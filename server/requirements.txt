@@ -1,0 +1,37 @@
+# ClipForge Python Worker Dependencies
+# =====================================
+
+# Web Framework
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+python-multipart==0.0.20
+
+# Database
+sqlalchemy==2.0.40
+aiosqlite==0.21.0
+
+# Data Validation
+pydantic==2.11.3
+pydantic-settings==2.9.1
+
+# Transcription
+faster-whisper==1.1.1
+
+# Video/Audio Processing
+yt-dlp>=2025.3.17
+pysubs2==1.8.0
+
+# Computer Vision (for reframing)
+mediapipe==0.10.21
+opencv-python-headless==4.11.0.86
+numpy>=1.26.0
+
+# NLP / Scoring
+textblob==0.18.0.post0
+nltk==3.9.1
+
+# HTTP Client
+httpx==0.28.1
+
+# Utilities
+python-dotenv==1.1.0
