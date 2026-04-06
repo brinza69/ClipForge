@@ -11,9 +11,15 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pydantic import BaseModel as PydanticBaseModel
+
 from database import get_session
 from models import ClipModel, ClipStatus, ProjectModel
 from config import settings
+
+
+class CleanupRequest(PydanticBaseModel):
+    target: str = "temp"
 
 router = APIRouter(prefix="/api/exports", tags=["exports"])
 
@@ -78,11 +84,12 @@ async def storage_info():
 
 
 @router.post("/cleanup")
-async def cleanup_storage(target: str = "temp"):
+async def cleanup_storage(body: CleanupRequest = CleanupRequest()):
     """
     Cleanup storage.
     Targets: temp, cache, exports, media
     """
+    target = body.target
     target_map = {
         "temp": settings.temp_dir,
         "cache": settings.cache_dir,
@@ -114,6 +121,60 @@ async def cleanup_storage(target: str = "temp"):
 async def get_exports_folder():
     """Return the exports folder path for the user to open."""
     return {"path": str(settings.exports_dir)}
+
+
+@router.get("/{clip_id}/download")
+async def download_export(clip_id: str, session: AsyncSession = Depends(get_session)):
+    """Download an exported clip file."""
+    result = await session.execute(
+        select(ClipModel).where(ClipModel.id == clip_id)
+    )
+    clip = result.scalar_one_or_none()
+    if not clip:
+        raise HTTPException(404, f"Clip {clip_id} not found")
+    if not clip.export_path:
+        raise HTTPException(404, f"Clip {clip_id} has no export file")
+
+    export_path = Path(clip.export_path)
+    if not export_path.exists():
+        raise HTTPException(404, f"Export file not found on disk: {clip.export_path}")
+
+    return FileResponse(
+        path=export_path,
+        filename=export_path.name,
+        media_type="video/mp4",
+    )
+
+
+@router.get("/{clip_id}/file")
+async def get_export_file_url(clip_id: str, session: AsyncSession = Depends(get_session)):
+    """Return the URL and path for an exported clip file."""
+    result = await session.execute(
+        select(ClipModel).where(ClipModel.id == clip_id)
+    )
+    clip = result.scalar_one_or_none()
+    if not clip:
+        raise HTTPException(404, f"Clip {clip_id} not found")
+    if not clip.export_path:
+        raise HTTPException(404, f"Clip {clip_id} has no export file")
+
+    export_path = Path(clip.export_path)
+    if not export_path.exists():
+        raise HTTPException(404, f"Export file not found on disk: {clip.export_path}")
+
+    # Build the static-file URL relative to the /exports/ mount
+    try:
+        relative = export_path.relative_to(settings.exports_dir)
+        url = f"/exports/{relative.as_posix()}"
+    except ValueError:
+        url = None
+
+    return {
+        "url": url,
+        "path": str(export_path),
+        "filename": export_path.name,
+        "size": export_path.stat().st_size,
+    }
 
 
 def _format_size(size_bytes: int) -> str:

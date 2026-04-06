@@ -1,37 +1,40 @@
 """
-ClipForge — Database Setup
-SQLite database with SQLAlchemy async engine.
+ClipForge Worker - Async SQLite database setup via SQLAlchemy 2.0
 """
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase
-from config import settings
-
-DATABASE_URL = f"sqlite+aiosqlite:///{settings.db_path}"
-
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=settings.debug,
-    connect_args={"check_same_thread": False},
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
 )
+from sqlalchemy.orm import DeclarativeBase
 
-async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+from config import settings
 
 
 class Base(DeclarativeBase):
     pass
 
 
-async def init_db():
-    """Create all tables."""
+_db_url = f"sqlite+aiosqlite:///{settings.db_path}"
+engine = create_async_engine(_db_url, echo=settings.debug)
+async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def init_db() -> None:
+    """Create all tables if they do not exist."""
+    from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add new columns to existing SQLite DB
+        for col in ["hook_text", "explanation", "thumbnail_path"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE clips ADD COLUMN {col} TEXT"))
+            except Exception:
+                pass
 
 
-async def get_session() -> AsyncSession:
-    """Dependency for FastAPI routes."""
+async def get_session():
+    """FastAPI dependency that yields a session."""
     async with async_session() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+        yield session

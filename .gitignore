@@ -39,3 +39,25 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+data/
+
+server/.venv/
+
+*.db
+
+*.db-journal
+
+.env.local
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code project files
+.claude/
+
+# Test scripts
+test.py
+server/test_transcribe.py

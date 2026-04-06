@@ -1,7 +1,14 @@
 """
-ClipForge — Caption Service
+ClipForge — Caption Service (v2)
 Generates animated ASS subtitles for word-by-word highlight captions
 in TikTok/Reels style, then burns them into video via FFmpeg.
+
+v2 improvements:
+  - Premium CapCut-like font choices and styling
+  - Intelligent safe-zone positioning (avoids TikTok UI, speaker face)
+  - Better hook text with fade animation and premium look
+  - More differentiated presets
+  - Anti-collision between hook text and captions
 """
 
 import logging
@@ -16,18 +23,53 @@ from config import settings
 logger = logging.getLogger("clipforge.captioner")
 
 
-# Default caption presets
+# ---------------------------------------------------------------------------
+# Safe zone constants for 1080x1920 (9:16) output
+# ---------------------------------------------------------------------------
+# TikTok UI overlay zones to avoid:
+#   Top: 0-160px (status bar, back button, username)
+#   Bottom: 1620-1920px (like/comment/share, caption text, progress bar)
+#   Right: 960-1080px (action buttons: heart, comment, share, etc.)
+#
+# Safe zones (marginv = distance FROM the edge that the alignment points to):
+#   alignment 2 (bottom-center) → marginv pushes UP from bottom
+#   alignment 5 (mid-center) → marginv offsets from center
+#   alignment 8 (top-center) → marginv pushes DOWN from top
+#
+# TikTok description overlay occupies bottom ~300px.
+# TikTok action buttons occupy right side ~120px (not affected by marginv).
+# We want captions ABOVE the description area → ~480px from bottom edge.
+SAFE_TOP = 200          # Below status bar
+SAFE_CAPTION_BOTTOM = 480   # Caption bottom margin — well above TikTok description/UI
+SAFE_CAPTION_CENTER = 120   # Center-aligned captions vertical offset (slight up-shift)
+SAFE_HOOK_MID_Y = 700       # Hook text: ~37% from top of 1920 frame = mid-frame area
+
+
+# ---------------------------------------------------------------------------
+# Caption presets — premium CapCut/TikTok-native styling
+# ---------------------------------------------------------------------------
+# Font priority: use bold/heavy system fonts that look good on mobile.
+# Windows: Impact, Arial Black, Segoe UI Black, Bahnschrift Bold
+# Fallback fonts are listed for cross-platform (Linux/Mac).
+#
+# Key design principles:
+#   - High contrast (thick outline or box background)
+#   - Large enough to read on phone (min 58px at 1080 width)
+#   - Short word groups (2-4 words max per display)
+#   - Bold/heavy weight always
+
 DEFAULT_PRESETS = {
     "bold_impact": {
         "name": "Bold Impact",
-        "font_family": "Montserrat",
-        "font_size": 68,
+        "font_family": "Impact",
+        "font_size": 72,
         "font_weight": "Bold",
         "text_color": "#FFFFFF",
         "highlight_color": "#FFD700",
         "outline_color": "#000000",
-        "outline_width": 4,
-        "shadow_color": "#00000080",
+        "outline_width": 5,
+        "shadow_offset": 2.5,
+        "shadow_color": "#000000B0",
         "position": "bottom",
         "uppercase": True,
         "animation": "word",
@@ -35,30 +77,99 @@ DEFAULT_PRESETS = {
     },
     "clean_minimal": {
         "name": "Clean Minimal",
-        "font_family": "Inter",
-        "font_size": 58,
-        "font_weight": "SemiBold",
+        "font_family": "Segoe UI",
+        "font_size": 62,
+        "font_weight": "Bold",
         "text_color": "#FFFFFF",
         "highlight_color": "#00D4FF",
         "outline_color": "#000000",
-        "outline_width": 3,
-        "shadow_color": "#00000060",
+        "outline_width": 4,
+        "shadow_offset": 2,
+        "shadow_color": "#00000080",
         "position": "bottom",
         "uppercase": False,
         "animation": "phrase",
-        "max_words_per_line": 4,
+        "max_words_per_line": 3,
     },
     "neon_pop": {
         "name": "Neon Pop",
-        "font_family": "Outfit",
-        "font_size": 72,
+        "font_family": "Arial Black",
+        "font_size": 74,
         "font_weight": "Black",
         "text_color": "#FFFFFF",
         "highlight_color": "#FF3366",
         "outline_color": "#1A0033",
         "outline_width": 5,
-        "shadow_color": "#FF336640",
+        "shadow_offset": 3,
+        "shadow_color": "#FF336650",
         "position": "center",
+        "uppercase": True,
+        "animation": "word",
+        "max_words_per_line": 2,
+    },
+    "classic_white": {
+        "name": "Classic White",
+        "font_family": "Segoe UI",
+        "font_size": 62,
+        "font_weight": "Bold",
+        "text_color": "#FFFFFF",
+        "highlight_color": "#FFFFFF",
+        "outline_color": "#000000",
+        "outline_width": 4,
+        "shadow_offset": 2,
+        "shadow_color": "#000000A0",
+        "position": "bottom",
+        "uppercase": False,
+        "animation": "phrase",
+        "max_words_per_line": 4,
+    },
+    "karaoke_yellow": {
+        "name": "Karaoke Yellow",
+        "font_family": "Arial Black",
+        "font_size": 68,
+        "font_weight": "Bold",
+        "text_color": "#FFFFFF",
+        "highlight_color": "#FFE600",
+        "highlight_bg_color": "#FFE600",
+        "outline_color": "#000000",
+        "outline_width": 4,
+        "shadow_offset": 2,
+        "shadow_color": "#000000A0",
+        "position": "bottom",
+        "uppercase": True,
+        "animation": "word",
+        "max_words_per_line": 3,
+    },
+    "boxed_white": {
+        "name": "Boxed White",
+        "font_family": "Segoe UI",
+        "font_size": 64,
+        "font_weight": "Bold",
+        "text_color": "#FFFFFF",
+        "highlight_color": "#FFFFFF",
+        "highlight_bg_color": "#000000",
+        "outline_color": "#000000",
+        "outline_width": 14,
+        "shadow_offset": 0,
+        "shadow_color": "#00000000",
+        "position": "bottom",
+        "uppercase": False,
+        "animation": "word",
+        "max_words_per_line": 3,
+        "borderstyle": 3,  # Opaque box
+    },
+    "viral_gradient": {
+        "name": "Viral Gradient",
+        "font_family": "Impact",
+        "font_size": 76,
+        "font_weight": "Bold",
+        "text_color": "#FFFFFF",
+        "highlight_color": "#FF6B35",
+        "outline_color": "#000000",
+        "outline_width": 5,
+        "shadow_offset": 3,
+        "shadow_color": "#FF6B3540",
+        "position": "bottom",
         "uppercase": True,
         "animation": "word",
         "max_words_per_line": 2,
@@ -85,6 +196,7 @@ def generate_captions(
     clip_end: float,
     preset: Optional[Dict] = None,
     output_path: Optional[str] = None,
+    hook_text: Optional[str] = None,
 ) -> str:
     """
     Generate an ASS subtitle file with animated word-by-word captions.
@@ -93,8 +205,9 @@ def generate_captions(
         segments: Transcript segments with word-level timestamps
         clip_start: Start time of the clip in the source video
         clip_end: End time of the clip
-        preset: Caption style preset dict
+        preset: Caption style preset dict (or uses bold_impact default)
         output_path: Where to save the ASS file
+        hook_text: Optional viral hook box text for the beginning
 
     Returns:
         Path to the generated ASS file
@@ -102,33 +215,156 @@ def generate_captions(
     preset = preset or DEFAULT_PRESETS["bold_impact"]
     logger.info(f"Generating captions [{clip_start:.1f}s-{clip_end:.1f}s] preset={preset.get('name', 'custom')}")
 
-    # Create ASS file
     subs = pysubs2.SSAFile()
     subs.info["PlayResX"] = str(settings.export_width)
     subs.info["PlayResY"] = str(settings.export_height)
 
-    # Create styles
+    # --- Positioning based on preset ---
+    position = preset.get("position", "bottom")
+    if position == "bottom":
+        caption_marginv = SAFE_CAPTION_BOTTOM
+    elif position == "center":
+        caption_marginv = SAFE_CAPTION_CENTER
+    else:  # top
+        caption_marginv = SAFE_TOP
+
+    # --- Create main caption style ---
     normal_style = pysubs2.SSAStyle()
-    normal_style.fontname = preset.get("font_family", "Montserrat")
-    normal_style.fontsize = preset.get("font_size", 68)
-    normal_style.bold = preset.get("font_weight", "Bold") in ("Bold", "Black", "ExtraBold")
+    normal_style.fontname = preset.get("font_family", "Impact")
+    normal_style.fontsize = preset.get("font_size", 72)
+    normal_style.bold = preset.get("font_weight", "Bold") in ("Bold", "Black", "ExtraBold", "SemiBold")
     normal_style.primarycolor = hex_to_ass_color(preset.get("text_color", "#FFFFFF"))
     normal_style.outlinecolor = hex_to_ass_color(preset.get("outline_color", "#000000"))
-    normal_style.backcolor = hex_to_ass_color(preset.get("shadow_color", "#00000080"))
-    normal_style.outline = preset.get("outline_width", 4)
-    normal_style.shadow = 2
-    normal_style.alignment = _get_alignment(preset.get("position", "bottom"))
-    normal_style.marginv = 120 if preset.get("position") == "bottom" else 50
+    normal_style.backcolor = hex_to_ass_color(preset.get("shadow_color", "#000000B0"))
+    # Enforce minimum outline for readability
+    normal_style.outline = max(preset.get("outline_width", 5), 3)
+    normal_style.shadow = max(preset.get("shadow_offset", 2.5), 1.5)
+    normal_style.borderstyle = preset.get("borderstyle", 1)  # 1=outline+shadow, 3=opaque box
+    normal_style.alignment = _get_alignment(position)
+    normal_style.marginv = caption_marginv
+    # Horizontal margins to keep text from touching edges
+    normal_style.marginl = 60
+    normal_style.marginr = 60
 
     subs.styles["Default"] = normal_style
 
-    # Highlighted word style
+    # --- Highlighted word style ---
     highlight_style = normal_style.copy()
     highlight_style.primarycolor = hex_to_ass_color(preset.get("highlight_color", "#FFD700"))
+
+    if preset.get("highlight_bg_color"):
+        # Karaoke/boxed style: opaque background on highlighted word
+        highlight_style.borderstyle = 3
+        highlight_style.outlinecolor = hex_to_ass_color(preset.get("highlight_bg_color"))
+        highlight_style.primarycolor = hex_to_ass_color("#000000")
+        highlight_style.outline = max(preset.get("outline_width", 14), 10)
     subs.styles["Highlight"] = highlight_style
 
-    # Collect all words within clip range
+    # --- Hook text style (premium box) ---
+    hook_duration_ms = 0
+    hook_fade_ms = 300  # Fade in/out duration
+
+    if hook_text:
+        hook_style = pysubs2.SSAStyle()
+        hook_style.fontname = "Segoe UI"  # Clean premium font for hook
+        hook_style.fontsize = 48
+        hook_style.bold = True
+        # Place hook in the MID-FRAME area (alignment 5 = true center, then
+        # push upward slightly via marginv so it sits in the upper-mid zone,
+        # roughly 35-40% from the top — visually strong without covering face).
+        hook_style.alignment = 5  # Center
+        hook_style.marginv = 260  # Push upward from dead-center
+        hook_style.marginl = 90
+        hook_style.marginr = 90
+        hook_style.borderstyle = 3   # Opaque box background
+        hook_style.outline = 22      # Generous padding around text
+        hook_style.shadow = 5        # Soft shadow for premium depth
+        hook_style.primarycolor = hex_to_ass_color("#FFFFFF")
+        hook_style.outlinecolor = hex_to_ass_color("#0D0D0D")      # Near-black premium bg
+        hook_style.backcolor = hex_to_ass_color("#000000C0")       # Shadow
+        subs.styles["Hook"] = hook_style
+
+        clip_duration = clip_end - clip_start
+        hook_duration_ms = int(min(4.5, clip_duration) * 1000)
+
+    # --- Anti-collision: when hook is mid-screen and captions are center-aligned,
+    # push captions to bottom during hook display to avoid overlap ---
+    need_collision_style = bool(hook_text) and position == "center"
+    if need_collision_style:
+        collision_style = normal_style.copy()
+        collision_style.alignment = 2   # Bottom-center
+        collision_style.marginv = SAFE_CAPTION_BOTTOM
+        subs.styles["DefaultBottom"] = collision_style
+
+        collision_hl = highlight_style.copy()
+        collision_hl.alignment = 2
+        collision_hl.marginv = SAFE_CAPTION_BOTTOM
+        subs.styles["HighlightBottom"] = collision_hl
+
+    # --- Collect words within clip range ---
+    clip_words = _extract_clip_words(segments, clip_start, clip_end)
+
+    if not clip_words:
+        logger.warning("No words found for caption generation")
+        # Still generate hook if present
+        if hook_text and output_path:
+            _add_hook_event(subs, hook_text, hook_duration_ms, hook_fade_ms)
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            subs.save(output_path, encoding="utf-8")
+            return output_path
+        return ""
+
+    # Apply uppercase
+    if preset.get("uppercase", True):
+        for w in clip_words:
+            w["word"] = w["word"].upper()
+
+    # Group words and generate animation events
+    max_words = preset.get("max_words_per_line", 3)
+    animation = preset.get("animation", "word")
+
+    if animation == "word":
+        _generate_word_animation(subs, clip_words, max_words)
+    elif animation == "phrase":
+        _generate_phrase_animation(subs, clip_words, max_words + 1)
+    else:
+        _generate_line_animation(subs, clip_words, max_words + 2)
+
+    # Anti-collision: push overlapping captions to bottom during hook
+    if need_collision_style and hook_duration_ms > 0:
+        for event in subs.events:
+            if event.start < hook_duration_ms:
+                if event.style == "Default":
+                    event.style = "DefaultBottom"
+                elif event.style == "Highlight":
+                    event.style = "HighlightBottom"
+
+    # Insert hook event
+    if hook_text:
+        _add_hook_event(subs, hook_text, hook_duration_ms, hook_fade_ms)
+
+    # Save
+    if not output_path:
+        output_path = str(settings.temp_dir / "captions.ass")
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    subs.save(output_path, encoding="utf-8")
+    logger.info(f"Captions saved: {output_path} ({len(subs.events)} events)")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Word extraction
+# ---------------------------------------------------------------------------
+
+def _extract_clip_words(
+    segments: List[Dict],
+    clip_start: float,
+    clip_end: float,
+) -> List[Dict]:
+    """Extract and normalize words from transcript segments within clip range."""
     clip_words = []
+
     for seg in segments:
         if seg["end"] <= clip_start or seg["start"] >= clip_end:
             continue
@@ -143,7 +379,7 @@ def generate_captions(
                         "end": w["end"] - clip_start,
                     })
         else:
-            # No word-level timestamps — split segment text
+            # No word-level timestamps — distribute evenly
             seg_start = max(seg["start"], clip_start) - clip_start
             seg_end = min(seg["end"], clip_end) - clip_start
             words_in_seg = seg["text"].split()
@@ -156,54 +392,30 @@ def generate_captions(
                         "end": seg_start + (i + 1) * word_dur,
                     })
 
-    if not clip_words:
-        logger.warning("No words found for caption generation")
-        return ""
+    return clip_words
 
-    # Apply uppercase if preset says so
-    if preset.get("uppercase", True):
-        for w in clip_words:
-            w["word"] = w["word"].upper()
 
-    # Group words into lines
-    max_words = preset.get("max_words_per_line", 3)
-    animation = preset.get("animation", "word")
-
-    if animation == "word":
-        _generate_word_animation(subs, clip_words, max_words)
-    elif animation == "phrase":
-        _generate_phrase_animation(subs, clip_words, max_words + 1)
-    else:
-        _generate_line_animation(subs, clip_words, max_words + 2)
-
-    # Save
-    if not output_path:
-        output_path = str(settings.temp_dir / "captions.ass")
-
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    subs.save(output_path)
-    logger.info(f"Captions saved: {output_path} ({len(subs.events)} events)")
-    return output_path
-
+# ---------------------------------------------------------------------------
+# Animation generators
+# ---------------------------------------------------------------------------
 
 def _generate_word_animation(
     subs: pysubs2.SSAFile,
     words: List[Dict],
     max_per_line: int,
 ):
-    """Word-by-word highlight: show group, highlight current word."""
+    """Word-by-word highlight with subtle scale emphasis on current word."""
     groups = _group_words(words, max_per_line)
 
     for group in groups:
-        group_start = group[0]["start"]
-        group_end = group[-1]["end"]
-
         for i, word_info in enumerate(group):
-            # Build text with current word highlighted
             parts = []
             for j, w in enumerate(group):
                 if j == i:
-                    parts.append(f'{{\\rHighlight}}{w["word"]}{{\\rDefault}}')
+                    # Scale up highlighted word slightly (105%) for emphasis pop
+                    parts.append(
+                        f'{{\\rHighlight\\fscx105\\fscy105}}{w["word"]}{{\\rDefault}}'
+                    )
                 else:
                     parts.append(w["word"])
 
@@ -223,7 +435,7 @@ def _generate_phrase_animation(
     words: List[Dict],
     max_per_line: int,
 ):
-    """Phrase-level animation: show entire phrase, highlight as group."""
+    """Phrase-level: show entire phrase highlighted as a group."""
     groups = _group_words(words, max_per_line)
 
     for group in groups:
@@ -242,7 +454,7 @@ def _generate_line_animation(
     words: List[Dict],
     max_per_line: int,
 ):
-    """Line-level animation: show and fade lines."""
+    """Line-level: show and fade lines."""
     groups = _group_words(words, max_per_line)
 
     for group in groups:
@@ -250,31 +462,83 @@ def _generate_line_animation(
         event = pysubs2.SSAEvent(
             start=int(group[0]["start"] * 1000),
             end=int(group[-1]["end"] * 1000),
-            text=f"{{\\fad(100,100)}}{text}",
+            text=f"{{\\fad(120,120)}}{text}",
             style="Default",
         )
         subs.events.append(event)
 
 
+# ---------------------------------------------------------------------------
+# Hook text
+# ---------------------------------------------------------------------------
+
+def _add_hook_event(
+    subs: pysubs2.SSAFile,
+    hook_text: str,
+    duration_ms: int,
+    fade_ms: int = 300,
+):
+    """Add the hook text event with fade + scale-up animation for premium feel."""
+    # Wrap with fad (fade) + fscx/fscy scale animation:
+    # Start at 90% scale, grow to 100% over first 400ms for a subtle pop-in
+    scale_in = 400  # ms for scale animation
+    # ASS animation: \t(0,400,\fscx100\fscy100) starting from \fscx92\fscy92
+    anim = (
+        f"{{\\fad({fade_ms},{fade_ms})"
+        f"\\fscx92\\fscy92"
+        f"\\t(0,{scale_in},\\fscx100\\fscy100)"
+        f"}}{hook_text}"
+    )
+    hook_event = pysubs2.SSAEvent(
+        start=0,
+        end=duration_ms,
+        text=anim,
+        style="Hook",
+    )
+    subs.events.insert(0, hook_event)
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
 def _group_words(words: List[Dict], max_per_group: int) -> List[List[Dict]]:
-    """Group words into display groups."""
-    groups = []
-    current_group = []
+    """
+    Group words into display groups with punctuation-aware breaks.
+
+    Rules:
+      - Break after sentence-ending punctuation (. ! ?)
+      - Break after commas if group has >= 2 words already
+      - Never exceed max_per_group
+      - Avoid orphan words (1-word groups) by merging with previous
+    """
+    groups: List[List[Dict]] = []
+    current_group: List[Dict] = []
 
     for word in words:
         current_group.append(word)
+        w = word["word"].rstrip()
 
-        if len(current_group) >= max_per_group:
+        # Check for sentence-ending punctuation
+        is_sentence_end = w and w[-1] in ".!?"
+        # Check for clause break (comma, semicolon, colon, dash)
+        is_clause_break = w and w[-1] in ",;:-" and len(current_group) >= 2
+
+        if len(current_group) >= max_per_group or is_sentence_end or is_clause_break:
             groups.append(current_group)
             current_group = []
 
     if current_group:
-        groups.append(current_group)
+        # Avoid orphan: if last group is just 1 word and there's a previous group
+        # that isn't too long, merge it
+        if len(current_group) == 1 and groups and len(groups[-1]) < max_per_group:
+            groups[-1].extend(current_group)
+        else:
+            groups.append(current_group)
 
     return groups
 
 
 def _get_alignment(position: str) -> int:
-    """Convert position name to ASS alignment number."""
-    # ASS alignment: 1-3 bottom, 4-6 middle, 7-9 top (numpad layout)
+    """Convert position name to ASS alignment number (numpad layout)."""
     return {"bottom": 2, "center": 5, "top": 8}.get(position, 2)

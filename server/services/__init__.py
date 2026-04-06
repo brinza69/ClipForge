@@ -1,1 +1,1 @@
-# ClipForge services package
+# services package

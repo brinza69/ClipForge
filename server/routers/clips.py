@@ -10,8 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from database import get_session
-from models import ClipModel, ClipResponse, ClipStatus, JobType, TranscriptModel
-from queue import job_queue
+from models import ClipModel, ClipStatus, JobType, TranscriptModel
+from schemas import ClipResponse
+from job_queue import job_queue
 
 router = APIRouter(prefix="/api/clips", tags=["clips"])
 
@@ -23,6 +24,11 @@ class ClipUpdate(BaseModel):
     reframe_mode: Optional[str] = None
     status: Optional[str] = None
     caption_preset_id: Optional[str] = None
+    hook_text: Optional[str] = None
+    # Caption editing: allow replacing the caption source segments for export.
+    # If `words` are omitted, the caption renderer will split segment text evenly.
+    transcript_text: Optional[str] = None
+    transcript_segments: Optional[list | dict] = None
 
 
 @router.get("/", response_model=list[ClipResponse])
@@ -115,6 +121,44 @@ async def approve_clip(clip_id: str, session: AsyncSession = Depends(get_session
     return {"clip_id": clip_id, "status": "approved"}
 
 
+@router.get("/{clip_id}/guidance")
+async def get_clip_guidance(clip_id: str, session: AsyncSession = Depends(get_session)):
+    """Generate upload guidance for a specific clip."""
+    from services.campaigns import generate_upload_guidance, Campaign, _load_local_campaigns
+    from services.categories import detect_category
+
+    clip = await session.get(ClipModel, clip_id)
+    if not clip:
+        raise HTTPException(404, "Clip not found")
+
+    # Auto-detect category from clip transcript
+    category = detect_category(transcript_text=clip.transcript_text or "")
+
+    # Find the best matching campaign
+    campaigns = _load_local_campaigns()
+    best_campaign = Campaign(
+        target_platforms=["tiktok", "youtube_shorts"],
+        min_duration_sec=15,
+        max_duration_sec=180,
+    )
+
+    if campaigns:
+        # Pick highest priority active campaign that fits our duration
+        for c in sorted(campaigns, key=lambda x: x.priority_score, reverse=True):
+            if c.status == "active" and c.min_duration_sec <= clip.duration <= c.max_duration_sec:
+                best_campaign = c
+                break
+
+    guidance = generate_upload_guidance(
+        campaign=best_campaign,
+        clip_title=clip.title or "",
+        clip_hook=clip.hook_text or "",
+        category=category,
+    )
+    guidance["detected_category"] = category
+    return guidance
+
+
 @router.get("/project/{project_id}/transcript")
 async def get_transcript(
     project_id: str,
@@ -122,9 +166,9 @@ async def get_transcript(
 ):
     """Get the full transcript for a project."""
     result = await session.execute(
-        select(TranscriptModel).where(TranscriptModel.project_id == project_id)
+        select(TranscriptModel).where(TranscriptModel.project_id == project_id).order_by(TranscriptModel.id.desc())
     )
-    transcript = result.scalar_one_or_none()
+    transcript = result.scalars().first()
     if not transcript:
         raise HTTPException(404, "Transcript not found")
 

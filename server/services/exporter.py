@@ -39,6 +39,31 @@ async def export_clip(
     h = height or settings.export_height
     out_fps = fps or settings.export_fps
     br = bitrate or settings.export_bitrate
+    def _calc_bufsize(bitrate_str: str) -> str:
+        """
+        ffmpeg bufsize must match bitrate unit scale.
+        Our default is usually like '4000k' (k = kbps), not '4000' megabits.
+        """
+        s = (bitrate_str or "").strip().lower()
+        if not s:
+            return "16M"
+        try:
+            if s.endswith("k"):
+                v = int(float(s[:-1]))
+                return f"{v * 2}k"
+            if s.endswith("m"):
+                v = int(float(s[:-1]))
+                return f"{v * 2}M"
+            if s.endswith("g"):
+                v = float(s[:-1])
+                return f"{int(v * 2)}G"
+            # No suffix: interpret as Mbps-like and be conservative.
+            v = int(float(s))
+            return f"{max(1, v * 2)}M"
+        except Exception:
+            return "16M"
+
+    bufsize = _calc_bufsize(br)
 
     duration = end_time - start_time
 
@@ -47,24 +72,9 @@ async def export_clip(
     # Ensure output directory exists
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # Build FFmpeg filter chain
-    filters = []
+    blurred_mode = bool(reframe_data and reframe_data.get("mode") in {"blurred", "blurred_background", "blurredBackground"})
 
-    # 1. Crop / reframe
-    if reframe_data:
-        crop_filter = build_crop_filter(reframe_data)
-        filters.append(crop_filter)
-    else:
-        # Default center crop to 9:16
-        filters.append(f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0")
-
-    # 2. Scale to output resolution
-    filters.append(f"scale={w}:{h}:flags=lanczos")
-
-    # 3. Set framerate
-    filters.append(f"fps={out_fps}")
-
-    # Build the command
+    # Build FFmpeg command
     cmd = [
         "ffmpeg",
         "-y",                                    # Overwrite output
@@ -73,72 +83,202 @@ async def export_clip(
         "-t", str(duration),                     # Duration
     ]
 
-    # Build video filter string
-    vf_chain = ",".join(filters)
+    # Ensure output directory exists
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # Add subtitle burn-in if captions exist
+    # Build video filter(s)
+    if not reframe_data:
+        crop_filter = f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
+        crop_w = None
+        crop_h = None
+    else:
+        crop_filter = build_crop_filter(reframe_data)
+        crop_w = reframe_data.get("crop_width")
+        crop_h = reframe_data.get("crop_height")
+
+    # Subtitles burn-in if captions exist
+    subtitles_filter = None
     if captions_path and Path(captions_path).exists():
-        # Subtitles filter must come after scaling
-        escaped_path = captions_path.replace("\\", "/").replace(":", "\\:")
-        vf_chain += f",subtitles='{escaped_path}'"
+        # FFmpeg on Windows needs forward slashes and escaped colons in filter paths.
+        # Convert to posix first, then escape colons (including drive letter colon).
+        abs_path = str(Path(captions_path).resolve()).replace("\\", "/")
+        escaped_path = abs_path.replace(":", "\\:")
+        subtitles_filter = f"subtitles='{escaped_path}'"
 
-    cmd.extend([
-        "-vf", vf_chain,
-        "-c:v", settings.export_codec,           # H.264
-        "-preset", "medium",
-        "-crf", "18",                            # High quality
-        "-b:v", br,
-        "-maxrate", br,
-        "-bufsize", f"{int(br.rstrip('MmKk')) * 2}M" if br.rstrip("MmKk").isdigit() else "16M",
-        "-c:a", settings.export_audio_codec,     # AAC
-        "-b:a", settings.export_audio_bitrate,
-        "-ar", "44100",
-        "-af", "loudnorm=I=-16:LRA=11:TP=-1.5", # Audio normalization
-        "-movflags", "+faststart",               # Web-optimized
-        "-pix_fmt", "yuv420p",                   # Compatibility
-        "-progress", "pipe:1",                   # Progress output
-        output_path,
-    ])
+    if blurred_mode:
+        # Blurred background: blur full frame to 9:16, then overlay a sharp cropped foreground.
+        # This produces a TikTok-style "subject on blurred background" look.
+        vf_chain_fg = f"{crop_filter},scale={w}:{h}:flags=lanczos"
+        vf_chain_bg = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=20:1"
+
+        # Compose overlay + optional subtitles + fade transitions
+        fade_filters = f"fade=t=in:st=0:d=0.4,fade=t=out:st={max(0, duration - 0.3):.3f}:d=0.3"
+        if subtitles_filter:
+            filter_complex = (
+                f"[0:v]split=2[fg][bg];"
+                f"[bg]{vf_chain_bg}[bg2];"
+                f"[fg]{vf_chain_fg}[fg2];"
+                f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2[v];"
+                f"[v]{subtitles_filter},{fade_filters},fps={out_fps}[vout]"
+            )
+            vf_fallback = None
+        else:
+            filter_complex = (
+                f"[0:v]split=2[fg][bg];"
+                f"[bg]{vf_chain_bg}[bg2];"
+                f"[fg]{vf_chain_fg}[fg2];"
+                f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2[v];"
+                f"[v]{fade_filters},fps={out_fps}[vout]"
+            )
+            vf_fallback = None
+
+        cmd.extend(
+            [
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "[vout]",
+                "-map",
+                "0:a?",
+                "-c:v",
+                settings.export_codec,
+                "-preset",
+                "medium",
+                "-crf",
+                "17",
+                "-b:v",
+                br,
+                "-maxrate",
+                br,
+                "-bufsize",
+                bufsize,
+                "-c:a",
+                settings.export_audio_codec,
+                "-b:a",
+                settings.export_audio_bitrate,
+                "-ar",
+                "44100",
+                "-af",
+                "loudnorm=I=-16:LRA=11:TP=-1.5,afade=t=in:st=0:d=0.3,afade=t=out:st=" + f"{max(0, duration - 0.4):.3f}" + ":d=0.4",
+                "-movflags",
+                "+faststart",
+                "-pix_fmt",
+                "yuv420p",
+                "-progress",
+                "pipe:1",
+                output_path,
+            ]
+        )
+    else:
+        # Default: crop → scale → fps → fade transitions → optional subtitles.
+        filters = [crop_filter, f"scale={w}:{h}:flags=lanczos", f"fps={out_fps}"]
+        # Subtle fade-in (0.4s) and fade-out (0.3s) for polished short-form feel
+        fade_in_frames = int(out_fps * 0.4)
+        fade_out_start_frames = max(0, int(duration * out_fps) - int(out_fps * 0.3))
+        filters.append(f"fade=t=in:st=0:d=0.4")
+        filters.append(f"fade=t=out:st={max(0, duration - 0.3):.3f}:d=0.3")
+        vf_chain = ",".join(filters)
+        if subtitles_filter:
+            vf_chain += f",{subtitles_filter}"
+
+        cmd.extend(
+            [
+                "-vf",
+                vf_chain,
+                "-c:v",
+                settings.export_codec,
+                "-preset",
+                "medium",
+                "-crf",
+                "17",
+                "-b:v",
+                br,
+                "-maxrate",
+                br,
+                "-bufsize",
+                bufsize,
+                "-c:a",
+                settings.export_audio_codec,
+                "-b:a",
+                settings.export_audio_bitrate,
+                "-ar",
+                "44100",
+                "-af",
+                "loudnorm=I=-16:LRA=11:TP=-1.5,afade=t=in:st=0:d=0.3,afade=t=out:st=" + f"{max(0, duration - 0.4):.3f}" + ":d=0.4",
+                "-movflags",
+                "+faststart",
+                "-pix_fmt",
+                "yuv420p",
+                "-progress",
+                "pipe:1",
+                output_path,
+            ]
+        )
 
     logger.info(f"FFmpeg command: {' '.join(cmd)}")
 
     if on_progress:
         await on_progress(0.05, "Starting export...")
 
-    # Run FFmpeg
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-    )
+    process = None
+    try:
+        # Run FFmpeg
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW
+            if hasattr(subprocess, "CREATE_NO_WINDOW")
+            else 0,
+        )
 
-    # Parse progress
-    while True:
-        line = await process.stdout.readline()
-        if not line:
-            break
+        # Parse progress
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
 
-        line_str = line.decode("utf-8", errors="replace").strip()
+            line_str = line.decode("utf-8", errors="replace").strip()
+            if not line_str:
+                continue
 
-        if line_str.startswith("out_time_us="):
+            if line_str.startswith("out_time_us="):
+                try:
+                    time_us = int(line_str.split("=")[1])
+                    time_s = time_us / 1_000_000
+                    progress = min(time_s / max(duration, 0.001), 0.95)
+                    if on_progress:
+                        pct = int(progress * 100)
+                        await on_progress(progress, f"Rendering... {pct}%")
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+        await process.wait()
+
+        if process.returncode != 0:
+            stderr = await process.stderr.read()
+            error = stderr.decode("utf-8", errors="replace")
+            # ffmpeg typically prints its version banner first; keep the tail where
+            # the actual parsing/runtime error message is most likely to appear.
+            lines = error.splitlines()
+            # Skip the verbose version/config banner (lines starting with spaces
+            # or known banner markers) to surface the actual error message.
+            error_lines = [l for l in lines if l and not l.startswith("  ") and not l.startswith("built with")]
+            tail = "\n".join(error_lines[-30:]).strip() or "\n".join(lines[-20:]).strip()
+            logger.error(f"FFmpeg export failed:\n{tail[:1200]}")
+            raise RuntimeError(f"Export failed: {tail[:800]}")
+    except asyncio.CancelledError:
+        # Ensure FFmpeg is terminated to prevent zombie renders after cancel/delete.
+        logger.warning("Export coroutine cancelled; terminating FFmpeg process...")
+        if process and process.returncode is None:
+            process.terminate()
             try:
-                time_us = int(line_str.split("=")[1])
-                time_s = time_us / 1_000_000
-                progress = min(time_s / duration, 0.95)
-                if on_progress:
-                    pct = int(progress * 100)
-                    await on_progress(progress, f"Rendering... {pct}%")
-            except (ValueError, ZeroDivisionError):
-                pass
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+        raise
 
-    await process.wait()
-
-    if process.returncode != 0:
-        stderr = await process.stderr.read()
-        error = stderr.decode("utf-8", errors="replace")
-        logger.error(f"FFmpeg export failed: {error[:500]}")
-        raise RuntimeError(f"Export failed: {error[:300]}")
+    # Verify output exists and has content
 
     # Verify output exists and has content
     output = Path(output_path)
@@ -159,23 +299,34 @@ async def generate_thumbnail(
     output_path: str,
     timestamp: float = 1.0,
 ) -> str:
-    """Generate a thumbnail from a video at a specific timestamp."""
+    """Generate a high-quality thumbnail from a video at a specific timestamp."""
+    # Use 9:16 crop + scale to 540x960 for sharp vertical preview thumbnails
     cmd = [
         "ffmpeg", "-y",
         "-ss", str(timestamp),
         "-i", video_path,
         "-vframes", "1",
-        "-vf", "scale=640:-1",
+        "-vf", "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=540:960:flags=lanczos",
         "-q:v", "2",
         output_path,
     ]
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-    )
-    await process.wait()
+    process = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        await process.wait()
+    except asyncio.CancelledError:
+        if process and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except Exception:
+                pass
+        raise
 
     return output_path

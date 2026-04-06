@@ -4,8 +4,9 @@ SQLite-backed async job queue for media processing tasks.
 """
 
 import asyncio
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Callable, Dict, Any
 
 from sqlalchemy import select, update
@@ -17,12 +18,16 @@ from models import JobModel, JobStatus, JobType, ProjectModel
 logger = logging.getLogger("clipforge.queue")
 
 
+class JobCancelledError(Exception):
+    pass
+
 class JobQueue:
     """Manages background processing jobs with SQLite persistence."""
 
     def __init__(self):
         self._handlers: Dict[str, Callable] = {}
         self._running_jobs: Dict[str, asyncio.Task] = {}
+        self._cancelled_jobs = set()
         self._processor_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
@@ -45,7 +50,7 @@ class JobQueue:
                 clip_id=clip_id,
                 type=job_type,
                 status=JobStatus.queued.value,
-                metadata=metadata or {},
+                metadata_json=json.dumps(metadata) if metadata else None,
             )
             session.add(job)
             await session.commit()
@@ -91,27 +96,39 @@ class JobQueue:
 
     async def fail_job(self, job_id: str, error: str):
         """Mark a job as failed."""
+        from models import ProjectStatus, ClipModel, ClipStatus
         async with async_session() as session:
-            await session.execute(
-                update(JobModel)
-                .where(JobModel.id == job_id)
-                .values(
-                    status=JobStatus.failed.value,
-                    error=error,
-                    updated_at=datetime.utcnow(),
-                )
-            )
+            job = await session.get(JobModel, job_id)
+            if job:
+                job.status = JobStatus.failed.value
+                job.error = str(error)[:500]
+                job.updated_at = datetime.utcnow()
+                
+                if job.project_id:
+                    project = await session.get(ProjectModel, job.project_id)
+                    if project:
+                        project.status = ProjectStatus.failed.value
+                        project.description = f"[{job.type} failed] {str(error)[:200]}"
+                
+                if job.clip_id:
+                    clip = await session.get(ClipModel, job.clip_id)
+                    if clip:
+                        clip.status = ClipStatus.failed.value
+
             await session.commit()
         self._running_jobs.pop(job_id, None)
         logger.error(f"Job {job_id} failed: {error}")
 
     async def cancel_job(self, job_id: str):
         """Cancel a running or queued job."""
+        self._cancelled_jobs.add(job_id)
         if job_id in self._running_jobs:
             self._running_jobs[job_id].cancel()
             self._running_jobs.pop(job_id, None)
 
         async with async_session() as session:
+            from models import ProjectStatus, ClipModel, ClipStatus
+
             await session.execute(
                 update(JobModel)
                 .where(JobModel.id == job_id)
@@ -120,8 +137,65 @@ class JobQueue:
                     updated_at=datetime.utcnow(),
                 )
             )
+
+            # Keep parent project state consistent with the user's cancellation.
+            job = await session.get(JobModel, job_id)
+            if job and job.project_id:
+                project = await session.get(ProjectModel, job.project_id)
+                if project and project.status not in (ProjectStatus.failed.value, ProjectStatus.cancelled.value):
+                    project.status = ProjectStatus.cancelled.value
+                    await session.commit()
+                    await session.refresh(project)
+
+            # Best-effort clip state update (mainly for export jobs).
+            if job and job.clip_id:
+                clip = await session.get(ClipModel, job.clip_id)
+                if clip and clip.status not in (ClipStatus.exported.value, ClipStatus.failed.value, ClipStatus.rejected.value):
+                    clip.status = ClipStatus.failed.value
+
             await session.commit()
         logger.info(f"Job {job_id} cancelled")
+
+    def is_cancelled(self, job_id: str) -> bool:
+        return job_id in self._cancelled_jobs
+
+    async def recover_stuck_jobs(self):
+        """
+        On startup, recover jobs that were left in `running` state due to crashes/hard kills.
+        This prevents silent hangs after server restarts.
+        """
+        from models import ProjectStatus
+
+        stuck_threshold = timedelta(minutes=30)
+        now = datetime.utcnow()
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(JobModel).where(
+                    JobModel.status == JobStatus.running.value,
+                    JobModel.updated_at < now - stuck_threshold,
+                )
+            )
+            stuck_jobs = result.scalars().all()
+            if not stuck_jobs:
+                return
+
+            for job in stuck_jobs:
+                project = await session.get(ProjectModel, job.project_id)
+                if project and project.status in (ProjectStatus.cancelled.value, ProjectStatus.failed.value):
+                    job.status = JobStatus.failed.value
+                    job.error = "Recovered from stuck running state; project is terminal."
+                    job.progress_message = "Recovered: project terminal state."
+                    continue
+
+                job.status = JobStatus.queued.value
+                job.progress = min(job.progress or 0.0, 0.05)
+                job.progress_message = "Recovered from stuck running state."
+                job.error = None
+                job.updated_at = datetime.utcnow()
+
+            await session.commit()
+            logger.warning(f"Recovered {len(stuck_jobs)} stuck jobs on startup.")
 
     async def _process_next(self):
         """Pick up the next queued job and execute it."""
@@ -163,7 +237,7 @@ class JobQueue:
             project_id = job.project_id
             clip_id = job.clip_id
             job_type = job.type
-            job_metadata = job.metadata or {}
+            job_metadata = json.loads(job.metadata_json) if job.metadata_json else {}
 
         # Run handler in a background task
         async def _run():
@@ -176,7 +250,7 @@ class JobQueue:
                     queue=self,
                 )
                 await self.complete_job(job_id)
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, JobCancelledError):
                 await self.cancel_job(job_id)
             except Exception as e:
                 logger.exception(f"Job {job_id} failed with exception")
@@ -190,6 +264,11 @@ class JobQueue:
         """Start the background job processor loop."""
         logger.info("Job queue processor started")
         self._stop_event.clear()
+
+        try:
+            await self.recover_stuck_jobs()
+        except Exception:
+            logger.exception("Failed to recover stuck jobs on startup")
 
         while not self._stop_event.is_set():
             try:
