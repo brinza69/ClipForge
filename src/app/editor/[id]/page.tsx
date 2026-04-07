@@ -47,38 +47,37 @@ export default function EditorPage() {
     enabled: !!clip?.project_id,
   });
 
-  // Initialize state once clip loads
+  // Initialize editor state when clip data first arrives.
+  // Use a ref to guard against re-init on every re-render.
+  const initializedRef = useRef(false);
   useEffect(() => {
-    if (clip) {
-      if (startTime === 0 && endTime === 0) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setStartTime(clip.start_time);
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setEndTime(clip.end_time);
-        if (clip.reframe_mode) setReframeMode(clip.reframe_mode);
-        if (clip.caption_preset_id) setCaptionPreset(clip.caption_preset_id);
-        if (clip.hook_text) setHookText(clip.hook_text);
-        setCaptionOverrideText("");
+    if (!clip || initializedRef.current) return;
+    initializedRef.current = true;
 
-        // Prepare caption preview data (word timestamps when available).
-        try {
-          const segs = (clip.transcript_segments || []) as TranscriptSegment[];
-          setOriginalCaptionSegments(segs);
-          const words: Array<{ word: string; start: number; end: number }> = [];
-          for (const seg of segs) {
-            const ws = seg?.words || [];
-            for (const w of ws) {
-              if (typeof w?.start === "number" && typeof w?.end === "number" && w?.word) {
-                words.push({ word: String(w.word), start: Number(w.start), end: Number(w.end) });
-              }
-            }
+    setStartTime(clip.start_time);
+    setEndTime(clip.end_time);
+    if (clip.reframe_mode) setReframeMode(clip.reframe_mode);
+    if (clip.caption_preset_id) setCaptionPreset(clip.caption_preset_id);
+    if (clip.hook_text) setHookText(clip.hook_text);
+    setCaptionOverrideText("");
+
+    // Prepare caption preview data (word timestamps when available).
+    try {
+      const segs = (clip.transcript_segments || []) as TranscriptSegment[];
+      setOriginalCaptionSegments(segs);
+      const words: Array<{ word: string; start: number; end: number }> = [];
+      for (const seg of segs) {
+        const ws = seg?.words || [];
+        for (const w of ws) {
+          if (typeof w?.start === "number" && typeof w?.end === "number" && w?.word) {
+            words.push({ word: String(w.word), start: Number(w.start), end: Number(w.end) });
           }
-          setAutoWords(words);
-        } catch {
-          setOriginalCaptionSegments(null);
-          setAutoWords([]);
         }
       }
+      setAutoWords(words);
+    } catch {
+      setOriginalCaptionSegments(null);
+      setAutoWords([]);
     }
   }, [clip]);
 
@@ -144,10 +143,10 @@ export default function EditorPage() {
   const sourceVideoUrl = VIDEO_URL(project?.id || "", project?.video_path);
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] flex-col lg:flex-row gap-6">
-      
+    <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100vh-8rem)]">
+
       {/* LEFT PANEL - PREVIEW */}
-      <div className="flex-1 rounded-xl bg-black border border-border/40 relative overflow-hidden flex flex-col">
+      <div className="flex-1 min-h-[60vh] lg:min-h-0 rounded-xl bg-black border border-border/40 relative overflow-hidden flex flex-col">
         <div className="h-12 border-b border-border/30 px-4 flex items-center justify-between text-muted-foreground z-10 bg-black/50 backdrop-blur-md">
           <Button variant="ghost" size="sm" onClick={() => router.back()} className="gap-2">
             <ArrowLeft className="h-4 w-4" /> Back
@@ -356,7 +355,7 @@ export default function EditorPage() {
       </div>
 
       {/* RIGHT PANEL - SETTINGS */}
-      <div className="w-full lg:w-[400px] border border-border/40 rounded-xl bg-card/40 flex flex-col shadow-lg overflow-y-auto">
+      <div className="w-full lg:w-[380px] lg:max-h-[calc(100vh-8rem)] border border-border/40 rounded-xl bg-card/40 flex flex-col shadow-lg overflow-y-auto">
         <div className="p-5 border-b border-border/30 sticky top-0 bg-card z-10">
           <h2 className="text-lg font-bold">Clip Settings</h2>
           <p className="text-xs text-muted-foreground mt-1 truncate">{clip.title}</p>

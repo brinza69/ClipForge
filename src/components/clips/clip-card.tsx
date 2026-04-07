@@ -41,7 +41,7 @@ export function ClipCard({ clip, projectId, rank, videoPath }: ClipCardProps) {
 
   const videoSrc = VIDEO_URL(projectId, videoPath);
 
-  const handleMouseEnter = useCallback(() => {
+  const startPreview = useCallback(() => {
     isHovering.current = true;
     const video = videoRef.current;
     if (!video) return;
@@ -50,13 +50,16 @@ export function ClipCard({ clip, projectId, rank, videoPath }: ClipCardProps) {
     video.play().catch(() => {});
   }, [clip.start_time]);
 
-  const handleMouseLeave = useCallback(() => {
+  const stopPreview = useCallback(() => {
     isHovering.current = false;
     const video = videoRef.current;
     if (!video) return;
     video.pause();
     video.style.opacity = "0";
   }, []);
+
+  const handleMouseEnter = startPreview;
+  const handleMouseLeave = stopPreview;
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
@@ -99,6 +102,8 @@ export function ClipCard({ clip, projectId, rank, videoPath }: ClipCardProps) {
           className="relative aspect-[9/16] w-full overflow-hidden bg-black/70"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
+          onTouchStart={startPreview}
+          onTouchEnd={stopPreview}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
