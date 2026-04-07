@@ -237,11 +237,22 @@ def _transcribe_worker(
             beam_size=5,
             word_timestamps=True,
             language=language,
+            # VAD helps skip non-speech audio but must be tuned:
+            # - 500ms min silence avoids over-segmenting fast speech
+            # - 400ms speech pad preserves word beginnings/endings
+            # - threshold 0.3 is permissive enough for accented speech
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=500,
-                speech_pad_ms=200,
+                speech_pad_ms=400,
+                threshold=0.3,
             ),
+            # Compression ratio filter: reject hallucinated/looping segments
+            compression_ratio_threshold=2.4,
+            # Log probability threshold for confident detection
+            log_prob_threshold=-1.0,
+            # Avoid hallucinations on non-speech sections
+            no_speech_threshold=0.6,
         )
     except Exception as e:
         result_queue.put(
@@ -281,9 +292,12 @@ def _transcribe_worker(
         words = []
         if getattr(segment, "words", None):
             for w in segment.words:
+                word_text = (w.word or "").strip()
+                if not word_text:
+                    continue
                 words.append(
                     {
-                        "word": (w.word or "").strip(),
+                        "word": word_text,
                         "start": round(float(w.start), 3),
                         "end": round(float(w.end), 3),
                         "probability": round(float(w.probability), 3),
@@ -306,7 +320,11 @@ def _transcribe_worker(
         full_text_parts.append(seg_data["text"])
 
     full_text = " ".join([p for p in full_text_parts if p]).strip()
-    word_count = sum(len(s.get("words", []) or []) or len((s.get("text") or "").split()) for s in segments)
+    # Count words: prefer word-level timestamps (more accurate); fall back to text split
+    word_count = sum(
+        len(s["words"]) if s.get("words") else len((s.get("text") or "").split())
+        for s in segments
+    )
 
     result_queue.put(
         {

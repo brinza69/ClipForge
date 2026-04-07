@@ -266,26 +266,27 @@ def generate_captions(
 
     if hook_text:
         hook_style = pysubs2.SSAStyle()
-        hook_style.fontname = "Segoe UI"  # Clean premium font for hook
-        hook_style.fontsize = 48
+        # Prioritize system fonts available on Windows, macOS, and Linux
+        hook_style.fontname = "Arial"  # Universal fallback; Impact looks too aggressive for hook box
+        hook_style.fontsize = 46
         hook_style.bold = True
-        # Place hook in the MID-FRAME area (alignment 5 = true center, then
-        # push upward slightly via marginv so it sits in the upper-mid zone,
-        # roughly 35-40% from the top — visually strong without covering face).
-        hook_style.alignment = 5  # Center
-        hook_style.marginv = 260  # Push upward from dead-center
-        hook_style.marginl = 90
-        hook_style.marginr = 90
-        hook_style.borderstyle = 3   # Opaque box background
-        hook_style.outline = 22      # Generous padding around text
-        hook_style.shadow = 5        # Soft shadow for premium depth
+        # Place hook in the upper-mid area (~35% from top) — strong visual
+        # position without covering the speaker's face
+        hook_style.alignment = 5  # Center (numpad)
+        hook_style.marginv = 280  # Push above dead-center
+        hook_style.marginl = 80
+        hook_style.marginr = 80
+        hook_style.borderstyle = 3   # Opaque background box
+        hook_style.outline = 24      # Generous padding = "pill" shape
+        hook_style.shadow = 6        # Drop shadow for depth
         hook_style.primarycolor = hex_to_ass_color("#FFFFFF")
-        hook_style.outlinecolor = hex_to_ass_color("#0D0D0D")      # Near-black premium bg
-        hook_style.backcolor = hex_to_ass_color("#000000C0")       # Shadow
+        hook_style.outlinecolor = hex_to_ass_color("#0A0A0A")      # Near-black background
+        hook_style.backcolor = hex_to_ass_color("#000000B0")       # Shadow color
         subs.styles["Hook"] = hook_style
 
         clip_duration = clip_end - clip_start
-        hook_duration_ms = int(min(4.5, clip_duration) * 1000)
+        # Hook should be visible for 3-5s; on very short clips cap at 15% of duration
+        hook_duration_ms = int(min(5.0, max(3.0, clip_duration * 0.15)) * 1000)
 
     # --- Anti-collision: when hook is mid-screen and captions are center-aligned,
     # push captions to bottom during hook display to avoid overlap ---
@@ -504,33 +505,39 @@ def _add_hook_event(
 
 def _group_words(words: List[Dict], max_per_group: int) -> List[List[Dict]]:
     """
-    Group words into display groups with punctuation-aware breaks.
+    Group words into display groups with punctuation-aware and pause-aware breaks.
 
     Rules:
       - Break after sentence-ending punctuation (. ! ?)
-      - Break after commas if group has >= 2 words already
+      - Break after commas/semicolons if group has >= 2 words already
+      - Break on natural speech pauses (>0.5s gap between words)
       - Never exceed max_per_group
-      - Avoid orphan words (1-word groups) by merging with previous
+      - Avoid orphan words (1-word groups) by merging with previous group
     """
     groups: List[List[Dict]] = []
     current_group: List[Dict] = []
 
-    for word in words:
+    for idx, word in enumerate(words):
         current_group.append(word)
         w = word["word"].rstrip()
 
         # Check for sentence-ending punctuation
-        is_sentence_end = w and w[-1] in ".!?"
-        # Check for clause break (comma, semicolon, colon, dash)
-        is_clause_break = w and w[-1] in ",;:-" and len(current_group) >= 2
+        is_sentence_end = bool(w and w[-1] in ".!?")
+        # Check for clause break (comma, semicolon, colon)
+        is_clause_break = bool(w and w[-1] in ",;:" and len(current_group) >= 2)
+        # Check for natural speech pause (gap > 0.5s to next word)
+        is_pause = False
+        if idx + 1 < len(words) and len(current_group) >= 2:
+            gap = words[idx + 1]["start"] - word["end"]
+            is_pause = gap > 0.5
 
-        if len(current_group) >= max_per_group or is_sentence_end or is_clause_break:
+        if len(current_group) >= max_per_group or is_sentence_end or is_clause_break or is_pause:
             groups.append(current_group)
             current_group = []
 
     if current_group:
-        # Avoid orphan: if last group is just 1 word and there's a previous group
-        # that isn't too long, merge it
+        # Avoid orphan: if last group is just 1 word, merge with previous group
+        # unless the previous group is already at max length
         if len(current_group) == 1 and groups and len(groups[-1]) < max_per_group:
             groups[-1].extend(current_group)
         else:
