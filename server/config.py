@@ -19,8 +19,10 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "auto"
     whisper_compute_type: str = "float16"
-    min_clip_duration: float = 55.0
-    max_clip_duration: float = 95.0
+    # Clip duration bounds — wide range to accommodate short-form content (30-90s)
+    # and longer interview cuts (up to 3 min). Target ~75s (TikTok sweet spot).
+    min_clip_duration: float = 30.0
+    max_clip_duration: float = 120.0
     target_clip_duration: float = 75.0
     default_clip_count: int = 10
     overlap_threshold: float = 0.3

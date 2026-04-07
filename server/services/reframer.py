@@ -185,6 +185,7 @@ def _analyze_sync(
             {"time": 0.0, "x": center_x, "y": center_y},
             {"time": duration, "x": center_x, "y": center_y},
         ]
+        logger.info(f"Reframe: using center crop fallback ({src_width}x{src_height} → {crop_width}x{crop_height})")
 
     # Smooth the keyframes
     keyframes = _smooth_keyframes(keyframes, min_move_distance=MIN_MOVE_PX)
@@ -515,7 +516,9 @@ def _compose_crop(
 
     has_opposing_face = False
     for (ox, oy, ow, oh) in all_faces:
-        if abs(ox - face_cx) < face_w and abs(oy - face_cy) < face_h:
+        # Skip if Euclidean distance is within one face-width (same face)
+        dist = ((ox - face_cx) ** 2 + (oy - face_cy) ** 2) ** 0.5
+        if dist < max(face_w, face_h) * 0.8:
             continue  # same face
         orel = ox / src_width
         if (face_rel_x < 0.4 and orel > 0.6) or (face_rel_x > 0.6 and orel < 0.4):

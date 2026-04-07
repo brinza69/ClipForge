@@ -26,6 +26,14 @@ logger = logging.getLogger("clipforge.scorer")
 # ============================================================================
 
 HOOK_PATTERNS = [
+    # Romanian patterns (common for Romanian speech content)
+    r"\bvă (?:spun|arăt|zic)\b",
+    r"\bnimeni nu (?:știe|vorbește|spune)\b",
+    r"\badevărul (?:este|despre)\b",
+    r"\bniciodată nu (?:am|vei)\b",
+    r"\bascultați (?:asta|bine)\b",
+    r"\bstați să (?:vă|vedeți)\b",
+
     # Mystery / Curiosity
     r"\bwhat (?:nobody|no one) tells you\b",
     r"\bthe (?:real|actual|true) reason\b",
@@ -68,6 +76,7 @@ HOOK_PATTERNS = [
 
 # Curiosity / engagement trigger words
 CURIOSITY_WORDS = {
+    # English
     "secret", "hidden", "exposed", "revealed", "shocking", "insane", "wild",
     "crazy", "unbelievable", "terrifying", "disturbing", "mysterious", "strange",
     "bizarre", "impossible", "banned", "forbidden", "classified", "conspiracy",
@@ -76,6 +85,10 @@ CURIOSITY_WORDS = {
     "incredible", "stunning", "mind-blowing", "game-changer", "revolutionary",
     "catastrophic", "unprecedented", "nightmare", "apocalyptic", "extinction",
     "nibiru", "planet", "cosmic", "galactic", "alien", "ufo",
+    # Romanian
+    "secret", "adevărul", "incredibil", "șocant", "periculos", "imposibil",
+    "interzis", "misterios", "descoperire", "dovadă", "urgent", "catastrofă",
+    "apocalipsă", "cosmic", "extraterestru", "conspirație", "revelație",
 }
 
 # Emotional intensity markers
@@ -531,7 +544,7 @@ def _score_candidate(
     elif sentence_count > 12:
         narrative_score += 5.0
 
-    if text.rstrip()[-1:] in ".!?" if text else False:
+    if text and text.rstrip() and text.rstrip()[-1] in ".!?":
         narrative_score += 10.0
 
     narrative_score = min(narrative_score, 100.0)
@@ -566,15 +579,15 @@ def _score_candidate(
             if rate_variance > 0.5:
                 dynamics_score += 20.0
 
-    # Duration proximity to target (prefer 60-90s range)
+    # Duration scoring — reward content in the 45-90s sweet spot, accept 30-120s
     dur = candidate.duration
-    if 60 <= dur <= 90:
-        dynamics_score += 25.0  # Sweet spot
-    elif 55 <= dur < 60 or 90 < dur <= 100:
-        dynamics_score += 15.0  # Acceptable
-    elif 45 <= dur < 55 or 100 < dur <= 120:
-        dynamics_score += 5.0   # Tolerable
-    # else: 0 — too short or too long
+    if 55 <= dur <= 90:
+        dynamics_score += 25.0  # Sweet spot (TikTok/Reels ideal)
+    elif 45 <= dur < 55 or 90 < dur <= 105:
+        dynamics_score += 18.0  # Good range
+    elif 30 <= dur < 45 or 105 < dur <= 120:
+        dynamics_score += 8.0   # Acceptable
+    # else: 0 — outside range
 
     dynamics_score = min(dynamics_score, 100.0)
 

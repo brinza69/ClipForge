@@ -69,7 +69,6 @@ async def export_clip(
 
     logger.info(f"Exporting clip: {video_path} [{start_time:.1f}s-{end_time:.1f}s] → {output_path}")
 
-    # Ensure output directory exists
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     blurred_mode = bool(reframe_data and reframe_data.get("mode") in {"blurred", "blurred_background", "blurredBackground"})
@@ -82,9 +81,6 @@ async def export_clip(
         "-i", video_path,                        # Input file
         "-t", str(duration),                     # Duration
     ]
-
-    # Ensure output directory exists
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Build video filter(s)
     if not reframe_data:

@@ -101,7 +101,7 @@ class JobQueue:
             job = await session.get(JobModel, job_id)
             if job:
                 job.status = JobStatus.failed.value
-                job.error = str(error)[:500]
+                job.error = str(error)[:800]
                 job.updated_at = datetime.utcnow()
                 
                 if job.project_id:

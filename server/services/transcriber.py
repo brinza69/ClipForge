@@ -178,7 +178,13 @@ async def transcribe(
             await asyncio.sleep(0.2)
 
         if outcome is None:
-            raise RuntimeError("Transcription worker exited without returning a result")
+            exit_code = worker.exitcode
+            raise RuntimeError(
+                f"Transcription worker exited without returning a result "
+                f"(exit code: {exit_code}). "
+                "This usually means the worker ran out of memory or crashed "
+                "loading the model. Try a smaller model or free up RAM."
+            )
 
         if not outcome.get("ok"):
             err = outcome.get("error", "Unknown transcription error")
