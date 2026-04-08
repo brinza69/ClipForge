@@ -55,6 +55,7 @@ async def init_db() -> None:
             ("hook_text_color", "VARCHAR(20)"),
             ("hook_bg_color", "VARCHAR(20)"),
             ("hook_y_position", "VARCHAR(20)"),
+            ("export_resolution", "VARCHAR(20)"),
         ]
         for col, col_type in _style_migrations:
             try:

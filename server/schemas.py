@@ -134,6 +134,7 @@ class ClipResponse(BaseModel):
     hook_text_color: Optional[str] = None
     hook_bg_color: Optional[str] = None
     hook_y_position: Optional[str] = None
+    export_resolution: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

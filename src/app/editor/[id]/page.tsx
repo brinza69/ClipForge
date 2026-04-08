@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight, Palette, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight, Palette, ChevronDown, ChevronUp, Maximize } from "lucide-react";
 import { toast } from "sonner";
 import type { Clip, Project, TranscriptSegment } from "@/types";
 
@@ -41,6 +41,8 @@ export default function EditorPage() {
   const [hookTextColor, setHookTextColor] = useState<string>("#FFFFFF");
   const [hookBgColor, setHookBgColor] = useState<string>("#0A0A0A");
   const [styleOverridesOpen, setStyleOverridesOpen] = useState<boolean>(false);
+  const [exportResolution, setExportResolution] = useState<string>("1080x1920");
+  const [previewMode, setPreviewMode] = useState<"9:16" | "16:9" | "original">("9:16");
 
   // Preset defaults for syncing style overrides when preset changes
   const PRESET_DEFAULTS: Record<string, { fontSize: number; textColor: string; highlightColor: string; outlineColor: string }> = {
@@ -92,6 +94,7 @@ export default function EditorPage() {
     setHookFontSize(clip.hook_font_size || 46);
     setHookTextColor(clip.hook_text_color || "#FFFFFF");
     setHookBgColor(clip.hook_bg_color || "#0A0A0A");
+    if (clip.export_resolution) setExportResolution(clip.export_resolution);
 
     // Prepare caption preview data (word timestamps when available).
     try {
@@ -159,6 +162,7 @@ export default function EditorPage() {
       hook_font_size: hookFontSize,
       hook_text_color: hookTextColor,
       hook_bg_color: hookBgColor,
+      export_resolution: exportResolution,
       // Caption override is exported by replacing the clip's caption segments.
       transcript_text: override ? override : (clip?.transcript_text ?? undefined),
       transcript_segments: override
@@ -183,6 +187,7 @@ export default function EditorPage() {
         hook_font_size: hookFontSize,
         hook_text_color: hookTextColor,
         hook_bg_color: hookBgColor,
+        export_resolution: exportResolution,
         transcript_text: override ? override : (clip?.transcript_text ?? undefined),
         transcript_segments: override
           ? [{ start: startTime, end: endTime, text: override }]
@@ -206,11 +211,30 @@ export default function EditorPage() {
           <Button variant="ghost" size="sm" onClick={() => router.back()} className="gap-2">
             <ArrowLeft className="h-4 w-4" /> Back
           </Button>
-          <span className="text-xs font-medium">Vertical Preview (9:16)</span>
+          <div className="flex items-center gap-1">
+            {(["9:16", "16:9", "original"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setPreviewMode(mode)}
+                className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                  previewMode === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted/60"
+                }`}
+              >
+                {mode === "original" ? "Original" : mode}
+              </button>
+            ))}
+          </div>
         </div>
-        
+
         <div className="flex-1 relative flex items-center justify-center p-4">
-          <div className="relative w-full aspect-[9/16] overflow-hidden rounded-lg border border-border/40 bg-black">
+          <div className={`relative overflow-hidden rounded-lg border border-border/40 bg-black ${
+            previewMode === "9:16" ? "h-full max-h-full aspect-[9/16]" :
+            previewMode === "16:9" ? "w-full aspect-[16/9]" :
+            "w-full aspect-video"
+          }`}>
             {/* Blurred background (preview-only). Export uses the backend reframe mode. */}
             {reframeMode === "blurred" && (
               // eslint-disable-next-line @next/next/no-img-element
@@ -231,7 +255,7 @@ export default function EditorPage() {
               controls
               playsInline
               preload="metadata"
-              className="absolute inset-0 w-full h-full object-cover"
+              className="absolute inset-0 w-full h-full object-contain"
               onLoadedMetadata={() => {
                 if (videoRef.current && startTime > 0) {
                   videoRef.current.currentTime = startTime;
@@ -574,6 +598,37 @@ export default function EditorPage() {
             )}
           </div>
 
+          {/* Export Resolution */}
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2"><Maximize className="h-4 w-4 text-primary" /> Export Resolution</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { value: "1080x1920", label: "1080×1920", desc: "Full HD 9:16" },
+                { value: "1440x2560", label: "1440×2560", desc: "2K 9:16" },
+                { value: "2160x3840", label: "2160×3840", desc: "4K 9:16" },
+                { value: "720x1280", label: "720×1280", desc: "HD 9:16" },
+                { value: "1920x1080", label: "1920×1080", desc: "Full HD 16:9" },
+                { value: "2560x1440", label: "2560×1440", desc: "2K 16:9" },
+                { value: "3840x2160", label: "3840×2160", desc: "4K 16:9" },
+                { value: "540x960", label: "540×960", desc: "SD 9:16" },
+              ].map((res) => (
+                <button
+                  key={res.value}
+                  type="button"
+                  onClick={() => setExportResolution(res.value)}
+                  className={`border rounded-lg p-2 text-left transition-colors ${
+                    exportResolution === res.value
+                      ? "bg-primary/10 border-primary"
+                      : "border-border/60 hover:bg-muted/50"
+                  }`}
+                >
+                  <div className="text-xs font-medium">{res.label}</div>
+                  <div className="text-[10px] text-muted-foreground">{res.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <Button variant="secondary" className="w-full text-xs" onClick={handleSave}>
             Save Configuration
           </Button>
@@ -589,7 +644,7 @@ export default function EditorPage() {
             {exportMutation.isPending ? "Starting Export..." : "Generate Vertical Clip"}
             {!exportMutation.isPending && <ArrowRight className="h-5 w-5" />}
           </Button>
-          <p className="text-[10px] text-center text-muted-foreground mt-3">Renders a 1080x1920 MP4 file with burnt-in captions.</p>
+          <p className="text-[10px] text-center text-muted-foreground mt-3">Renders a {exportResolution} MP4 file with burnt-in captions.</p>
         </div>
 
       </div>

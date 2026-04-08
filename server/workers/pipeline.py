@@ -425,6 +425,15 @@ async def handle_export(
         mapped = 0.4 + progress * 0.6
         await queue.update_progress(job_id, mapped, message)
 
+    # Parse export resolution from clip settings (e.g. "1080x1920", "720x1280")
+    export_w, export_h = None, None
+    if clip.export_resolution:
+        try:
+            parts = clip.export_resolution.lower().split("x")
+            export_w, export_h = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError):
+            pass
+
     # Step 3: Export (FFmpeg) with a hard timeout.
     export_timeout = max(300, int((end_time - start_time) * 6) + 120)
     await asyncio.wait_for(
@@ -436,6 +445,8 @@ async def handle_export(
             reframe_data=reframe_data,
             captions_path=captions_path,
             on_progress=on_export_progress,
+            width=export_w,
+            height=export_h,
         ),
         timeout=export_timeout,
     )

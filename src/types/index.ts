@@ -105,6 +105,7 @@ export interface Clip {
   hook_text_color?: string | null;
   hook_bg_color?: string | null;
   hook_y_position?: string | null;
+  export_resolution?: string | null;
   export_path: string | null;
   created_at: string | null;
 }

@@ -39,6 +39,7 @@ class ClipUpdate(BaseModel):
     hook_text_color: Optional[str] = None
     hook_bg_color: Optional[str] = None
     hook_y_position: Optional[str] = None
+    export_resolution: Optional[str] = None
 
 
 @router.get("/", response_model=list[ClipResponse])

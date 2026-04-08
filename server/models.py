@@ -180,6 +180,7 @@ class ClipModel(Base):
     hook_text_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     hook_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     hook_y_position: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    export_resolution: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
