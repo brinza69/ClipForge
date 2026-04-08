@@ -29,6 +29,17 @@ class ClipUpdate(BaseModel):
     # If `words` are omitted, the caption renderer will split segment text evenly.
     transcript_text: Optional[str] = None
     transcript_segments: Optional[list | dict] = None
+    # Style overrides (null means "use preset default")
+    caption_font_size: Optional[int] = None
+    caption_text_color: Optional[str] = None
+    caption_highlight_color: Optional[str] = None
+    caption_outline_color: Optional[str] = None
+    caption_y_position: Optional[str] = None
+    hook_font_size: Optional[int] = None
+    hook_text_color: Optional[str] = None
+    hook_bg_color: Optional[str] = None
+    hook_y_position: Optional[str] = None
+    export_resolution: Optional[str] = None
 
 
 @router.get("/", response_model=list[ClipResponse])

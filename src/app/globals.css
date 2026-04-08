@@ -73,3 +73,41 @@ body {
 .animate-fade-up { animation: fade-up 0.35s ease-out; }
 
 ::selection { background: oklch(0.72 0.19 145 / 0.3); color: white; }
+
+/* Custom range slider thumb styling */
+.slider-thumb-input {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 20px;
+  margin: 0;
+  cursor: pointer;
+}
+.slider-thumb-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  border: 1.5px solid var(--color-ring, oklch(0.72 0.19 145));
+  box-shadow: 0 0 0 0 oklch(0.72 0.19 145 / 0.3);
+  transition: box-shadow 0.15s;
+}
+.slider-thumb-input::-webkit-slider-thumb:hover,
+.slider-thumb-input::-webkit-slider-thumb:active {
+  box-shadow: 0 0 0 4px oklch(0.72 0.19 145 / 0.3);
+}
+.slider-thumb-input::-moz-range-thumb {
+  pointer-events: auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  border: 1.5px solid var(--color-ring, oklch(0.72 0.19 145));
+  box-shadow: none;
+}
+.slider-thumb-input::-moz-range-thumb:hover {
+  box-shadow: 0 0 0 4px oklch(0.72 0.19 145 / 0.3);
+}

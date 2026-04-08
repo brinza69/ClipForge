@@ -392,6 +392,20 @@ async def handle_export(
     if caption_segments:
         await queue.update_progress(job_id, 0.3, "Generating captions...")
         preset = DEFAULT_PRESETS.get(clip.caption_preset_id or "bold_impact") or DEFAULT_PRESETS.get("bold_impact")
+        style_overrides = {
+            "caption_font_size": clip.caption_font_size,
+            "caption_text_color": clip.caption_text_color,
+            "caption_highlight_color": clip.caption_highlight_color,
+            "caption_outline_color": clip.caption_outline_color,
+            "caption_y_position": clip.caption_y_position,
+            "hook_font_size": clip.hook_font_size,
+            "hook_text_color": clip.hook_text_color,
+            "hook_bg_color": clip.hook_bg_color,
+            "hook_y_position": clip.hook_y_position,
+        }
+        # Remove None values
+        style_overrides = {k: v for k, v in style_overrides.items() if v is not None}
+
         captions_path = generate_captions(
             segments=caption_segments,
             clip_start=start_time,
@@ -399,6 +413,7 @@ async def handle_export(
             preset=preset,
             output_path=str(settings.temp_dir / project_id / f"captions_{clip_id}.ass"),
             hook_text=clip.hook_text,
+            style_overrides=style_overrides or None,
         )
 
     # Step 3: Export
@@ -409,6 +424,15 @@ async def handle_export(
         # Map to 0.4 - 1.0 range
         mapped = 0.4 + progress * 0.6
         await queue.update_progress(job_id, mapped, message)
+
+    # Parse export resolution from clip settings (e.g. "1080x1920", "720x1280")
+    export_w, export_h = None, None
+    if clip.export_resolution:
+        try:
+            parts = clip.export_resolution.lower().split("x")
+            export_w, export_h = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError):
+            pass
 
     # Step 3: Export (FFmpeg) with a hard timeout.
     export_timeout = max(300, int((end_time - start_time) * 6) + 120)
@@ -421,6 +445,8 @@ async def handle_export(
             reframe_data=reframe_data,
             captions_path=captions_path,
             on_progress=on_export_progress,
+            width=export_w,
+            height=export_h,
         ),
         timeout=export_timeout,
     )

@@ -26,12 +26,55 @@ async def init_db() -> None:
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Add new columns to existing SQLite DB
-        for col in ["hook_text", "explanation", "thumbnail_path"]:
+        # Column migrations for clips table
+        _clip_migrations = [
+            ("hook_text", "TEXT"),
+            ("explanation", "TEXT"),
+            ("thumbnail_path", "TEXT"),
+            ("caption_preset_id", "VARCHAR(50)"),
+            ("reframe_mode", "VARCHAR(20)"),
+            ("reframe_data", "TEXT"),
+            ("export_path", "TEXT"),
+        ]
+        for col_name, col_type in _clip_migrations:
             try:
-                await conn.execute(text(f"ALTER TABLE clips ADD COLUMN {col} TEXT"))
+                await conn.execute(
+                    text(f"ALTER TABLE clips ADD COLUMN {col_name} {col_type}")
+                )
+            except Exception:
+                pass  # column already exists
+
+        # Style override columns on clips table
+        _style_migrations = [
+            ("caption_font_size", "INTEGER"),
+            ("caption_text_color", "VARCHAR(20)"),
+            ("caption_highlight_color", "VARCHAR(20)"),
+            ("caption_outline_color", "VARCHAR(20)"),
+            ("caption_y_position", "VARCHAR(20)"),
+            ("hook_font_size", "INTEGER"),
+            ("hook_text_color", "VARCHAR(20)"),
+            ("hook_bg_color", "VARCHAR(20)"),
+            ("hook_y_position", "VARCHAR(20)"),
+            ("export_resolution", "VARCHAR(20)"),
+        ]
+        for col, col_type in _style_migrations:
+            try:
+                await conn.execute(text(f"ALTER TABLE clips ADD COLUMN {col} {col_type}"))
             except Exception:
                 pass
+
+        # Fix any projects stuck at 'downloaded' that already have scored clips
+        try:
+            await conn.execute(text("""
+                UPDATE projects SET status = 'ready'
+                WHERE status = 'downloaded'
+                  AND id IN (
+                    SELECT DISTINCT project_id FROM clips
+                    WHERE hook_text IS NOT NULL
+                  )
+            """))
+        except Exception:
+            pass
 
 
 async def get_session():

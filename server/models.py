@@ -170,6 +170,18 @@ class ClipModel(Base):
     reframe_data: Mapped[list | dict | None] = mapped_column(JSON, nullable=True)
     caption_preset_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # Style overrides (nullable — null means "use preset default")
+    caption_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    caption_text_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    caption_highlight_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    caption_outline_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    caption_y_position: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "bottom", "center", "top"
+    hook_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_text_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hook_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hook_y_position: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    export_resolution: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

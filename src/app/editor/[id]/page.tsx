@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight } from "lucide-react";
+import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight, Palette, ChevronDown, ChevronUp, Maximize } from "lucide-react";
 import { toast } from "sonner";
 import type { Clip, Project, TranscriptSegment } from "@/types";
 
@@ -31,6 +31,29 @@ export default function EditorPage() {
   const [currentCaptionGroup, setCurrentCaptionGroup] = useState<string[]>([]);
   const [currentCaptionWord, setCurrentCaptionWord] = useState<string | null>(null);
   const [previewElapsed, setPreviewElapsed] = useState<number>(0);
+
+  // Style override states
+  const [captionFontSize, setCaptionFontSize] = useState<number>(72);
+  const [captionTextColor, setCaptionTextColor] = useState<string>("#FFFFFF");
+  const [captionHighlightColor, setCaptionHighlightColor] = useState<string>("#FFD700");
+  const [captionOutlineColor, setCaptionOutlineColor] = useState<string>("#000000");
+  const [hookFontSize, setHookFontSize] = useState<number>(46);
+  const [hookTextColor, setHookTextColor] = useState<string>("#FFFFFF");
+  const [hookBgColor, setHookBgColor] = useState<string>("#0A0A0A");
+  const [styleOverridesOpen, setStyleOverridesOpen] = useState<boolean>(false);
+  const [exportResolution, setExportResolution] = useState<string>("1080x1920");
+  const [previewMode, setPreviewMode] = useState<"9:16" | "16:9" | "original">("9:16");
+
+  // Preset defaults for syncing style overrides when preset changes
+  const PRESET_DEFAULTS: Record<string, { fontSize: number; textColor: string; highlightColor: string; outlineColor: string }> = {
+    bold_impact:     { fontSize: 72, textColor: "#FFFFFF", highlightColor: "#FFD700", outlineColor: "#000000" },
+    clean_minimal:   { fontSize: 62, textColor: "#FFFFFF", highlightColor: "#00D4FF", outlineColor: "#000000" },
+    neon_pop:        { fontSize: 74, textColor: "#FFFFFF", highlightColor: "#FF3366", outlineColor: "#1A0033" },
+    classic_white:   { fontSize: 62, textColor: "#FFFFFF", highlightColor: "#FFFFFF", outlineColor: "#000000" },
+    karaoke_yellow:  { fontSize: 68, textColor: "#FFFFFF", highlightColor: "#FFE600", outlineColor: "#000000" },
+    boxed_white:     { fontSize: 64, textColor: "#FFFFFF", highlightColor: "#FFFFFF", outlineColor: "#000000" },
+    viral_gradient:  { fontSize: 76, textColor: "#FFFFFF", highlightColor: "#FF6B35", outlineColor: "#000000" },
+  };
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgVideoRef = useRef<HTMLVideoElement>(null);
@@ -61,6 +84,18 @@ export default function EditorPage() {
     if (clip.hook_text) setHookText(clip.hook_text);
     setCaptionOverrideText("");
 
+    // Initialize style overrides from clip data (or fall back to preset defaults)
+    const presetId = clip.caption_preset_id || "bold_impact";
+    const defaults = PRESET_DEFAULTS[presetId] || PRESET_DEFAULTS.bold_impact;
+    setCaptionFontSize(clip.caption_font_size || defaults.fontSize);
+    setCaptionTextColor(clip.caption_text_color || defaults.textColor);
+    setCaptionHighlightColor(clip.caption_highlight_color || defaults.highlightColor);
+    setCaptionOutlineColor(clip.caption_outline_color || defaults.outlineColor);
+    setHookFontSize(clip.hook_font_size || 46);
+    setHookTextColor(clip.hook_text_color || "#FFFFFF");
+    setHookBgColor(clip.hook_bg_color || "#0A0A0A");
+    if (clip.export_resolution) setExportResolution(clip.export_resolution);
+
     // Prepare caption preview data (word timestamps when available).
     try {
       const segs = (clip.transcript_segments || []) as TranscriptSegment[];
@@ -89,6 +124,15 @@ export default function EditorPage() {
     },
   });
 
+  const handlePresetChange = (presetId: string) => {
+    setCaptionPreset(presetId);
+    const defaults = PRESET_DEFAULTS[presetId] || PRESET_DEFAULTS.bold_impact;
+    setCaptionFontSize(defaults.fontSize);
+    setCaptionTextColor(defaults.textColor);
+    setCaptionHighlightColor(defaults.highlightColor);
+    setCaptionOutlineColor(defaults.outlineColor);
+  };
+
   const exportMutation = useMutation({
     mutationFn: () => api.clips.export(clipId),
     onSuccess: (data) => {
@@ -111,6 +155,14 @@ export default function EditorPage() {
       reframe_mode: reframeMode,
       caption_preset_id: captionPreset,
       hook_text: hookText,
+      caption_font_size: captionFontSize,
+      caption_text_color: captionTextColor,
+      caption_highlight_color: captionHighlightColor,
+      caption_outline_color: captionOutlineColor,
+      hook_font_size: hookFontSize,
+      hook_text_color: hookTextColor,
+      hook_bg_color: hookBgColor,
+      export_resolution: exportResolution,
       // Caption override is exported by replacing the clip's caption segments.
       transcript_text: override ? override : (clip?.transcript_text ?? undefined),
       transcript_segments: override
@@ -128,6 +180,14 @@ export default function EditorPage() {
         reframe_mode: reframeMode,
         caption_preset_id: captionPreset,
         hook_text: hookText,
+        caption_font_size: captionFontSize,
+        caption_text_color: captionTextColor,
+        caption_highlight_color: captionHighlightColor,
+        caption_outline_color: captionOutlineColor,
+        hook_font_size: hookFontSize,
+        hook_text_color: hookTextColor,
+        hook_bg_color: hookBgColor,
+        export_resolution: exportResolution,
         transcript_text: override ? override : (clip?.transcript_text ?? undefined),
         transcript_segments: override
           ? [{ start: startTime, end: endTime, text: override }]
@@ -151,11 +211,30 @@ export default function EditorPage() {
           <Button variant="ghost" size="sm" onClick={() => router.back()} className="gap-2">
             <ArrowLeft className="h-4 w-4" /> Back
           </Button>
-          <span className="text-xs font-medium">Vertical Preview (9:16)</span>
+          <div className="flex items-center gap-1">
+            {(["9:16", "16:9", "original"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setPreviewMode(mode)}
+                className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                  previewMode === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted/60"
+                }`}
+              >
+                {mode === "original" ? "Original" : mode}
+              </button>
+            ))}
+          </div>
         </div>
-        
+
         <div className="flex-1 relative flex items-center justify-center p-4">
-          <div className="relative w-full aspect-[9/16] overflow-hidden rounded-lg border border-border/40 bg-black">
+          <div className={`relative overflow-hidden rounded-lg border border-border/40 bg-black ${
+            previewMode === "9:16" ? "h-full max-h-full aspect-[9/16]" :
+            previewMode === "16:9" ? "w-full aspect-[16/9]" :
+            "w-full aspect-video"
+          }`}>
             {/* Blurred background (preview-only). Export uses the backend reframe mode. */}
             {reframeMode === "blurred" && (
               // eslint-disable-next-line @next/next/no-img-element
@@ -176,7 +255,7 @@ export default function EditorPage() {
               controls
               playsInline
               preload="metadata"
-              className="absolute inset-0 w-full h-full object-cover"
+              className="absolute inset-0 w-full h-full object-contain"
               onLoadedMetadata={() => {
                 if (videoRef.current && startTime > 0) {
                   videoRef.current.currentTime = startTime;
@@ -280,8 +359,14 @@ export default function EditorPage() {
             <div className="absolute inset-0 pointer-events-none">
               {/* Hook box uses current video time */}
               {hookText.trim().length > 0 && previewElapsed <= 4.0 && (
-                <div className="absolute top-[32%] left-1/2 -translate-x-1/2 max-w-[82%] px-7 py-5 rounded-2xl bg-[#0D0D0D]/95 border border-white/8 shadow-2xl backdrop-blur-sm">
-                  <div className="text-[17px] leading-snug font-bold text-white text-center">
+                <div
+                  className="absolute top-[32%] left-1/2 -translate-x-1/2 max-w-[82%] px-7 py-5 rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
+                  style={{ backgroundColor: hookBgColor + "F2" }}
+                >
+                  <div
+                    className="leading-snug font-bold text-center"
+                    style={{ color: hookTextColor, fontSize: `${Math.round(hookFontSize * 0.37)}px` }}
+                  >
                     {hookText}
                   </div>
                 </div>
@@ -291,33 +376,21 @@ export default function EditorPage() {
               {currentCaptionGroup.length > 0 && currentCaptionWord && (
                 <div className="absolute bottom-[26%] left-0 right-0 px-6">
                   <div
-                    className="text-[28px] font-extrabold tracking-wide text-white text-center"
-                    style={{ textShadow: "0 2px 8px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.8)" }}
+                    className="font-extrabold tracking-wide text-center"
+                    style={{
+                      fontSize: `${Math.round(captionFontSize * 0.39)}px`,
+                      color: captionTextColor,
+                      textShadow: `0 2px 8px ${captionOutlineColor}E6, 0 0 2px ${captionOutlineColor}CC`,
+                    }}
                   >
                     {currentCaptionGroup.map((w, i) => (
                       <span
                         key={`${w}-${i}`}
-                        className={
-                          w === currentCaptionWord
-                            ? captionPreset === "clean_minimal"
-                              ? "px-2 py-1 rounded text-cyan-400"
-                              : captionPreset === "neon_pop"
-                                ? "px-2 py-1 rounded bg-pink-500 text-white drop-shadow-[0_0_6px_rgba(236,72,153,0.7)]"
-                                : captionPreset === "classic_white"
-                                  ? "px-2 py-1 rounded"
-                                  : captionPreset === "karaoke_yellow"
-                                    ? "px-2 py-1 rounded text-yellow-400"
-                                    : captionPreset === "boxed_white"
-                                      ? "px-2 py-1 rounded bg-black/80 text-white"
-                                      : captionPreset === "viral_gradient"
-                                        ? "px-2 py-1 rounded text-orange-500"
-                                        : "px-2 py-1 rounded bg-yellow-400 text-black"
-                            : "mx-1 opacity-90"
-                        }
+                        className="px-1"
                         style={
-                          w !== currentCaptionWord
-                            ? { textShadow: "0 1px 4px rgba(0,0,0,0.8)" }
-                            : undefined
+                          w === currentCaptionWord
+                            ? { color: captionHighlightColor, transform: "scale(1.05)", display: "inline-block" }
+                            : { opacity: 0.9 }
                         }
                       >
                         {w}
@@ -423,7 +496,7 @@ export default function EditorPage() {
           {/* Caption Style */}
           <div className="space-y-4">
             <Label className="flex items-center gap-2"><Film className="h-4 w-4 text-primary"/> Caption Style</Label>
-            <RadioGroup value={captionPreset} onValueChange={setCaptionPreset} className="grid grid-cols-3 gap-3">
+            <RadioGroup value={captionPreset} onValueChange={handlePresetChange} className="grid grid-cols-3 gap-3">
               <Label className={`border rounded-lg flex flex-col items-center justify-center p-4 cursor-pointer text-center h-24 transition-colors ${captionPreset === "bold_impact" ? "bg-primary/10 border-primary" : "border-border/60 hover:bg-muted/50"}`}>
                 <span className="font-black italic block text-lg uppercase tracking-wider text-yellow-500" style={{ textShadow: "1px 1px 0 #000" }}>BOLD</span>
                 <RadioGroupItem value="bold_impact" className="sr-only" />
@@ -455,6 +528,107 @@ export default function EditorPage() {
             </RadioGroup>
           </div>
 
+          {/* Style Overrides */}
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setStyleOverridesOpen(!styleOverridesOpen)}
+              className="flex items-center gap-2 w-full text-sm font-semibold text-left"
+            >
+              <Palette className="h-4 w-4 text-primary" />
+              Style Overrides
+              {styleOverridesOpen ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
+            </button>
+            <p className="text-[10px] text-muted-foreground">Fine-tune colors and sizes. Presets set the defaults; tweak them here.</p>
+
+            {styleOverridesOpen && (
+              <div className="space-y-4 pt-1">
+                {/* Caption overrides */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Captions</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Font Size ({captionFontSize})</Label>
+                    <Slider
+                      value={[captionFontSize]}
+                      min={32}
+                      max={120}
+                      step={2}
+                      onValueChange={(val: number | readonly number[]) => setCaptionFontSize(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Text Color</Label>
+                    <input type="color" value={captionTextColor} onChange={(e) => setCaptionTextColor(e.target.value)} className="w-8 h-8 rounded border border-border/60 cursor-pointer bg-transparent" />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Highlight Color</Label>
+                    <input type="color" value={captionHighlightColor} onChange={(e) => setCaptionHighlightColor(e.target.value)} className="w-8 h-8 rounded border border-border/60 cursor-pointer bg-transparent" />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Outline Color</Label>
+                    <input type="color" value={captionOutlineColor} onChange={(e) => setCaptionOutlineColor(e.target.value)} className="w-8 h-8 rounded border border-border/60 cursor-pointer bg-transparent" />
+                  </div>
+                </div>
+
+                {/* Hook overrides */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Hook Box</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Font Size ({hookFontSize})</Label>
+                    <Slider
+                      value={[hookFontSize]}
+                      min={24}
+                      max={80}
+                      step={2}
+                      onValueChange={(val: number | readonly number[]) => setHookFontSize(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Text Color</Label>
+                    <input type="color" value={hookTextColor} onChange={(e) => setHookTextColor(e.target.value)} className="w-8 h-8 rounded border border-border/60 cursor-pointer bg-transparent" />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Background</Label>
+                    <input type="color" value={hookBgColor} onChange={(e) => setHookBgColor(e.target.value)} className="w-8 h-8 rounded border border-border/60 cursor-pointer bg-transparent" />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Export Resolution */}
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2"><Maximize className="h-4 w-4 text-primary" /> Export Resolution</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { value: "1080x1920", label: "1080×1920", desc: "Full HD 9:16" },
+                { value: "1440x2560", label: "1440×2560", desc: "2K 9:16" },
+                { value: "2160x3840", label: "2160×3840", desc: "4K 9:16" },
+                { value: "720x1280", label: "720×1280", desc: "HD 9:16" },
+                { value: "1920x1080", label: "1920×1080", desc: "Full HD 16:9" },
+                { value: "2560x1440", label: "2560×1440", desc: "2K 16:9" },
+                { value: "3840x2160", label: "3840×2160", desc: "4K 16:9" },
+                { value: "540x960", label: "540×960", desc: "SD 9:16" },
+              ].map((res) => (
+                <button
+                  key={res.value}
+                  type="button"
+                  onClick={() => setExportResolution(res.value)}
+                  className={`border rounded-lg p-2 text-left transition-colors ${
+                    exportResolution === res.value
+                      ? "bg-primary/10 border-primary"
+                      : "border-border/60 hover:bg-muted/50"
+                  }`}
+                >
+                  <div className="text-xs font-medium">{res.label}</div>
+                  <div className="text-[10px] text-muted-foreground">{res.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <Button variant="secondary" className="w-full text-xs" onClick={handleSave}>
             Save Configuration
           </Button>
@@ -470,7 +644,7 @@ export default function EditorPage() {
             {exportMutation.isPending ? "Starting Export..." : "Generate Vertical Clip"}
             {!exportMutation.isPending && <ArrowRight className="h-5 w-5" />}
           </Button>
-          <p className="text-[10px] text-center text-muted-foreground mt-3">Renders a 1080x1920 MP4 file with burnt-in captions.</p>
+          <p className="text-[10px] text-center text-muted-foreground mt-3">Renders a {exportResolution} MP4 file with burnt-in captions.</p>
         </div>
 
       </div>
