@@ -197,6 +197,7 @@ def generate_captions(
     preset: Optional[Dict] = None,
     output_path: Optional[str] = None,
     hook_text: Optional[str] = None,
+    style_overrides: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Generate an ASS subtitle file with animated word-by-word captions.
@@ -212,7 +213,18 @@ def generate_captions(
     Returns:
         Path to the generated ASS file
     """
-    preset = preset or DEFAULT_PRESETS["bold_impact"]
+    preset = dict(preset or DEFAULT_PRESETS["bold_impact"])  # copy so overrides don't mutate original
+    if style_overrides:
+        if style_overrides.get("caption_font_size"):
+            preset["font_size"] = style_overrides["caption_font_size"]
+        if style_overrides.get("caption_text_color"):
+            preset["text_color"] = style_overrides["caption_text_color"]
+        if style_overrides.get("caption_highlight_color"):
+            preset["highlight_color"] = style_overrides["caption_highlight_color"]
+        if style_overrides.get("caption_outline_color"):
+            preset["outline_color"] = style_overrides["caption_outline_color"]
+        if style_overrides.get("caption_y_position"):
+            preset["position"] = style_overrides["caption_y_position"]
     logger.info(f"Generating captions [{clip_start:.1f}s-{clip_end:.1f}s] preset={preset.get('name', 'custom')}")
 
     subs = pysubs2.SSAFile()
@@ -268,7 +280,7 @@ def generate_captions(
         hook_style = pysubs2.SSAStyle()
         # Prioritize system fonts available on Windows, macOS, and Linux
         hook_style.fontname = "Arial"  # Universal fallback; Impact looks too aggressive for hook box
-        hook_style.fontsize = 46
+        hook_style.fontsize = (style_overrides or {}).get("hook_font_size") or 46
         hook_style.bold = True
         # Place hook in the upper-mid area (~35% from top) — strong visual
         # position without covering the speaker's face
@@ -279,8 +291,12 @@ def generate_captions(
         hook_style.borderstyle = 3   # Opaque background box
         hook_style.outline = 24      # Generous padding = "pill" shape
         hook_style.shadow = 6        # Drop shadow for depth
-        hook_style.primarycolor = hex_to_ass_color("#FFFFFF")
-        hook_style.outlinecolor = hex_to_ass_color("#0A0A0A")      # Near-black background
+        hook_style.primarycolor = hex_to_ass_color(
+            (style_overrides or {}).get("hook_text_color") or "#FFFFFF"
+        )
+        hook_style.outlinecolor = hex_to_ass_color(
+            (style_overrides or {}).get("hook_bg_color") or "#0A0A0A"
+        )      # Near-black background
         hook_style.backcolor = hex_to_ass_color("#000000B0")       # Shadow color
         subs.styles["Hook"] = hook_style
 

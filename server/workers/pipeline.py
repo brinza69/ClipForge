@@ -392,6 +392,20 @@ async def handle_export(
     if caption_segments:
         await queue.update_progress(job_id, 0.3, "Generating captions...")
         preset = DEFAULT_PRESETS.get(clip.caption_preset_id or "bold_impact") or DEFAULT_PRESETS.get("bold_impact")
+        style_overrides = {
+            "caption_font_size": clip.caption_font_size,
+            "caption_text_color": clip.caption_text_color,
+            "caption_highlight_color": clip.caption_highlight_color,
+            "caption_outline_color": clip.caption_outline_color,
+            "caption_y_position": clip.caption_y_position,
+            "hook_font_size": clip.hook_font_size,
+            "hook_text_color": clip.hook_text_color,
+            "hook_bg_color": clip.hook_bg_color,
+            "hook_y_position": clip.hook_y_position,
+        }
+        # Remove None values
+        style_overrides = {k: v for k, v in style_overrides.items() if v is not None}
+
         captions_path = generate_captions(
             segments=caption_segments,
             clip_start=start_time,
@@ -399,6 +413,7 @@ async def handle_export(
             preset=preset,
             output_path=str(settings.temp_dir / project_id / f"captions_{clip_id}.ass"),
             hook_text=clip.hook_text,
+            style_overrides=style_overrides or None,
         )
 
     # Step 3: Export

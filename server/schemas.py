@@ -124,6 +124,16 @@ class ClipResponse(BaseModel):
     reframe_mode: Optional[str] = None
     reframe_data: Optional[list | dict] = None
     caption_preset_id: Optional[str] = None
+    # Style overrides
+    caption_font_size: Optional[int] = None
+    caption_text_color: Optional[str] = None
+    caption_highlight_color: Optional[str] = None
+    caption_outline_color: Optional[str] = None
+    caption_y_position: Optional[str] = None
+    hook_font_size: Optional[int] = None
+    hook_text_color: Optional[str] = None
+    hook_bg_color: Optional[str] = None
+    hook_y_position: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

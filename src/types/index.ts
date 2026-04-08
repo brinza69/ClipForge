@@ -96,6 +96,15 @@ export interface Clip {
   reframe_data?: any;
   reframe_mode?: string;
   caption_preset_id?: string;
+  caption_font_size?: number | null;
+  caption_text_color?: string | null;
+  caption_highlight_color?: string | null;
+  caption_outline_color?: string | null;
+  caption_y_position?: string | null;
+  hook_font_size?: number | null;
+  hook_text_color?: string | null;
+  hook_bg_color?: string | null;
+  hook_y_position?: string | null;
   export_path: string | null;
   created_at: string | null;
 }
