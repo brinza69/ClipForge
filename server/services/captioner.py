@@ -258,6 +258,19 @@ def generate_captions(
     normal_style.marginl = 60
     normal_style.marginr = 60
 
+    # Apply subtitle position overrides (subtitle_y = 0-100 vertical %)
+    sub_y_override = (style_overrides or {}).get("subtitle_y")
+    if sub_y_override is not None:
+        # Map 0-100 to ASS marginv: 0=top(large marginv from top), 100=bottom(large marginv from bottom)
+        # For bottom-aligned (2): marginv is distance from bottom edge
+        # sub_y=0 means very top → large marginv pushes up; sub_y=100 means bottom → small marginv
+        if normal_style.alignment in (1, 2, 3):  # bottom-aligned
+            normal_style.marginv = max(20, int((100 - sub_y_override) / 100 * 1920))
+        elif normal_style.alignment in (7, 8, 9):  # top-aligned
+            normal_style.marginv = max(20, int(sub_y_override / 100 * 1920))
+        else:  # center-aligned
+            normal_style.marginv = int((50 - sub_y_override) / 100 * 1920)
+
     subs.styles["Default"] = normal_style
 
     # --- Highlighted word style ---
@@ -278,31 +291,45 @@ def generate_captions(
 
     if hook_text:
         hook_style = pysubs2.SSAStyle()
-        # Prioritize system fonts available on Windows, macOS, and Linux
-        hook_style.fontname = "Arial"  # Universal fallback; Impact looks too aggressive for hook box
+        hook_style.fontname = "Arial"
         hook_style.fontsize = (style_overrides or {}).get("hook_font_size") or 46
         hook_style.bold = True
-        # Place hook in the upper-mid area (~35% from top) — strong visual
-        # position without covering the speaker's face
-        hook_style.alignment = 5  # Center (numpad)
-        hook_style.marginv = 280  # Push above dead-center
-        hook_style.marginl = 80
-        hook_style.marginr = 80
+
+        # Hook position: use hook_x/hook_y overrides or defaults
+        hook_x_pos = (style_overrides or {}).get("hook_x")  # 0-100 percentage
+        hook_y_pos = (style_overrides or {}).get("hook_y")  # 0-100 percentage
+        if hook_x_pos is not None and hook_y_pos is not None:
+            # Use \pos override in the event text instead of style alignment
+            hook_style.alignment = 5  # Center anchor for \pos
+            hook_style.marginv = 0
+            hook_style.marginl = 0
+            hook_style.marginr = 0
+        else:
+            hook_style.alignment = 5  # Center (numpad)
+            hook_style.marginv = 280  # Push above dead-center
+            hook_style.marginl = 80
+            hook_style.marginr = 80
+
         hook_style.borderstyle = 3   # Opaque background box
-        hook_style.outline = 24      # Generous padding = "pill" shape
-        hook_style.shadow = 6        # Drop shadow for depth
+        hook_box_size = (style_overrides or {}).get("hook_box_size") or 24
+        hook_style.outline = hook_box_size  # Controls padding around hook text
+        hook_style.shadow = max(6, hook_box_size // 4)
         hook_style.primarycolor = hex_to_ass_color(
             (style_overrides or {}).get("hook_text_color") or "#FFFFFF"
         )
         hook_style.outlinecolor = hex_to_ass_color(
             (style_overrides or {}).get("hook_bg_color") or "#0A0A0A"
-        )      # Near-black background
-        hook_style.backcolor = hex_to_ass_color("#000000B0")       # Shadow color
+        )
+        hook_style.backcolor = hex_to_ass_color("#000000B0")
         subs.styles["Hook"] = hook_style
 
         clip_duration = clip_end - clip_start
-        # Hook should be visible for 3-5s; on very short clips cap at 15% of duration
-        hook_duration_ms = int(min(5.0, max(3.0, clip_duration * 0.15)) * 1000)
+        # Use explicit duration from overrides, or auto-calculate
+        hook_dur_override = (style_overrides or {}).get("hook_duration_seconds")
+        if hook_dur_override and hook_dur_override > 0:
+            hook_duration_ms = int(hook_dur_override * 1000)
+        else:
+            hook_duration_ms = int(min(5.0, max(3.0, clip_duration * 0.15)) * 1000)
 
     # --- Anti-collision: when hook is mid-screen and captions are center-aligned,
     # push captions to bottom during hook display to avoid overlap ---
@@ -325,7 +352,13 @@ def generate_captions(
         logger.warning("No words found for caption generation")
         # Still generate hook if present
         if hook_text and output_path:
-            _add_hook_event(subs, hook_text, hook_duration_ms, hook_fade_ms)
+            _add_hook_event(
+                subs, hook_text, hook_duration_ms, hook_fade_ms,
+                hook_x=(style_overrides or {}).get("hook_x"),
+                hook_y=(style_overrides or {}).get("hook_y"),
+                hook_font_size=(style_overrides or {}).get("hook_font_size"),
+                hook_box_size=(style_overrides or {}).get("hook_box_size"),
+            )
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             subs.save(output_path, encoding="utf-8")
             return output_path
@@ -358,7 +391,13 @@ def generate_captions(
 
     # Insert hook event
     if hook_text:
-        _add_hook_event(subs, hook_text, hook_duration_ms, hook_fade_ms)
+        _add_hook_event(
+            subs, hook_text, hook_duration_ms, hook_fade_ms,
+            hook_x=(style_overrides or {}).get("hook_x"),
+            hook_y=(style_overrides or {}).get("hook_y"),
+            hook_font_size=(style_overrides or {}).get("hook_font_size"),
+            hook_box_size=(style_overrides or {}).get("hook_box_size"),
+        )
 
     # Save
     if not output_path:
@@ -494,14 +533,31 @@ def _add_hook_event(
     hook_text: str,
     duration_ms: int,
     fade_ms: int = 300,
+    hook_x: int = None,
+    hook_y: int = None,
+    hook_font_size: int = None,
+    hook_box_size: int = None,
 ):
-    """Add the hook text event with fade + scale-up animation for premium feel."""
-    # Wrap with fad (fade) + fscx/fscy scale animation:
-    # Start at 90% scale, grow to 100% over first 400ms for a subtle pop-in
-    scale_in = 400  # ms for scale animation
-    # ASS animation: \t(0,400,\fscx100\fscy100) starting from \fscx92\fscy92
+    """Add the hook text event with fade + scale-up animation for premium feel.
+
+    Hook text wraps inside the box via ASS \\q1 (word-wrap) mode.
+    If hook_x/hook_y are provided (0-100 percentage), position with \\pos.
+    """
+    scale_in = 400
+    play_res_x = int(subs.info.get("PlayResX", 1080))
+    play_res_y = int(subs.info.get("PlayResY", 1920))
+
+    # Build position override tag if x/y provided
+    pos_tag = ""
+    if hook_x is not None and hook_y is not None:
+        px = int(hook_x / 100 * play_res_x)
+        py = int(hook_y / 100 * play_res_y)
+        pos_tag = f"\\pos({px},{py})"
+
+    # Enable word wrapping (\\q1 = end-of-line wrapping, respects \\ClipRect / margins)
     anim = (
-        f"{{\\fad({fade_ms},{fade_ms})"
+        f"{{\\q1{pos_tag}"
+        f"\\fad({fade_ms},{fade_ms})"
         f"\\fscx92\\fscy92"
         f"\\t(0,{scale_in},\\fscx100\\fscy100)"
         f"}}{hook_text}"
@@ -513,6 +569,66 @@ def _add_hook_event(
         style="Hook",
     )
     subs.events.insert(0, hook_event)
+
+
+def _add_part_label_event(
+    subs: pysubs2.SSAFile,
+    part_num: int,
+    total_parts: int,
+    duration_ms: int,
+    style_overrides: dict = None,
+):
+    """Add a 'Part X/Y' label overlay that shows for the entire part duration."""
+    overrides = style_overrides or {}
+
+    label_style = pysubs2.SSAStyle()
+    label_style.fontname = "Arial"
+    label_style.fontsize = overrides.get("part_label_font_size") or 32
+    label_style.bold = True
+    label_style.borderstyle = 3  # Opaque box
+    label_box_size = overrides.get("part_label_box_size") or 14
+    label_style.outline = label_box_size
+    label_style.shadow = max(3, label_box_size // 4)
+    label_style.primarycolor = hex_to_ass_color(
+        overrides.get("part_label_text_color") or "#FFFFFF"
+    )
+    label_style.outlinecolor = hex_to_ass_color(
+        overrides.get("part_label_bg_color") or "#000000CC"
+    )
+    label_style.backcolor = hex_to_ass_color("#00000080")
+
+    play_res_x = int(subs.info.get("PlayResX", 1080))
+    play_res_y = int(subs.info.get("PlayResY", 1920))
+
+    # Position: use part_label_x/part_label_y (0-100) or default top-right
+    label_x = overrides.get("part_label_x")
+    label_y = overrides.get("part_label_y")
+    if label_x is not None and label_y is not None:
+        label_style.alignment = 5  # center anchor
+        label_style.marginv = 0
+        label_style.marginl = 0
+        label_style.marginr = 0
+        px = int(label_x / 100 * play_res_x)
+        py = int(label_y / 100 * play_res_y)
+        pos_tag = f"\\pos({px},{py})"
+    else:
+        # Default: top-right area
+        label_style.alignment = 9  # top-right
+        label_style.marginv = 180
+        label_style.marginr = 40
+        label_style.marginl = 40
+        pos_tag = ""
+
+    subs.styles["PartLabel"] = label_style
+
+    label_text = f"Part {part_num}/{total_parts}"
+    event = pysubs2.SSAEvent(
+        start=0,
+        end=duration_ms,
+        text=f"{{{pos_tag}}}{label_text}" if pos_tag else label_text,
+        style="PartLabel",
+    )
+    subs.events.append(event)
 
 
 # ---------------------------------------------------------------------------

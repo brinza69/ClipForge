@@ -55,7 +55,21 @@ async def init_db() -> None:
             ("hook_text_color", "VARCHAR(20)"),
             ("hook_bg_color", "VARCHAR(20)"),
             ("hook_y_position", "VARCHAR(20)"),
+            ("hook_box_size", "INTEGER"),
+            ("hook_duration_seconds", "REAL"),
+            ("hook_x", "INTEGER"),
+            ("hook_y", "INTEGER"),
+            ("subtitle_x", "INTEGER"),
+            ("subtitle_y", "INTEGER"),
             ("export_resolution", "VARCHAR(20)"),
+            ("split_mode", "VARCHAR(10)"),
+            ("split_parts_count", "INTEGER"),
+            ("part_label_font_size", "INTEGER"),
+            ("part_label_box_size", "INTEGER"),
+            ("part_label_text_color", "VARCHAR(20)"),
+            ("part_label_bg_color", "VARCHAR(20)"),
+            ("part_label_x", "INTEGER"),
+            ("part_label_y", "INTEGER"),
         ]
         for col, col_type in _style_migrations:
             try:
