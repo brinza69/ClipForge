@@ -410,7 +410,7 @@ export default function EditorPage() {
                   className="absolute max-w-[82%] rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
                   style={{
                     backgroundColor: hookBgColor + "F2",
-                    padding: `${Math.round(hookBoxSize * 0.8)}px ${Math.round(hookBoxSize * 1.2)}px`,
+                    padding: `${hookBoxSize}px`,
                     left: `${hookX}%`,
                     top: `${hookY}%`,
                     transform: "translate(-50%, -50%)",
@@ -421,7 +421,7 @@ export default function EditorPage() {
                     style={{
                       color: hookTextColor,
                       fontSize: `${Math.round(hookFontSize * 0.37)}px`,
-                      maxWidth: `${Math.max(100, 300 - hookBoxSize * 2)}px`,
+                      maxWidth: "260px",
                       wordBreak: "break-word",
                     }}
                   >
@@ -439,7 +439,7 @@ export default function EditorPage() {
                     top: `${partLabelY}%`,
                     transform: "translate(-50%, -50%)",
                     backgroundColor: partLabelBgColor + "CC",
-                    padding: `${Math.round(partLabelBoxSize * 0.5)}px ${Math.round(partLabelBoxSize * 0.8)}px`,
+                    padding: `${partLabelBoxSize}px`,
                   }}
                 >
                   <span
@@ -809,7 +809,7 @@ export default function EditorPage() {
         </div>
 
         {/* EXPORT / DOWNLOAD SECTION — split controls live here */}
-        <div className="p-5 border-t border-border/30 bg-muted/20 sticky bottom-0 space-y-4">
+        <div className="p-5 border-t border-border/30 bg-muted/20 space-y-4">
           {/* Export mode toggle */}
           <div className="flex gap-2">
             <button
