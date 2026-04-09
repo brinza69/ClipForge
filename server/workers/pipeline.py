@@ -6,6 +6,7 @@ End-to-end pipeline worker that orchestrates:
 
 import logging
 import asyncio
+import math
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -327,6 +328,33 @@ async def handle_score(
     logger.info(f"Scoring complete for project {project_id}: {len(candidates)} candidates")
 
 
+def _compute_split_parts(clip_duration: float, split_mode: str, requested_parts: int) -> list:
+    """Compute time segments for splitting a clip.
+
+    Returns list of (part_start_offset, part_end_offset) relative to clip start.
+    Each part is at most 180 seconds.
+    """
+    MAX_PART_DURATION = 180.0
+
+    if split_mode == "auto":
+        num_parts = max(1, math.ceil(clip_duration / MAX_PART_DURATION))
+    elif split_mode == "manual" and requested_parts and requested_parts >= 1:
+        num_parts = requested_parts
+        # Enforce 180s max: increase parts if needed
+        min_parts_needed = max(1, math.ceil(clip_duration / MAX_PART_DURATION))
+        num_parts = max(num_parts, min_parts_needed)
+    else:
+        return [(0.0, clip_duration)]
+
+    part_duration = clip_duration / num_parts
+    parts = []
+    for i in range(num_parts):
+        p_start = i * part_duration
+        p_end = min((i + 1) * part_duration, clip_duration)
+        parts.append((p_start, p_end))
+    return parts
+
+
 async def handle_export(
     job_id: str,
     project_id: str,
@@ -334,9 +362,9 @@ async def handle_export(
     metadata: Dict,
     queue,
 ):
-    """Export a single clip with reframing and captions."""
+    """Export a single clip with reframing, captions, and optional splitting."""
     from services.reframer import analyze_reframe
-    from services.captioner import generate_captions, DEFAULT_PRESETS
+    from services.captioner import generate_captions, _add_part_label_event, DEFAULT_PRESETS
     from services.exporter import export_clip
 
     if not clip_id:
@@ -355,7 +383,6 @@ async def handle_export(
         start_time = clip.start_time
         end_time = clip.end_time
         reframe_mode = clip.reframe_mode or "auto"
-        # Fallback transcript (only used if clip-level caption segments are missing).
         result = await session.execute(
             select(TranscriptModel)
             .where(TranscriptModel.project_id == project_id)
@@ -363,14 +390,20 @@ async def handle_export(
         )
         transcript = result.scalars().first()
 
-        # Update clip status
         clip.status = ClipStatus.exporting.value
         await session.commit()
 
-    # Step 1: Reframe analysis
+    clip_duration = end_time - start_time
+
+    # Determine split parts
+    split_mode = clip.split_mode or "off"
+    split_parts = _compute_split_parts(clip_duration, split_mode, clip.split_parts_count or 0)
+    total_parts = len(split_parts)
+    is_split = total_parts > 1
+
+    # Step 1: Reframe analysis (once for entire clip)
     await queue.update_progress(job_id, 0.1, "Analyzing video for reframe...")
-    # Avoid rare "analysis hangs" by putting a hard ceiling on this stage.
-    analyze_timeout = max(120, int((end_time - start_time) * 2) + 60)
+    analyze_timeout = max(120, int(clip_duration * 2) + 60)
     reframe_data = await asyncio.wait_for(
         analyze_reframe(
             video_path=video_path,
@@ -381,51 +414,33 @@ async def handle_export(
         timeout=analyze_timeout,
     )
 
-    # Step 2: Generate captions
-    captions_path = None
-    caption_segments = None
-    if clip.transcript_segments:
-        caption_segments = clip.transcript_segments
-    elif transcript and transcript.segments:
-        caption_segments = transcript.segments
+    # Build style overrides dict
+    style_overrides = {
+        "caption_font_size": clip.caption_font_size,
+        "caption_text_color": clip.caption_text_color,
+        "caption_highlight_color": clip.caption_highlight_color,
+        "caption_outline_color": clip.caption_outline_color,
+        "caption_y_position": clip.caption_y_position,
+        "hook_font_size": clip.hook_font_size,
+        "hook_text_color": clip.hook_text_color,
+        "hook_bg_color": clip.hook_bg_color,
+        "hook_y_position": clip.hook_y_position,
+        "hook_box_size": clip.hook_box_size,
+        "hook_duration_seconds": clip.hook_duration_seconds,
+        "hook_x": clip.hook_x,
+        "hook_y": clip.hook_y,
+        "subtitle_x": clip.subtitle_x,
+        "subtitle_y": clip.subtitle_y,
+        "part_label_font_size": clip.part_label_font_size,
+        "part_label_box_size": clip.part_label_box_size,
+        "part_label_text_color": clip.part_label_text_color,
+        "part_label_bg_color": clip.part_label_bg_color,
+        "part_label_x": clip.part_label_x,
+        "part_label_y": clip.part_label_y,
+    }
+    style_overrides = {k: v for k, v in style_overrides.items() if v is not None}
 
-    if caption_segments:
-        await queue.update_progress(job_id, 0.3, "Generating captions...")
-        preset = DEFAULT_PRESETS.get(clip.caption_preset_id or "bold_impact") or DEFAULT_PRESETS.get("bold_impact")
-        style_overrides = {
-            "caption_font_size": clip.caption_font_size,
-            "caption_text_color": clip.caption_text_color,
-            "caption_highlight_color": clip.caption_highlight_color,
-            "caption_outline_color": clip.caption_outline_color,
-            "caption_y_position": clip.caption_y_position,
-            "hook_font_size": clip.hook_font_size,
-            "hook_text_color": clip.hook_text_color,
-            "hook_bg_color": clip.hook_bg_color,
-            "hook_y_position": clip.hook_y_position,
-        }
-        # Remove None values
-        style_overrides = {k: v for k, v in style_overrides.items() if v is not None}
-
-        captions_path = generate_captions(
-            segments=caption_segments,
-            clip_start=start_time,
-            clip_end=end_time,
-            preset=preset,
-            output_path=str(settings.temp_dir / project_id / f"captions_{clip_id}.ass"),
-            hook_text=clip.hook_text,
-            style_overrides=style_overrides or None,
-        )
-
-    # Step 3: Export
-    output_filename = f"clip_{clip_id}.mp4"
-    output_path = str(settings.exports_dir / project_id / output_filename)
-
-    async def on_export_progress(progress, message):
-        # Map to 0.4 - 1.0 range
-        mapped = 0.4 + progress * 0.6
-        await queue.update_progress(job_id, mapped, message)
-
-    # Parse export resolution from clip settings (e.g. "1080x1920", "720x1280")
+    # Parse export resolution
     export_w, export_h = None, None
     if clip.export_resolution:
         try:
@@ -434,37 +449,122 @@ async def handle_export(
         except (ValueError, IndexError):
             pass
 
-    # Step 3: Export (FFmpeg) with a hard timeout.
-    export_timeout = max(300, int((end_time - start_time) * 6) + 120)
-    await asyncio.wait_for(
-        export_clip(
-            video_path=video_path,
-            output_path=output_path,
-            start_time=start_time,
-            end_time=end_time,
-            reframe_data=reframe_data,
-            captions_path=captions_path,
-            on_progress=on_export_progress,
-            width=export_w,
-            height=export_h,
-        ),
-        timeout=export_timeout,
-    )
+    preset = DEFAULT_PRESETS.get(clip.caption_preset_id or "bold_impact") or DEFAULT_PRESETS.get("bold_impact")
 
-    # Update clip with export path
+    # Caption segments source
+    caption_segments = None
+    if clip.transcript_segments:
+        caption_segments = clip.transcript_segments
+    elif transcript and transcript.segments:
+        caption_segments = transcript.segments
+
+    output_paths = []
+
+    for part_idx, (part_offset_start, part_offset_end) in enumerate(split_parts):
+        part_num = part_idx + 1
+        part_abs_start = start_time + part_offset_start
+        part_abs_end = start_time + part_offset_end
+        part_duration = part_abs_end - part_abs_start
+
+        progress_base = 0.2 + (part_idx / total_parts) * 0.7
+        progress_range = 0.7 / total_parts
+
+        if is_split:
+            await queue.update_progress(
+                job_id, progress_base, f"Part {part_num}/{total_parts}: generating captions..."
+            )
+        else:
+            await queue.update_progress(job_id, 0.3, "Generating captions...")
+
+        # Generate captions for this part
+        captions_path = None
+        if caption_segments:
+            # For split parts, only show hook on part 1
+            part_hook_text = clip.hook_text if (not is_split or part_num == 1) else None
+
+            captions_path = generate_captions(
+                segments=caption_segments,
+                clip_start=part_abs_start,
+                clip_end=part_abs_end,
+                preset=preset,
+                output_path=str(settings.temp_dir / project_id / f"captions_{clip_id}_p{part_num}.ass"),
+                hook_text=part_hook_text,
+                style_overrides=style_overrides or None,
+            )
+
+            # Add part label overlay for split videos
+            if is_split and captions_path:
+                import pysubs2
+                subs = pysubs2.load(captions_path, encoding="utf-8")
+                _add_part_label_event(
+                    subs, part_num, total_parts,
+                    duration_ms=int(part_duration * 1000),
+                    style_overrides=style_overrides,
+                )
+                subs.save(captions_path, encoding="utf-8")
+
+        # If no caption segments but we still need a part label
+        if is_split and not captions_path:
+            import pysubs2
+            from services.captioner import hex_to_ass_color
+            subs = pysubs2.SSAFile()
+            subs.info["PlayResX"] = str(settings.export_width)
+            subs.info["PlayResY"] = str(settings.export_height)
+            _add_part_label_event(
+                subs, part_num, total_parts,
+                duration_ms=int(part_duration * 1000),
+                style_overrides=style_overrides,
+            )
+            captions_path = str(settings.temp_dir / project_id / f"partlabel_{clip_id}_p{part_num}.ass")
+            Path(captions_path).parent.mkdir(parents=True, exist_ok=True)
+            subs.save(captions_path, encoding="utf-8")
+
+        # Build output path
+        if is_split:
+            output_filename = f"clip_{clip_id}_part{part_num}.mp4"
+        else:
+            output_filename = f"clip_{clip_id}.mp4"
+        output_path = str(settings.exports_dir / project_id / output_filename)
+
+        async def on_export_progress(progress, message, _base=progress_base, _range=progress_range):
+            mapped = _base + progress * _range
+            await queue.update_progress(job_id, mapped, message)
+
+        export_timeout = max(300, int(part_duration * 6) + 120)
+        await asyncio.wait_for(
+            export_clip(
+                video_path=video_path,
+                output_path=output_path,
+                start_time=part_abs_start,
+                end_time=part_abs_end,
+                reframe_data=reframe_data,
+                captions_path=captions_path,
+                on_progress=on_export_progress,
+                width=export_w,
+                height=export_h,
+            ),
+            timeout=export_timeout,
+        )
+        output_paths.append(output_path)
+
+    # Update clip with export path (first part or single file)
+    final_export_path = output_paths[0] if output_paths else None
     async with async_session() as session:
         await session.execute(
             update(ClipModel)
             .where(ClipModel.id == clip_id)
             .values(
                 status=ClipStatus.exported.value,
-                export_path=output_path,
+                export_path=final_export_path,
                 reframe_data=reframe_data,
             )
         )
         await session.commit()
 
-    logger.info(f"Export complete: {output_path}")
+    if is_split:
+        logger.info(f"Export complete: {total_parts} parts for clip {clip_id}")
+    else:
+        logger.info(f"Export complete: {final_export_path}")
 
 
 async def handle_full_pipeline(

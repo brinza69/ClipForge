@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight, Palette, ChevronDown, ChevronUp, Maximize } from "lucide-react";
+import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight, Palette, ChevronDown, ChevronUp, Maximize, SplitSquareHorizontal, Tag, Type, Move } from "lucide-react";
 import { toast } from "sonner";
 import type { Clip, Project, TranscriptSegment } from "@/types";
 
@@ -40,9 +40,32 @@ export default function EditorPage() {
   const [hookFontSize, setHookFontSize] = useState<number>(46);
   const [hookTextColor, setHookTextColor] = useState<string>("#FFFFFF");
   const [hookBgColor, setHookBgColor] = useState<string>("#0A0A0A");
+  const [hookBoxSize, setHookBoxSize] = useState<number>(24);
+  const [hookDurationSeconds, setHookDurationSeconds] = useState<number>(4);
+  const [hookX, setHookX] = useState<number>(50);
+  const [hookY, setHookY] = useState<number>(32);
+  const [subtitleX, setSubtitleX] = useState<number>(50);
+  const [subtitleY, setSubtitleY] = useState<number>(74);
   const [styleOverridesOpen, setStyleOverridesOpen] = useState<boolean>(false);
   const [exportResolution, setExportResolution] = useState<string>("1080x1920");
   const [previewMode, setPreviewMode] = useState<"9:16" | "16:9" | "original">("9:16");
+
+  // Split settings (persisted for convenience, but surfaced only in export flow)
+  const [splitMode, setSplitMode] = useState<string>("off");
+  const [splitPartsCount, setSplitPartsCount] = useState<number>(2);
+
+  // Part label settings
+  const [partLabelFontSize, setPartLabelFontSize] = useState<number>(32);
+  const [partLabelBoxSize, setPartLabelBoxSize] = useState<number>(14);
+  const [partLabelTextColor, setPartLabelTextColor] = useState<string>("#FFFFFF");
+  const [partLabelBgColor, setPartLabelBgColor] = useState<string>("#000000");
+  const [partLabelX, setPartLabelX] = useState<number>(88);
+  const [partLabelY, setPartLabelY] = useState<number>(10);
+
+  // Section toggles
+  const [positionSectionOpen, setPositionSectionOpen] = useState<boolean>(false);
+  // Export flow: show split settings panel in export area
+  const [exportSplitOpen, setExportSplitOpen] = useState<boolean>(false);
 
   // Preset defaults for syncing style overrides when preset changes
   const PRESET_DEFAULTS: Record<string, { fontSize: number; textColor: string; highlightColor: string; outlineColor: string }> = {
@@ -71,7 +94,6 @@ export default function EditorPage() {
   });
 
   // Initialize editor state when clip data first arrives.
-  // Use a ref to guard against re-init on every re-render.
   const initializedRef = useRef(false);
   useEffect(() => {
     if (!clip || initializedRef.current) return;
@@ -84,7 +106,6 @@ export default function EditorPage() {
     if (clip.hook_text) setHookText(clip.hook_text);
     setCaptionOverrideText("");
 
-    // Initialize style overrides from clip data (or fall back to preset defaults)
     const presetId = clip.caption_preset_id || "bold_impact";
     const defaults = PRESET_DEFAULTS[presetId] || PRESET_DEFAULTS.bold_impact;
     setCaptionFontSize(clip.caption_font_size || defaults.fontSize);
@@ -94,9 +115,27 @@ export default function EditorPage() {
     setHookFontSize(clip.hook_font_size || 46);
     setHookTextColor(clip.hook_text_color || "#FFFFFF");
     setHookBgColor(clip.hook_bg_color || "#0A0A0A");
+    setHookBoxSize(clip.hook_box_size || 24);
+    setHookDurationSeconds(clip.hook_duration_seconds || 4);
+    setHookX(clip.hook_x ?? 50);
+    setHookY(clip.hook_y ?? 32);
+    setSubtitleX(clip.subtitle_x ?? 50);
+    setSubtitleY(clip.subtitle_y ?? 74);
     if (clip.export_resolution) setExportResolution(clip.export_resolution);
 
-    // Prepare caption preview data (word timestamps when available).
+    // Split settings
+    setSplitMode(clip.split_mode || "off");
+    setSplitPartsCount(clip.split_parts_count || 2);
+    setPartLabelFontSize(clip.part_label_font_size || 32);
+    setPartLabelBoxSize(clip.part_label_box_size || 14);
+    setPartLabelTextColor(clip.part_label_text_color || "#FFFFFF");
+    setPartLabelBgColor(clip.part_label_bg_color || "#000000");
+    setPartLabelX(clip.part_label_x ?? 88);
+    setPartLabelY(clip.part_label_y ?? 10);
+    // Auto-open export split panel if split was previously configured
+    if (clip.split_mode && clip.split_mode !== "off") setExportSplitOpen(true);
+
+    // Prepare caption preview data
     try {
       const segs = (clip.transcript_segments || []) as TranscriptSegment[];
       setOriginalCaptionSegments(segs);
@@ -146,10 +185,30 @@ export default function EditorPage() {
 
   if (clipLoading || !clip) return <div className="p-8">Loading...</div>;
 
-  const handleSave = () => {
-    const override = captionOverrideText.trim();
+  // Compute split info for preview
+  const clipDuration = endTime - startTime;
+  const computeSplitParts = (): number => {
+    if (splitMode === "off") return 1;
+    if (splitMode === "auto") return Math.max(1, Math.ceil(clipDuration / 180));
+    if (splitMode === "manual") {
+      const minParts = Math.max(1, Math.ceil(clipDuration / 180));
+      return Math.max(splitPartsCount, minParts);
+    }
+    return 1;
+  };
+  const effectiveParts = computeSplitParts();
 
-    updateMutation.mutate({
+  // Check if export is landscape (letterbox mode)
+  const isLandscapeExport = (() => {
+    try {
+      const [w, h] = exportResolution.split("x").map(Number);
+      return w > h;
+    } catch { return false; }
+  })();
+
+  const buildSavePayload = () => {
+    const override = captionOverrideText.trim();
+    return {
       start_time: startTime,
       end_time: endTime,
       reframe_mode: reframeMode,
@@ -162,37 +221,35 @@ export default function EditorPage() {
       hook_font_size: hookFontSize,
       hook_text_color: hookTextColor,
       hook_bg_color: hookBgColor,
+      hook_box_size: hookBoxSize,
+      hook_duration_seconds: hookDurationSeconds,
+      hook_x: hookX,
+      hook_y: hookY,
+      subtitle_x: subtitleX,
+      subtitle_y: subtitleY,
       export_resolution: exportResolution,
-      // Caption override is exported by replacing the clip's caption segments.
+      split_mode: splitMode,
+      split_parts_count: splitPartsCount,
+      part_label_font_size: partLabelFontSize,
+      part_label_box_size: partLabelBoxSize,
+      part_label_text_color: partLabelTextColor,
+      part_label_bg_color: partLabelBgColor,
+      part_label_x: partLabelX,
+      part_label_y: partLabelY,
       transcript_text: override ? override : (clip?.transcript_text ?? undefined),
       transcript_segments: override
         ? [{ start: startTime, end: endTime, text: override }]
         : originalCaptionSegments ?? undefined,
-    });
+    };
+  };
+
+  const handleSave = () => {
+    updateMutation.mutate(buildSavePayload());
   };
 
   const handleExportNow = async () => {
-    const override = captionOverrideText.trim();
     try {
-      await updateMutation.mutateAsync({
-        start_time: startTime,
-        end_time: endTime,
-        reframe_mode: reframeMode,
-        caption_preset_id: captionPreset,
-        hook_text: hookText,
-        caption_font_size: captionFontSize,
-        caption_text_color: captionTextColor,
-        caption_highlight_color: captionHighlightColor,
-        caption_outline_color: captionOutlineColor,
-        hook_font_size: hookFontSize,
-        hook_text_color: hookTextColor,
-        hook_bg_color: hookBgColor,
-        export_resolution: exportResolution,
-        transcript_text: override ? override : (clip?.transcript_text ?? undefined),
-        transcript_segments: override
-          ? [{ start: startTime, end: endTime, text: override }]
-          : originalCaptionSegments ?? undefined,
-      });
+      await updateMutation.mutateAsync(buildSavePayload());
       await exportMutation.mutateAsync();
     } catch (err) {
       const e = err as { message?: string };
@@ -230,14 +287,14 @@ export default function EditorPage() {
         </div>
 
         <div className="flex-1 relative flex items-center justify-center p-4">
+          {/* Preview container: always 9:16 aspect when landscape export selected */}
           <div className={`relative overflow-hidden rounded-lg border border-border/40 bg-black ${
-            previewMode === "9:16" ? "h-full max-h-full aspect-[9/16]" :
+            previewMode === "9:16" || isLandscapeExport ? "h-full max-h-full aspect-[9/16]" :
             previewMode === "16:9" ? "w-full aspect-[16/9]" :
             "w-full aspect-video"
           }`}>
-            {/* Blurred background (preview-only). Export uses the backend reframe mode. */}
-            {reframeMode === "blurred" && (
-              // eslint-disable-next-line @next/next/no-img-element
+            {/* Blurred background (preview-only) */}
+            {reframeMode === "blurred" && !isLandscapeExport && (
               <video
                 ref={bgVideoRef}
                 src={sourceVideoUrl}
@@ -275,14 +332,12 @@ export default function EditorPage() {
                 if (!fg) return;
 
                 const tAbs = fg.currentTime;
-                const clipDur = Math.max(endTime - startTime, 0.001);
 
                 if (tAbs >= endTime) {
                   fg.currentTime = startTime;
                   if (bgVideoRef.current) bgVideoRef.current.currentTime = startTime;
                 }
 
-                // Keep background in sync for blurred preview.
                 if (bgVideoRef.current && reframeMode === "blurred") {
                   bgVideoRef.current.currentTime = fg.currentTime;
                 }
@@ -290,13 +345,6 @@ export default function EditorPage() {
                 const t = Math.min(Math.max(fg.currentTime, startTime), endTime);
                 const elapsed = t - startTime;
 
-                // Hook overlay for the first few seconds.
-                const shouldShowHook = hookText.trim().length > 0 && elapsed <= 4.0;
-                if (shouldShowHook) {
-                  // Force rerender by updating caption group (handled below); hook uses currentTime state.
-                }
-
-                // Update caption highlight (~10fps max) for a usable preview.
                 const now = Date.now();
                 if (now - lastCaptionUpdateRef.current < 100) return;
                 lastCaptionUpdateRef.current = now;
@@ -316,7 +364,7 @@ export default function EditorPage() {
                     setCurrentCaptionWord(null);
                     return;
                   }
-                  const ratio = (t - startTime) / clipDur;
+                  const ratio = (t - startTime) / Math.max(clipDuration, 0.001);
                   const idx = Math.min(Math.max(Math.floor(ratio * tokens.length), 0), tokens.length - 1);
                   const word = tokens[idx];
                   const groupStart = Math.max(0, idx - (maxWordsPerLine - 1));
@@ -326,7 +374,6 @@ export default function EditorPage() {
                   return;
                 }
 
-                // Auto captions: word timestamps available from transcription (when present).
                 if (!autoWords.length) {
                   setCurrentCaptionGroup([]);
                   setCurrentCaptionWord(null);
@@ -357,24 +404,62 @@ export default function EditorPage() {
 
             {/* Overlays */}
             <div className="absolute inset-0 pointer-events-none">
-              {/* Hook box uses current video time */}
-              {hookText.trim().length > 0 && previewElapsed <= 4.0 && (
+              {/* Hook box */}
+              {hookText.trim().length > 0 && previewElapsed <= hookDurationSeconds && (
                 <div
-                  className="absolute top-[32%] left-1/2 -translate-x-1/2 max-w-[82%] px-7 py-5 rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
-                  style={{ backgroundColor: hookBgColor + "F2" }}
+                  className="absolute max-w-[82%] rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
+                  style={{
+                    backgroundColor: hookBgColor + "F2",
+                    padding: `${Math.round(hookBoxSize * 0.8)}px ${Math.round(hookBoxSize * 1.2)}px`,
+                    left: `${hookX}%`,
+                    top: `${hookY}%`,
+                    transform: "translate(-50%, -50%)",
+                  }}
                 >
                   <div
-                    className="leading-snug font-bold text-center"
-                    style={{ color: hookTextColor, fontSize: `${Math.round(hookFontSize * 0.37)}px` }}
+                    className="leading-snug font-bold text-center break-words"
+                    style={{
+                      color: hookTextColor,
+                      fontSize: `${Math.round(hookFontSize * 0.37)}px`,
+                      maxWidth: `${Math.max(100, 300 - hookBoxSize * 2)}px`,
+                      wordBreak: "break-word",
+                    }}
                   >
                     {hookText}
                   </div>
                 </div>
               )}
 
+              {/* Part label preview — only when split export is active */}
+              {splitMode !== "off" && effectiveParts > 1 && (
+                <div
+                  className="absolute rounded-lg"
+                  style={{
+                    left: `${partLabelX}%`,
+                    top: `${partLabelY}%`,
+                    transform: "translate(-50%, -50%)",
+                    backgroundColor: partLabelBgColor + "CC",
+                    padding: `${Math.round(partLabelBoxSize * 0.5)}px ${Math.round(partLabelBoxSize * 0.8)}px`,
+                  }}
+                >
+                  <span
+                    className="font-bold whitespace-nowrap"
+                    style={{
+                      color: partLabelTextColor,
+                      fontSize: `${Math.round(partLabelFontSize * 0.37)}px`,
+                    }}
+                  >
+                    Part 1/{effectiveParts}
+                  </span>
+                </div>
+              )}
+
               {/* Captions */}
               {currentCaptionGroup.length > 0 && currentCaptionWord && (
-                <div className="absolute bottom-[26%] left-0 right-0 px-6">
+                <div
+                  className="absolute left-0 right-0 px-6"
+                  style={{ top: `${subtitleY}%`, transform: "translateY(-50%)" }}
+                >
                   <div
                     className="font-extrabold tracking-wide text-center"
                     style={{
@@ -410,10 +495,10 @@ export default function EditorPage() {
             <span className="font-semibold text-sm">Trim Clip ({ (endTime - startTime).toFixed(1) }s)</span>
             <span className="font-mono text-xs text-primary">{endTime.toFixed(2)}s</span>
           </div>
-          <Slider 
-            value={[startTime, endTime]} 
-            min={0} 
-            max={project?.duration || endTime + 60} 
+          <Slider
+            value={[startTime, endTime]}
+            min={0}
+            max={project?.duration || endTime + 60}
             step={0.1}
             onValueChange={(val: number | readonly number[]) => {
               const arr = Array.isArray(val) ? val : [val, val];
@@ -439,9 +524,9 @@ export default function EditorPage() {
           <div className="space-y-3">
             <Label className="flex items-center gap-2"><Scissors className="h-4 w-4 text-primary" /> Auto Hook Text</Label>
             <div className="text-[10px] text-muted-foreground mb-1">
-              This text appears as a large bold box in the first 5 seconds to hook viewers.
+              This text appears as a bold box at the start of the clip. Adjust duration and box size in Style Overrides.
             </div>
-            <Input 
+            <Input
               value={hookText}
               onChange={(e) => setHookText(e.target.value)}
               placeholder="e.g. This changes everything..."
@@ -586,6 +671,28 @@ export default function EditorPage() {
                     />
                   </div>
                   <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Box Size ({hookBoxSize})</Label>
+                    <Slider
+                      value={[hookBoxSize]}
+                      min={8}
+                      max={60}
+                      step={2}
+                      onValueChange={(val: number | readonly number[]) => setHookBoxSize(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Duration ({hookDurationSeconds}s)</Label>
+                    <Slider
+                      value={[hookDurationSeconds]}
+                      min={1}
+                      max={15}
+                      step={0.5}
+                      onValueChange={(val: number | readonly number[]) => setHookDurationSeconds(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
                     <Label className="text-xs whitespace-nowrap min-w-[100px]">Text Color</Label>
                     <input type="color" value={hookTextColor} onChange={(e) => setHookTextColor(e.target.value)} className="w-8 h-8 rounded border border-border/60 cursor-pointer bg-transparent" />
                   </div>
@@ -598,19 +705,80 @@ export default function EditorPage() {
             )}
           </div>
 
+          {/* Position Controls */}
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setPositionSectionOpen(!positionSectionOpen)}
+              className="flex items-center gap-2 w-full text-sm font-semibold text-left"
+            >
+              <Move className="h-4 w-4 text-primary" />
+              Overlay Positions
+              {positionSectionOpen ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
+            </button>
+            <p className="text-[10px] text-muted-foreground">Adjust position of hook and subtitles on the video.</p>
+
+            {positionSectionOpen && (
+              <div className="space-y-4 pt-1">
+                {/* Hook position */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Hook Position</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">X ({hookX}%)</Label>
+                    <Slider
+                      value={[hookX]}
+                      min={5}
+                      max={95}
+                      step={1}
+                      onValueChange={(val: number | readonly number[]) => setHookX(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Y ({hookY}%)</Label>
+                    <Slider
+                      value={[hookY]}
+                      min={5}
+                      max={95}
+                      step={1}
+                      onValueChange={(val: number | readonly number[]) => setHookY(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                </div>
+
+                {/* Subtitle position */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subtitle Position</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Y ({subtitleY}%)</Label>
+                    <Slider
+                      value={[subtitleY]}
+                      min={10}
+                      max={95}
+                      step={1}
+                      onValueChange={(val: number | readonly number[]) => setSubtitleY(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Export Resolution */}
           <div className="space-y-3">
             <Label className="flex items-center gap-2"><Maximize className="h-4 w-4 text-primary" /> Export Resolution</Label>
             <div className="grid grid-cols-2 gap-2">
               {[
-                { value: "1080x1920", label: "1080×1920", desc: "Full HD 9:16" },
-                { value: "1440x2560", label: "1440×2560", desc: "2K 9:16" },
-                { value: "2160x3840", label: "2160×3840", desc: "4K 9:16" },
-                { value: "720x1280", label: "720×1280", desc: "HD 9:16" },
-                { value: "1920x1080", label: "1920×1080", desc: "Full HD 16:9" },
-                { value: "2560x1440", label: "2560×1440", desc: "2K 16:9" },
-                { value: "3840x2160", label: "3840×2160", desc: "4K 16:9" },
-                { value: "540x960", label: "540×960", desc: "SD 9:16" },
+                { value: "1080x1920", label: "1080x1920", desc: "Full HD 9:16" },
+                { value: "1440x2560", label: "1440x2560", desc: "2K 9:16" },
+                { value: "2160x3840", label: "2160x3840", desc: "4K 9:16" },
+                { value: "720x1280", label: "720x1280", desc: "HD 9:16" },
+                { value: "1920x1080", label: "1920x1080", desc: "Full HD 16:9" },
+                { value: "2560x1440", label: "2560x1440", desc: "2K 16:9" },
+                { value: "3840x2160", label: "3840x2160", desc: "4K 16:9" },
+                { value: "540x960", label: "540x960", desc: "SD 9:16" },
               ].map((res) => (
                 <button
                   key={res.value}
@@ -627,6 +795,11 @@ export default function EditorPage() {
                 </button>
               ))}
             </div>
+            {isLandscapeExport && (
+              <div className="text-[10px] text-yellow-500 bg-yellow-500/10 p-2 rounded">
+                16:9 selected — output will be letterboxed into 9:16 vertical format (no cropping).
+              </div>
+            )}
           </div>
 
           <Button variant="secondary" className="w-full text-xs" onClick={handleSave}>
@@ -635,16 +808,166 @@ export default function EditorPage() {
 
         </div>
 
-        <div className="p-5 border-t border-border/30 bg-muted/20 sticky bottom-0">
-          <Button 
+        {/* EXPORT / DOWNLOAD SECTION — split controls live here */}
+        <div className="p-5 border-t border-border/30 bg-muted/20 sticky bottom-0 space-y-4">
+          {/* Export mode toggle */}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => { setSplitMode("off"); setExportSplitOpen(false); }}
+              className={`flex-1 border rounded-lg p-2 text-center text-xs font-medium transition-colors ${
+                splitMode === "off"
+                  ? "bg-primary/10 border-primary text-primary"
+                  : "border-border/60 hover:bg-muted/50 text-muted-foreground"
+              }`}
+            >
+              <Film className="h-3.5 w-3.5 mx-auto mb-1" />
+              Single Clip
+            </button>
+            <button
+              type="button"
+              onClick={() => { if (splitMode === "off") setSplitMode("auto"); setExportSplitOpen(true); }}
+              className={`flex-1 border rounded-lg p-2 text-center text-xs font-medium transition-colors ${
+                splitMode !== "off"
+                  ? "bg-primary/10 border-primary text-primary"
+                  : "border-border/60 hover:bg-muted/50 text-muted-foreground"
+              }`}
+            >
+              <SplitSquareHorizontal className="h-3.5 w-3.5 mx-auto mb-1" />
+              Split into Parts
+            </button>
+          </div>
+
+          {/* Split settings — shown only when split mode is active */}
+          {splitMode !== "off" && exportSplitOpen && (
+            <div className="space-y-3 bg-card/60 rounded-lg p-3 border border-border/30">
+              {/* Split mode selector */}
+              <div className="grid grid-cols-2 gap-2">
+                {(["auto", "manual"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setSplitMode(mode)}
+                    className={`border rounded-lg p-1.5 text-center transition-colors ${
+                      splitMode === mode
+                        ? "bg-primary/10 border-primary"
+                        : "border-border/60 hover:bg-muted/50"
+                    }`}
+                  >
+                    <div className="text-[11px] font-medium capitalize">{mode}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Manual parts count */}
+              {splitMode === "manual" && (
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs whitespace-nowrap min-w-[80px]">Parts ({splitPartsCount})</Label>
+                  <Slider
+                    value={[splitPartsCount]}
+                    min={2}
+                    max={20}
+                    step={1}
+                    onValueChange={(val: number | readonly number[]) => setSplitPartsCount(Array.isArray(val) ? val[0] : val)}
+                    className="flex-1"
+                  />
+                </div>
+              )}
+
+              {/* Split info */}
+              <div className="text-[10px] text-muted-foreground bg-muted/30 p-2 rounded">
+                {clipDuration.toFixed(1)}s clip → {effectiveParts} part{effectiveParts > 1 ? "s" : ""} (~{(clipDuration / effectiveParts).toFixed(1)}s each)
+                {splitMode === "manual" && effectiveParts > splitPartsCount && (
+                  <span className="text-yellow-500 block mt-1">
+                    Adjusted from {splitPartsCount} to {effectiveParts} parts (max 180s per part)
+                  </span>
+                )}
+              </div>
+
+              {/* Part label styling — collapsible */}
+              <button
+                type="button"
+                onClick={() => setPositionSectionOpen(!positionSectionOpen)}
+                className="flex items-center gap-1.5 w-full text-[11px] font-medium text-muted-foreground"
+              >
+                <Tag className="h-3 w-3" />
+                Part Label Style
+                {positionSectionOpen ? <ChevronUp className="h-2.5 w-2.5 ml-auto" /> : <ChevronDown className="h-2.5 w-2.5 ml-auto" />}
+              </button>
+
+              {positionSectionOpen && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[80px]">Font ({partLabelFontSize})</Label>
+                    <Slider
+                      value={[partLabelFontSize]}
+                      min={16}
+                      max={64}
+                      step={2}
+                      onValueChange={(val: number | readonly number[]) => setPartLabelFontSize(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[80px]">Box ({partLabelBoxSize})</Label>
+                    <Slider
+                      value={[partLabelBoxSize]}
+                      min={4}
+                      max={40}
+                      step={2}
+                      onValueChange={(val: number | readonly number[]) => setPartLabelBoxSize(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[80px]">Text</Label>
+                    <input type="color" value={partLabelTextColor} onChange={(e) => setPartLabelTextColor(e.target.value)} className="w-7 h-7 rounded border border-border/60 cursor-pointer bg-transparent" />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[80px]">Bg</Label>
+                    <input type="color" value={partLabelBgColor} onChange={(e) => setPartLabelBgColor(e.target.value)} className="w-7 h-7 rounded border border-border/60 cursor-pointer bg-transparent" />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[80px]">X ({partLabelX}%)</Label>
+                    <Slider
+                      value={[partLabelX]}
+                      min={5}
+                      max={95}
+                      step={1}
+                      onValueChange={(val: number | readonly number[]) => setPartLabelX(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[80px]">Y ({partLabelY}%)</Label>
+                    <Slider
+                      value={[partLabelY]}
+                      min={5}
+                      max={95}
+                      step={1}
+                      onValueChange={(val: number | readonly number[]) => setPartLabelY(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <Button
             className="w-full gap-2 text-md font-bold shadow-lg shadow-primary/20 py-6"
             onClick={handleExportNow}
             disabled={exportMutation.isPending || updateMutation.isPending}
           >
-            {exportMutation.isPending ? "Starting Export..." : "Generate Vertical Clip"}
+            {exportMutation.isPending ? "Starting Export..." : splitMode !== "off" && effectiveParts > 1 ? `Export ${effectiveParts} Parts` : "Export Clip"}
             {!exportMutation.isPending && <ArrowRight className="h-5 w-5" />}
           </Button>
-          <p className="text-[10px] text-center text-muted-foreground mt-3">Renders a {exportResolution} MP4 file with burnt-in captions.</p>
+          <p className="text-[10px] text-center text-muted-foreground mt-1">
+            {splitMode !== "off" && effectiveParts > 1
+              ? `Renders ${effectiveParts} MP4 files with burnt-in captions and part labels.`
+              : `Renders a ${isLandscapeExport ? "9:16 letterboxed" : exportResolution} MP4 file with burnt-in captions.`
+            }
+          </p>
         </div>
 
       </div>

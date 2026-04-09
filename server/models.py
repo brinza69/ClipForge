@@ -180,7 +180,23 @@ class ClipModel(Base):
     hook_text_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     hook_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     hook_y_position: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hook_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hook_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subtitle_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subtitle_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
     export_resolution: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Split / part label settings
+    split_mode: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    split_parts_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_label_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_label_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_label_text_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    part_label_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    part_label_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_label_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

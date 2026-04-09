@@ -73,6 +73,15 @@ async def export_clip(
 
     blurred_mode = bool(reframe_data and reframe_data.get("mode") in {"blurred", "blurred_background", "blurredBackground"})
 
+    # Detect letterbox mode: if export resolution is landscape (w > h) we letterbox
+    # the landscape video into a 9:16 vertical container instead of cropping.
+    is_landscape_export = w > h
+    if is_landscape_export:
+        # Final output is always 9:16 — swap dimensions for the container
+        container_w, container_h = h, w  # e.g. 1920x1080 → 1080x1920 container
+    else:
+        container_w, container_h = w, h
+
     # Build FFmpeg command
     cmd = [
         "ffmpeg",
@@ -85,30 +94,50 @@ async def export_clip(
     # Build video filter(s)
     if not reframe_data:
         crop_filter = f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
-        crop_w = None
-        crop_h = None
     else:
         crop_filter = build_crop_filter(reframe_data)
-        crop_w = reframe_data.get("crop_width")
-        crop_h = reframe_data.get("crop_height")
 
     # Subtitles burn-in if captions exist
     subtitles_filter = None
     if captions_path and Path(captions_path).exists():
-        # FFmpeg on Windows needs forward slashes and escaped colons in filter paths.
-        # Convert to posix first, then escape colons (including drive letter colon).
         abs_path = str(Path(captions_path).resolve()).replace("\\", "/")
         escaped_path = abs_path.replace(":", "\\:")
         subtitles_filter = f"subtitles='{escaped_path}'"
 
-    if blurred_mode:
-        # Blurred background: blur full frame to 9:16, then overlay a sharp cropped foreground.
-        # This produces a TikTok-style "subject on blurred background" look.
-        vf_chain_fg = f"{crop_filter},scale={w}:{h}:flags=lanczos"
-        vf_chain_bg = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=20:1"
+    fade_filters = f"fade=t=in:st=0:d=0.4,fade=t=out:st={max(0, duration - 0.3):.3f}:d=0.3"
+    audio_filters = f"loudnorm=I=-16:LRA=11:TP=-1.5,afade=t=in:st=0:d=0.3,afade=t=out:st={max(0, duration - 0.4):.3f}:d=0.4"
+    encoding_args = [
+        "-c:v", settings.export_codec,
+        "-preset", "medium",
+        "-crf", "17",
+        "-b:v", br,
+        "-maxrate", br,
+        "-bufsize", bufsize,
+        "-c:a", settings.export_audio_codec,
+        "-b:a", settings.export_audio_bitrate,
+        "-ar", "44100",
+        "-af", audio_filters,
+        "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p",
+        "-progress", "pipe:1",
+        output_path,
+    ]
 
-        # Compose overlay + optional subtitles + fade transitions
-        fade_filters = f"fade=t=in:st=0:d=0.4,fade=t=out:st={max(0, duration - 0.3):.3f}:d=0.3"
+    if is_landscape_export:
+        # LETTERBOX MODE: scale video to fit container width, pad top/bottom with black
+        # e.g. 1920x1080 source → scale to container_w wide, then pad to container_w x container_h
+        scale_filter = f"scale={container_w}:-2:flags=lanczos"
+        pad_filter = f"pad={container_w}:{container_h}:(ow-iw)/2:(oh-ih)/2:black"
+        filters_str = f"{scale_filter},{pad_filter},{fade_filters},fps={out_fps}"
+        if subtitles_filter:
+            filters_str += f",{subtitles_filter}"
+        cmd.extend(["-vf", filters_str])
+        cmd.extend(encoding_args)
+
+    elif blurred_mode:
+        vf_chain_fg = f"{crop_filter},scale={container_w}:{container_h}:flags=lanczos"
+        vf_chain_bg = f"scale={container_w}:{container_h}:force_original_aspect_ratio=increase,crop={container_w}:{container_h},boxblur=20:1"
+
         if subtitles_filter:
             filter_complex = (
                 f"[0:v]split=2[fg][bg];"
@@ -117,7 +146,6 @@ async def export_clip(
                 f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2[v];"
                 f"[v]{subtitles_filter},{fade_filters},fps={out_fps}[vout]"
             )
-            vf_fallback = None
         else:
             filter_complex = (
                 f"[0:v]split=2[fg][bg];"
@@ -126,90 +154,19 @@ async def export_clip(
                 f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2[v];"
                 f"[v]{fade_filters},fps={out_fps}[vout]"
             )
-            vf_fallback = None
 
-        cmd.extend(
-            [
-                "-filter_complex",
-                filter_complex,
-                "-map",
-                "[vout]",
-                "-map",
-                "0:a?",
-                "-c:v",
-                settings.export_codec,
-                "-preset",
-                "medium",
-                "-crf",
-                "17",
-                "-b:v",
-                br,
-                "-maxrate",
-                br,
-                "-bufsize",
-                bufsize,
-                "-c:a",
-                settings.export_audio_codec,
-                "-b:a",
-                settings.export_audio_bitrate,
-                "-ar",
-                "44100",
-                "-af",
-                "loudnorm=I=-16:LRA=11:TP=-1.5,afade=t=in:st=0:d=0.3,afade=t=out:st=" + f"{max(0, duration - 0.4):.3f}" + ":d=0.4",
-                "-movflags",
-                "+faststart",
-                "-pix_fmt",
-                "yuv420p",
-                "-progress",
-                "pipe:1",
-                output_path,
-            ]
-        )
+        cmd.extend(["-filter_complex", filter_complex, "-map", "[vout]", "-map", "0:a?"])
+        cmd.extend(encoding_args)
     else:
-        # Default: crop → scale → fps → fade transitions → optional subtitles.
-        filters = [crop_filter, f"scale={w}:{h}:flags=lanczos", f"fps={out_fps}"]
-        # Subtle fade-in (0.4s) and fade-out (0.3s) for polished short-form feel
-        fade_in_frames = int(out_fps * 0.4)
-        fade_out_start_frames = max(0, int(duration * out_fps) - int(out_fps * 0.3))
+        # Default: crop → scale → fps → fade → optional subtitles
+        filters = [crop_filter, f"scale={container_w}:{container_h}:flags=lanczos", f"fps={out_fps}"]
         filters.append(f"fade=t=in:st=0:d=0.4")
         filters.append(f"fade=t=out:st={max(0, duration - 0.3):.3f}:d=0.3")
         vf_chain = ",".join(filters)
         if subtitles_filter:
             vf_chain += f",{subtitles_filter}"
-
-        cmd.extend(
-            [
-                "-vf",
-                vf_chain,
-                "-c:v",
-                settings.export_codec,
-                "-preset",
-                "medium",
-                "-crf",
-                "17",
-                "-b:v",
-                br,
-                "-maxrate",
-                br,
-                "-bufsize",
-                bufsize,
-                "-c:a",
-                settings.export_audio_codec,
-                "-b:a",
-                settings.export_audio_bitrate,
-                "-ar",
-                "44100",
-                "-af",
-                "loudnorm=I=-16:LRA=11:TP=-1.5,afade=t=in:st=0:d=0.3,afade=t=out:st=" + f"{max(0, duration - 0.4):.3f}" + ":d=0.4",
-                "-movflags",
-                "+faststart",
-                "-pix_fmt",
-                "yuv420p",
-                "-progress",
-                "pipe:1",
-                output_path,
-            ]
-        )
+        cmd.extend(["-vf", vf_chain])
+        cmd.extend(encoding_args)
 
     logger.info(f"FFmpeg command: {' '.join(cmd)}")
 

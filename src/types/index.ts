@@ -105,7 +105,21 @@ export interface Clip {
   hook_text_color?: string | null;
   hook_bg_color?: string | null;
   hook_y_position?: string | null;
+  hook_box_size?: number | null;
+  hook_duration_seconds?: number | null;
+  hook_x?: number | null;
+  hook_y?: number | null;
+  subtitle_x?: number | null;
+  subtitle_y?: number | null;
   export_resolution?: string | null;
+  split_mode?: string | null;
+  split_parts_count?: number | null;
+  part_label_font_size?: number | null;
+  part_label_box_size?: number | null;
+  part_label_text_color?: string | null;
+  part_label_bg_color?: string | null;
+  part_label_x?: number | null;
+  part_label_y?: number | null;
   export_path: string | null;
   created_at: string | null;
 }

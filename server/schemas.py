@@ -134,7 +134,21 @@ class ClipResponse(BaseModel):
     hook_text_color: Optional[str] = None
     hook_bg_color: Optional[str] = None
     hook_y_position: Optional[str] = None
+    hook_box_size: Optional[int] = None
+    hook_duration_seconds: Optional[float] = None
+    hook_x: Optional[int] = None
+    hook_y: Optional[int] = None
+    subtitle_x: Optional[int] = None
+    subtitle_y: Optional[int] = None
     export_resolution: Optional[str] = None
+    split_mode: Optional[str] = None
+    split_parts_count: Optional[int] = None
+    part_label_font_size: Optional[int] = None
+    part_label_box_size: Optional[int] = None
+    part_label_text_color: Optional[str] = None
+    part_label_bg_color: Optional[str] = None
+    part_label_x: Optional[int] = None
+    part_label_y: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
