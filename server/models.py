@@ -7,7 +7,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Text, DateTime, Enum, JSON,
+    Column, String, Integer, Float, Text, DateTime, Enum, JSON, Boolean,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -197,6 +197,10 @@ class ClipModel(Base):
     part_label_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     part_label_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
     part_label_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Multi-part export persistence
+    export_parts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    hook_bg_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

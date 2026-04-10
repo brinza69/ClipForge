@@ -424,6 +424,7 @@ async def handle_export(
         "hook_font_size": clip.hook_font_size,
         "hook_text_color": clip.hook_text_color,
         "hook_bg_color": clip.hook_bg_color,
+        "hook_bg_enabled": clip.hook_bg_enabled if clip.hook_bg_enabled is not None else True,
         "hook_y_position": clip.hook_y_position,
         "hook_box_size": clip.hook_box_size,
         "hook_duration_seconds": clip.hook_duration_seconds,
@@ -490,6 +491,7 @@ async def handle_export(
                 output_path=str(settings.temp_dir / project_id / f"captions_{clip_id}_p{part_num}.ass"),
                 hook_text=part_hook_text,
                 style_overrides=style_overrides or None,
+                hook_bg_enabled=clip.hook_bg_enabled if clip.hook_bg_enabled is not None else True,
             )
 
             # Add part label overlay for split videos
@@ -547,6 +549,19 @@ async def handle_export(
         )
         output_paths.append(output_path)
 
+    # Build export_parts list for all output paths
+    parts_list = []
+    for idx, op in enumerate(output_paths):
+        p = Path(op)
+        part_duration = split_parts[idx][1] - split_parts[idx][0]
+        parts_list.append({
+            "part_num": idx + 1,
+            "total_parts": total_parts,
+            "path": op,
+            "filename": p.name,
+            "duration": round(part_duration, 3),
+        })
+
     # Update clip with export path (first part or single file)
     final_export_path = output_paths[0] if output_paths else None
     async with async_session() as session:
@@ -556,6 +571,7 @@ async def handle_export(
             .values(
                 status=ClipStatus.exported.value,
                 export_path=final_export_path,
+                export_parts=parts_list,
                 reframe_data=reframe_data,
             )
         )

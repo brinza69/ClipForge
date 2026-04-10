@@ -149,6 +149,8 @@ class ClipResponse(BaseModel):
     part_label_bg_color: Optional[str] = None
     part_label_x: Optional[int] = None
     part_label_y: Optional[int] = None
+    export_parts: list[dict] = []
+    hook_bg_enabled: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

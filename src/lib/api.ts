@@ -151,6 +151,10 @@ export const api = {
         body: JSON.stringify({ target }),
       }),
     folder: () => request<{ path: string }>("/api/exports/open-folder"),
+    downloadPartUrl: (clipId: string, partNum: number) =>
+      `${WORKER_URL}/api/exports/${clipId}/parts/${partNum}/download`,
+    downloadAllUrl: (clipId: string) =>
+      `${WORKER_URL}/api/exports/${clipId}/download-all`,
   },
 };
 

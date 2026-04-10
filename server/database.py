@@ -70,6 +70,8 @@ async def init_db() -> None:
             ("part_label_bg_color", "VARCHAR(20)"),
             ("part_label_x", "INTEGER"),
             ("part_label_y", "INTEGER"),
+            ("export_parts", "TEXT"),
+            ("hook_bg_enabled", "BOOLEAN DEFAULT 1"),
         ]
         for col, col_type in _style_migrations:
             try:

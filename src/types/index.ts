@@ -121,6 +121,8 @@ export interface Clip {
   part_label_x?: number | null;
   part_label_y?: number | null;
   export_path: string | null;
+  export_parts?: Array<{ part_num: number; total_parts: number; filename: string; duration: number }>;
+  hook_bg_enabled?: boolean;
   created_at: string | null;
 }
 

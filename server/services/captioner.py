@@ -198,6 +198,7 @@ def generate_captions(
     output_path: Optional[str] = None,
     hook_text: Optional[str] = None,
     style_overrides: Optional[Dict[str, Any]] = None,
+    hook_bg_enabled: bool = True,
 ) -> str:
     """
     Generate an ASS subtitle file with animated word-by-word captions.
@@ -310,17 +311,24 @@ def generate_captions(
             hook_style.marginl = 80
             hook_style.marginr = 80
 
-        hook_style.borderstyle = 3   # Opaque background box
         hook_box_size = (style_overrides or {}).get("hook_box_size") or 24
-        hook_style.outline = hook_box_size  # Controls padding around hook text
-        hook_style.shadow = max(6, hook_box_size // 4)
         hook_style.primarycolor = hex_to_ass_color(
             (style_overrides or {}).get("hook_text_color") or "#FFFFFF"
         )
-        hook_style.outlinecolor = hex_to_ass_color(
-            (style_overrides or {}).get("hook_bg_color") or "#0A0A0A"
-        )
-        hook_style.backcolor = hex_to_ass_color("#000000B0")
+        if hook_bg_enabled:
+            hook_style.borderstyle = 3   # Opaque background box
+            hook_style.outline = hook_box_size
+            hook_style.shadow = max(6, hook_box_size // 4)
+            hook_style.outlinecolor = hex_to_ass_color(
+                (style_overrides or {}).get("hook_bg_color") or "#0A0A0A"
+            )
+            hook_style.backcolor = hex_to_ass_color("#000000B0")
+        else:
+            hook_style.borderstyle = 1   # Outline only, no box
+            hook_style.outline = 3
+            hook_style.shadow = 1
+            hook_style.outlinecolor = hex_to_ass_color("#000000")
+            hook_style.backcolor = hex_to_ass_color("#00000000")
         subs.styles["Hook"] = hook_style
 
         clip_duration = clip_end - clip_start

@@ -219,6 +219,29 @@ export function ClipCard({ clip, projectId, rank, videoPath }: ClipCardProps) {
       </div>
 
       {/* Actions */}
+      {clip.status === "exported" && (clip.export_parts?.length ?? 0) > 1 && (
+        <div className="px-3 pb-2 space-y-1">
+          {clip.export_parts!.map((part) => (
+            <a
+              key={part.part_num}
+              href={`${WORKER_URL}/api/exports/${clip.id}/parts/${part.part_num}/download`}
+              download
+              className="flex items-center justify-between text-[11px] text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 rounded px-2 py-1"
+            >
+              <span>Part {part.part_num}/{part.total_parts} ({part.duration.toFixed(1)}s)</span>
+              <Download className="h-3 w-3" />
+            </a>
+          ))}
+          <a
+            href={`${WORKER_URL}/api/exports/${clip.id}/download-all`}
+            download
+            className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-primary hover:text-primary/80 bg-primary/10 rounded px-2 py-1.5 w-full"
+          >
+            <Download className="h-3 w-3" /> Download All (ZIP)
+          </a>
+        </div>
+      )}
+
       <div className="flex items-center gap-1.5 border-t border-border/20 px-3 py-2.5">
         <Button
           size="sm"

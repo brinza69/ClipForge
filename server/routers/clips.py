@@ -54,6 +54,7 @@ class ClipUpdate(BaseModel):
     part_label_bg_color: Optional[str] = None
     part_label_x: Optional[int] = None
     part_label_y: Optional[int] = None
+    hook_bg_enabled: Optional[bool] = None
 
 
 @router.get("/", response_model=list[ClipResponse])

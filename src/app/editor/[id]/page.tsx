@@ -40,6 +40,7 @@ export default function EditorPage() {
   const [hookFontSize, setHookFontSize] = useState<number>(46);
   const [hookTextColor, setHookTextColor] = useState<string>("#FFFFFF");
   const [hookBgColor, setHookBgColor] = useState<string>("#0A0A0A");
+  const [hookBgEnabled, setHookBgEnabled] = useState<boolean>(true);
   const [hookBoxSize, setHookBoxSize] = useState<number>(24);
   const [hookDurationSeconds, setHookDurationSeconds] = useState<number>(4);
   const [hookX, setHookX] = useState<number>(50);
@@ -115,6 +116,7 @@ export default function EditorPage() {
     setHookFontSize(clip.hook_font_size || 46);
     setHookTextColor(clip.hook_text_color || "#FFFFFF");
     setHookBgColor(clip.hook_bg_color || "#0A0A0A");
+    setHookBgEnabled(clip.hook_bg_enabled ?? true);
     setHookBoxSize(clip.hook_box_size || 24);
     setHookDurationSeconds(clip.hook_duration_seconds || 4);
     setHookX(clip.hook_x ?? 50);
@@ -221,6 +223,7 @@ export default function EditorPage() {
       hook_font_size: hookFontSize,
       hook_text_color: hookTextColor,
       hook_bg_color: hookBgColor,
+      hook_bg_enabled: hookBgEnabled,
       hook_box_size: hookBoxSize,
       hook_duration_seconds: hookDurationSeconds,
       hook_x: hookX,
@@ -407,10 +410,10 @@ export default function EditorPage() {
               {/* Hook box */}
               {hookText.trim().length > 0 && previewElapsed <= hookDurationSeconds && (
                 <div
-                  className="absolute max-w-[82%] rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
+                  className={`absolute max-w-[82%] ${hookBgEnabled ? "rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm" : ""}`}
                   style={{
-                    backgroundColor: hookBgColor + "F2",
-                    padding: `${hookBoxSize}px`,
+                    backgroundColor: hookBgEnabled ? hookBgColor + "F2" : "transparent",
+                    padding: hookBgEnabled ? `${hookBoxSize}px` : `${hookBoxSize}px`,
                     left: `${hookX}%`,
                     top: `${hookY}%`,
                     transform: "translate(-50%, -50%)",
@@ -423,6 +426,7 @@ export default function EditorPage() {
                       fontSize: `${Math.round(hookFontSize * 0.37)}px`,
                       maxWidth: "260px",
                       wordBreak: "break-word",
+                      textShadow: hookBgEnabled ? "none" : "0 2px 4px #000, 0 0 2px #000",
                     }}
                   >
                     {hookText}
@@ -699,6 +703,16 @@ export default function EditorPage() {
                   <div className="flex items-center justify-between gap-3">
                     <Label className="text-xs whitespace-nowrap min-w-[100px]">Background</Label>
                     <input type="color" value={hookBgColor} onChange={(e) => setHookBgColor(e.target.value)} className="w-8 h-8 rounded border border-border/60 cursor-pointer bg-transparent" />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Show BG Box</Label>
+                    <button
+                      type="button"
+                      onClick={() => setHookBgEnabled(!hookBgEnabled)}
+                      className={`relative w-10 h-5 rounded-full transition-colors ${hookBgEnabled ? "bg-primary" : "bg-muted"}`}
+                    >
+                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${hookBgEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
+                    </button>
                   </div>
                 </div>
               </div>
