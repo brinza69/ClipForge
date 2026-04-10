@@ -188,6 +188,45 @@ export default function ProjectPage() {
             </Card>
           )}
 
+          {/* Workflow mode picker (editable until download starts) */}
+          {showMetadataPreview && (
+            <div className="flex gap-2" data-testid="workflow-mode-section">
+              {(["clipping", "full_video_parts"] as const).map((mode) => {
+                const active = (project.processing_mode || "clipping") === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    data-testid={`project-mode-${mode}`}
+                    onClick={async () => {
+                      try {
+                        await api.projects.update(projectId, { processing_mode: mode });
+                        queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+                      } catch (e: any) {
+                        toast.error(e?.message || "Failed to update mode");
+                      }
+                    }}
+                    className={`flex-1 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
+                      active ? "border-primary bg-primary/10" : "border-border/60 hover:bg-muted/50"
+                    }`}
+                  >
+                    <div className="font-semibold">
+                      {mode === "clipping" ? "Smart Clipping" : "Full Video → Parts"}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {mode === "clipping"
+                        ? "AI-pick viral moments."
+                        : "Keep full video, split with title overlay."}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {!showMetadataPreview && project.processing_mode === "full_video_parts" && (
+            <Badge variant="outline" className="text-[10px]">Full Video → Parts mode</Badge>
+          )}
+
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-2">
             {isProcessing && (

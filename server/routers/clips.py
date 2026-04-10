@@ -55,6 +55,12 @@ class ClipUpdate(BaseModel):
     part_label_bg_color: Optional[str] = None
     part_label_x: Optional[int] = None
     part_label_y: Optional[int] = None
+    title_text: Optional[str] = None
+    title_font_size: Optional[int] = None
+    title_x: Optional[int] = None
+    title_y: Optional[int] = None
+    title_box_size: Optional[int] = None
+    title_box_width: Optional[int] = None
 
 
 @router.get("/", response_model=list[ClipResponse])

@@ -55,6 +55,14 @@ export default function EditorPage() {
   const [splitMode, setSplitMode] = useState<string>("off");
   const [splitPartsCount, setSplitPartsCount] = useState<number>(2);
 
+  // Title overlay settings (full_video_parts mode)
+  const [titleText, setTitleText] = useState<string>("");
+  const [titleFontSize, setTitleFontSize] = useState<number>(46);
+  const [titleX, setTitleX] = useState<number>(50);
+  const [titleY, setTitleY] = useState<number>(18);
+  const [titleBoxSize, setTitleBoxSize] = useState<number>(24);
+  const [titleBoxWidth, setTitleBoxWidth] = useState<number>(24);
+
   // Part label settings
   const [partLabelFontSize, setPartLabelFontSize] = useState<number>(32);
   const [partLabelBoxSize, setPartLabelBoxSize] = useState<number>(14);
@@ -134,6 +142,12 @@ export default function EditorPage() {
     setPartLabelBgColor(clip.part_label_bg_color || "#000000");
     setPartLabelX(clip.part_label_x ?? 88);
     setPartLabelY(clip.part_label_y ?? 10);
+    setTitleText(clip.title_text || "");
+    setTitleFontSize(clip.title_font_size || 46);
+    setTitleX(clip.title_x ?? 50);
+    setTitleY(clip.title_y ?? 18);
+    setTitleBoxSize(clip.title_box_size || 24);
+    setTitleBoxWidth(clip.title_box_width || clip.title_box_size || 24);
     // Auto-open export split panel if split was previously configured
     if (clip.split_mode && clip.split_mode !== "off") setExportSplitOpen(true);
 
@@ -239,6 +253,12 @@ export default function EditorPage() {
       part_label_bg_color: partLabelBgColor,
       part_label_x: partLabelX,
       part_label_y: partLabelY,
+      title_text: titleText,
+      title_font_size: titleFontSize,
+      title_x: titleX,
+      title_y: titleY,
+      title_box_size: titleBoxSize,
+      title_box_width: titleBoxWidth,
       transcript_text: override ? override : (clip?.transcript_text ?? undefined),
       transcript_segments: override
         ? [{ start: startTime, end: endTime, text: override }]
@@ -261,6 +281,7 @@ export default function EditorPage() {
   };
 
   const sourceVideoUrl = VIDEO_URL(project?.id || "", project?.video_path);
+  const isFullVideoMode = (project?.processing_mode || "clipping") === "full_video_parts";
 
   return (
     <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100vh-8rem)]">
@@ -433,6 +454,33 @@ export default function EditorPage() {
                 </div>
               )}
 
+              {/* Title overlay preview — visible the entire duration in full_video_parts mode */}
+              {isFullVideoMode && titleText.trim().length > 0 && (
+                <div
+                  data-testid="preview-title-box"
+                  className="absolute max-w-[82%] rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
+                  style={{
+                    backgroundColor: "#0A0A0AF2",
+                    padding: `${titleBoxSize}px ${titleBoxWidth}px`,
+                    left: `${titleX}%`,
+                    top: `${titleY}%`,
+                    transform: "translate(-50%, -50%)",
+                  }}
+                >
+                  <div
+                    className="leading-snug font-bold text-center break-words"
+                    style={{
+                      color: "#FFFFFF",
+                      fontSize: `${Math.round(titleFontSize * 0.37)}px`,
+                      maxWidth: "260px",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {titleText}
+                  </div>
+                </div>
+              )}
+
               {/* Part label preview — only when split export is active */}
               {splitMode !== "off" && effectiveParts > 1 && (
                 <div
@@ -523,19 +571,95 @@ export default function EditorPage() {
         </div>
 
         <div className="p-5 space-y-8 flex-1">
-          {/* Hook Text Editor */}
-          <div className="space-y-3">
-            <Label className="flex items-center gap-2"><Scissors className="h-4 w-4 text-primary" /> Auto Hook Text</Label>
-            <div className="text-[10px] text-muted-foreground mb-1">
-              This text appears as a bold box at the start of the clip. Adjust duration and box size in Style Overrides.
+          {/* Hook Text Editor (clipping mode only) */}
+          {!isFullVideoMode && (
+            <div className="space-y-3">
+              <Label className="flex items-center gap-2"><Scissors className="h-4 w-4 text-primary" /> Auto Hook Text</Label>
+              <div className="text-[10px] text-muted-foreground mb-1">
+                This text appears as a bold box at the start of the clip. Adjust duration and box size in Style Overrides.
+              </div>
+              <Input
+                value={hookText}
+                onChange={(e) => setHookText(e.target.value)}
+                placeholder="e.g. This changes everything..."
+                className="bg-card w-full"
+              />
             </div>
-            <Input
-              value={hookText}
-              onChange={(e) => setHookText(e.target.value)}
-              placeholder="e.g. This changes everything..."
-              className="bg-card w-full"
-            />
-          </div>
+          )}
+
+          {/* Title Box Editor (full_video_parts mode only) */}
+          {isFullVideoMode && (
+            <div className="space-y-3" data-testid="title-box-section">
+              <Label className="flex items-center gap-2"><Type className="h-4 w-4 text-primary" /> Title Box</Label>
+              <div className="text-[10px] text-muted-foreground mb-1">
+                Persistent title overlay shown for the entire duration of every exported part.
+              </div>
+              <Input
+                data-testid="title-text-input"
+                value={titleText}
+                onChange={(e) => setTitleText(e.target.value)}
+                placeholder="e.g. Episode 1 — Full Interview"
+                className="bg-card w-full"
+              />
+              <div className="space-y-2 pt-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs whitespace-nowrap min-w-[100px]">Font Size ({titleFontSize})</Label>
+                  <Slider
+                    value={[titleFontSize]}
+                    min={24}
+                    max={80}
+                    step={2}
+                    onValueChange={(val: number | readonly number[]) => setTitleFontSize(Array.isArray(val) ? val[0] : val)}
+                    className="flex-1"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs whitespace-nowrap min-w-[100px]">Box Height ({titleBoxSize})</Label>
+                  <Slider
+                    value={[titleBoxSize]}
+                    min={8}
+                    max={60}
+                    step={2}
+                    onValueChange={(val: number | readonly number[]) => setTitleBoxSize(Array.isArray(val) ? val[0] : val)}
+                    className="flex-1"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs whitespace-nowrap min-w-[100px]">Box Width ({titleBoxWidth})</Label>
+                  <Slider
+                    value={[titleBoxWidth]}
+                    min={8}
+                    max={80}
+                    step={2}
+                    onValueChange={(val: number | readonly number[]) => setTitleBoxWidth(Array.isArray(val) ? val[0] : val)}
+                    className="flex-1"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs whitespace-nowrap min-w-[100px]">X ({titleX}%)</Label>
+                  <Slider
+                    value={[titleX]}
+                    min={5}
+                    max={95}
+                    step={1}
+                    onValueChange={(val: number | readonly number[]) => setTitleX(Array.isArray(val) ? val[0] : val)}
+                    className="flex-1"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs whitespace-nowrap min-w-[100px]">Y ({titleY}%)</Label>
+                  <Slider
+                    value={[titleY]}
+                    min={5}
+                    max={95}
+                    step={1}
+                    onValueChange={(val: number | readonly number[]) => setTitleY(Array.isArray(val) ? val[0] : val)}
+                    className="flex-1"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Caption Override */}
           <div className="space-y-3">
@@ -660,6 +784,7 @@ export default function EditorPage() {
                 </div>
 
                 {/* Hook overrides */}
+                {!isFullVideoMode && (
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Hook Box</p>
                   <div className="flex items-center justify-between gap-3">
@@ -715,6 +840,7 @@ export default function EditorPage() {
                     <input type="color" value={hookBgColor} onChange={(e) => setHookBgColor(e.target.value)} className="w-8 h-8 rounded border border-border/60 cursor-pointer bg-transparent" />
                   </div>
                 </div>
+                )}
               </div>
             )}
           </div>
@@ -735,6 +861,7 @@ export default function EditorPage() {
             {positionSectionOpen && (
               <div className="space-y-4 pt-1">
                 {/* Hook position */}
+                {!isFullVideoMode && (
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Hook Position</p>
                   <div className="flex items-center justify-between gap-3">
@@ -760,6 +887,7 @@ export default function EditorPage() {
                     />
                   </div>
                 </div>
+                )}
 
                 {/* Subtitle position */}
                 <div className="space-y-2">

@@ -36,6 +36,7 @@ export interface Project {
   estimated_size: number | null;
   video_path: string | null;
   filesize: number | null;
+  processing_mode?: "clipping" | "full_video_parts" | null;
   total_storage: number;
   clip_count: number;
   exported_count: number;
@@ -121,6 +122,12 @@ export interface Clip {
   part_label_bg_color?: string | null;
   part_label_x?: number | null;
   part_label_y?: number | null;
+  title_text?: string | null;
+  title_font_size?: number | null;
+  title_x?: number | null;
+  title_y?: number | null;
+  title_box_size?: number | null;
+  title_box_width?: number | null;
   export_path: string | null;
   created_at: string | null;
 }
