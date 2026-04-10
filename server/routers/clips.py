@@ -40,6 +40,7 @@ class ClipUpdate(BaseModel):
     hook_bg_color: Optional[str] = None
     hook_y_position: Optional[str] = None
     hook_box_size: Optional[int] = None
+    hook_box_width: Optional[int] = None
     hook_duration_seconds: Optional[float] = None
     hook_x: Optional[int] = None
     hook_y: Optional[int] = None

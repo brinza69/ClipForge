@@ -426,6 +426,7 @@ async def handle_export(
         "hook_bg_color": clip.hook_bg_color,
         "hook_y_position": clip.hook_y_position,
         "hook_box_size": clip.hook_box_size,
+        "hook_box_width": clip.hook_box_width,
         "hook_duration_seconds": clip.hook_duration_seconds,
         "hook_x": clip.hook_x,
         "hook_y": clip.hook_y,

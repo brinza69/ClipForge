@@ -358,6 +358,7 @@ def generate_captions(
                 hook_y=(style_overrides or {}).get("hook_y"),
                 hook_font_size=(style_overrides or {}).get("hook_font_size"),
                 hook_box_size=(style_overrides or {}).get("hook_box_size"),
+                hook_box_width=(style_overrides or {}).get("hook_box_width"),
             )
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             subs.save(output_path, encoding="utf-8")
@@ -397,6 +398,7 @@ def generate_captions(
             hook_y=(style_overrides or {}).get("hook_y"),
             hook_font_size=(style_overrides or {}).get("hook_font_size"),
             hook_box_size=(style_overrides or {}).get("hook_box_size"),
+            hook_box_width=(style_overrides or {}).get("hook_box_width"),
         )
 
     # Save
@@ -537,11 +539,13 @@ def _add_hook_event(
     hook_y: int = None,
     hook_font_size: int = None,
     hook_box_size: int = None,
+    hook_box_width: int = None,
 ):
     """Add the hook text event with fade + scale-up animation for premium feel.
 
     Hook text wraps inside the box via ASS \\q1 (word-wrap) mode.
     If hook_x/hook_y are provided (0-100 percentage), position with \\pos.
+    hook_box_width adds extra horizontal padding via \\fsp (letter spacing).
     """
     scale_in = 400
     play_res_x = int(subs.info.get("PlayResX", 1080))
@@ -554,9 +558,18 @@ def _add_hook_event(
         py = int(hook_y / 100 * play_res_y)
         pos_tag = f"\\pos({px},{py})"
 
+    # Extra horizontal padding via letter spacing when box_width > box_size
+    fsp_tag = ""
+    effective_box_size = hook_box_size or 24
+    effective_box_width = hook_box_width or effective_box_size
+    if effective_box_width > effective_box_size:
+        # Scale the extra width into letter spacing (approximate visual match)
+        extra_px = effective_box_width - effective_box_size
+        fsp_tag = f"\\fsp{extra_px}"
+
     # Enable word wrapping (\\q1 = end-of-line wrapping, respects \\ClipRect / margins)
     anim = (
-        f"{{\\q1{pos_tag}"
+        f"{{\\q1{pos_tag}{fsp_tag}"
         f"\\fad({fade_ms},{fade_ms})"
         f"\\fscx92\\fscy92"
         f"\\t(0,{scale_in},\\fscx100\\fscy100)"

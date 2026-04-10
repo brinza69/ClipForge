@@ -106,6 +106,7 @@ export interface Clip {
   hook_bg_color?: string | null;
   hook_y_position?: string | null;
   hook_box_size?: number | null;
+  hook_box_width?: number | null;
   hook_duration_seconds?: number | null;
   hook_x?: number | null;
   hook_y?: number | null;

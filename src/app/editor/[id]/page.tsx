@@ -41,6 +41,7 @@ export default function EditorPage() {
   const [hookTextColor, setHookTextColor] = useState<string>("#FFFFFF");
   const [hookBgColor, setHookBgColor] = useState<string>("#0A0A0A");
   const [hookBoxSize, setHookBoxSize] = useState<number>(24);
+  const [hookBoxWidth, setHookBoxWidth] = useState<number>(24);
   const [hookDurationSeconds, setHookDurationSeconds] = useState<number>(4);
   const [hookX, setHookX] = useState<number>(50);
   const [hookY, setHookY] = useState<number>(32);
@@ -116,6 +117,7 @@ export default function EditorPage() {
     setHookTextColor(clip.hook_text_color || "#FFFFFF");
     setHookBgColor(clip.hook_bg_color || "#0A0A0A");
     setHookBoxSize(clip.hook_box_size || 24);
+    setHookBoxWidth(clip.hook_box_width || clip.hook_box_size || 24);
     setHookDurationSeconds(clip.hook_duration_seconds || 4);
     setHookX(clip.hook_x ?? 50);
     setHookY(clip.hook_y ?? 32);
@@ -222,6 +224,7 @@ export default function EditorPage() {
       hook_text_color: hookTextColor,
       hook_bg_color: hookBgColor,
       hook_box_size: hookBoxSize,
+      hook_box_width: hookBoxWidth,
       hook_duration_seconds: hookDurationSeconds,
       hook_x: hookX,
       hook_y: hookY,
@@ -410,7 +413,7 @@ export default function EditorPage() {
                   className="absolute max-w-[82%] rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
                   style={{
                     backgroundColor: hookBgColor + "F2",
-                    padding: `${hookBoxSize}px`,
+                    padding: `${hookBoxSize}px ${hookBoxWidth}px`,
                     left: `${hookX}%`,
                     top: `${hookY}%`,
                     transform: "translate(-50%, -50%)",
@@ -671,13 +674,24 @@ export default function EditorPage() {
                     />
                   </div>
                   <div className="flex items-center justify-between gap-3">
-                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Box Size ({hookBoxSize})</Label>
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Box Height ({hookBoxSize})</Label>
                     <Slider
                       value={[hookBoxSize]}
                       min={8}
                       max={60}
                       step={2}
                       onValueChange={(val: number | readonly number[]) => setHookBoxSize(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Box Width ({hookBoxWidth})</Label>
+                    <Slider
+                      value={[hookBoxWidth]}
+                      min={8}
+                      max={80}
+                      step={2}
+                      onValueChange={(val: number | readonly number[]) => setHookBoxWidth(Array.isArray(val) ? val[0] : val)}
                       className="flex-1"
                     />
                   </div>

@@ -56,6 +56,7 @@ async def init_db() -> None:
             ("hook_bg_color", "VARCHAR(20)"),
             ("hook_y_position", "VARCHAR(20)"),
             ("hook_box_size", "INTEGER"),
+            ("hook_box_width", "INTEGER"),
             ("hook_duration_seconds", "REAL"),
             ("hook_x", "INTEGER"),
             ("hook_y", "INTEGER"),

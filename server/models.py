@@ -181,6 +181,7 @@ class ClipModel(Base):
     hook_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     hook_y_position: Mapped[str | None] = mapped_column(String(20), nullable=True)
     hook_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_box_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hook_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     hook_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hook_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
