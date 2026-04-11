@@ -232,6 +232,75 @@ async def handle_score(
     await _update_project_status(project_id, ProjectStatus.scoring)
     await queue.update_progress(job_id, 0.1, "Loading transcript...")
 
+    # ── Full-video-into-parts mode: skip clip candidate scoring and instead
+    # create a single clip spanning the entire video with auto split. ───────
+    async with async_session() as session:
+        proj_check = await session.get(ProjectModel, project_id)
+        if proj_check and (proj_check.processing_mode or "clipping") == "full_video_parts":
+            from services.exporter import generate_thumbnail
+            await queue.update_progress(job_id, 0.3, "Preparing full-video parts...")
+
+            if not proj_check.video_path:
+                raise RuntimeError("No video file found for full-video mode")
+            video_path = proj_check.video_path
+            _ensure_file(video_path, "Full video parts")
+            duration = float(proj_check.duration or 0.0)
+            if duration <= 0:
+                # Probe via ffprobe fallback (rarely needed)
+                duration = 60.0
+
+            # Load transcript if available so captions still get generated
+            tr_result = await session.execute(
+                select(TranscriptModel).where(TranscriptModel.project_id == project_id).order_by(TranscriptModel.id.desc())
+            )
+            tr = tr_result.scalars().first()
+
+            # Wipe any prior clips for this project
+            await session.execute(delete(ClipModel).where(ClipModel.project_id == project_id))
+
+            full_clip = ClipModel(
+                project_id=project_id,
+                title=proj_check.title or "Full Video",
+                start_time=0.0,
+                end_time=duration,
+                duration=duration,
+                transcript_text=(tr.full_text if tr else None),
+                transcript_segments=(tr.segments if tr else None),
+                hook_text=None,
+                title_text=proj_check.title or "Full Video",
+                split_mode="auto",
+                status=ClipStatus.candidate.value,
+            )
+            session.add(full_clip)
+            await session.execute(
+                update(ProjectModel)
+                .where(ProjectModel.id == project_id)
+                .values(status=ProjectStatus.ready.value)
+            )
+            await session.commit()
+            await session.refresh(full_clip)
+
+            # Thumbnail for the single clip
+            thumbs_dir = settings.thumbnails_dir / project_id
+            thumbs_dir.mkdir(parents=True, exist_ok=True)
+            thumb_path = thumbs_dir / f"clip_{full_clip.id}.jpg"
+            await generate_thumbnail(
+                video_path=video_path,
+                output_path=str(thumb_path),
+                timestamp=0.5,
+            )
+            async with async_session() as s2:
+                await s2.execute(
+                    update(ClipModel)
+                    .where(ClipModel.id == full_clip.id)
+                    .values(thumbnail_path=str(thumb_path))
+                )
+                await s2.commit()
+
+            await queue.update_progress(job_id, 1.0, "Full video ready")
+            logger.info(f"Full-video clip created for project {project_id}: duration={duration:.1f}s")
+            return
+
     # Load transcript
     async with async_session() as session:
         project = await session.get(ProjectModel, project_id)
@@ -427,6 +496,7 @@ async def handle_export(
         "hook_bg_enabled": clip.hook_bg_enabled if clip.hook_bg_enabled is not None else True,
         "hook_y_position": clip.hook_y_position,
         "hook_box_size": clip.hook_box_size,
+        "hook_box_width": clip.hook_box_width,
         "hook_duration_seconds": clip.hook_duration_seconds,
         "hook_x": clip.hook_x,
         "hook_y": clip.hook_y,
@@ -438,6 +508,11 @@ async def handle_export(
         "part_label_bg_color": clip.part_label_bg_color,
         "part_label_x": clip.part_label_x,
         "part_label_y": clip.part_label_y,
+        "title_font_size": clip.title_font_size,
+        "title_x": clip.title_x,
+        "title_y": clip.title_y,
+        "title_box_size": clip.title_box_size,
+        "title_box_width": clip.title_box_width,
     }
     style_overrides = {k: v for k, v in style_overrides.items() if v is not None}
 
@@ -480,7 +555,8 @@ async def handle_export(
         # Generate captions for this part
         captions_path = None
         if caption_segments:
-            # For split parts, only show hook on part 1
+            # For split parts, only show hook on part 1.
+            # Title (full_video_parts mode) shows on every part for full duration.
             part_hook_text = clip.hook_text if (not is_split or part_num == 1) else None
 
             captions_path = generate_captions(
@@ -492,6 +568,7 @@ async def handle_export(
                 hook_text=part_hook_text,
                 style_overrides=style_overrides or None,
                 hook_bg_enabled=clip.hook_bg_enabled if clip.hook_bg_enabled is not None else True,
+                title_text=clip.title_text or None,
             )
 
             # Add part label overlay for split videos
@@ -504,6 +581,25 @@ async def handle_export(
                     style_overrides=style_overrides,
                 )
                 subs.save(captions_path, encoding="utf-8")
+
+        # If no caption segments but we still need a title overlay (full_video_parts mode without transcript)
+        if not captions_path and clip.title_text:
+            from services.captioner import _add_title_event
+            import pysubs2
+            subs = pysubs2.SSAFile()
+            subs.info["PlayResX"] = str(settings.export_width)
+            subs.info["PlayResY"] = str(settings.export_height)
+            _add_title_event(
+                subs, clip.title_text, int(part_duration * 1000),
+                title_x=style_overrides.get("title_x"),
+                title_y=style_overrides.get("title_y"),
+                title_font_size=style_overrides.get("title_font_size"),
+                title_box_size=style_overrides.get("title_box_size"),
+                title_box_width=style_overrides.get("title_box_width"),
+            )
+            captions_path = str(settings.temp_dir / project_id / f"title_{clip_id}_p{part_num}.ass")
+            Path(captions_path).parent.mkdir(parents=True, exist_ok=True)
+            subs.save(captions_path, encoding="utf-8")
 
         # If no caption segments but we still need a part label
         if is_split and not captions_path:

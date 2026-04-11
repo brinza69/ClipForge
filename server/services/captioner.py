@@ -199,6 +199,7 @@ def generate_captions(
     hook_text: Optional[str] = None,
     style_overrides: Optional[Dict[str, Any]] = None,
     hook_bg_enabled: bool = True,
+    title_text: Optional[str] = None,
 ) -> str:
     """
     Generate an ASS subtitle file with animated word-by-word captions.
@@ -358,15 +359,27 @@ def generate_captions(
 
     if not clip_words:
         logger.warning("No words found for caption generation")
-        # Still generate hook if present
-        if hook_text and output_path:
-            _add_hook_event(
-                subs, hook_text, hook_duration_ms, hook_fade_ms,
-                hook_x=(style_overrides or {}).get("hook_x"),
-                hook_y=(style_overrides or {}).get("hook_y"),
-                hook_font_size=(style_overrides or {}).get("hook_font_size"),
-                hook_box_size=(style_overrides or {}).get("hook_box_size"),
-            )
+        # Still generate hook / title if present
+        if (hook_text or title_text) and output_path:
+            if hook_text:
+                _add_hook_event(
+                    subs, hook_text, hook_duration_ms, hook_fade_ms,
+                    hook_x=(style_overrides or {}).get("hook_x"),
+                    hook_y=(style_overrides or {}).get("hook_y"),
+                    hook_font_size=(style_overrides or {}).get("hook_font_size"),
+                    hook_box_size=(style_overrides or {}).get("hook_box_size"),
+                    hook_box_width=(style_overrides or {}).get("hook_box_width"),
+                )
+            if title_text:
+                clip_duration_ms = int((clip_end - clip_start) * 1000)
+                _add_title_event(
+                    subs, title_text, clip_duration_ms,
+                    title_x=(style_overrides or {}).get("title_x"),
+                    title_y=(style_overrides or {}).get("title_y"),
+                    title_font_size=(style_overrides or {}).get("title_font_size"),
+                    title_box_size=(style_overrides or {}).get("title_box_size"),
+                    title_box_width=(style_overrides or {}).get("title_box_width"),
+                )
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             subs.save(output_path, encoding="utf-8")
             return output_path
@@ -405,6 +418,19 @@ def generate_captions(
             hook_y=(style_overrides or {}).get("hook_y"),
             hook_font_size=(style_overrides or {}).get("hook_font_size"),
             hook_box_size=(style_overrides or {}).get("hook_box_size"),
+            hook_box_width=(style_overrides or {}).get("hook_box_width"),
+        )
+
+    # Insert persistent title event (full duration)
+    if title_text:
+        clip_duration_ms = int((clip_end - clip_start) * 1000)
+        _add_title_event(
+            subs, title_text, clip_duration_ms,
+            title_x=(style_overrides or {}).get("title_x"),
+            title_y=(style_overrides or {}).get("title_y"),
+            title_font_size=(style_overrides or {}).get("title_font_size"),
+            title_box_size=(style_overrides or {}).get("title_box_size"),
+            title_box_width=(style_overrides or {}).get("title_box_width"),
         )
 
     # Save
@@ -545,11 +571,13 @@ def _add_hook_event(
     hook_y: int = None,
     hook_font_size: int = None,
     hook_box_size: int = None,
+    hook_box_width: int = None,
 ):
     """Add the hook text event with fade + scale-up animation for premium feel.
 
     Hook text wraps inside the box via ASS \\q1 (word-wrap) mode.
     If hook_x/hook_y are provided (0-100 percentage), position with \\pos.
+    hook_box_width adds extra horizontal padding via \\fsp (letter spacing).
     """
     scale_in = 400
     play_res_x = int(subs.info.get("PlayResX", 1080))
@@ -562,9 +590,18 @@ def _add_hook_event(
         py = int(hook_y / 100 * play_res_y)
         pos_tag = f"\\pos({px},{py})"
 
+    # Extra horizontal padding via letter spacing when box_width > box_size
+    fsp_tag = ""
+    effective_box_size = hook_box_size or 24
+    effective_box_width = hook_box_width or effective_box_size
+    if effective_box_width > effective_box_size:
+        # Scale the extra width into letter spacing (approximate visual match)
+        extra_px = effective_box_width - effective_box_size
+        fsp_tag = f"\\fsp{extra_px}"
+
     # Enable word wrapping (\\q1 = end-of-line wrapping, respects \\ClipRect / margins)
     anim = (
-        f"{{\\q1{pos_tag}"
+        f"{{\\q1{pos_tag}{fsp_tag}"
         f"\\fad({fade_ms},{fade_ms})"
         f"\\fscx92\\fscy92"
         f"\\t(0,{scale_in},\\fscx100\\fscy100)"
@@ -577,6 +614,64 @@ def _add_hook_event(
         style="Hook",
     )
     subs.events.insert(0, hook_event)
+
+
+def _add_title_event(
+    subs: pysubs2.SSAFile,
+    title_text: str,
+    duration_ms: int,
+    title_x: int = None,
+    title_y: int = None,
+    title_font_size: int = None,
+    title_box_size: int = None,
+    title_box_width: int = None,
+):
+    """Add a persistent title overlay (full duration) styled like the hook box.
+
+    Differs from the hook box in that it stays visible for the entire clip
+    duration and has no fade animation. Position via \\pos when x/y given.
+    """
+    play_res_x = int(subs.info.get("PlayResX", 1080))
+    play_res_y = int(subs.info.get("PlayResY", 1920))
+
+    title_style = pysubs2.SSAStyle()
+    title_style.fontname = "Arial"
+    title_style.fontsize = title_font_size or 46
+    title_style.bold = True
+    title_style.borderstyle = 3  # Opaque background box
+    box_size = title_box_size or 24
+    title_style.outline = box_size
+    title_style.shadow = max(6, box_size // 4)
+    title_style.primarycolor = hex_to_ass_color("#FFFFFF")
+    title_style.outlinecolor = hex_to_ass_color("#0A0A0A")
+    title_style.backcolor = hex_to_ass_color("#000000B0")
+    title_style.alignment = 5  # center anchor (works for \pos)
+    title_style.marginv = 0
+    title_style.marginl = 0
+    title_style.marginr = 0
+    subs.styles["Title"] = title_style
+
+    # Position
+    pos_tag = ""
+    if title_x is not None and title_y is not None:
+        px = int(title_x / 100 * play_res_x)
+        py = int(title_y / 100 * play_res_y)
+        pos_tag = f"\\pos({px},{py})"
+    else:
+        # Default near top-center
+        px = play_res_x // 2
+        py = int(play_res_y * 0.18)
+        pos_tag = f"\\pos({px},{py})"
+
+    # Letter spacing for extra horizontal padding
+    fsp_tag = ""
+    box_width = title_box_width or box_size
+    if box_width > box_size:
+        fsp_tag = f"\\fsp{box_width - box_size}"
+
+    text = f"{{\\q1{pos_tag}{fsp_tag}}}{title_text}"
+    event = pysubs2.SSAEvent(start=0, end=duration_ms, text=text, style="Title")
+    subs.events.insert(0, event)
 
 
 def _add_part_label_event(

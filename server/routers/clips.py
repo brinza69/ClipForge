@@ -40,6 +40,7 @@ class ClipUpdate(BaseModel):
     hook_bg_color: Optional[str] = None
     hook_y_position: Optional[str] = None
     hook_box_size: Optional[int] = None
+    hook_box_width: Optional[int] = None
     hook_duration_seconds: Optional[float] = None
     hook_x: Optional[int] = None
     hook_y: Optional[int] = None
@@ -55,6 +56,12 @@ class ClipUpdate(BaseModel):
     part_label_x: Optional[int] = None
     part_label_y: Optional[int] = None
     hook_bg_enabled: Optional[bool] = None
+    title_text: Optional[str] = None
+    title_font_size: Optional[int] = None
+    title_x: Optional[int] = None
+    title_y: Optional[int] = None
+    title_box_size: Optional[int] = None
+    title_box_width: Optional[int] = None
 
 
 @router.get("/", response_model=list[ClipResponse])

@@ -91,6 +91,7 @@ async def create_project(
         source_url=data.source_url,
         source_type=detect_source_type(data.source_url) if data.source_url else "local",
         status=ProjectStatus.fetching_metadata.value if data.source_url else ProjectStatus.pending.value,
+        processing_mode=data.processing_mode or "clipping",
     )
     session.add(project)
     await session.commit()
@@ -241,6 +242,32 @@ async def get_project_metadata(
         was_live=project.was_live,
         availability=project.availability,
     )
+
+
+# ── PATCH (workflow mode update) ─────────────────────────────────────────────
+
+class ProjectPatch(__import__("pydantic").BaseModel):
+    processing_mode: Optional[str] = None
+    title: Optional[str] = None
+
+
+@router.patch("/{project_id}", response_model=ProjectResponse)
+async def patch_project(
+    project_id: str,
+    data: ProjectPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    project = await session.get(ProjectModel, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    update_data = data.model_dump(exclude_unset=True)
+    if update_data.get("processing_mode") and update_data["processing_mode"] not in ("clipping", "full_video_parts"):
+        raise HTTPException(400, "Invalid processing_mode")
+    for k, v in update_data.items():
+        setattr(project, k, v)
+    await session.commit()
+    await session.refresh(project)
+    return project
 
 
 # ── ACTION ───────────────────────────────────────────────────────────────────

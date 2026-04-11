@@ -20,10 +20,11 @@ export function UrlInput({ onProjectCreated }: UrlInputProps) {
   const [url, setUrl] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [loadingText, setLoadingText] = useState("Analyzing...");
+  const [processingMode, setProcessingMode] = useState<"clipping" | "full_video_parts">("clipping");
 
   const mutation = useMutation({
     mutationFn: (sourceUrl: string) =>
-      api.projects.create({ source_url: sourceUrl }),
+      api.projects.create({ source_url: sourceUrl, processing_mode: processingMode }),
     onSuccess: (data) => {
       toast.success("Project created", {
         description: "Fetching video metadata...",
@@ -74,6 +75,37 @@ export function UrlInput({ onProjectCreated }: UrlInputProps) {
 
   return (
     <form onSubmit={handleSubmit}>
+      {/* Workflow mode picker */}
+      <div className="mb-3 flex gap-2" data-testid="workflow-mode-picker">
+        <button
+          type="button"
+          onClick={() => setProcessingMode("clipping")}
+          data-testid="mode-clipping"
+          className={cn(
+            "flex-1 rounded-xl border px-3 py-2 text-left transition-colors",
+            processingMode === "clipping"
+              ? "border-primary bg-primary/10"
+              : "border-border/60 hover:bg-muted/50",
+          )}
+        >
+          <div className="text-xs font-semibold">Smart Clipping</div>
+          <div className="text-[10px] text-muted-foreground">AI-detect viral moments and export them as short clips.</div>
+        </button>
+        <button
+          type="button"
+          onClick={() => setProcessingMode("full_video_parts")}
+          data-testid="mode-full-video-parts"
+          className={cn(
+            "flex-1 rounded-xl border px-3 py-2 text-left transition-colors",
+            processingMode === "full_video_parts"
+              ? "border-primary bg-primary/10"
+              : "border-border/60 hover:bg-muted/50",
+          )}
+        >
+          <div className="text-xs font-semibold">Full Video → Parts</div>
+          <div className="text-[10px] text-muted-foreground">Keep entire video, split into captioned parts with a title overlay.</div>
+        </button>
+      </div>
       <div
         className={cn(
           "glass relative overflow-hidden rounded-2xl transition-all duration-300",

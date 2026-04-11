@@ -56,6 +56,7 @@ async def init_db() -> None:
             ("hook_bg_color", "VARCHAR(20)"),
             ("hook_y_position", "VARCHAR(20)"),
             ("hook_box_size", "INTEGER"),
+            ("hook_box_width", "INTEGER"),
             ("hook_duration_seconds", "REAL"),
             ("hook_x", "INTEGER"),
             ("hook_y", "INTEGER"),
@@ -72,12 +73,24 @@ async def init_db() -> None:
             ("part_label_y", "INTEGER"),
             ("export_parts", "TEXT"),
             ("hook_bg_enabled", "BOOLEAN DEFAULT 1"),
+            ("title_text", "TEXT"),
+            ("title_font_size", "INTEGER"),
+            ("title_x", "INTEGER"),
+            ("title_y", "INTEGER"),
+            ("title_box_size", "INTEGER"),
+            ("title_box_width", "INTEGER"),
         ]
         for col, col_type in _style_migrations:
             try:
                 await conn.execute(text(f"ALTER TABLE clips ADD COLUMN {col} {col_type}"))
             except Exception:
                 pass
+
+        # Project-level processing mode (clipping vs full_video_parts)
+        try:
+            await conn.execute(text("ALTER TABLE projects ADD COLUMN processing_mode VARCHAR(30)"))
+        except Exception:
+            pass
 
         # Fix any projects stuck at 'downloaded' that already have scored clips
         try:
