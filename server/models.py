@@ -110,6 +110,9 @@ class ProjectModel(Base):
     video_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     filesize: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Processing mode: "clipping" (default) or "full_video_parts"
+    processing_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -181,6 +184,7 @@ class ClipModel(Base):
     hook_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     hook_y_position: Mapped[str | None] = mapped_column(String(20), nullable=True)
     hook_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_box_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hook_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     hook_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hook_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -197,6 +201,14 @@ class ClipModel(Base):
     part_label_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     part_label_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
     part_label_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Title overlay (full_video_parts mode) — persistent on every part
+    title_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_box_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

@@ -48,9 +48,14 @@ export const api = {
   projects: {
     list: () => request<Project[]>("/api/projects/"),
     get: (id: string) => request<Project>(`/api/projects/${id}`),
-    create: (data: { source_url?: string; title?: string }) =>
+    create: (data: { source_url?: string; title?: string; processing_mode?: "clipping" | "full_video_parts" }) =>
       request<Project>("/api/projects/", {
         method: "POST",
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: { processing_mode?: "clipping" | "full_video_parts"; title?: string }) =>
+      request<Project>(`/api/projects/${id}`, {
+        method: "PATCH",
         body: JSON.stringify(data),
       }),
     delete: (id: string) =>
