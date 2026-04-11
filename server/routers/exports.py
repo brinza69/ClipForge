@@ -3,11 +3,13 @@ ClipForge — Exports & Storage Router
 API endpoints for export management, storage info, and cleanup.
 """
 
+import io
 import shutil
+import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -175,6 +177,71 @@ async def get_export_file_url(clip_id: str, session: AsyncSession = Depends(get_
         "filename": export_path.name,
         "size": export_path.stat().st_size,
     }
+
+
+@router.get("/{clip_id}/parts/{part_num}/download")
+async def download_export_part(
+    clip_id: str,
+    part_num: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Download a specific part of a split export."""
+    result = await session.execute(select(ClipModel).where(ClipModel.id == clip_id))
+    clip = result.scalar_one_or_none()
+    if not clip:
+        raise HTTPException(404, f"Clip {clip_id} not found")
+
+    parts = clip.export_parts or []
+    part_entry = next((p for p in parts if p.get("part_num") == part_num), None)
+    if not part_entry:
+        raise HTTPException(404, f"Part {part_num} not found for clip {clip_id}")
+
+    part_path = Path(part_entry["path"])
+    if not part_path.exists():
+        raise HTTPException(404, f"Part file not found on disk: {part_entry['path']}")
+
+    return FileResponse(
+        path=part_path,
+        filename=part_entry["filename"],
+        media_type="video/mp4",
+        headers={"Content-Disposition": f'attachment; filename="{part_entry["filename"]}"'},
+    )
+
+
+@router.get("/{clip_id}/download-all")
+async def download_all_parts(
+    clip_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Stream a ZIP archive of all export parts for a clip."""
+    result = await session.execute(select(ClipModel).where(ClipModel.id == clip_id))
+    clip = result.scalar_one_or_none()
+    if not clip:
+        raise HTTPException(404, f"Clip {clip_id} not found")
+
+    parts = clip.export_parts or []
+    if not parts:
+        if clip.export_path:
+            ep = Path(clip.export_path)
+            if ep.exists():
+                parts = [{"part_num": 1, "total_parts": 1, "path": clip.export_path, "filename": ep.name, "duration": clip.duration}]
+        if not parts:
+            raise HTTPException(404, f"No export files found for clip {clip_id}")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
+        for entry in parts:
+            p = Path(entry["path"])
+            if p.exists():
+                zf.write(p, arcname=entry["filename"])
+    buf.seek(0)
+
+    zip_filename = f"clip_{clip_id}_parts.zip"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_filename}"'},
+    )
 
 
 def _format_size(size_bytes: int) -> str:

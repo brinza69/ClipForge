@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "auto"
     whisper_compute_type: str = "float16"
+    # Chunked transcription: split long audio into N-second chunks before
+    # passing to faster-whisper so peak RAM stays bounded per chunk.
+    # Set to 0 to disable chunking (transcribe the whole file in one pass).
+    whisper_chunk_duration_s: float = 600.0
+    # Minimum total duration (seconds) before chunking kicks in. Short clips
+    # bypass chunking to avoid ffmpeg overhead.
+    whisper_chunk_min_duration_s: float = 900.0
     # Clip duration bounds — wide range to accommodate short-form content (30-90s)
     # and longer interview cuts (up to 3 min). Target ~75s (TikTok sweet spot).
     min_clip_duration: float = 30.0

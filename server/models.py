@@ -7,7 +7,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Text, DateTime, Enum, JSON,
+    Column, String, Integer, Float, Text, DateTime, Enum, JSON, Boolean,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -202,6 +202,9 @@ class ClipModel(Base):
     part_label_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
     part_label_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Multi-part export persistence
+    export_parts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    hook_bg_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # Title overlay (full_video_parts mode) — persistent on every part
     title_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     title_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
