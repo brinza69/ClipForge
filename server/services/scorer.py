@@ -112,8 +112,8 @@ QUESTION_PATTERNS = [
 # ---------------------------------------------------------------------------
 # Dead-time / silence detection thresholds
 # ---------------------------------------------------------------------------
-DEAD_PAUSE_THRESHOLD = 1.5   # Seconds of silence that counts as "dead time"
-WEAK_PAUSE_THRESHOLD = 0.8   # Pauses that feel slow but aren't dead
+DEAD_PAUSE_THRESHOLD = 1.2   # Seconds of silence that counts as "dead time" (was 1.5)
+WEAK_PAUSE_THRESHOLD = 0.7   # Pauses that feel slow but aren't dead (was 0.8)
 MAX_INTERNAL_DEAD_TIME = 5.0 # Max total dead time allowed inside a clip
 
 
@@ -372,17 +372,19 @@ def _snap_boundaries(
     max_dur = settings.max_clip_duration
     min_dur = settings.min_clip_duration
 
-    # --- Snap start: skip initial dead time ---
-    # Look for the first word/speech in the first 3 seconds
+    # --- Snap start: skip initial dead time using word-level timing when available ---
     first_seg = candidate.transcript_segments[0] if candidate.transcript_segments else None
     if first_seg:
-        # If there's a gap between clip start and first speech, skip it
-        speech_start = first_seg["start"]
-        if speech_start > candidate.start_time + 0.5:
-            # Snap to 0.2s before first speech (small lead-in)
-            new_start = max(candidate.start_time, speech_start - 0.2)
-            shift = new_start - candidate.start_time
-            if shift <= 3.0:  # Only snap if within 3s
+        # Prefer word-level timestamps for more precise trim
+        first_words = first_seg.get("words") or []
+        if first_words and isinstance(first_words[0], dict) and "start" in first_words[0]:
+            speech_start = float(first_words[0]["start"])
+        else:
+            speech_start = float(first_seg["start"])
+        if speech_start > candidate.start_time + 0.4:
+            # 0.15s lead-in preserves natural rhythm; tighter than segment-level 0.2s
+            new_start = max(candidate.start_time, speech_start - 0.15)
+            if (new_start - candidate.start_time) <= 3.0:
                 candidate.start_time = round(new_start, 3)
                 candidate.duration = round(candidate.end_time - candidate.start_time, 3)
 
@@ -811,11 +813,28 @@ def _generate_hook_text(candidate: ClipCandidate) -> str:
             first_sentence = " ".join(first_sentence.split()[:10]) + "..."
         return first_sentence[:1].upper() + first_sentence[1:] if first_sentence else ""
 
-    # --- 4. Fallback: first sentence fragment, capped ---
+    # --- 4. Reframe fallback: try to make the opening punchier ---
+    # If the first sentence starts with a filler/weak opener, skip it and
+    # use a short surprising hook based on key words from the opening.
+    WEAK_OPENERS = (
+        "so ", "well ", "okay so ", "ok so ", "today ", "in this video",
+        "hey ", "hi ", "hello ", "alright ", "i'm going to", "i want to",
+        "let's talk about", "we're going to", "i'm here to",
+    )
     first_sentence = re.split(r'[.!?]', text)[0].strip()
+    lower_fs = first_sentence.lower()
+    is_weak = any(lower_fs.startswith(w) for w in WEAK_OPENERS)
+
+    # Try second sentence when first is weak
+    if is_weak:
+        sentences = [s.strip() for s in re.split(r'[.!?]', text) if s.strip()]
+        if len(sentences) > 1:
+            candidate_hook = sentences[1]
+            if 10 < len(candidate_hook) <= 70:
+                return candidate_hook[:1].upper() + candidate_hook[1:]
+
     if len(first_sentence) > 5:
         if len(first_sentence) > 65:
-            # Cut at a natural word boundary
             cut = first_sentence[:62].rstrip()
             last_space = cut.rfind(" ")
             if last_space > 30:
