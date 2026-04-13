@@ -399,6 +399,15 @@ async def handle_export(
             preset=preset,
             output_path=str(settings.temp_dir / project_id / f"captions_{clip_id}.ass"),
             hook_text=clip.hook_text,
+            caption_y_pct=clip.caption_y_pct,
+            caption_align=clip.caption_align,
+            hook_y_pct=clip.hook_y_pct,
+            hook_align=clip.hook_align,
+            caption_font_size=clip.caption_font_size,
+            caption_text_color=clip.caption_text_color,
+            hook_font_size=clip.hook_font_size,
+            hook_text_color=clip.hook_text_color,
+            hook_bg_color=clip.hook_bg_color,
         )
 
     # Step 3: Export

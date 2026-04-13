@@ -24,7 +24,17 @@ class ClipUpdate(BaseModel):
     reframe_mode: Optional[str] = None
     status: Optional[str] = None
     caption_preset_id: Optional[str] = None
+    caption_style: Optional[dict] = None
     hook_text: Optional[str] = None
+    caption_y_pct: Optional[float] = None
+    caption_align: Optional[str] = None
+    hook_y_pct: Optional[float] = None
+    hook_align: Optional[str] = None
+    caption_font_size: Optional[float] = None
+    caption_text_color: Optional[str] = None
+    hook_font_size: Optional[float] = None
+    hook_text_color: Optional[str] = None
+    hook_bg_color: Optional[str] = None
     # Caption editing: allow replacing the caption source segments for export.
     # If `words` are omitted, the caption renderer will split segment text evenly.
     transcript_text: Optional[str] = None

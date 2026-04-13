@@ -169,6 +169,18 @@ class ClipModel(Base):
     reframe_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reframe_data: Mapped[list | dict | None] = mapped_column(JSON, nullable=True)
     caption_preset_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    caption_style: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Caption & hook position overrides (percentage-based)
+    caption_y_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    caption_align: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    hook_y_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hook_align: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Caption & hook style overrides
+    caption_font_size: Mapped[float | None] = mapped_column(Float, nullable=True)
+    caption_text_color: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    hook_font_size: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hook_text_color: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    hook_bg_color: Mapped[str | None] = mapped_column(String(9), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

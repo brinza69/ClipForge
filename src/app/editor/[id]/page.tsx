@@ -10,9 +10,15 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight } from "lucide-react";
+import {
+  ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight,
+  AlignLeft, AlignCenter, AlignRight, Layout,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { Clip, Project, TranscriptSegment } from "@/types";
+
+type PreviewMode = "9:16" | "16:9" | "16:9-blur";
+type AlignValue = "left" | "center" | "right";
 
 export default function EditorPage() {
   const params = useParams();
@@ -32,6 +38,19 @@ export default function EditorPage() {
   const [currentCaptionWord, setCurrentCaptionWord] = useState<string | null>(null);
   const [previewElapsed, setPreviewElapsed] = useState<number>(0);
 
+  // Preview mode & position controls
+  const [previewMode, setPreviewMode] = useState<PreviewMode>("9:16");
+  const [captionYPct, setCaptionYPct] = useState<number>(26);
+  const [captionAlign, setCaptionAlign] = useState<AlignValue>("center");
+  const [hookYPct, setHookYPct] = useState<number>(32);
+  const [hookAlign, setHookAlign] = useState<AlignValue>("center");
+  // Style overrides
+  const [captionFontSize, setCaptionFontSize] = useState<number | null>(null);
+  const [captionTextColor, setCaptionTextColor] = useState<string | null>(null);
+  const [hookFontSize, setHookFontSize] = useState<number | null>(null);
+  const [hookTextColor, setHookTextColor] = useState<string | null>(null);
+  const [hookBgColor, setHookBgColor] = useState<string | null>(null);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgVideoRef = useRef<HTMLVideoElement>(null);
   const lastCaptionUpdateRef = useRef<number>(0);
@@ -47,8 +66,6 @@ export default function EditorPage() {
     enabled: !!clip?.project_id,
   });
 
-  // Initialize editor state when clip data first arrives.
-  // Use a ref to guard against re-init on every re-render.
   const initializedRef = useRef(false);
   useEffect(() => {
     if (!clip || initializedRef.current) return;
@@ -59,9 +76,17 @@ export default function EditorPage() {
     if (clip.reframe_mode) setReframeMode(clip.reframe_mode);
     if (clip.caption_preset_id) setCaptionPreset(clip.caption_preset_id);
     if (clip.hook_text) setHookText(clip.hook_text);
+    if (clip.caption_y_pct != null) setCaptionYPct(clip.caption_y_pct);
+    if (clip.caption_align) setCaptionAlign(clip.caption_align as AlignValue);
+    if (clip.hook_y_pct != null) setHookYPct(clip.hook_y_pct);
+    if (clip.hook_align) setHookAlign(clip.hook_align as AlignValue);
+    setCaptionFontSize(clip.caption_font_size ?? null);
+    setCaptionTextColor(clip.caption_text_color ?? null);
+    setHookFontSize(clip.hook_font_size ?? null);
+    setHookTextColor(clip.hook_text_color ?? null);
+    setHookBgColor(clip.hook_bg_color ?? null);
     setCaptionOverrideText("");
 
-    // Prepare caption preview data (word timestamps when available).
     try {
       const segs = (clip.transcript_segments || []) as TranscriptSegment[];
       setOriginalCaptionSegments(segs);
@@ -91,7 +116,7 @@ export default function EditorPage() {
 
   const exportMutation = useMutation({
     mutationFn: () => api.clips.export(clipId),
-    onSuccess: (data) => {
+    onSuccess: () => {
       toast.success("Export started", {
         description: "Your clip is rendering in the background.",
       });
@@ -102,37 +127,35 @@ export default function EditorPage() {
 
   if (clipLoading || !clip) return <div className="p-8">Loading...</div>;
 
-  const handleSave = () => {
+  const buildSaveData = (): Partial<Clip> => {
     const override = captionOverrideText.trim();
-
-    updateMutation.mutate({
+    return {
       start_time: startTime,
       end_time: endTime,
       reframe_mode: reframeMode,
       caption_preset_id: captionPreset,
       hook_text: hookText,
-      // Caption override is exported by replacing the clip's caption segments.
+      caption_y_pct: captionYPct,
+      caption_align: captionAlign,
+      hook_y_pct: hookYPct,
+      hook_align: hookAlign,
+      caption_font_size: captionFontSize,
+      caption_text_color: captionTextColor,
+      hook_font_size: hookFontSize,
+      hook_text_color: hookTextColor,
+      hook_bg_color: hookBgColor,
       transcript_text: override ? override : (clip?.transcript_text ?? undefined),
       transcript_segments: override
         ? [{ start: startTime, end: endTime, text: override }]
         : originalCaptionSegments ?? undefined,
-    });
+    };
   };
 
+  const handleSave = () => updateMutation.mutate(buildSaveData());
+
   const handleExportNow = async () => {
-    const override = captionOverrideText.trim();
     try {
-      await updateMutation.mutateAsync({
-        start_time: startTime,
-        end_time: endTime,
-        reframe_mode: reframeMode,
-        caption_preset_id: captionPreset,
-        hook_text: hookText,
-        transcript_text: override ? override : (clip?.transcript_text ?? undefined),
-        transcript_segments: override
-          ? [{ start: startTime, end: endTime, text: override }]
-          : originalCaptionSegments ?? undefined,
-      });
+      await updateMutation.mutateAsync(buildSaveData());
       await exportMutation.mutateAsync();
     } catch (err) {
       const e = err as { message?: string };
@@ -142,205 +165,235 @@ export default function EditorPage() {
 
   const sourceVideoUrl = VIDEO_URL(project?.id || "", project?.video_path);
 
+  const hookAlignClass =
+    hookAlign === "center"
+      ? "left-1/2 -translate-x-1/2"
+      : hookAlign === "left"
+        ? "left-4"
+        : "right-4";
+
   return (
     <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100vh-8rem)]">
 
       {/* LEFT PANEL - PREVIEW */}
       <div className="flex-1 min-h-[60vh] lg:min-h-0 rounded-xl bg-black border border-border/40 relative overflow-hidden flex flex-col">
-        <div className="h-12 border-b border-border/30 px-4 flex items-center justify-between text-muted-foreground z-10 bg-black/50 backdrop-blur-md">
-          <Button variant="ghost" size="sm" onClick={() => router.back()} className="gap-2">
+
+        {/* Preview header with mode toggle */}
+        <div className="h-12 border-b border-border/30 px-3 flex items-center justify-between text-muted-foreground z-10 bg-black/50 backdrop-blur-md">
+          <Button variant="ghost" size="sm" onClick={() => router.back()} className="gap-2 shrink-0">
             <ArrowLeft className="h-4 w-4" /> Back
           </Button>
-          <span className="text-xs font-medium">Vertical Preview (9:16)</span>
+          <div className="flex items-center gap-1">
+            {(["9:16", "16:9", "16:9-blur"] as PreviewMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setPreviewMode(mode)}
+                className={`px-2 py-1 rounded text-[10px] font-semibold transition-colors ${
+                  previewMode === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-white/5"
+                }`}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
         </div>
-        
-        <div className="flex-1 relative flex items-center justify-center p-4">
-          <div className="relative w-full aspect-[9/16] overflow-hidden rounded-lg border border-border/40 bg-black">
-            {/* Blurred background (preview-only). Export uses the backend reframe mode. */}
-            {reframeMode === "blurred" && (
-              // eslint-disable-next-line @next/next/no-img-element
+
+        <div className="flex-1 relative flex items-center justify-center p-4 overflow-hidden">
+
+          {/* 9:16 mode */}
+          {previewMode === "9:16" && (
+            <div className="relative h-full aspect-[9/16] overflow-hidden rounded-lg border border-border/40 bg-black">
+              {reframeMode === "blurred" && (
+                <video
+                  ref={bgVideoRef}
+                  src={sourceVideoUrl}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 pointer-events-none"
+                />
+              )}
               <video
-                ref={bgVideoRef}
+                ref={videoRef}
+                src={sourceVideoUrl}
+                controls
+                playsInline
+                preload="metadata"
+                className="absolute inset-0 w-full h-full object-cover"
+                onLoadedMetadata={() => {
+                  if (videoRef.current && startTime > 0) videoRef.current.currentTime = startTime;
+                  if (bgVideoRef.current && startTime > 0) bgVideoRef.current.currentTime = startTime;
+                }}
+                onPlay={() => {
+                  if (bgVideoRef.current && reframeMode === "blurred") bgVideoRef.current.play();
+                }}
+                onPause={() => {
+                  if (bgVideoRef.current) bgVideoRef.current.pause();
+                }}
+                onTimeUpdate={() => {
+                  const fg = videoRef.current;
+                  if (!fg) return;
+                  const tAbs = fg.currentTime;
+                  const clipDur = Math.max(endTime - startTime, 0.001);
+                  if (tAbs >= endTime) {
+                    fg.currentTime = startTime;
+                    if (bgVideoRef.current) bgVideoRef.current.currentTime = startTime;
+                  }
+                  if (bgVideoRef.current && reframeMode === "blurred") {
+                    bgVideoRef.current.currentTime = fg.currentTime;
+                  }
+                  const t = Math.min(Math.max(fg.currentTime, startTime), endTime);
+                  const elapsed = t - startTime;
+                  const now = Date.now();
+                  if (now - lastCaptionUpdateRef.current < 100) return;
+                  lastCaptionUpdateRef.current = now;
+                  setPreviewElapsed(elapsed);
+                  _updateCaptionState(t, startTime, clipDur, captionPreset, captionOverrideText, autoWords, setCurrentCaptionGroup, setCurrentCaptionWord);
+                }}
+              />
+              <_CaptionOverlay
+                captionGroup={currentCaptionGroup}
+                captionWord={currentCaptionWord}
+                captionPreset={captionPreset}
+                captionYPct={captionYPct}
+                captionAlign={captionAlign}
+                hookText={hookText}
+                hookYPct={hookYPct}
+                hookAlignClass={hookAlignClass}
+                previewElapsed={previewElapsed}
+                captionFontSize={captionFontSize}
+                captionTextColor={captionTextColor}
+                hookFontSize={hookFontSize}
+                hookTextColor={hookTextColor}
+                hookBgColor={hookBgColor}
+              />
+            </div>
+          )}
+
+          {/* 16:9 mode */}
+          {previewMode === "16:9" && (
+            <div className="relative w-full aspect-[16/9] overflow-hidden rounded-lg border border-border/40 bg-black">
+              <video
+                ref={videoRef}
+                src={sourceVideoUrl}
+                controls
+                playsInline
+                preload="metadata"
+                className="absolute inset-0 w-full h-full object-contain"
+                onLoadedMetadata={() => {
+                  if (videoRef.current && startTime > 0) videoRef.current.currentTime = startTime;
+                }}
+                onTimeUpdate={() => {
+                  const fg = videoRef.current;
+                  if (!fg) return;
+                  if (fg.currentTime >= endTime) fg.currentTime = startTime;
+                  const t = Math.min(Math.max(fg.currentTime, startTime), endTime);
+                  const clipDur = Math.max(endTime - startTime, 0.001);
+                  const elapsed = t - startTime;
+                  const now = Date.now();
+                  if (now - lastCaptionUpdateRef.current < 100) return;
+                  lastCaptionUpdateRef.current = now;
+                  setPreviewElapsed(elapsed);
+                  _updateCaptionState(t, startTime, clipDur, captionPreset, captionOverrideText, autoWords, setCurrentCaptionGroup, setCurrentCaptionWord);
+                }}
+              />
+              <_CaptionOverlay
+                captionGroup={currentCaptionGroup}
+                captionWord={currentCaptionWord}
+                captionPreset={captionPreset}
+                captionYPct={captionYPct}
+                captionAlign={captionAlign}
+                hookText={hookText}
+                hookYPct={hookYPct}
+                hookAlignClass={hookAlignClass}
+                previewElapsed={previewElapsed}
+                captionFontSize={captionFontSize}
+                captionTextColor={captionTextColor}
+                hookFontSize={hookFontSize}
+                hookTextColor={hookTextColor}
+                hookBgColor={hookBgColor}
+              />
+            </div>
+          )}
+
+          {/* 16:9-blur mode: pillarbox — 9:16 content on blurred 16:9 canvas */}
+          {previewMode === "16:9-blur" && (
+            <div className="relative w-full aspect-[16/9] overflow-hidden rounded-lg border border-border/40 bg-black">
+              {/* Blurred sides fill */}
+              <video
                 src={sourceVideoUrl}
                 muted
                 playsInline
                 preload="metadata"
-                className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 pointer-events-none"
+                className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 pointer-events-none opacity-70"
+                ref={(el) => {
+                  if (el && videoRef.current) {
+                    el.currentTime = videoRef.current.currentTime;
+                  }
+                }}
               />
-            )}
-
-            {/* Foreground subject preview */}
-            <video
-              ref={videoRef}
-              src={sourceVideoUrl}
-              controls
-              playsInline
-              preload="metadata"
-              className="absolute inset-0 w-full h-full object-cover"
-              onLoadedMetadata={() => {
-                if (videoRef.current && startTime > 0) {
-                  videoRef.current.currentTime = startTime;
-                }
-                if (bgVideoRef.current && startTime > 0) {
-                  bgVideoRef.current.currentTime = startTime;
-                }
-              }}
-              onPlay={() => {
-                if (bgVideoRef.current && reframeMode === "blurred") bgVideoRef.current.play();
-              }}
-              onPause={() => {
-                if (bgVideoRef.current) bgVideoRef.current.pause();
-              }}
-              onTimeUpdate={() => {
-                const fg = videoRef.current;
-                if (!fg) return;
-
-                const tAbs = fg.currentTime;
-                const clipDur = Math.max(endTime - startTime, 0.001);
-
-                if (tAbs >= endTime) {
-                  fg.currentTime = startTime;
-                  if (bgVideoRef.current) bgVideoRef.current.currentTime = startTime;
-                }
-
-                // Keep background in sync for blurred preview.
-                if (bgVideoRef.current && reframeMode === "blurred") {
-                  bgVideoRef.current.currentTime = fg.currentTime;
-                }
-
-                const t = Math.min(Math.max(fg.currentTime, startTime), endTime);
-                const elapsed = t - startTime;
-
-                // Hook overlay for the first few seconds.
-                const shouldShowHook = hookText.trim().length > 0 && elapsed <= 4.0;
-                if (shouldShowHook) {
-                  // Force rerender by updating caption group (handled below); hook uses currentTime state.
-                }
-
-                // Update caption highlight (~10fps max) for a usable preview.
-                const now = Date.now();
-                if (now - lastCaptionUpdateRef.current < 100) return;
-                lastCaptionUpdateRef.current = now;
-                setPreviewElapsed(elapsed);
-
-                const maxWordsPerLine =
-                  captionPreset === "neon_pop" || captionPreset === "viral_gradient" ? 2
-                    : captionPreset === "clean_minimal" ? 4
-                    : captionPreset === "classic_white" ? 5
-                    : 3;
-
-                const override = captionOverrideText.trim();
-                if (override) {
-                  const tokens = override.split(/\s+/).filter(Boolean);
-                  if (!tokens.length) {
-                    setCurrentCaptionGroup([]);
-                    setCurrentCaptionWord(null);
-                    return;
-                  }
-                  const ratio = (t - startTime) / clipDur;
-                  const idx = Math.min(Math.max(Math.floor(ratio * tokens.length), 0), tokens.length - 1);
-                  const word = tokens[idx];
-                  const groupStart = Math.max(0, idx - (maxWordsPerLine - 1));
-                  const group = tokens.slice(groupStart, idx + 1);
-                  setCurrentCaptionGroup(group);
-                  setCurrentCaptionWord(word);
-                  return;
-                }
-
-                // Auto captions: word timestamps available from transcription (when present).
-                if (!autoWords.length) {
-                  setCurrentCaptionGroup([]);
-                  setCurrentCaptionWord(null);
-                  return;
-                }
-
-                let idxFound = -1;
-                for (let i = 0; i < autoWords.length; i++) {
-                  const w = autoWords[i];
-                  if (w.start <= t && w.end >= t) {
-                    idxFound = i;
-                    break;
-                  }
-                }
-                if (idxFound === -1) {
-                  setCurrentCaptionGroup([]);
-                  setCurrentCaptionWord(null);
-                  return;
-                }
-
-                const word = autoWords[idxFound]?.word ?? "";
-                const groupStart = Math.max(0, idxFound - (maxWordsPerLine - 1));
-                const group = autoWords.slice(groupStart, idxFound + 1).map((w) => w.word);
-                setCurrentCaptionGroup(group);
-                setCurrentCaptionWord(word);
-              }}
-            />
-
-            {/* Overlays */}
-            <div className="absolute inset-0 pointer-events-none">
-              {/* Hook box uses current video time */}
-              {hookText.trim().length > 0 && previewElapsed <= 4.0 && (
-                <div className="absolute top-[32%] left-1/2 -translate-x-1/2 max-w-[82%] px-7 py-5 rounded-2xl bg-[#0D0D0D]/95 border border-white/8 shadow-2xl backdrop-blur-sm">
-                  <div className="text-[17px] leading-snug font-bold text-white text-center">
-                    {hookText}
-                  </div>
+              {/* Sharp 9:16 centered content */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="relative h-full aspect-[9/16] overflow-hidden rounded bg-black">
+                  <video
+                    ref={videoRef}
+                    src={sourceVideoUrl}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="absolute inset-0 w-full h-full object-cover"
+                    onLoadedMetadata={() => {
+                      if (videoRef.current && startTime > 0) videoRef.current.currentTime = startTime;
+                    }}
+                    onTimeUpdate={() => {
+                      const fg = videoRef.current;
+                      if (!fg) return;
+                      if (fg.currentTime >= endTime) fg.currentTime = startTime;
+                      const t = Math.min(Math.max(fg.currentTime, startTime), endTime);
+                      const clipDur = Math.max(endTime - startTime, 0.001);
+                      const elapsed = t - startTime;
+                      const now = Date.now();
+                      if (now - lastCaptionUpdateRef.current < 100) return;
+                      lastCaptionUpdateRef.current = now;
+                      setPreviewElapsed(elapsed);
+                      _updateCaptionState(t, startTime, clipDur, captionPreset, captionOverrideText, autoWords, setCurrentCaptionGroup, setCurrentCaptionWord);
+                    }}
+                  />
+                  <_CaptionOverlay
+                    captionGroup={currentCaptionGroup}
+                    captionWord={currentCaptionWord}
+                    captionPreset={captionPreset}
+                    captionYPct={captionYPct}
+                    captionAlign={captionAlign}
+                    hookText={hookText}
+                    hookYPct={hookYPct}
+                    hookAlignClass={hookAlignClass}
+                    previewElapsed={previewElapsed}
+                    captionFontSize={captionFontSize}
+                    captionTextColor={captionTextColor}
+                    hookFontSize={hookFontSize}
+                    hookTextColor={hookTextColor}
+                    hookBgColor={hookBgColor}
+                  />
                 </div>
-              )}
-
-              {/* Captions */}
-              {currentCaptionGroup.length > 0 && currentCaptionWord && (
-                <div className="absolute bottom-[26%] left-0 right-0 px-6">
-                  <div
-                    className="text-[28px] font-extrabold tracking-wide text-white text-center"
-                    style={{ textShadow: "0 2px 8px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.8)" }}
-                  >
-                    {currentCaptionGroup.map((w, i) => (
-                      <span
-                        key={`${w}-${i}`}
-                        className={
-                          w === currentCaptionWord
-                            ? captionPreset === "clean_minimal"
-                              ? "px-2 py-1 rounded text-cyan-400"
-                              : captionPreset === "neon_pop"
-                                ? "px-2 py-1 rounded bg-pink-500 text-white drop-shadow-[0_0_6px_rgba(236,72,153,0.7)]"
-                                : captionPreset === "classic_white"
-                                  ? "px-2 py-1 rounded"
-                                  : captionPreset === "karaoke_yellow"
-                                    ? "px-2 py-1 rounded text-yellow-400"
-                                    : captionPreset === "boxed_white"
-                                      ? "px-2 py-1 rounded bg-black/80 text-white"
-                                      : captionPreset === "viral_gradient"
-                                        ? "px-2 py-1 rounded text-orange-500"
-                                        : "px-2 py-1 rounded bg-yellow-400 text-black"
-                            : "mx-1 opacity-90"
-                        }
-                        style={
-                          w !== currentCaptionWord
-                            ? { textShadow: "0 1px 4px rgba(0,0,0,0.8)" }
-                            : undefined
-                        }
-                      >
-                        {w}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* TIMELINE CONTROL */}
         <div className="h-28 border-t border-border/30 bg-card/60 backdrop-blur-md p-4 flex flex-col gap-2">
           <div className="flex justify-between items-center px-1">
             <span className="font-mono text-xs text-primary">{startTime.toFixed(2)}s</span>
-            <span className="font-semibold text-sm">Trim Clip ({ (endTime - startTime).toFixed(1) }s)</span>
+            <span className="font-semibold text-sm">Trim Clip ({(endTime - startTime).toFixed(1)}s)</span>
             <span className="font-mono text-xs text-primary">{endTime.toFixed(2)}s</span>
           </div>
-          <Slider 
-            value={[startTime, endTime]} 
-            min={0} 
-            max={project?.duration || endTime + 60} 
+          <Slider
+            value={[startTime, endTime]}
+            min={0}
+            max={project?.duration || endTime + 60}
             step={0.1}
             onValueChange={(val: number | readonly number[]) => {
               const arr = Array.isArray(val) ? val : [val, val];
@@ -362,18 +415,125 @@ export default function EditorPage() {
         </div>
 
         <div className="p-5 space-y-8 flex-1">
-          {/* Hook Text Editor */}
+
+          {/* Hook Text */}
           <div className="space-y-3">
-            <Label className="flex items-center gap-2"><Scissors className="h-4 w-4 text-primary" /> Auto Hook Text</Label>
+            <Label className="flex items-center gap-2">
+              <Scissors className="h-4 w-4 text-primary" /> Auto Hook Text
+            </Label>
             <div className="text-[10px] text-muted-foreground mb-1">
-              This text appears as a large bold box in the first 5 seconds to hook viewers.
+              Large bold box shown in the first 5 seconds to hook viewers.
             </div>
-            <Input 
+            <Input
               value={hookText}
               onChange={(e) => setHookText(e.target.value)}
               placeholder="e.g. This changes everything..."
               className="bg-card w-full"
             />
+          </div>
+
+          {/* Hook Position */}
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2">
+              <Layout className="h-4 w-4 text-primary" /> Hook Position
+            </Label>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Vertical (from top)</span>
+                <span className="font-mono text-primary">{hookYPct}%</span>
+              </div>
+              <Slider
+                value={[hookYPct]}
+                min={5}
+                max={75}
+                step={1}
+                onValueChange={(v: number | readonly number[]) => setHookYPct(Array.isArray(v) ? v[0] : v)}
+              />
+              <div className="flex gap-1 mt-2">
+                {(["left", "center", "right"] as AlignValue[]).map((a) => (
+                  <button
+                    key={a}
+                    onClick={() => setHookAlign(a)}
+                    className={`flex-1 flex items-center justify-center py-1.5 rounded border text-xs transition-colors ${
+                      hookAlign === a ? "bg-primary/20 border-primary text-primary" : "border-border/40 text-muted-foreground hover:bg-muted/30"
+                    }`}
+                  >
+                    {a === "left" ? <AlignLeft className="h-3.5 w-3.5" /> : a === "center" ? <AlignCenter className="h-3.5 w-3.5" /> : <AlignRight className="h-3.5 w-3.5" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Style Overrides */}
+          <div className="space-y-4">
+            <Label className="flex items-center gap-2">
+              <Film className="h-4 w-4 text-primary" /> Style Overrides
+            </Label>
+            <div className="text-[10px] text-muted-foreground -mt-1">
+              Override caption/hook style. Leave blank to use preset defaults.
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <div className="text-[10px] text-muted-foreground">Caption font size</div>
+                <Input
+                  type="number"
+                  min={40} max={120} step={2}
+                  value={captionFontSize ?? ""}
+                  onChange={(e) => setCaptionFontSize(e.target.value ? Number(e.target.value) : null)}
+                  placeholder="72"
+                  className="bg-card h-8 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="text-[10px] text-muted-foreground">Caption text color</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={captionTextColor || "#ffffff"}
+                    onChange={(e) => setCaptionTextColor(e.target.value)}
+                    className="h-8 w-10 rounded cursor-pointer border border-border/40 bg-card"
+                  />
+                  <button onClick={() => setCaptionTextColor(null)} className="text-[10px] text-muted-foreground hover:text-foreground">reset</button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-[10px] text-muted-foreground">Hook font size</div>
+                <Input
+                  type="number"
+                  min={14} max={80} step={2}
+                  value={hookFontSize ?? ""}
+                  onChange={(e) => setHookFontSize(e.target.value ? Number(e.target.value) : null)}
+                  placeholder="46"
+                  className="bg-card h-8 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="text-[10px] text-muted-foreground">Hook text color</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={hookTextColor || "#ffffff"}
+                    onChange={(e) => setHookTextColor(e.target.value)}
+                    className="h-8 w-10 rounded cursor-pointer border border-border/40 bg-card"
+                  />
+                  <button onClick={() => setHookTextColor(null)} className="text-[10px] text-muted-foreground hover:text-foreground">reset</button>
+                </div>
+              </div>
+              <div className="space-y-1 col-span-2">
+                <div className="text-[10px] text-muted-foreground">Hook background color</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={hookBgColor || "#0d0d0d"}
+                    onChange={(e) => setHookBgColor(e.target.value)}
+                    className="h-8 w-10 rounded cursor-pointer border border-border/40 bg-card"
+                  />
+                  <span className="text-[10px] text-muted-foreground font-mono">{hookBgColor || "#0d0d0d"}</span>
+                  <button onClick={() => setHookBgColor(null)} className="text-[10px] text-muted-foreground hover:text-foreground ml-auto">reset</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Caption Override */}
@@ -382,19 +542,54 @@ export default function EditorPage() {
               <Film className="h-4 w-4 text-primary" /> Caption Override (Optional)
             </Label>
             <div className="text-[10px] text-muted-foreground mb-1">
-              Leave empty to use auto captions. If filled, exports use this text for the clip.
+              Leave empty to use auto captions from transcription.
             </div>
             <textarea
               value={captionOverrideText}
               onChange={(e) => setCaptionOverrideText(e.target.value)}
-              placeholder="Paste a custom caption text for this clip..."
+              placeholder="Paste custom caption text for this clip..."
               className="w-full min-h-28 rounded-md border border-border/60 bg-card px-3 py-2 text-sm outline-none focus:border-primary/60"
             />
           </div>
 
-          {/* Framer Mode */}
+          {/* Caption Position */}
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2">
+              <Layout className="h-4 w-4 text-primary" /> Caption Position
+            </Label>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Vertical (from bottom)</span>
+                <span className="font-mono text-primary">{captionYPct}%</span>
+              </div>
+              <Slider
+                value={[captionYPct]}
+                min={5}
+                max={70}
+                step={1}
+                onValueChange={(v: number | readonly number[]) => setCaptionYPct(Array.isArray(v) ? v[0] : v)}
+              />
+              <div className="flex gap-1 mt-2">
+                {(["left", "center", "right"] as AlignValue[]).map((a) => (
+                  <button
+                    key={a}
+                    onClick={() => setCaptionAlign(a)}
+                    className={`flex-1 flex items-center justify-center py-1.5 rounded border text-xs transition-colors ${
+                      captionAlign === a ? "bg-primary/20 border-primary text-primary" : "border-border/40 text-muted-foreground hover:bg-muted/30"
+                    }`}
+                  >
+                    {a === "left" ? <AlignLeft className="h-3.5 w-3.5" /> : a === "center" ? <AlignCenter className="h-3.5 w-3.5" /> : <AlignRight className="h-3.5 w-3.5" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Reframe Mode */}
           <div className="space-y-4">
-            <Label className="flex items-center gap-2"><MonitorPlay className="h-4 w-4 text-primary" /> Vertical Reframe Mode</Label>
+            <Label className="flex items-center gap-2">
+              <MonitorPlay className="h-4 w-4 text-primary" /> Vertical Reframe Mode
+            </Label>
             <RadioGroup value={reframeMode} onValueChange={setReframeMode} className="grid grid-cols-1 gap-3">
               <Label className={`border rounded-lg p-3 cursor-pointer flex items-center justify-between transition-colors ${reframeMode === "auto" ? "bg-primary/10 border-primary" : "border-border/60 hover:bg-muted/50"}`}>
                 <div>
@@ -422,7 +617,9 @@ export default function EditorPage() {
 
           {/* Caption Style */}
           <div className="space-y-4">
-            <Label className="flex items-center gap-2"><Film className="h-4 w-4 text-primary"/> Caption Style</Label>
+            <Label className="flex items-center gap-2">
+              <Film className="h-4 w-4 text-primary" /> Caption Style
+            </Label>
             <RadioGroup value={captionPreset} onValueChange={setCaptionPreset} className="grid grid-cols-3 gap-3">
               <Label className={`border rounded-lg flex flex-col items-center justify-center p-4 cursor-pointer text-center h-24 transition-colors ${captionPreset === "bold_impact" ? "bg-primary/10 border-primary" : "border-border/60 hover:bg-muted/50"}`}>
                 <span className="font-black italic block text-lg uppercase tracking-wider text-yellow-500" style={{ textShadow: "1px 1px 0 #000" }}>BOLD</span>
@@ -458,11 +655,10 @@ export default function EditorPage() {
           <Button variant="secondary" className="w-full text-xs" onClick={handleSave}>
             Save Configuration
           </Button>
-
         </div>
 
         <div className="p-5 border-t border-border/30 bg-muted/20 sticky bottom-0">
-          <Button 
+          <Button
             className="w-full gap-2 text-md font-bold shadow-lg shadow-primary/20 py-6"
             onClick={handleExportNow}
             disabled={exportMutation.isPending || updateMutation.isPending}
@@ -470,10 +666,151 @@ export default function EditorPage() {
             {exportMutation.isPending ? "Starting Export..." : "Generate Vertical Clip"}
             {!exportMutation.isPending && <ArrowRight className="h-5 w-5" />}
           </Button>
-          <p className="text-[10px] text-center text-muted-foreground mt-3">Renders a 1080x1920 MP4 file with burnt-in captions.</p>
+          <p className="text-[10px] text-center text-muted-foreground mt-3">Renders a 1080×1920 MP4 with burnt-in captions.</p>
         </div>
-
       </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Caption update helper (extracted to avoid duplicating logic across 3 modes)
+// ---------------------------------------------------------------------------
+
+function _updateCaptionState(
+  t: number,
+  startTime: number,
+  clipDur: number,
+  captionPreset: string,
+  captionOverrideText: string,
+  autoWords: Array<{ word: string; start: number; end: number }>,
+  setGroup: (g: string[]) => void,
+  setWord: (w: string | null) => void,
+) {
+  const maxWordsPerLine =
+    captionPreset === "neon_pop" || captionPreset === "viral_gradient" ? 2
+      : captionPreset === "clean_minimal" ? 4
+        : captionPreset === "classic_white" ? 5
+          : 3;
+
+  const override = captionOverrideText.trim();
+  if (override) {
+    const tokens = override.split(/\s+/).filter(Boolean);
+    if (!tokens.length) { setGroup([]); setWord(null); return; }
+    const ratio = (t - startTime) / clipDur;
+    const idx = Math.min(Math.max(Math.floor(ratio * tokens.length), 0), tokens.length - 1);
+    const word = tokens[idx];
+    const groupStart = Math.max(0, idx - (maxWordsPerLine - 1));
+    setGroup(tokens.slice(groupStart, idx + 1));
+    setWord(word);
+    return;
+  }
+
+  if (!autoWords.length) { setGroup([]); setWord(null); return; }
+
+  let idxFound = -1;
+  for (let i = 0; i < autoWords.length; i++) {
+    const w = autoWords[i];
+    if (w.start <= t && w.end >= t) { idxFound = i; break; }
+  }
+  if (idxFound === -1) { setGroup([]); setWord(null); return; }
+
+  const word = autoWords[idxFound]?.word ?? "";
+  const groupStart = Math.max(0, idxFound - (maxWordsPerLine - 1));
+  setGroup(autoWords.slice(groupStart, idxFound + 1).map((w) => w.word));
+  setWord(word);
+}
+
+
+// ---------------------------------------------------------------------------
+// Caption + hook overlay component (shared across all preview modes)
+// ---------------------------------------------------------------------------
+
+interface CaptionOverlayProps {
+  captionGroup: string[];
+  captionWord: string | null;
+  captionPreset: string;
+  captionYPct: number;
+  captionAlign: AlignValue;
+  hookText: string;
+  hookYPct: number;
+  hookAlignClass: string;
+  previewElapsed: number;
+  captionFontSize?: number | null;
+  captionTextColor?: string | null;
+  hookFontSize?: number | null;
+  hookTextColor?: string | null;
+  hookBgColor?: string | null;
+}
+
+function _CaptionOverlay({
+  captionGroup, captionWord, captionPreset,
+  captionYPct, captionAlign,
+  hookText, hookYPct, hookAlignClass,
+  previewElapsed,
+  captionFontSize, captionTextColor,
+  hookFontSize, hookTextColor, hookBgColor,
+}: CaptionOverlayProps) {
+  // Scale caption font from 1080px export space to preview container (approx 37%)
+  const captionPxSize = captionFontSize ? `${(captionFontSize * 0.37).toFixed(0)}px` : "28px";
+  const captionColor = captionTextColor || "#ffffff";
+  const hookPxSize = hookFontSize ? `${(hookFontSize * 0.37).toFixed(0)}px` : "17px";
+  const hookColor = hookTextColor || "#ffffff";
+  const hookBg = hookBgColor || "#0D0D0D";
+
+  return (
+    <div className="absolute inset-0 pointer-events-none">
+      {/* Hook box */}
+      {hookText.trim().length > 0 && previewElapsed <= 4.0 && (
+        <div
+          className={`absolute max-w-[82%] px-7 py-5 rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm ${hookAlignClass}`}
+          style={{ top: `${hookYPct}%`, backgroundColor: `${hookBg}F2` }}
+        >
+          <div className="leading-snug font-bold text-center" style={{ fontSize: hookPxSize, color: hookColor }}>
+            {hookText}
+          </div>
+        </div>
+      )}
+
+      {/* Captions */}
+      {captionGroup.length > 0 && captionWord && (
+        <div
+          className="absolute left-0 right-0 px-6"
+          style={{ bottom: `${captionYPct}%`, textAlign: captionAlign }}
+        >
+          <div
+            className="font-extrabold tracking-wide inline-block"
+            style={{ fontSize: captionPxSize, color: captionColor, textShadow: "0 2px 8px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.8)" }}
+          >
+            {captionGroup.map((w, i) => (
+              <span
+                key={`${w}-${i}`}
+                className={
+                  w === captionWord
+                    ? captionPreset === "clean_minimal"
+                      ? "px-2 py-1 rounded text-cyan-400"
+                      : captionPreset === "neon_pop"
+                        ? "px-2 py-1 rounded bg-pink-500 text-white drop-shadow-[0_0_6px_rgba(236,72,153,0.7)]"
+                        : captionPreset === "classic_white"
+                          ? "px-2 py-1 rounded"
+                          : captionPreset === "karaoke_yellow"
+                            ? "px-2 py-1 rounded text-yellow-400"
+                            : captionPreset === "boxed_white"
+                              ? "px-2 py-1 rounded bg-black/80 text-white"
+                              : captionPreset === "viral_gradient"
+                                ? "px-2 py-1 rounded text-orange-500"
+                                : "px-2 py-1 rounded bg-yellow-400 text-black"
+                    : "mx-1 opacity-90"
+                }
+                style={w !== captionWord ? { textShadow: "0 1px 4px rgba(0,0,0,0.8)" } : undefined}
+              >
+                {w}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -197,6 +197,15 @@ def generate_captions(
     preset: Optional[Dict] = None,
     output_path: Optional[str] = None,
     hook_text: Optional[str] = None,
+    caption_y_pct: Optional[float] = None,
+    caption_align: Optional[str] = None,
+    hook_y_pct: Optional[float] = None,
+    hook_align: Optional[str] = None,
+    caption_font_size: Optional[float] = None,
+    caption_text_color: Optional[str] = None,
+    hook_font_size: Optional[float] = None,
+    hook_text_color: Optional[str] = None,
+    hook_bg_color: Optional[str] = None,
 ) -> str:
     """
     Generate an ASS subtitle file with animated word-by-word captions.
@@ -212,16 +221,24 @@ def generate_captions(
     Returns:
         Path to the generated ASS file
     """
-    preset = preset or DEFAULT_PRESETS["bold_impact"]
+    preset = dict(preset or DEFAULT_PRESETS["bold_impact"])  # shallow copy — never mutate the original
+    if caption_font_size is not None:
+        preset["font_size"] = caption_font_size
+    if caption_text_color:
+        preset["text_color"] = caption_text_color
     logger.info(f"Generating captions [{clip_start:.1f}s-{clip_end:.1f}s] preset={preset.get('name', 'custom')}")
 
     subs = pysubs2.SSAFile()
     subs.info["PlayResX"] = str(settings.export_width)
     subs.info["PlayResY"] = str(settings.export_height)
 
-    # --- Positioning based on preset ---
+    # --- Positioning based on preset (overridden by explicit pct params) ---
     position = preset.get("position", "bottom")
-    if position == "bottom":
+    if caption_y_pct is not None:
+        # Override: treat as % from bottom for bottom-aligned captions
+        caption_marginv = int(settings.export_height * caption_y_pct / 100)
+        position = "bottom"  # Force bottom alignment when using explicit pct
+    elif position == "bottom":
         caption_marginv = SAFE_CAPTION_BOTTOM
     elif position == "center":
         caption_marginv = SAFE_CAPTION_CENTER
@@ -240,7 +257,7 @@ def generate_captions(
     normal_style.outline = max(preset.get("outline_width", 5), 3)
     normal_style.shadow = max(preset.get("shadow_offset", 2.5), 1.5)
     normal_style.borderstyle = preset.get("borderstyle", 1)  # 1=outline+shadow, 3=opaque box
-    normal_style.alignment = _get_alignment(position)
+    normal_style.alignment = _get_alignment_with_align(position, caption_align)
     normal_style.marginv = caption_marginv
     # Horizontal margins to keep text from touching edges
     normal_style.marginl = 60
@@ -266,21 +283,25 @@ def generate_captions(
 
     if hook_text:
         hook_style = pysubs2.SSAStyle()
-        # Prioritize system fonts available on Windows, macOS, and Linux
-        hook_style.fontname = "Arial"  # Universal fallback; Impact looks too aggressive for hook box
+        hook_style.fontname = "Arial"
         hook_style.fontsize = 46
         hook_style.bold = True
-        # Place hook in the upper-mid area (~35% from top) — strong visual
-        # position without covering the speaker's face
-        hook_style.alignment = 5  # Center (numpad)
-        hook_style.marginv = 280  # Push above dead-center
+        # Alignment 8 = top-center: marginv is pixels from top edge, easy to control.
+        # Left/right variants: 7=top-left, 8=top-center, 9=top-right
+        _hook_align_str = hook_align or "center"
+        _hook_align_map = {"left": 7, "center": 8, "right": 9}
+        hook_style.alignment = _hook_align_map.get(_hook_align_str, 8)
+        # hook_y_pct is % from top; map to pixels. Default 35% from top.
+        _hook_y_px = int(settings.export_height * (hook_y_pct / 100 if hook_y_pct is not None else 0.35))
+        hook_style.marginv = _hook_y_px
         hook_style.marginl = 80
         hook_style.marginr = 80
         hook_style.borderstyle = 3   # Opaque background box
         hook_style.outline = 24      # Generous padding = "pill" shape
         hook_style.shadow = 6        # Drop shadow for depth
-        hook_style.primarycolor = hex_to_ass_color("#FFFFFF")
-        hook_style.outlinecolor = hex_to_ass_color("#0A0A0A")      # Near-black background
+        hook_style.fontsize = int(hook_font_size) if hook_font_size else 46
+        hook_style.primarycolor = hex_to_ass_color(hook_text_color or "#FFFFFF")
+        hook_style.outlinecolor = hex_to_ass_color(hook_bg_color or "#0A0A0A")      # Background (opaque box)
         hook_style.backcolor = hex_to_ass_color("#000000B0")       # Shadow color
         subs.styles["Hook"] = hook_style
 
@@ -549,3 +570,15 @@ def _group_words(words: List[Dict], max_per_group: int) -> List[List[Dict]]:
 def _get_alignment(position: str) -> int:
     """Convert position name to ASS alignment number (numpad layout)."""
     return {"bottom": 2, "center": 5, "top": 8}.get(position, 2)
+
+
+def _get_alignment_with_align(position: str, align: Optional[str]) -> int:
+    """
+    Map position + horizontal alignment to ASS numpad alignment.
+    bottom: 1=left, 2=center, 3=right
+    center: 4=left, 5=center, 6=right
+    top:    7=left, 8=center, 9=right
+    """
+    base = {"bottom": 0, "center": 3, "top": 6}.get(position, 0)
+    offset = {"left": 1, "center": 2, "right": 3}.get(align or "center", 2)
+    return base + offset
