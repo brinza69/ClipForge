@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Download, Eraser, Loader2, ArrowRight, CheckCircle2,
-  Youtube, Film, ImageOff, Type,
+  Play, Film, ImageOff, Type,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -118,7 +118,7 @@ export default function UtilitiesPage() {
           <div className="rounded-lg border border-border/30 bg-muted/20 p-3 space-y-1.5">
             <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Supported platforms</div>
             <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground">
-              <div className="flex items-center gap-1.5"><Youtube className="h-3.5 w-3.5 text-red-500" /> YouTube Shorts</div>
+              <div className="flex items-center gap-1.5"><Play className="h-3.5 w-3.5 text-red-500" /> YouTube Shorts</div>
               <div className="flex items-center gap-1.5"><Film className="h-3.5 w-3.5 text-pink-500" /> TikTok</div>
               <div className="flex items-center gap-1.5"><Film className="h-3.5 w-3.5 text-purple-500" /> Instagram Reels</div>
               <div className="flex items-center gap-1.5"><Film className="h-3.5 w-3.5 text-blue-400" /> Twitter/X</div>
