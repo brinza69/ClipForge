@@ -7,6 +7,9 @@ FFmpeg-based video export pipeline:
 import logging
 import asyncio
 import subprocess
+import threading
+import shutil
+import tempfile
 import os
 from pathlib import Path
 from typing import Optional, Callable, Awaitable, Dict, Any
@@ -92,12 +95,21 @@ async def export_clip(
         crop_w = reframe_data.get("crop_width")
         crop_h = reframe_data.get("crop_height")
 
-    # Subtitles burn-in if captions exist
+    # Subtitles burn-in if captions exist.
+    # libass on Windows hangs if the ASS path contains spaces. Copy to a
+    # space-free temp path before passing to ffmpeg to avoid this.
     subtitles_filter = None
+    _temp_captions: Optional[str] = None
     if captions_path and Path(captions_path).exists():
-        # FFmpeg on Windows needs forward slashes and escaped colons in filter paths.
-        # Convert to posix first, then escape colons (including drive letter colon).
-        abs_path = str(Path(captions_path).resolve()).replace("\\", "/")
+        safe_path = Path(captions_path)
+        if " " in str(safe_path):
+            fd, tmp = tempfile.mkstemp(suffix=".ass", prefix="cf_", dir=tempfile.gettempdir())
+            os.close(fd)
+            shutil.copy2(str(safe_path), tmp)
+            safe_path = Path(tmp)
+            _temp_captions = tmp
+        # FFmpeg needs forward slashes and escaped colons in filter paths.
+        abs_path = str(safe_path.resolve()).replace("\\", "/")
         escaped_path = abs_path.replace(":", "\\:")
         subtitles_filter = f"subtitles='{escaped_path}'"
 
@@ -211,33 +223,50 @@ async def export_clip(
             ]
         )
 
+    # Prepend ffmpeg binary path if configured (needed on Windows where it may not be in PATH)
+    ffmpeg_bin = "ffmpeg"
+    ffmpeg_loc = settings.ffmpeg_location
+    if ffmpeg_loc:
+        ffmpeg_bin = str(Path(ffmpeg_loc) / "ffmpeg")
+    cmd[0] = ffmpeg_bin
+
     logger.info(f"FFmpeg command: {' '.join(cmd)}")
 
     if on_progress:
         await on_progress(0.05, "Starting export...")
 
-    process = None
-    try:
-        # Run FFmpeg
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=subprocess.CREATE_NO_WINDOW
-            if hasattr(subprocess, "CREATE_NO_WINDOW")
-            else 0,
+    loop = asyncio.get_event_loop()
+    cancel_event = threading.Event()
+    proc_holder: list = [None]
+
+    def _run_ffmpeg():
+        creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=creationflags,
         )
+        proc_holder[0] = proc
 
-        # Parse progress
-        while True:
-            line = await process.stdout.readline()
-            if not line:
+        # Drain stderr concurrently to prevent pipe-buffer deadlock.
+        # FFmpeg writes verbose codec/filter logs to stderr (> 64 KB). If we
+        # only read stdout, the stderr buffer fills up and ffmpeg blocks.
+        stderr_chunks: list[bytes] = []
+
+        def _drain_stderr():
+            for chunk in iter(lambda: proc.stderr.read(4096), b""):
+                stderr_chunks.append(chunk)
+
+        stderr_drainer = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_drainer.start()
+
+        # Read stdout line-by-line for -progress pipe:1 updates
+        for raw_line in proc.stdout:
+            if cancel_event.is_set():
+                proc.terminate()
                 break
-
-            line_str = line.decode("utf-8", errors="replace").strip()
-            if not line_str:
-                continue
-
+            line_str = raw_line.decode("utf-8", errors="replace").strip()
             if line_str.startswith("out_time_us="):
                 try:
                     time_us = int(line_str.split("=")[1])
@@ -245,36 +274,43 @@ async def export_clip(
                     progress = min(time_s / max(duration, 0.001), 0.95)
                     if on_progress:
                         pct = int(progress * 100)
-                        await on_progress(progress, f"Rendering... {pct}%")
+                        asyncio.run_coroutine_threadsafe(
+                            on_progress(progress, f"Rendering... {pct}%"), loop
+                        )
                 except (ValueError, ZeroDivisionError):
                     pass
 
-        await process.wait()
+        proc.wait()
+        stderr_drainer.join(timeout=10)
+        proc._stderr_captured = b"".join(stderr_chunks)
+        return proc
 
-        if process.returncode != 0:
-            stderr = await process.stderr.read()
-            error = stderr.decode("utf-8", errors="replace")
-            # ffmpeg typically prints its version banner first; keep the tail where
-            # the actual parsing/runtime error message is most likely to appear.
+    try:
+        proc = await loop.run_in_executor(None, _run_ffmpeg)
+
+        if cancel_event.is_set():
+            raise asyncio.CancelledError()
+
+        if proc.returncode != 0:
+            error = getattr(proc, "_stderr_captured", b"").decode("utf-8", errors="replace")
             lines = error.splitlines()
-            # Skip the verbose version/config banner (lines starting with spaces
-            # or known banner markers) to surface the actual error message.
             error_lines = [l for l in lines if l and not l.startswith("  ") and not l.startswith("built with")]
             tail = "\n".join(error_lines[-30:]).strip() or "\n".join(lines[-20:]).strip()
             logger.error(f"FFmpeg export failed:\n{tail[:1200]}")
             raise RuntimeError(f"Export failed: {tail[:800]}")
     except asyncio.CancelledError:
-        # Ensure FFmpeg is terminated to prevent zombie renders after cancel/delete.
         logger.warning("Export coroutine cancelled; terminating FFmpeg process...")
-        if process and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
+        cancel_event.set()
+        proc = proc_holder[0]
+        if proc and proc.returncode is None:
+            proc.terminate()
         raise
-
-    # Verify output exists and has content
+    finally:
+        if _temp_captions and Path(_temp_captions).exists():
+            try:
+                os.remove(_temp_captions)
+            except OSError:
+                pass
 
     # Verify output exists and has content
     output = Path(output_path)
@@ -307,22 +343,19 @@ async def generate_thumbnail(
         output_path,
     ]
 
-    process = None
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+    ffmpeg_loc = settings.ffmpeg_location
+    if ffmpeg_loc:
+        cmd[0] = str(Path(ffmpeg_loc) / "ffmpeg")
+
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
         )
-        await process.wait()
-    except asyncio.CancelledError:
-        if process and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except Exception:
-                pass
-        raise
 
+    await loop.run_in_executor(None, _run)
     return output_path

@@ -327,6 +327,10 @@ async def download_video(
         "concurrent_fragment_downloads": 1,
         "progress_hooks": [_progress_hook] if on_progress else [],
     }
+    # Point yt-dlp at the correct ffmpeg location (Windows PATH may not include it)
+    _ffmpeg_loc = settings.ffmpeg_location
+    if _ffmpeg_loc:
+        ydl_opts["ffmpeg_location"] = _ffmpeg_loc
     
     def _run():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

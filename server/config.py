@@ -78,6 +78,29 @@ class Settings(BaseSettings):
         ]:
             d.mkdir(parents=True, exist_ok=True)
 
+    # CORS: comma-separated list of allowed origins.
+    # E.g. CLIPFORGE_ALLOWED_ORIGINS="https://myapp.vercel.app,http://localhost:3000"
+    allowed_origins_raw: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [o.strip() for o in self.allowed_origins_raw.split(",") if o.strip()]
+
+    # Optional: explicit path to ffmpeg binary directory (auto-detected if blank)
+    ffmpeg_path: str = ""
+
+    @property
+    def ffmpeg_location(self) -> str | None:
+        """Return ffmpeg binary directory for yt-dlp, or None to let yt-dlp find it."""
+        if self.ffmpeg_path:
+            return self.ffmpeg_path
+        import shutil
+        exe = shutil.which("ffmpeg")
+        if exe:
+            from pathlib import Path as _Path
+            return str(_Path(exe).parent)
+        return None
+
     model_config = {"env_prefix": "CLIPFORGE_"}
 
 
