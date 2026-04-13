@@ -11,13 +11,15 @@ import {
   WifiOff,
   ChevronRight,
   TrendingUp,
+  Wrench,
 } from "lucide-react";
 
 const navItems = [
-  { label: "Dashboard",  href: "/",          icon: LayoutDashboard },
-  { label: "Campaigns",  href: "/campaigns", icon: TrendingUp },
-  { label: "Exports",    href: "/exports",   icon: HardDrive },
-  { label: "Settings",   href: "/settings",  icon: Settings },
+  { label: "Dashboard",  href: "/",           icon: LayoutDashboard },
+  { label: "Campaigns",  href: "/campaigns",  icon: TrendingUp },
+  { label: "Utilities",  href: "/utilities",  icon: Wrench },
+  { label: "Exports",    href: "/exports",    icon: HardDrive },
+  { label: "Settings",   href: "/settings",   icon: Settings },
 ];
 
 interface SidebarProps {

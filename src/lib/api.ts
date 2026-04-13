@@ -152,6 +152,15 @@ export const api = {
       }),
     folder: () => request<{ path: string }>("/api/exports/open-folder"),
   },
+
+  // Utilities
+  utilities: {
+    download: (url: string, title?: string) =>
+      request<{ project_id: string; job_id: string; title: string }>(
+        "/api/utilities/download",
+        { method: "POST", body: JSON.stringify({ url, title }) },
+      ),
+  },
 };
 
 // Worker URL for static assets (thumbnails)
