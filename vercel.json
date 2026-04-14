@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install",
+  "env": {
+    "NEXT_PUBLIC_WORKER_URL": "@clipforge_worker_url",
+    "WORKER_URL_INTERNAL": "@clipforge_worker_url"
+  },
+  "github": {
+    "silent": true
+  }
+}
