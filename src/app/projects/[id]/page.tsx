@@ -3,7 +3,8 @@
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, THUMBNAIL_URL } from "@/lib/api";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -268,6 +269,23 @@ export default function ProjectPage() {
               >
                 <Scissors className="h-4 w-4" /> Find Clips
               </Button>
+            )}
+            {!isProcessing && project.video_path && ["downloaded", "transcribed", "scored", "scoring", "ready"].includes(project.status) && (
+              <a
+                href={api.projects.sourceDownloadUrl(projectId)}
+                download
+                className={cn(
+                  buttonVariants({ variant: "outline" }),
+                  "gap-2 border-primary/30 text-primary hover:bg-primary/10 hover:text-primary"
+                )}
+              >
+                <Download className="h-4 w-4" /> Download Source
+                {project.width && project.height ? (
+                  <span className="text-[10px] font-mono opacity-70 ml-1">
+                    {project.width}×{project.height}
+                  </span>
+                ) : null}
+              </a>
             )}
             <Button
               variant="ghost"

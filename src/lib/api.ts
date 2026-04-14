@@ -56,6 +56,7 @@ export const api = {
     delete: (id: string) =>
       request<{ deleted: string }>(`/api/projects/${id}`, { method: "DELETE" }),
     metadata: (id: string) => request<ProjectMetadata>(`/api/projects/${id}/metadata`),
+    sourceDownloadUrl: (id: string) => `${WORKER_URL}/api/projects/${id}/source`,
     action: (id: string, action: string, formatId?: string) =>
       request<{ job_id?: string; action: string; status: string }>(
         `/api/projects/${id}/action`,

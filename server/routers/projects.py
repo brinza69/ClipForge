@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -303,6 +304,39 @@ async def project_action(
         "job_id": job_id,
         "message": f"Action '{act}' has been queued for background processing.",
     }
+
+
+# ── DOWNLOAD SOURCE VIDEO ────────────────────────────────────────────────────
+
+@router.get("/{project_id}/source")
+async def download_source_video(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Stream the downloaded source video file back to the browser."""
+    project = await session.get(ProjectModel, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not project.video_path:
+        raise HTTPException(404, "Project has no downloaded source video")
+
+    video_path = Path(project.video_path)
+    if not video_path.exists():
+        raise HTTPException(404, f"Source file missing on disk: {project.video_path}")
+
+    # Build a clean filename: "{title}.{ext}" stripped of filesystem-hostile chars
+    ext = video_path.suffix or ".mp4"
+    safe_title = "".join(
+        c if (c.isalnum() or c in " _-.") else "_"
+        for c in (project.title or project_id)
+    ).strip() or project_id
+    filename = f"{safe_title}{ext}"
+
+    return FileResponse(
+        path=video_path,
+        filename=filename,
+        media_type="video/mp4",
+    )
 
 
 # ── DELETE ───────────────────────────────────────────────────────────────────
