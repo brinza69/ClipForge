@@ -3,6 +3,7 @@ ClipForge — Clips Router
 API endpoints for clip candidates, editing, and export triggering.
 """
 
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, update
@@ -15,6 +16,19 @@ from schemas import ClipResponse
 from job_queue import job_queue
 
 router = APIRouter(prefix="/api/clips", tags=["clips"])
+
+
+def _to_response(clip: ClipModel) -> ClipResponse:
+    """Build a ClipResponse and compute whether the export file actually exists on disk."""
+    resp = ClipResponse.model_validate(clip)
+    if clip.export_path:
+        try:
+            resp.export_file_exists = Path(clip.export_path).exists()
+        except Exception:
+            resp.export_file_exists = False
+    else:
+        resp.export_file_exists = False
+    return resp
 
 
 class ClipUpdate(BaseModel):
@@ -53,7 +67,7 @@ async def list_clips(
         .order_by(ClipModel.momentum_score.desc())
     )
     clips = result.scalars().all()
-    return [ClipResponse.model_validate(c) for c in clips]
+    return [_to_response(c) for c in clips]
 
 
 @router.get("/{clip_id}", response_model=ClipResponse)
@@ -62,7 +76,7 @@ async def get_clip(clip_id: str, session: AsyncSession = Depends(get_session)):
     clip = await session.get(ClipModel, clip_id)
     if not clip:
         raise HTTPException(404, "Clip not found")
-    return ClipResponse.model_validate(clip)
+    return _to_response(clip)
 
 
 @router.patch("/{clip_id}", response_model=ClipResponse)
@@ -88,7 +102,7 @@ async def update_clip(
 
     await session.commit()
     await session.refresh(clip)
-    return ClipResponse.model_validate(clip)
+    return _to_response(clip)
 
 
 @router.post("/{clip_id}/export")

@@ -15,7 +15,7 @@ import {
 } from "@/lib/constants";
 import type { Clip } from "@/types";
 import {
-  Download, X, Check, Clock, Zap,
+  Download, X, Check, Clock, Zap, AlertCircle, RefreshCw,
   BarChart3, Sparkles, Loader2, Scissors
 } from "lucide-react";
 
@@ -156,9 +156,14 @@ export function ClipCard({ clip, projectId, rank, videoPath }: ClipCardProps) {
             </div>
           </div>
 
-          {clip.status === "exported" && (
+          {clip.status === "exported" && clip.export_file_exists && (
             <Badge variant="secondary" className="bg-emerald-500/15 text-emerald-400 text-[10px]">
               <Check className="mr-1 h-3 w-3" /> Exported
+            </Badge>
+          )}
+          {clip.status === "exported" && clip.export_file_exists === false && (
+            <Badge variant="secondary" className="bg-red-500/15 text-red-400 text-[10px]">
+              <AlertCircle className="mr-1 h-3 w-3" /> File missing
             </Badge>
           )}
           {clip.status === "exporting" && (
@@ -228,21 +233,34 @@ export function ClipCard({ clip, projectId, rank, videoPath }: ClipCardProps) {
         >
           <Scissors className="h-3 w-3" /> Edit
         </Button>
-        {clip.status === "exported" && clip.export_path ? (
+        {clip.status === "exported" && clip.export_file_exists ? (
           <a href={`/worker-api/exports/${clip.id}/download`}>
             <Button
               size="sm"
               variant="ghost"
               className="h-7 gap-1.5 text-xs text-emerald-400 hover:text-emerald-300"
+              title="Download exported clip"
             >
               <Download className="h-3 w-3" />
             </Button>
           </a>
+        ) : clip.status === "exported" && clip.export_file_exists === false ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 gap-1.5 text-xs text-amber-400 hover:text-amber-300"
+            title="Export file is missing — re-export"
+            onClick={() => exportMutation.mutate()}
+            disabled={exportMutation.isPending}
+          >
+            {exportMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          </Button>
         ) : (
           <Button
             size="sm"
             variant="ghost"
             className="h-7 gap-1.5 text-xs text-muted-foreground"
+            title="Export clip"
             onClick={() => exportMutation.mutate()}
             disabled={exportMutation.isPending || clip.status === "exporting"}
           >

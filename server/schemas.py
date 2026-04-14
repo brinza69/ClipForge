@@ -121,6 +121,7 @@ class ClipResponse(BaseModel):
     explanation: Optional[str] = None
     status: str
     export_path: Optional[str] = None
+    export_file_exists: Optional[bool] = None
     reframe_mode: Optional[str] = None
     reframe_data: Optional[list | dict] = None
     caption_preset_id: Optional[str] = None

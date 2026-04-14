@@ -9,7 +9,7 @@ import { formatDuration, formatBytes, getScoreColor } from "@/lib/constants";
 import { toast } from "sonner";
 import {
   FolderOpen, HardDrive, Trash2, Download, Play,
-  Check, Film, Sparkles,
+  Check, Film, Sparkles, RefreshCw, AlertCircle,
 } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -42,6 +42,15 @@ export default function ExportsPage() {
       toast.success(`Cleaned ${data.cleaned_bytes > 0 ? formatBytes(data.cleaned_bytes) : "0 B"}`);
       queryClient.invalidateQueries({ queryKey: ["storage"] });
     },
+  });
+
+  const reexportMutation = useMutation({
+    mutationFn: (clipId: string) => api.clips.export(clipId),
+    onSuccess: (_data, clipId) => {
+      toast.success("Re-export queued", { description: `Clip ${clipId.slice(0, 8)} will be re-processed.` });
+      queryClient.invalidateQueries({ queryKey: ["exports"] });
+    },
+    onError: (err: Error) => toast.error("Re-export failed", { description: err.message }),
   });
 
   return (
@@ -118,22 +127,25 @@ export default function ExportsPage() {
             {exports.map((exp: any) => (
               <Card
                 key={exp.clip_id}
-                className="flex items-center gap-4 border-border/30 bg-card/50 p-4 transition-colors hover:bg-card/70"
+                className={`flex items-center gap-4 border-border/30 p-4 transition-colors ${exp.file_exists ? "bg-card/50 hover:bg-card/70" : "bg-red-500/5 border-red-500/20"}`}
               >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
-                  <Check className="h-5 w-5 text-emerald-400" />
+                <div className={`flex h-10 w-10 items-center justify-center rounded-lg shrink-0 ${exp.file_exists ? "bg-emerald-500/10" : "bg-red-500/10"}`}>
+                  {exp.file_exists
+                    ? <Check className="h-5 w-5 text-emerald-400" />
+                    : <AlertCircle className="h-5 w-5 text-red-400" />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{exp.title}</p>
                   <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                     <span>{formatDuration(exp.duration)}</span>
-                    <span>{formatBytes(exp.file_size)}</span>
+                    {exp.file_size > 0 && <span>{formatBytes(exp.file_size)}</span>}
                     <span className={getScoreColor(exp.momentum_score)}>
                       Score: {Math.round(exp.momentum_score)}
                     </span>
+                    {!exp.file_exists && <span className="text-red-400">File deleted from disk</span>}
                   </div>
                 </div>
-                {exp.file_exists && exp.export_path && (
+                {exp.file_exists ? (
                   <div className="flex items-center gap-1.5">
                     <Button
                       size="sm"
@@ -152,14 +164,20 @@ export default function ExportsPage() {
                         <Download className="h-3 w-3" /> Download
                       </Button>
                     </a>
+                    <Badge variant="outline" className="text-emerald-400 border-emerald-400/30">Available</Badge>
                   </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 text-xs border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
+                    disabled={reexportMutation.isPending}
+                    onClick={() => reexportMutation.mutate(exp.clip_id)}
+                  >
+                    <RefreshCw className={`h-3 w-3 ${reexportMutation.isPending ? "animate-spin" : ""}`} />
+                    Re-export
+                  </Button>
                 )}
-                <Badge
-                  variant="outline"
-                  className={exp.file_exists ? "text-emerald-400 border-emerald-400/30" : "text-red-400 border-red-400/30"}
-                >
-                  {exp.file_exists ? "Available" : "Missing"}
-                </Badge>
               </Card>
             ))}
           </div>
