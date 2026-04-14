@@ -229,7 +229,7 @@ export function ClipCard({ clip, projectId, rank, videoPath }: ClipCardProps) {
           <Scissors className="h-3 w-3" /> Edit
         </Button>
         {clip.status === "exported" && clip.export_path ? (
-          <a href={getExportUrl(clip.export_path)} download>
+          <a href={`/worker-api/exports/${clip.id}/download`}>
             <Button
               size="sm"
               variant="ghost"

@@ -1,12 +1,19 @@
 """
 ClipForge — Utilities Router
 Quick-download: paste a URL and kick off the full pipeline immediately.
+Caption Eraser: upload a video and blur/erase a rectangular region using FFmpeg.
 """
 
+import asyncio
 import logging
+import subprocess
+import tempfile
+import uuid
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,3 +88,110 @@ async def quick_download(
 
     logger.info(f"Quick-download queued: project={project.id} job={job_id} url={data.url}")
     return {"project_id": project.id, "job_id": job_id, "title": project.title}
+
+
+@router.post("/erase")
+async def erase_region(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    x: int = Form(0),
+    y: int = Form(0),
+    w: int = Form(100),
+    h: int = Form(50),
+):
+    """
+    Erase (blur) a rectangular region in a video using FFmpeg boxblur filter.
+    x, y, w, h are in pixels (top-left origin). Accepts MP4, MOV, WebM, MKV.
+    Returns the processed video as a downloadable MP4.
+    """
+    from config import settings
+
+    if w <= 0 or h <= 0:
+        raise HTTPException(400, "Region width and height must be greater than 0")
+
+    # Read uploaded content
+    content = await file.read()
+    if len(content) > 500 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum 500 MB.")
+    if len(content) < 1000:
+        raise HTTPException(400, "File appears to be empty or invalid.")
+
+    # Save to space-free temp paths (spaces in path cause issues with some ffmpeg filters)
+    uid = uuid.uuid4().hex[:12]
+    suffix = Path(file.filename or "video.mp4").suffix.lower() or ".mp4"
+    tmp_dir = Path(tempfile.gettempdir())
+    input_path = tmp_dir / f"cf_erase_in_{uid}{suffix}"
+    output_path = tmp_dir / f"cf_erase_out_{uid}.mp4"
+
+    input_path.write_bytes(content)
+
+    # Resolve ffmpeg binary
+    ffmpeg_bin = "ffmpeg"
+    ffmpeg_loc = settings.ffmpeg_location
+    if ffmpeg_loc:
+        ffmpeg_bin = str(Path(ffmpeg_loc) / "ffmpeg")
+
+    # Blur the region using crop+boxblur+overlay — more reliable than delogo,
+    # which fails on videos with non-square SAR.
+    vf = (
+        f"split=2[main][blur_src];"
+        f"[blur_src]crop={w}:{h}:{x}:{y},boxblur=20:5[blurred];"
+        f"[main][blurred]overlay={x}:{y}"
+    )
+    cmd = [
+        ffmpeg_bin, "-y",
+        "-i", str(input_path),
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+
+    logger.info(f"Erase job uid={uid}: region x={x} y={y} w={w} h={h}, input={input_path.name}")
+
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+
+    try:
+        proc = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=600)
+    except asyncio.TimeoutError:
+        input_path.unlink(missing_ok=True)
+        raise HTTPException(504, "Processing timed out after 10 minutes")
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", errors="replace")
+        lines = [l for l in stderr.splitlines() if l and not l.startswith("  ") and not l.startswith("built")]
+        tail = "\n".join(lines[-8:]).strip()
+        logger.error(f"FFmpeg erase failed (uid={uid}):\n{tail}")
+        input_path.unlink(missing_ok=True)
+        raise HTTPException(422, f"Processing failed: {tail[-400:]}")
+
+    if not output_path.exists() or output_path.stat().st_size < 1000:
+        input_path.unlink(missing_ok=True)
+        raise HTTPException(500, "Processing produced no output file")
+
+    logger.info(f"Erase job uid={uid} done: {output_path.stat().st_size // 1024} KB")
+
+    stem = Path(file.filename or "video").stem
+    out_filename = f"{stem}_erased.mp4"
+
+    def _cleanup():
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+    background_tasks.add_task(_cleanup)
+
+    return FileResponse(
+        path=str(output_path),
+        media_type="video/mp4",
+        filename=out_filename,
+        headers={"Content-Disposition": f'attachment; filename="{out_filename}"'},
+    )

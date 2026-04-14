@@ -139,11 +139,11 @@ export default function ExportsPage() {
                       size="sm"
                       variant="ghost"
                       className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-primary"
-                      onClick={() => window.open(getExportUrl(exp.export_path), "_blank")}
+                      onClick={() => window.open(`/worker-api/exports/${exp.clip_id}/download`, "_blank")}
                     >
                       <Play className="h-3 w-3" /> Play
                     </Button>
-                    <a href={getExportUrl(exp.export_path)} download>
+                    <a href={`/worker-api/exports/${exp.clip_id}/download`}>
                       <Button
                         size="sm"
                         variant="ghost"
