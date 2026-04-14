@@ -7,8 +7,12 @@ import logging
 import asyncio
 import multiprocessing as mp
 import queue as py_queue
+import os
+import shutil
+import subprocess
+import tempfile
 import traceback
-from typing import Optional, Callable, Awaitable, Dict, Any
+from typing import Optional, Callable, Awaitable, Dict, Any, List, Tuple
 import time
 from pathlib import Path
 
@@ -215,6 +219,77 @@ async def transcribe(
         raise
 
 
+def _split_audio_to_chunks(
+    media_path: str,
+    chunk_duration_s: float,
+    out_dir: Path,
+) -> List[Path]:
+    """
+    Split a media file into fixed-duration mono 16kHz PCM wav chunks using
+    ffmpeg's segment muxer. This bounds the memory faster-whisper needs to
+    decode any single chunk (important for long videos on low-RAM hosts).
+
+    Returns the list of chunk paths in order.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pattern = str(out_dir / "chunk_%04d.wav")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-nostdin",
+        "-loglevel", "error",
+        "-i", media_path,
+        "-vn",
+        "-ac", "1",
+        "-ar", "16000",
+        "-c:a", "pcm_s16le",
+        "-f", "segment",
+        "-segment_time", str(int(chunk_duration_s)),
+        "-reset_timestamps", "1",
+        pattern,
+    ]
+    creationflags = (
+        subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+    )
+    subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        creationflags=creationflags,
+    )
+    return sorted(out_dir.glob("chunk_*.wav"))
+
+
+def _transcribe_one(
+    model,
+    audio_path: str,
+    language: Optional[str],
+) -> Tuple[Any, Any]:
+    """Invoke faster-whisper once with the project's standard parameters."""
+    return model.transcribe(
+        audio_path,
+        beam_size=5,
+        word_timestamps=True,
+        language=language,
+        # VAD helps skip non-speech audio but must be tuned:
+        # - 500ms min silence avoids over-segmenting fast speech
+        # - 400ms speech pad preserves word beginnings/endings
+        # - threshold 0.3 is permissive enough for accented speech
+        vad_filter=True,
+        vad_parameters=dict(
+            min_silence_duration_ms=500,
+            speech_pad_ms=400,
+            threshold=0.3,
+        ),
+        # Compression ratio filter: reject hallucinated/looping segments
+        compression_ratio_threshold=2.4,
+        # Log probability threshold for confident detection
+        log_prob_threshold=-1.0,
+        # Avoid hallucinations on non-speech sections
+        no_speech_threshold=0.6,
+    )
+
+
 def _transcribe_worker(
     media_path: str,
     duration: float,
@@ -226,115 +301,215 @@ def _transcribe_worker(
     """
     Killable sync transcription worker executed in a separate process.
 
+    Strategy: when the input is longer than `whisper_chunk_min_duration_s`,
+    pre-split the audio into fixed-length PCM wav chunks on disk and feed
+    each chunk to faster-whisper independently. Peak RAM is bounded by the
+    largest chunk (~10 min) regardless of total media length. Segment and
+    word timestamps are re-offset to the global timeline before being
+    returned, so downstream code sees a single unified transcript.
+
     Communication protocol:
       - progress_queue: {"kind":"progress","progress":float,"message":str}
       - result_queue: {"ok":bool,"result":dict} OR {"ok":False,"error":str,"traceback":str}
     """
+    tmp_chunks_dir: Optional[Path] = None
     try:
-        model = _get_model()
-        segments_iter, info = model.transcribe(
-            media_path,
-            beam_size=5,
-            word_timestamps=True,
-            language=language,
-            # VAD helps skip non-speech audio but must be tuned:
-            # - 500ms min silence avoids over-segmenting fast speech
-            # - 400ms speech pad preserves word beginnings/endings
-            # - threshold 0.3 is permissive enough for accented speech
-            vad_filter=True,
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-                speech_pad_ms=400,
-                threshold=0.3,
-            ),
-            # Compression ratio filter: reject hallucinated/looping segments
-            compression_ratio_threshold=2.4,
-            # Log probability threshold for confident detection
-            log_prob_threshold=-1.0,
-            # Avoid hallucinations on non-speech sections
-            no_speech_threshold=0.6,
+        try:
+            model = _get_model()
+        except Exception as e:
+            result_queue.put(
+                {
+                    "ok": False,
+                    "error": f"Transcription failed to initialize: {e}",
+                    "traceback": traceback.format_exc(),
+                }
+            )
+            return
+
+        # Decide chunking policy
+        chunk_duration = float(settings.whisper_chunk_duration_s or 0.0)
+        chunk_min = float(settings.whisper_chunk_min_duration_s or 0.0)
+        use_chunking = (
+            chunk_duration > 0
+            and duration
+            and duration > 0
+            and duration >= chunk_min
         )
-    except Exception as e:
-        result_queue.put(
-            {
-                "ok": False,
-                "error": f"Transcription failed to initialize: {e}",
-                "traceback": traceback.format_exc(),
-            }
-        )
-        return
 
-    detected_language = getattr(info, "language", None) or "unknown"
+        chunk_jobs: List[Tuple[str, float]] = []  # (audio_path, global_offset_s)
 
-    segments = []
-    full_text_parts = []
-    last_update = 0.0
-    cancelled = False
+        if use_chunking:
+            try:
+                tmp_chunks_dir = Path(
+                    tempfile.mkdtemp(prefix="clipforge_wx_", dir=str(settings.temp_dir))
+                )
+            except Exception:
+                tmp_chunks_dir = Path(tempfile.mkdtemp(prefix="clipforge_wx_"))
 
-    for segment in segments_iter:
-        if cancel_event.is_set():
-            cancelled = True
-            break
-
-        if duration and duration > 0:
-            # 5% startup overhead, remaining 95% is segment progress
-            p = 0.05 + (0.95 * (float(segment.end) / float(duration)))
-            p = min(max(p, 0.03), 0.99)
-            now = time.time()
-            if now - last_update >= 1.0 or p >= 0.98:
-                last_update = now
-                msg = f"Transcribing... {segment.end:.1f}s / {duration:.1f}s ({int(p*100)}%)"
-                try:
-                    progress_queue.put({"kind": "progress", "progress": p, "message": msg})
-                except Exception:
-                    pass
-
-        words = []
-        if getattr(segment, "words", None):
-            for w in segment.words:
-                word_text = (w.word or "").strip()
-                if not word_text:
-                    continue
-                words.append(
+            try:
+                progress_queue.put(
                     {
-                        "word": word_text,
-                        "start": round(float(w.start), 3),
-                        "end": round(float(w.end), 3),
-                        "probability": round(float(w.probability), 3),
+                        "kind": "progress",
+                        "progress": 0.02,
+                        "message": (
+                            f"Splitting audio into ~{int(chunk_duration)}s chunks..."
+                        ),
                     }
                 )
+            except Exception:
+                pass
 
-        seg_data = {
-            "start": round(float(segment.start), 3),
-            "end": round(float(segment.end), 3),
-            "text": (getattr(segment, "text", "") or "").strip(),
-            "confidence": round(
-                (sum(float(w.probability) for w in segment.words) / max(len(segment.words), 1))
-                if segment.words
-                else 0.5,
-                3,
-            ),
-            "words": words,
-        }
-        segments.append(seg_data)
-        full_text_parts.append(seg_data["text"])
+            try:
+                chunk_paths = _split_audio_to_chunks(
+                    media_path, chunk_duration, tmp_chunks_dir
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = (e.stderr or b"").decode("utf-8", errors="replace")
+                result_queue.put(
+                    {
+                        "ok": False,
+                        "error": f"Audio chunk split failed: {stderr or e}",
+                        "traceback": traceback.format_exc(),
+                    }
+                )
+                return
 
-    full_text = " ".join([p for p in full_text_parts if p]).strip()
-    # Count words: prefer word-level timestamps (more accurate); fall back to text split
-    word_count = sum(
-        len(s["words"]) if s.get("words") else len((s.get("text") or "").split())
-        for s in segments
-    )
+            if not chunk_paths:
+                # Fallback: no chunks produced, run on the original file.
+                chunk_jobs = [(media_path, 0.0)]
+                use_chunking = False
+            else:
+                for i, p in enumerate(chunk_paths):
+                    chunk_jobs.append((str(p), i * chunk_duration))
+        else:
+            chunk_jobs = [(media_path, 0.0)]
 
-    result_queue.put(
-        {
-            "ok": True,
-            "result": {
-                "language": detected_language,
-                "segments": segments,
-                "full_text": full_text,
-                "word_count": word_count,
-                "cancelled": cancelled,
-            },
-        }
-    )
+        segments: List[Dict[str, Any]] = []
+        full_text_parts: List[str] = []
+        last_update = 0.0
+        cancelled = False
+        detected_language: Optional[str] = None
+
+        total_chunks = len(chunk_jobs)
+
+        for chunk_index, (chunk_path, offset_s) in enumerate(chunk_jobs):
+            if cancel_event.is_set():
+                cancelled = True
+                break
+
+            try:
+                segments_iter, info = _transcribe_one(model, chunk_path, language)
+            except Exception as e:
+                result_queue.put(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"Transcription failed on chunk "
+                            f"{chunk_index + 1}/{total_chunks}: {e}"
+                        ),
+                        "traceback": traceback.format_exc(),
+                    }
+                )
+                return
+
+            if detected_language is None:
+                detected_language = getattr(info, "language", None) or "unknown"
+
+            for segment in segments_iter:
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
+
+                seg_start = float(segment.start) + offset_s
+                seg_end = float(segment.end) + offset_s
+
+                if duration and duration > 0:
+                    # 5% startup overhead, remaining 95% is segment progress
+                    p = 0.05 + (0.95 * (seg_end / float(duration)))
+                    p = min(max(p, 0.03), 0.99)
+                    now = time.time()
+                    if now - last_update >= 1.0 or p >= 0.98:
+                        last_update = now
+                        msg = (
+                            f"Transcribing... {seg_end:.1f}s / {duration:.1f}s "
+                            f"({int(p * 100)}%)"
+                            + (
+                                f" [chunk {chunk_index + 1}/{total_chunks}]"
+                                if total_chunks > 1
+                                else ""
+                            )
+                        )
+                        try:
+                            progress_queue.put(
+                                {"kind": "progress", "progress": p, "message": msg}
+                            )
+                        except Exception:
+                            pass
+
+                words = []
+                if getattr(segment, "words", None):
+                    for w in segment.words:
+                        word_text = (w.word or "").strip()
+                        if not word_text:
+                            continue
+                        words.append(
+                            {
+                                "word": word_text,
+                                "start": round(float(w.start) + offset_s, 3),
+                                "end": round(float(w.end) + offset_s, 3),
+                                "probability": round(float(w.probability), 3),
+                            }
+                        )
+
+                seg_data = {
+                    "start": round(seg_start, 3),
+                    "end": round(seg_end, 3),
+                    "text": (getattr(segment, "text", "") or "").strip(),
+                    "confidence": round(
+                        (
+                            sum(float(w.probability) for w in segment.words)
+                            / max(len(segment.words), 1)
+                        )
+                        if segment.words
+                        else 0.5,
+                        3,
+                    ),
+                    "words": words,
+                }
+                segments.append(seg_data)
+                full_text_parts.append(seg_data["text"])
+
+            # Free chunk file as soon as we're done with it so disk usage
+            # doesn't grow unboundedly on very long videos.
+            if use_chunking:
+                try:
+                    os.remove(chunk_path)
+                except OSError:
+                    pass
+
+            if cancelled:
+                break
+
+        full_text = " ".join([p for p in full_text_parts if p]).strip()
+        # Count words: prefer word-level timestamps (more accurate);
+        # fall back to text split.
+        word_count = sum(
+            len(s["words"]) if s.get("words") else len((s.get("text") or "").split())
+            for s in segments
+        )
+
+        result_queue.put(
+            {
+                "ok": True,
+                "result": {
+                    "language": detected_language or "unknown",
+                    "segments": segments,
+                    "full_text": full_text,
+                    "word_count": word_count,
+                    "cancelled": cancelled,
+                },
+            }
+        )
+    finally:
+        if tmp_chunks_dir is not None:
+            shutil.rmtree(tmp_chunks_dir, ignore_errors=True)

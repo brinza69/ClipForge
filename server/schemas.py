@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 class ProjectCreate(BaseModel):
     source_url: Optional[str] = None
     title: Optional[str] = None
+    processing_mode: Optional[Literal["clipping", "full_video_parts"]] = None
 
 
 class ProjectAction(BaseModel):
@@ -50,6 +51,7 @@ class ProjectResponse(BaseModel):
     availability: Optional[str] = None
     video_path: Optional[str] = None
     filesize: Optional[int] = None
+    processing_mode: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -125,15 +127,45 @@ class ClipResponse(BaseModel):
     reframe_mode: Optional[str] = None
     reframe_data: Optional[list | dict] = None
     caption_preset_id: Optional[str] = None
+    # Style overrides
+    caption_font_size: Optional[int] = None
+    caption_text_color: Optional[str] = None
+    caption_highlight_color: Optional[str] = None
+    caption_outline_color: Optional[str] = None
+    caption_y_position: Optional[str] = None
+    hook_font_size: Optional[int] = None
+    hook_text_color: Optional[str] = None
+    hook_bg_color: Optional[str] = None
+    hook_y_position: Optional[str] = None
+    hook_box_size: Optional[int] = None
+    hook_box_width: Optional[int] = None
+    hook_duration_seconds: Optional[float] = None
+    hook_x: Optional[int] = None
+    hook_y: Optional[int] = None
+    subtitle_x: Optional[int] = None
+    subtitle_y: Optional[int] = None
+    export_resolution: Optional[str] = None
+    split_mode: Optional[str] = None
+    split_parts_count: Optional[int] = None
+    part_label_font_size: Optional[int] = None
+    part_label_box_size: Optional[int] = None
+    part_label_text_color: Optional[str] = None
+    part_label_bg_color: Optional[str] = None
+    part_label_x: Optional[int] = None
+    part_label_y: Optional[int] = None
+    export_parts: Optional[list[dict]] = []
+    hook_bg_enabled: Optional[bool] = True
+    title_text: Optional[str] = None
+    title_font_size: Optional[int] = None
+    title_x: Optional[int] = None
+    title_y: Optional[int] = None
+    title_box_size: Optional[int] = None
+    title_box_width: Optional[int] = None
+    # Legacy positioning (kept for backwards compat)
     caption_y_pct: Optional[float] = None
     caption_align: Optional[str] = None
     hook_y_pct: Optional[float] = None
     hook_align: Optional[str] = None
-    caption_font_size: Optional[float] = None
-    caption_text_color: Optional[str] = None
-    hook_font_size: Optional[float] = None
-    hook_text_color: Optional[str] = None
-    hook_bg_color: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

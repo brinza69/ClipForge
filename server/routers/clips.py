@@ -53,6 +53,39 @@ class ClipUpdate(BaseModel):
     # If `words` are omitted, the caption renderer will split segment text evenly.
     transcript_text: Optional[str] = None
     transcript_segments: Optional[list | dict] = None
+    # Style overrides (null means "use preset default")
+    caption_font_size: Optional[int] = None
+    caption_text_color: Optional[str] = None
+    caption_highlight_color: Optional[str] = None
+    caption_outline_color: Optional[str] = None
+    caption_y_position: Optional[str] = None
+    hook_font_size: Optional[int] = None
+    hook_text_color: Optional[str] = None
+    hook_bg_color: Optional[str] = None
+    hook_y_position: Optional[str] = None
+    hook_box_size: Optional[int] = None
+    hook_box_width: Optional[int] = None
+    hook_duration_seconds: Optional[float] = None
+    hook_x: Optional[int] = None
+    hook_y: Optional[int] = None
+    subtitle_x: Optional[int] = None
+    subtitle_y: Optional[int] = None
+    export_resolution: Optional[str] = None
+    split_mode: Optional[str] = None
+    split_parts_count: Optional[int] = None
+    part_label_font_size: Optional[int] = None
+    part_label_box_size: Optional[int] = None
+    part_label_text_color: Optional[str] = None
+    part_label_bg_color: Optional[str] = None
+    part_label_x: Optional[int] = None
+    part_label_y: Optional[int] = None
+    hook_bg_enabled: Optional[bool] = None
+    title_text: Optional[str] = None
+    title_font_size: Optional[int] = None
+    title_x: Optional[int] = None
+    title_y: Optional[int] = None
+    title_box_size: Optional[int] = None
+    title_box_width: Optional[int] = None
 
 
 @router.get("/", response_model=list[ClipResponse])

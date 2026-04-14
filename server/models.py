@@ -7,7 +7,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Text, DateTime, Enum, JSON,
+    Column, String, Integer, Float, Text, DateTime, Enum, JSON, Boolean,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -110,6 +110,9 @@ class ProjectModel(Base):
     video_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     filesize: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Processing mode: "clipping" (default) or "full_video_parts"
+    processing_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -181,6 +184,46 @@ class ClipModel(Base):
     hook_font_size: Mapped[float | None] = mapped_column(Float, nullable=True)
     hook_text_color: Mapped[str | None] = mapped_column(String(9), nullable=True)
     hook_bg_color: Mapped[str | None] = mapped_column(String(9), nullable=True)
+
+    # Style overrides (nullable — null means "use preset default")
+    caption_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    caption_text_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    caption_highlight_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    caption_outline_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    caption_y_position: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "bottom", "center", "top"
+    hook_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_text_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hook_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hook_y_position: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hook_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_box_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hook_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subtitle_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subtitle_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    export_resolution: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Split / part label settings
+    split_mode: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    split_parts_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_label_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_label_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_label_text_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    part_label_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    part_label_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    part_label_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Multi-part export persistence
+    export_parts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    hook_bg_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Title overlay (full_video_parts mode) — persistent on every part
+    title_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title_font_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_box_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
