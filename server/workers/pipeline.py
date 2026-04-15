@@ -401,17 +401,14 @@ def _compute_split_parts(clip_duration: float, split_mode: str, requested_parts:
     """Compute time segments for splitting a clip.
 
     Returns list of (part_start_offset, part_end_offset) relative to clip start.
-    Each part is at most 180 seconds.
+    No per-part duration cap — the user picks the count; that's what they get.
     """
-    MAX_PART_DURATION = 180.0
-
     if split_mode == "auto":
-        num_parts = max(1, math.ceil(clip_duration / MAX_PART_DURATION))
+        # Sensible default: ~60s per part, clamped to [2, 20]. Still user-overridable.
+        num_parts = max(2, math.ceil(clip_duration / 60.0))
+        num_parts = min(num_parts, 20)
     elif split_mode == "manual" and requested_parts and requested_parts >= 1:
         num_parts = requested_parts
-        # Enforce 180s max: increase parts if needed
-        min_parts_needed = max(1, math.ceil(clip_duration / MAX_PART_DURATION))
-        num_parts = max(num_parts, min_parts_needed)
     else:
         return [(0.0, clip_duration)]
 

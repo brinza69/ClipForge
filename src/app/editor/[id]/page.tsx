@@ -77,20 +77,42 @@ export default function EditorPage() {
   // Export flow: show split settings panel in export area
   const [exportSplitOpen, setExportSplitOpen] = useState<boolean>(false);
 
-  // Preset defaults for syncing style overrides when preset changes
-  const PRESET_DEFAULTS: Record<string, { fontSize: number; textColor: string; highlightColor: string; outlineColor: string }> = {
+  // Highlight bg color is mirrored from the active preset (some presets render the
+  // highlighted word inside an opaque box — we mirror that faithfully in the preview).
+  const [captionHighlightBgColor, setCaptionHighlightBgColor] = useState<string>("");
+
+  // Preset defaults for syncing style overrides when preset changes.
+  // These MUST stay in sync with DEFAULT_PRESETS in server/services/captioner.py.
+  const PRESET_DEFAULTS: Record<string, { fontSize: number; textColor: string; highlightColor: string; outlineColor: string; highlightBgColor?: string }> = {
     bold_impact:     { fontSize: 72, textColor: "#FFFFFF", highlightColor: "#FFD700", outlineColor: "#000000" },
     clean_minimal:   { fontSize: 62, textColor: "#FFFFFF", highlightColor: "#00D4FF", outlineColor: "#000000" },
     neon_pop:        { fontSize: 74, textColor: "#FFFFFF", highlightColor: "#FF3366", outlineColor: "#1A0033" },
     classic_white:   { fontSize: 62, textColor: "#FFFFFF", highlightColor: "#FFFFFF", outlineColor: "#000000" },
-    karaoke_yellow:  { fontSize: 68, textColor: "#FFFFFF", highlightColor: "#FFE600", outlineColor: "#000000" },
-    boxed_white:     { fontSize: 64, textColor: "#FFFFFF", highlightColor: "#FFFFFF", outlineColor: "#000000" },
+    karaoke_yellow:  { fontSize: 68, textColor: "#FFFFFF", highlightColor: "#FFE600", outlineColor: "#000000", highlightBgColor: "#FFE600" },
+    boxed_white:     { fontSize: 64, textColor: "#FFFFFF", highlightColor: "#FFFFFF", outlineColor: "#000000", highlightBgColor: "#000000" },
     viral_gradient:  { fontSize: 76, textColor: "#FFFFFF", highlightColor: "#FF6B35", outlineColor: "#000000" },
   };
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgVideoRef = useRef<HTMLVideoElement>(null);
   const lastCaptionUpdateRef = useRef<number>(0);
+
+  // Preview container ref + scale factor (container_height_px / 1920). Used to
+  // scale font sizes and paddings so the preview matches the 1080x1920 export.
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+  const [previewScale, setPreviewScale] = useState<number>(0.37);
+  useEffect(() => {
+    const el = previewContainerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const update = () => {
+      const h = el.clientHeight;
+      if (h > 0) setPreviewScale(h / 1920);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [previewMode, exportResolution]);
 
   const { data: clip, isLoading: clipLoading } = useQuery({
     queryKey: ["clip", clipId],
@@ -122,6 +144,7 @@ export default function EditorPage() {
     setCaptionTextColor(clip.caption_text_color || defaults.textColor);
     setCaptionHighlightColor(clip.caption_highlight_color || defaults.highlightColor);
     setCaptionOutlineColor(clip.caption_outline_color || defaults.outlineColor);
+    setCaptionHighlightBgColor(defaults.highlightBgColor || "");
     setHookFontSize(clip.hook_font_size || 46);
     setHookTextColor(clip.hook_text_color || "#FFFFFF");
     setHookBgColor(clip.hook_bg_color || "#0A0A0A");
@@ -188,6 +211,7 @@ export default function EditorPage() {
     setCaptionTextColor(defaults.textColor);
     setCaptionHighlightColor(defaults.highlightColor);
     setCaptionOutlineColor(defaults.outlineColor);
+    setCaptionHighlightBgColor(defaults.highlightBgColor || "");
   };
 
   const exportMutation = useMutation({
@@ -203,14 +227,18 @@ export default function EditorPage() {
 
   if (clipLoading || !clip) return <div className="p-8">Loading...</div>;
 
-  // Compute split info for preview
+  // Compute split info for preview. No max per-part duration cap — the user
+  // picks how many parts they want and that's what they get.
   const clipDuration = endTime - startTime;
   const computeSplitParts = (): number => {
     if (splitMode === "off") return 1;
-    if (splitMode === "auto") return Math.max(1, Math.ceil(clipDuration / 180));
+    if (splitMode === "auto") {
+      // Sensible default: ~60s per part, clamped to [2, 20]
+      const n = Math.max(2, Math.ceil(clipDuration / 60));
+      return Math.min(20, n);
+    }
     if (splitMode === "manual") {
-      const minParts = Math.max(1, Math.ceil(clipDuration / 180));
-      return Math.max(splitPartsCount, minParts);
+      return Math.max(1, splitPartsCount);
     }
     return 1;
   };
@@ -315,11 +343,14 @@ export default function EditorPage() {
 
         <div className="flex-1 relative flex items-center justify-center p-4">
           {/* Preview container: always 9:16 aspect when landscape export selected */}
-          <div className={`relative overflow-hidden rounded-lg border border-border/40 bg-black ${
-            previewMode === "9:16" || isLandscapeExport ? "h-full max-h-full aspect-[9/16]" :
-            previewMode === "16:9" ? "w-full aspect-[16/9]" :
-            "w-full aspect-video"
-          }`}>
+          <div
+            ref={previewContainerRef}
+            className={`relative overflow-hidden rounded-lg border border-border/40 bg-black ${
+              previewMode === "9:16" || isLandscapeExport ? "h-full max-h-full aspect-[9/16]" :
+              previewMode === "16:9" ? "w-full aspect-[16/9]" :
+              "w-full aspect-video"
+            }`}
+          >
             {/* Blurred background (preview-only) */}
             {reframeMode === "blurred" && !isLandscapeExport && (
               <video
@@ -437,9 +468,7 @@ export default function EditorPage() {
                   className={`absolute max-w-[82%] ${hookBgEnabled ? "rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm" : ""}`}
                   style={{
                     backgroundColor: hookBgEnabled ? hookBgColor + "F2" : "transparent",
-                    padding: hookBgEnabled ? `${hookBoxSize}px` : `${hookBoxSize}px`,
-                    backgroundColor: hookBgColor + "F2",
-                    padding: `${hookBoxSize}px ${hookBoxWidth}px`,
+                    padding: `${Math.max(2, hookBoxSize * previewScale)}px ${Math.max(2, hookBoxWidth * previewScale)}px`,
                     left: `${hookX}%`,
                     top: `${hookY}%`,
                     transform: "translate(-50%, -50%)",
@@ -449,8 +478,8 @@ export default function EditorPage() {
                     className="leading-snug font-bold text-center break-words"
                     style={{
                       color: hookTextColor,
-                      fontSize: `${Math.round(hookFontSize * 0.37)}px`,
-                      maxWidth: "260px",
+                      fontSize: `${Math.max(8, hookFontSize * previewScale)}px`,
+                      maxWidth: `${Math.max(120, 700 * previewScale)}px`,
                       wordBreak: "break-word",
                       textShadow: hookBgEnabled ? "none" : "0 2px 4px #000, 0 0 2px #000",
                     }}
@@ -467,7 +496,7 @@ export default function EditorPage() {
                   className="absolute max-w-[82%] rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
                   style={{
                     backgroundColor: "#0A0A0AF2",
-                    padding: `${titleBoxSize}px ${titleBoxWidth}px`,
+                    padding: `${Math.max(2, titleBoxSize * previewScale)}px ${Math.max(2, titleBoxWidth * previewScale)}px`,
                     left: `${titleX}%`,
                     top: `${titleY}%`,
                     transform: "translate(-50%, -50%)",
@@ -477,8 +506,8 @@ export default function EditorPage() {
                     className="leading-snug font-bold text-center break-words"
                     style={{
                       color: "#FFFFFF",
-                      fontSize: `${Math.round(titleFontSize * 0.37)}px`,
-                      maxWidth: "260px",
+                      fontSize: `${Math.max(8, titleFontSize * previewScale)}px`,
+                      maxWidth: `${Math.max(120, 700 * previewScale)}px`,
                       wordBreak: "break-word",
                     }}
                   >
@@ -496,14 +525,14 @@ export default function EditorPage() {
                     top: `${partLabelY}%`,
                     transform: "translate(-50%, -50%)",
                     backgroundColor: partLabelBgColor + "CC",
-                    padding: `${partLabelBoxSize}px`,
+                    padding: `${Math.max(2, partLabelBoxSize * previewScale)}px ${Math.max(4, partLabelBoxSize * previewScale * 1.4)}px`,
                   }}
                 >
                   <span
                     className="font-bold whitespace-nowrap"
                     style={{
                       color: partLabelTextColor,
-                      fontSize: `${Math.round(partLabelFontSize * 0.37)}px`,
+                      fontSize: `${Math.max(8, partLabelFontSize * previewScale)}px`,
                     }}
                   >
                     Part 1/{effectiveParts}
@@ -511,33 +540,69 @@ export default function EditorPage() {
                 </div>
               )}
 
-              {/* Captions */}
+              {/* Captions — bottom-anchored at subtitleY% to match the ASS export's
+                  alignment=2 + marginv=((100-subtitleY)/100 * 1920) interpretation. */}
               {currentCaptionGroup.length > 0 && currentCaptionWord && (
                 <div
-                  className="absolute left-0 right-0 px-6"
-                  style={{ top: `${subtitleY}%`, transform: "translateY(-50%)" }}
+                  className="absolute"
+                  style={{
+                    left: `${subtitleX}%`,
+                    top: `${subtitleY}%`,
+                    transform: "translate(-50%, -100%)",
+                    maxWidth: "94%",
+                  }}
                 >
                   <div
-                    className="font-extrabold tracking-wide text-center"
+                    className="font-extrabold tracking-wide text-center whitespace-nowrap"
                     style={{
-                      fontSize: `${Math.round(captionFontSize * 0.39)}px`,
+                      fontSize: `${Math.max(8, captionFontSize * previewScale)}px`,
                       color: captionTextColor,
                       textShadow: `0 2px 8px ${captionOutlineColor}E6, 0 0 2px ${captionOutlineColor}CC`,
+                      lineHeight: 1.1,
                     }}
                   >
-                    {currentCaptionGroup.map((w, i) => (
-                      <span
-                        key={`${w}-${i}`}
-                        className="px-1"
-                        style={
-                          w === currentCaptionWord
-                            ? { color: captionHighlightColor, transform: "scale(1.05)", display: "inline-block" }
-                            : { opacity: 0.9 }
-                        }
-                      >
-                        {w}
-                      </span>
-                    ))}
+                    {currentCaptionGroup.map((w, i) => {
+                      const isHighlight = w === currentCaptionWord;
+                      if (isHighlight && captionHighlightBgColor) {
+                        // Karaoke/Boxed-style: opaque bg box, black text inside
+                        return (
+                          <span
+                            key={`${w}-${i}`}
+                            style={{
+                              backgroundColor: captionHighlightBgColor,
+                              color: "#000000",
+                              padding: `${Math.max(2, 4 * previewScale * 10)}px ${Math.max(4, 8 * previewScale * 10)}px`,
+                              borderRadius: `${Math.max(2, 6 * previewScale * 10)}px`,
+                              marginLeft: i === 0 ? 0 : `${Math.max(2, 4 * previewScale * 10)}px`,
+                              display: "inline-block",
+                              textShadow: "none",
+                            }}
+                          >
+                            {w}
+                          </span>
+                        );
+                      }
+                      return (
+                        <span
+                          key={`${w}-${i}`}
+                          style={
+                            isHighlight
+                              ? {
+                                  color: captionHighlightColor,
+                                  display: "inline-block",
+                                  transform: "scale(1.05)",
+                                  marginLeft: i === 0 ? 0 : `${Math.max(2, 4 * previewScale * 10)}px`,
+                                }
+                              : {
+                                  opacity: 0.95,
+                                  marginLeft: i === 0 ? 0 : `${Math.max(2, 4 * previewScale * 10)}px`,
+                                }
+                          }
+                        >
+                          {w}
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1024,7 +1089,7 @@ export default function EditorPage() {
                   <Slider
                     value={[splitPartsCount]}
                     min={2}
-                    max={20}
+                    max={100}
                     step={1}
                     onValueChange={(val: number | readonly number[]) => setSplitPartsCount(Array.isArray(val) ? val[0] : val)}
                     className="flex-1"
@@ -1035,11 +1100,6 @@ export default function EditorPage() {
               {/* Split info */}
               <div className="text-[10px] text-muted-foreground bg-muted/30 p-2 rounded">
                 {clipDuration.toFixed(1)}s clip → {effectiveParts} part{effectiveParts > 1 ? "s" : ""} (~{(clipDuration / effectiveParts).toFixed(1)}s each)
-                {splitMode === "manual" && effectiveParts > splitPartsCount && (
-                  <span className="text-yellow-500 block mt-1">
-                    Adjusted from {splitPartsCount} to {effectiveParts} parts (max 180s per part)
-                  </span>
-                )}
               </div>
 
               {/* Part label styling — collapsible */}
