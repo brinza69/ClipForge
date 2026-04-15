@@ -227,6 +227,14 @@ def generate_captions(
             preset["outline_color"] = style_overrides["caption_outline_color"]
         if style_overrides.get("caption_y_position"):
             preset["position"] = style_overrides["caption_y_position"]
+
+    # User-provided subtitle_x/subtitle_y (from the editor sliders) ALWAYS win over
+    # the preset's `position` field. This is what the preview shows, so exporting
+    # anything else creates a mismatch between editor and final MP4.
+    sub_x_override = (style_overrides or {}).get("subtitle_x")
+    sub_y_override = (style_overrides or {}).get("subtitle_y")
+    if sub_y_override is not None:
+        preset["position"] = "bottom"  # force bottom alignment; we position via marginv
     logger.info(f"Generating captions [{clip_start:.1f}s-{clip_end:.1f}s] preset={preset.get('name', 'custom')}")
 
     subs = pysubs2.SSAFile()
@@ -260,18 +268,17 @@ def generate_captions(
     normal_style.marginl = 60
     normal_style.marginr = 60
 
-    # Apply subtitle position overrides (subtitle_y = 0-100 vertical %)
-    sub_y_override = (style_overrides or {}).get("subtitle_y")
+    # Apply subtitle position overrides.
+    # subtitle_y (0-100) maps to "percent from top of frame where the BOTTOM of the
+    # caption text sits" — matches the preview which uses `translate(-50%, -100%)`.
+    # With alignment=2 (bottom-center), ASS marginv = distance from frame bottom
+    # to caption bottom → marginv = (100 - subtitle_y) / 100 * export_height.
+    play_res_y = int(subs.info.get("PlayResY", settings.export_height))
     if sub_y_override is not None:
-        # Map 0-100 to ASS marginv: 0=top(large marginv from top), 100=bottom(large marginv from bottom)
-        # For bottom-aligned (2): marginv is distance from bottom edge
-        # sub_y=0 means very top → large marginv pushes up; sub_y=100 means bottom → small marginv
-        if normal_style.alignment in (1, 2, 3):  # bottom-aligned
-            normal_style.marginv = max(20, int((100 - sub_y_override) / 100 * 1920))
-        elif normal_style.alignment in (7, 8, 9):  # top-aligned
-            normal_style.marginv = max(20, int(sub_y_override / 100 * 1920))
-        else:  # center-aligned
-            normal_style.marginv = int((50 - sub_y_override) / 100 * 1920)
+        # Force bottom alignment so the mapping is consistent (we overrode
+        # preset["position"] above, but belt-and-suspenders).
+        normal_style.alignment = 2
+        normal_style.marginv = max(20, int((100 - sub_y_override) / 100 * play_res_y))
 
     subs.styles["Default"] = normal_style
 
