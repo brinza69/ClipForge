@@ -8,6 +8,7 @@ import asyncio
 import multiprocessing as mp
 import queue as py_queue
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -22,6 +23,24 @@ logger = logging.getLogger("clipforge.transcriber")
 
 # Lazy-load model to avoid startup cost
 _model = None
+
+# Strip every symbol/punctuation from transcript text. Keeps unicode letters,
+# digits, and whitespace only; output is lowercased so downstream caption
+# rendering is case-insensitive. `\w` in Python's `re` with re.UNICODE (default
+# on py3) matches letters, digits, and underscore — we remove underscores
+# explicitly since the user wants "only text".
+_SYMBOL_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _clean_text(text: str) -> str:
+    """Remove all symbols/punctuation and lowercase the result."""
+    if not text:
+        return text
+    cleaned = _SYMBOL_RE.sub("", text)
+    cleaned = cleaned.replace("_", "")
+    # Collapse any whitespace runs that may result from symbol removal.
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.lower()
 
 
 def _get_model():
@@ -449,7 +468,7 @@ def _transcribe_worker(
                 words = []
                 if getattr(segment, "words", None):
                     for w in segment.words:
-                        word_text = (w.word or "").strip()
+                        word_text = _clean_text((w.word or "").strip())
                         if not word_text:
                             continue
                         words.append(
@@ -464,7 +483,7 @@ def _transcribe_worker(
                 seg_data = {
                     "start": round(seg_start, 3),
                     "end": round(seg_end, 3),
-                    "text": (getattr(segment, "text", "") or "").strip(),
+                    "text": _clean_text((getattr(segment, "text", "") or "").strip()),
                     "confidence": round(
                         (
                             sum(float(w.probability) for w in segment.words)
