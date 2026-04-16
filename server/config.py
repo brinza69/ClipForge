@@ -65,6 +65,10 @@ class Settings(BaseSettings):
         return self.data_dir / "temp"
 
     @property
+    def previews_dir(self) -> Path:
+        return self.data_dir / "previews"
+
+    @property
     def cache_dir(self) -> Path:
         return self.data_dir / "cache"
 
@@ -78,6 +82,7 @@ class Settings(BaseSettings):
             self.db_path.parent,
             self.media_dir,
             self.exports_dir,
+            self.previews_dir,
             self.thumbnails_dir,
             self.temp_dir,
             self.cache_dir,

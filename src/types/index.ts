@@ -128,6 +128,7 @@ export interface Clip {
   title_y?: number | null;
   title_box_size?: number | null;
   title_box_width?: number | null;
+  title_bg_enabled?: boolean;
   export_path: string | null;
   export_file_exists?: boolean | null;
   export_parts?: Array<{ part_num: number; total_parts: number; filename: string; duration: number }>;

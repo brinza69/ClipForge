@@ -510,6 +510,7 @@ async def handle_export(
         "title_y": clip.title_y,
         "title_box_size": clip.title_box_size,
         "title_box_width": clip.title_box_width,
+        "title_bg_enabled": clip.title_bg_enabled if clip.title_bg_enabled is not None else True,
     }
     style_overrides = {k: v for k, v in style_overrides.items() if v is not None}
 

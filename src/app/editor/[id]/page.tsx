@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight, Palette, ChevronDown, ChevronUp, Maximize, SplitSquareHorizontal, Tag, Type, Move } from "lucide-react";
+import { ArrowLeft, Download, Scissors, MonitorPlay, Film, ArrowRight, Palette, ChevronDown, ChevronUp, Maximize, SplitSquareHorizontal, Tag, Type, Move, Eye } from "lucide-react";
 import { toast } from "sonner";
 import type { Clip, Project, TranscriptSegment } from "@/types";
 
@@ -63,6 +63,7 @@ export default function EditorPage() {
   const [titleY, setTitleY] = useState<number>(18);
   const [titleBoxSize, setTitleBoxSize] = useState<number>(24);
   const [titleBoxWidth, setTitleBoxWidth] = useState<number>(24);
+  const [titleBgEnabled, setTitleBgEnabled] = useState<boolean>(true);
 
   // Part label settings
   const [partLabelFontSize, setPartLabelFontSize] = useState<number>(32);
@@ -96,6 +97,7 @@ export default function EditorPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgVideoRef = useRef<HTMLVideoElement>(null);
   const lastCaptionUpdateRef = useRef<number>(0);
+  const bgSyncRafRef = useRef<number | null>(null);
 
   // Preview container ref + scale factor (container_height_px / 1920). Used to
   // scale font sizes and paddings so the preview matches the 1080x1920 export.
@@ -113,6 +115,32 @@ export default function EditorPage() {
     ro.observe(el);
     return () => ro.disconnect();
   }, [previewMode, exportResolution]);
+
+  // RAF-based sync loop: keep bgVideo.currentTime locked to foreground video
+  useEffect(() => {
+    if (reframeMode !== "blurred") return;
+    let running = true;
+    const sync = () => {
+      if (!running) return;
+      const fg = videoRef.current;
+      const bg = bgVideoRef.current;
+      if (fg && bg) {
+        // Sync time only when drift exceeds threshold (avoids constant seeking)
+        if (Math.abs(bg.currentTime - fg.currentTime) > 0.05) {
+          bg.currentTime = fg.currentTime;
+        }
+        // Sync play state
+        if (!fg.paused && bg.paused) bg.play().catch(() => {});
+        if (fg.paused && !bg.paused) bg.pause();
+      }
+      bgSyncRafRef.current = requestAnimationFrame(sync);
+    };
+    bgSyncRafRef.current = requestAnimationFrame(sync);
+    return () => {
+      running = false;
+      if (bgSyncRafRef.current) cancelAnimationFrame(bgSyncRafRef.current);
+    };
+  }, [reframeMode]);
 
   const { data: clip, isLoading: clipLoading } = useQuery({
     queryKey: ["clip", clipId],
@@ -173,6 +201,7 @@ export default function EditorPage() {
     setTitleY(clip.title_y ?? 18);
     setTitleBoxSize(clip.title_box_size || 24);
     setTitleBoxWidth(clip.title_box_width || clip.title_box_size || 24);
+    setTitleBgEnabled(clip.title_bg_enabled ?? true);
     // Auto-open export split panel if split was previously configured
     if (clip.split_mode && clip.split_mode !== "off") setExportSplitOpen(true);
 
@@ -290,6 +319,7 @@ export default function EditorPage() {
       title_y: titleY,
       title_box_size: titleBoxSize,
       title_box_width: titleBoxWidth,
+      title_bg_enabled: titleBgEnabled,
       transcript_text: override ? override : (clip?.transcript_text ?? undefined),
       transcript_segments: override
         ? [{ start: startTime, end: endTime, text: override }]
@@ -299,6 +329,25 @@ export default function EditorPage() {
 
   const handleSave = () => {
     updateMutation.mutate(buildSavePayload());
+  };
+
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  const handlePreviewFinal = async () => {
+    try {
+      setPreviewLoading(true);
+      // Save settings first so backend renders with current config
+      await updateMutation.mutateAsync(buildSavePayload());
+      // Open the preview endpoint in a new tab — the backend renders and streams the MP4
+      const previewUrl = api.clips.previewUrl(clipId);
+      window.open(previewUrl, "_blank");
+      toast.success("Preview rendering — a new tab will open with the video");
+    } catch (err) {
+      const e = err as { message?: string };
+      toast.error(e?.message || "Preview failed");
+    } finally {
+      setPreviewLoading(false);
+    }
   };
 
   const handleExportNow = async () => {
@@ -359,7 +408,8 @@ export default function EditorPage() {
                 muted
                 playsInline
                 preload="metadata"
-                className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 pointer-events-none"
+                className="absolute inset-0 w-full h-full object-cover scale-125 pointer-events-none"
+                style={{ filter: "blur(40px) brightness(0.85)" }}
               />
             )}
 
@@ -380,10 +430,17 @@ export default function EditorPage() {
                 }
               }}
               onPlay={() => {
-                if (bgVideoRef.current && reframeMode === "blurred") bgVideoRef.current.play();
+                // RAF sync loop handles bg play/pause, but kickstart immediately for responsiveness
+                if (bgVideoRef.current && reframeMode === "blurred") bgVideoRef.current.play().catch(() => {});
               }}
               onPause={() => {
                 if (bgVideoRef.current) bgVideoRef.current.pause();
+              }}
+              onSeeked={() => {
+                // Immediate sync on seek for responsiveness (RAF loop is backup)
+                if (bgVideoRef.current && reframeMode === "blurred" && videoRef.current) {
+                  bgVideoRef.current.currentTime = videoRef.current.currentTime;
+                }
               }}
               onTimeUpdate={() => {
                 const fg = videoRef.current;
@@ -394,10 +451,6 @@ export default function EditorPage() {
                 if (tAbs >= endTime) {
                   fg.currentTime = startTime;
                   if (bgVideoRef.current) bgVideoRef.current.currentTime = startTime;
-                }
-
-                if (bgVideoRef.current && reframeMode === "blurred") {
-                  bgVideoRef.current.currentTime = fg.currentTime;
                 }
 
                 const t = Math.min(Math.max(fg.currentTime, startTime), endTime);
@@ -493,9 +546,9 @@ export default function EditorPage() {
               {isFullVideoMode && titleText.trim().length > 0 && (
                 <div
                   data-testid="preview-title-box"
-                  className="absolute max-w-[82%] rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm"
+                  className={`absolute max-w-[82%] ${titleBgEnabled ? "rounded-2xl border border-white/8 shadow-2xl backdrop-blur-sm" : ""}`}
                   style={{
-                    backgroundColor: "#0A0A0AF2",
+                    backgroundColor: titleBgEnabled ? "#0A0A0AF2" : "transparent",
                     padding: `${Math.max(2, titleBoxSize * previewScale)}px ${Math.max(2, titleBoxWidth * previewScale)}px`,
                     left: `${titleX}%`,
                     top: `${titleY}%`,
@@ -509,6 +562,7 @@ export default function EditorPage() {
                       fontSize: `${Math.max(8, titleFontSize * previewScale)}px`,
                       maxWidth: `${Math.max(120, 700 * previewScale)}px`,
                       wordBreak: "break-word",
+                      textShadow: titleBgEnabled ? "none" : "0 2px 4px #000, 0 0 2px #000",
                     }}
                   >
                     {titleText}
@@ -673,6 +727,16 @@ export default function EditorPage() {
                 className="bg-card w-full"
               />
               <div className="space-y-2 pt-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs whitespace-nowrap min-w-[100px]">Show BG Box</Label>
+                  <button
+                    type="button"
+                    onClick={() => setTitleBgEnabled(!titleBgEnabled)}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${titleBgEnabled ? "bg-primary" : "bg-muted"}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${titleBgEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
+                  </button>
+                </div>
                 <div className="flex items-center justify-between gap-3">
                   <Label className="text-xs whitespace-nowrap min-w-[100px]">Font Size ({titleFontSize})</Label>
                   <Slider
@@ -1171,6 +1235,19 @@ export default function EditorPage() {
               )}
             </div>
           )}
+
+          <Button
+            variant="secondary"
+            className="w-full gap-2 text-sm py-4"
+            onClick={handlePreviewFinal}
+            disabled={previewLoading || updateMutation.isPending}
+          >
+            {previewLoading ? "Rendering Preview..." : "Preview Final"}
+            {!previewLoading && <Eye className="h-4 w-4" />}
+          </Button>
+          <p className="text-[10px] text-center text-muted-foreground">
+            Opens a low-res preview in a new tab that matches the final export.
+          </p>
 
           <Button
             className="w-full gap-2 text-md font-bold shadow-lg shadow-primary/20 py-6"

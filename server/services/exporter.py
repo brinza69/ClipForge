@@ -32,6 +32,7 @@ async def export_clip(
     height: int = None,
     fps: int = None,
     bitrate: str = None,
+    encoding_preset: str = None,
 ) -> str:
     """
     Export a video clip with reframing, captions, and audio normalization.
@@ -122,7 +123,7 @@ async def export_clip(
     audio_filters = f"loudnorm=I=-16:LRA=11:TP=-1.5,afade=t=in:st=0:d=0.3,afade=t=out:st={max(0, duration - 0.4):.3f}:d=0.4"
     encoding_args = [
         "-c:v", settings.export_codec,
-        "-preset", "medium",
+        "-preset", encoding_preset or "medium",
         "-crf", "17",
         "-b:v", br,
         "-maxrate", br,

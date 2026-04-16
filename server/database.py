@@ -85,6 +85,7 @@ async def init_db() -> None:
             ("title_y", "INTEGER"),
             ("title_box_size", "INTEGER"),
             ("title_box_width", "INTEGER"),
+            ("title_bg_enabled", "BOOLEAN DEFAULT 1"),
         ]
         for col, col_type in _style_migrations:
             try:
