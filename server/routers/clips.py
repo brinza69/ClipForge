@@ -89,6 +89,13 @@ class ClipUpdate(BaseModel):
     title_box_size: Optional[int] = None
     title_box_width: Optional[int] = None
     title_bg_enabled: Optional[bool] = None
+    creator_tag_enabled: Optional[bool] = None
+    creator_tag_text: Optional[str] = None
+    creator_tag_x: Optional[int] = None
+    creator_tag_y: Optional[int] = None
+    creator_tag_opacity: Optional[float] = None
+    creator_tag_font_size: Optional[int] = None
+    drive_folder_link: Optional[str] = None
 
 
 @router.get("/", response_model=list[ClipResponse])
@@ -135,6 +142,13 @@ async def update_clip(
 
     for key, value in update_data.items():
         setattr(clip, key, value)
+
+    # Force updated_at to bump even if every field equals the current DB value.
+    # The preview cache keys on updated_at > preview_mtime, and SQLAlchemy's
+    # onupdate only fires when the row actually changes — so a clean "Save"
+    # with no field diffs would leave a stale preview in place.
+    from datetime import datetime, timezone
+    clip.updated_at = datetime.now(timezone.utc)
 
     await session.commit()
     await session.refresh(clip)
@@ -309,6 +323,12 @@ async def preview_clip(clip_id: str, session: AsyncSession = Depends(get_session
             "title_box_size": clip.title_box_size,
             "title_box_width": clip.title_box_width,
             "title_bg_enabled": clip.title_bg_enabled if clip.title_bg_enabled is not None else True,
+            "creator_tag_enabled": clip.creator_tag_enabled if clip.creator_tag_enabled is not None else False,
+            "creator_tag_text": clip.creator_tag_text,
+            "creator_tag_x": clip.creator_tag_x,
+            "creator_tag_y": clip.creator_tag_y,
+            "creator_tag_opacity": clip.creator_tag_opacity,
+            "creator_tag_font_size": clip.creator_tag_font_size,
         }
         style_overrides = {k: v for k, v in style_overrides.items() if v is not None}
 
@@ -317,18 +337,39 @@ async def preview_clip(clip_id: str, session: AsyncSession = Depends(get_session
         preset_id = clip.caption_preset_id or "bold_impact"
         preset = dict(DEFAULT_PRESETS.get(preset_id, DEFAULT_PRESETS["bold_impact"]))
         is_full_video = (project.processing_mode or "clipping") == "full_video_parts"
+        creator_tag_for_preview = None
+        if clip.creator_tag_enabled and (clip.creator_tag_text or "").strip():
+            creator_tag_for_preview = clip.creator_tag_text.strip()
+
+        preview_captions_path = str(settings.temp_dir / "previews" / f"captions_{clip_id}.ass")
         captions_path = generate_captions(
             segments=segments,
             clip_start=start_time,
             clip_end=preview_end,
             preset=preset,
+            output_path=preview_captions_path,
             hook_text=clip.hook_text if not is_full_video else None,
             style_overrides=style_overrides,
             hook_bg_enabled=style_overrides.get("hook_bg_enabled", True),
             title_text=clip.title_text if is_full_video else None,
+            creator_tag_text=creator_tag_for_preview,
         )
 
-        # Export at 540x960 with ultrafast for speed
+        # Preview dims: honor the user's export_resolution (portrait vs 16:9)
+        # so letterbox/blurred-fill behavior is faithfully reflected. We downscale
+        # to a low-res proxy (~540px on the short side) to keep render fast.
+        preview_w, preview_h = 540, 960
+        if clip.export_resolution:
+            try:
+                ew, eh = (int(x) for x in clip.export_resolution.lower().split("x"))
+                if ew > eh:
+                    # Landscape: 960x540
+                    preview_w, preview_h = 960, 540
+                else:
+                    preview_w, preview_h = 540, 960
+            except Exception:
+                pass
+
         try:
             await run_export(
                 video_path=video_path,
@@ -337,8 +378,8 @@ async def preview_clip(clip_id: str, session: AsyncSession = Depends(get_session
                 end_time=preview_end,
                 reframe_data=reframe_data,
                 captions_path=captions_path if captions_path else None,
-                width=540,
-                height=960,
+                width=preview_w,
+                height=preview_h,
                 fps=24,
                 bitrate="1500k",
                 encoding_preset="ultrafast",
@@ -347,11 +388,173 @@ async def preview_clip(clip_id: str, session: AsyncSession = Depends(get_session
             logger.error(f"Preview render failed: {e}")
             raise HTTPException(500, f"Preview render failed: {str(e)[:200]}")
 
+    # Cache-Control: no-store so browsers/tabs never serve a stale preview
+    # after the user changes settings and re-clicks "Preview Final".
     return FileResponse(
         str(preview_path),
         media_type="video/mp4",
         filename=f"preview_{clip_id}.mp4",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )
+
+
+class DrivePayload(BaseModel):
+    folder_link: str
+
+
+def _extract_drive_folder_id(link: str) -> Optional[str]:
+    """Parse a Google Drive folder URL or ID and return the folder ID.
+
+    Accepts common share-link shapes:
+      - https://drive.google.com/drive/folders/<ID>
+      - https://drive.google.com/drive/folders/<ID>?usp=sharing
+      - https://drive.google.com/drive/u/0/folders/<ID>
+      - https://drive.google.com/open?id=<ID>
+      - bare 25-44 char alphanumeric/_- ID
+    """
+    import re
+    s = (link or "").strip()
+    if not s:
+        return None
+    # Bare ID
+    if re.fullmatch(r"[A-Za-z0-9_-]{25,64}", s):
+        return s
+    # folders/<ID>
+    m = re.search(r"/folders/([A-Za-z0-9_-]{25,64})", s)
+    if m:
+        return m.group(1)
+    # ?id=<ID>
+    m = re.search(r"[?&]id=([A-Za-z0-9_-]{25,64})", s)
+    if m:
+        return m.group(1)
+    return None
+
+
+@router.post("/drive/validate")
+async def validate_drive_link(payload: DrivePayload):
+    """Parse and validate a Google Drive folder link.
+
+    Stateless — does not hit Drive API. Purely validates the URL shape and
+    extracts the folder ID so the frontend can give instant feedback.
+    """
+    folder_id = _extract_drive_folder_id(payload.folder_link)
+    if not folder_id:
+        return {"valid": False, "folder_id": None, "reason": "Could not parse a Drive folder ID from the link"}
+    return {"valid": True, "folder_id": folder_id}
+
+
+@router.post("/{clip_id}/drive-upload")
+async def upload_to_drive(
+    clip_id: str,
+    payload: DrivePayload,
+    session: AsyncSession = Depends(get_session),
+):
+    """Upload this clip's rendered outputs to the given Google Drive folder.
+
+    Requires a service-account key file at settings.data_dir/drive_credentials.json
+    OR GOOGLE_APPLICATION_CREDENTIALS env pointing at a valid JSON. Without
+    credentials we return a clearly-labeled `blocked_missing_credentials`
+    response so the UI can surface the real blocker instead of pretending.
+    """
+    import os
+    import logging
+    logger = logging.getLogger("clipforge.drive")
+
+    clip = await session.get(ClipModel, clip_id)
+    if not clip:
+        raise HTTPException(404, "Clip not found")
+
+    folder_id = _extract_drive_folder_id(payload.folder_link)
+    if not folder_id:
+        raise HTTPException(400, "Invalid Drive folder link")
+
+    # Persist the link on the clip for later re-use
+    clip.drive_folder_link = payload.folder_link.strip()
+    await session.commit()
+
+    # Locate output files
+    files_to_upload: list[Path] = []
+    if clip.export_path and Path(clip.export_path).exists():
+        files_to_upload.append(Path(clip.export_path))
+    if clip.export_parts:
+        for part in clip.export_parts:
+            p = Path(settings.exports_dir) / part.get("filename", "")
+            if p.exists():
+                files_to_upload.append(p)
+
+    if not files_to_upload:
+        return {
+            "clip_id": clip_id,
+            "status": "no_files",
+            "folder_id": folder_id,
+            "reason": "No rendered outputs found. Export the clip before uploading.",
+        }
+
+    # Locate credentials
+    creds_env = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    creds_local = settings.data_dir / "drive_credentials.json"
+    creds_path: Optional[str] = None
+    if creds_env and Path(creds_env).exists():
+        creds_path = creds_env
+    elif creds_local.exists():
+        creds_path = str(creds_local)
+
+    if not creds_path:
+        return {
+            "clip_id": clip_id,
+            "status": "blocked_missing_credentials",
+            "folder_id": folder_id,
+            "reason": (
+                "Google Drive service-account credentials not found. Place a JSON key at "
+                f"{creds_local} or set GOOGLE_APPLICATION_CREDENTIALS. The folder link was "
+                "saved to the clip and files were located; only the API call is blocked."
+            ),
+            "files_located": [f.name for f in files_to_upload],
+        }
+
+    # Perform the upload (requires google-api-python-client + google-auth)
+    try:
+        from google.oauth2 import service_account  # type: ignore
+        from googleapiclient.discovery import build  # type: ignore
+        from googleapiclient.http import MediaFileUpload  # type: ignore
+    except ImportError:
+        return {
+            "clip_id": clip_id,
+            "status": "blocked_missing_credentials",
+            "folder_id": folder_id,
+            "reason": (
+                "Python packages 'google-api-python-client' and 'google-auth' are not installed "
+                "on the server. Install them and retry. The folder link was saved; only the API "
+                "call is blocked."
+            ),
+            "files_located": [f.name for f in files_to_upload],
+        }
+
+    try:
+        scopes = ["https://www.googleapis.com/auth/drive.file"]
+        creds = service_account.Credentials.from_service_account_file(creds_path, scopes=scopes)
+        service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        uploaded: list[str] = []
+        for fp in files_to_upload:
+            meta = {"name": fp.name, "parents": [folder_id]}
+            media = MediaFileUpload(str(fp), mimetype="video/mp4", resumable=True)
+            created = service.files().create(body=meta, media_body=media, fields="id,name").execute()
+            uploaded.append(created.get("name", fp.name))
+            logger.info(f"Uploaded {fp.name} to Drive folder {folder_id}")
+        return {
+            "clip_id": clip_id,
+            "status": "uploaded",
+            "folder_id": folder_id,
+            "uploaded": uploaded,
+        }
+    except Exception as e:
+        logger.error(f"Drive upload failed: {e}")
+        return {
+            "clip_id": clip_id,
+            "status": "failed",
+            "folder_id": folder_id,
+            "reason": f"Drive API call failed: {str(e)[:300]}",
+        }
 
 
 @router.get("/project/{project_id}/transcript")

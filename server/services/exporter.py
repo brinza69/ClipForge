@@ -138,20 +138,33 @@ async def export_clip(
         output_path,
     ]
 
-    if is_landscape_export:
-        # LETTERBOX MODE: scale video to fit container width, pad top/bottom with black
-        # e.g. 1920x1080 source → scale to container_w wide, then pad to container_w x container_h
-        scale_filter = f"scale={container_w}:-2:flags=lanczos"
-        pad_filter = f"pad={container_w}:{container_h}:(ow-iw)/2:(oh-ih)/2:black"
-        filters_str = f"{scale_filter},{pad_filter},{fade_filters},fps={out_fps}"
-        if subtitles_filter:
-            filters_str += f",{subtitles_filter}"
-        cmd.extend(["-vf", filters_str])
-        cmd.extend(encoding_args)
+    # Letterbox mode triggers when export is landscape (output padded into 9:16
+    # container). In that case we always produce blurred fill for the pad area
+    # using the same source clip — black bars are never the desired look.
+    use_blurred_fill = blurred_mode or is_landscape_export
 
-    elif blurred_mode:
-        vf_chain_fg = f"{crop_filter},scale={container_w}:{container_h}:flags=lanczos"
-        vf_chain_bg = f"scale={container_w}:{container_h}:force_original_aspect_ratio=increase,crop={container_w}:{container_h},boxblur=20:1"
+    if use_blurred_fill:
+        # Foreground: preserve full frame by fitting inside the container, keep
+        # aspect via `force_original_aspect_ratio=decrease`. For portrait output
+        # with a landscape source this letterboxes top/bottom; for 9:16 outputs
+        # with blurred mode the crop_filter still reframes to the speaker first.
+        if is_landscape_export:
+            # Input source is horizontal/landscape — no reframe crop, preserve
+            # the full frame by scaling into the container with letterbox.
+            vf_chain_fg = (
+                f"scale={container_w}:{container_h}:"
+                f"force_original_aspect_ratio=decrease:flags=lanczos,"
+                f"pad={container_w}:{container_h}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+            )
+        else:
+            # Portrait output — reframe-crop the subject, then scale to container.
+            vf_chain_fg = f"{crop_filter},scale={container_w}:{container_h}:flags=lanczos"
+
+        # Blurred background — scale (cover), crop to container, heavy box blur.
+        vf_chain_bg = (
+            f"scale={container_w}:{container_h}:force_original_aspect_ratio=increase,"
+            f"crop={container_w}:{container_h},boxblur=20:1"
+        )
 
         if subtitles_filter:
             filter_complex = (

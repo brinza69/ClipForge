@@ -511,8 +511,20 @@ async def handle_export(
         "title_box_size": clip.title_box_size,
         "title_box_width": clip.title_box_width,
         "title_bg_enabled": clip.title_bg_enabled if clip.title_bg_enabled is not None else True,
+        "creator_tag_enabled": clip.creator_tag_enabled if clip.creator_tag_enabled is not None else False,
+        "creator_tag_text": clip.creator_tag_text,
+        "creator_tag_x": clip.creator_tag_x,
+        "creator_tag_y": clip.creator_tag_y,
+        "creator_tag_opacity": clip.creator_tag_opacity,
+        "creator_tag_font_size": clip.creator_tag_font_size,
     }
     style_overrides = {k: v for k, v in style_overrides.items() if v is not None}
+
+    # Creator tag is a boolean gate over the text — only pass the text to the
+    # captioner when both are set. When disabled, we emit no creator overlay.
+    creator_tag_for_export: Optional[str] = None
+    if clip.creator_tag_enabled and (clip.creator_tag_text or "").strip():
+        creator_tag_for_export = clip.creator_tag_text.strip()
 
     # Parse export resolution
     export_w, export_h = None, None
@@ -567,6 +579,7 @@ async def handle_export(
                 style_overrides=style_overrides or None,
                 hook_bg_enabled=clip.hook_bg_enabled if clip.hook_bg_enabled is not None else True,
                 title_text=clip.title_text or None,
+                creator_tag_text=creator_tag_for_export,
             )
 
             # Add part label overlay for split videos
@@ -580,21 +593,31 @@ async def handle_export(
                 )
                 subs.save(captions_path, encoding="utf-8")
 
-        # If no caption segments but we still need a title overlay (full_video_parts mode without transcript)
-        if not captions_path and clip.title_text:
-            from services.captioner import _add_title_event
+        # If no caption segments but we still need a title / creator-tag overlay
+        # (e.g. full_video_parts mode without transcript, or watermark-only flow)
+        if not captions_path and (clip.title_text or creator_tag_for_export):
+            from services.captioner import _add_title_event, _add_creator_tag_event
             import pysubs2
             subs = pysubs2.SSAFile()
             subs.info["PlayResX"] = str(settings.export_width)
             subs.info["PlayResY"] = str(settings.export_height)
-            _add_title_event(
-                subs, clip.title_text, int(part_duration * 1000),
-                title_x=style_overrides.get("title_x"),
-                title_y=style_overrides.get("title_y"),
-                title_font_size=style_overrides.get("title_font_size"),
-                title_box_size=style_overrides.get("title_box_size"),
-                title_box_width=style_overrides.get("title_box_width"),
-            )
+            if clip.title_text:
+                _add_title_event(
+                    subs, clip.title_text, int(part_duration * 1000),
+                    title_x=style_overrides.get("title_x"),
+                    title_y=style_overrides.get("title_y"),
+                    title_font_size=style_overrides.get("title_font_size"),
+                    title_box_size=style_overrides.get("title_box_size"),
+                    title_box_width=style_overrides.get("title_box_width"),
+                )
+            if creator_tag_for_export:
+                _add_creator_tag_event(
+                    subs, creator_tag_for_export, int(part_duration * 1000),
+                    tag_x=style_overrides.get("creator_tag_x"),
+                    tag_y=style_overrides.get("creator_tag_y"),
+                    tag_font_size=style_overrides.get("creator_tag_font_size"),
+                    tag_opacity=style_overrides.get("creator_tag_opacity"),
+                )
             captions_path = str(settings.temp_dir / project_id / f"title_{clip_id}_p{part_num}.ass")
             Path(captions_path).parent.mkdir(parents=True, exist_ok=True)
             subs.save(captions_path, encoding="utf-8")

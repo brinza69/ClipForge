@@ -108,6 +108,16 @@ export const api = {
       request<{ clip_id: string }>(`/api/clips/${id}/reject`, { method: "POST" }),
     transcript: (projectId: string) =>
       request<Transcript>(`/api/clips/project/${projectId}/transcript`),
+    driveUpload: (id: string, folder_link: string) =>
+      request<{ clip_id: string; status: string; uploaded?: string[]; folder_id?: string; reason?: string }>(
+        `/api/clips/${id}/drive-upload`,
+        { method: "POST", body: JSON.stringify({ folder_link }) },
+      ),
+    driveValidate: (folder_link: string) =>
+      request<{ valid: boolean; folder_id: string | null; reason?: string }>(
+        `/api/clips/drive/validate`,
+        { method: "POST", body: JSON.stringify({ folder_link }) },
+      ),
   },
 
   // Campaigns
