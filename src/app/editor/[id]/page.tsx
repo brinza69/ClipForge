@@ -77,6 +77,7 @@ export default function EditorPage() {
   const [positionSectionOpen, setPositionSectionOpen] = useState<boolean>(false);
   // Export flow: show split settings panel in export area
   const [exportSplitOpen, setExportSplitOpen] = useState<boolean>(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   // Highlight bg color is mirrored from the active preset (some presets render the
   // highlighted word inside an opaque box — we mirror that faithfully in the preview).
@@ -330,8 +331,6 @@ export default function EditorPage() {
   const handleSave = () => {
     updateMutation.mutate(buildSavePayload());
   };
-
-  const [previewLoading, setPreviewLoading] = useState(false);
 
   const handlePreviewFinal = async () => {
     try {
@@ -1246,7 +1245,7 @@ export default function EditorPage() {
             {!previewLoading && <Eye className="h-4 w-4" />}
           </Button>
           <p className="text-[10px] text-center text-muted-foreground">
-            Opens a low-res preview in a new tab that matches the final export.
+            Renders first 10s at low-res in a new tab — same look as final export.
           </p>
 
           <Button

@@ -261,6 +261,9 @@ async def preview_clip(clip_id: str, session: AsyncSession = Depends(get_session
         video_path = project.video_path
         start_time = clip.start_time
         end_time = clip.end_time
+        # Limit preview to 10 seconds for quick positioning check
+        preview_duration = min(10.0, end_time - start_time)
+        preview_end = start_time + preview_duration
         reframe_mode = clip.reframe_mode or "auto"
 
         # Get transcript
@@ -273,11 +276,10 @@ async def preview_clip(clip_id: str, session: AsyncSession = Depends(get_session
 
         # Reframe
         import asyncio
-        clip_duration = end_time - start_time
         try:
             reframe_data = await asyncio.wait_for(
-                analyze_reframe(video_path, start_time, end_time, mode=reframe_mode),
-                timeout=max(60, int(clip_duration) + 30),
+                analyze_reframe(video_path, start_time, preview_end, mode=reframe_mode),
+                timeout=max(60, int(preview_duration) + 30),
             )
         except Exception:
             reframe_data = {"mode": reframe_mode, "keyframes": []}
@@ -318,7 +320,7 @@ async def preview_clip(clip_id: str, session: AsyncSession = Depends(get_session
         captions_path = generate_captions(
             segments=segments,
             clip_start=start_time,
-            clip_end=end_time,
+            clip_end=preview_end,
             preset=preset,
             hook_text=clip.hook_text if not is_full_video else None,
             style_overrides=style_overrides,
@@ -332,7 +334,7 @@ async def preview_clip(clip_id: str, session: AsyncSession = Depends(get_session
                 video_path=video_path,
                 output_path=str(preview_path),
                 start_time=start_time,
-                end_time=end_time,
+                end_time=preview_end,
                 reframe_data=reframe_data,
                 captions_path=captions_path if captions_path else None,
                 width=540,
