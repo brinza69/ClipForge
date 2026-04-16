@@ -224,6 +224,7 @@ class ClipModel(Base):
     title_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title_box_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title_box_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title_bg_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

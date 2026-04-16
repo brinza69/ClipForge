@@ -100,6 +100,8 @@ export const api = {
       request<{ job_id: string; clip_id: string }>(`/api/clips/${id}/export`, {
         method: "POST",
       }),
+    previewUrl: (id: string) =>
+      `${WORKER_URL}/api/clips/${id}/preview`,
     approve: (id: string) =>
       request<{ clip_id: string }>(`/api/clips/${id}/approve`, { method: "POST" }),
     reject: (id: string) =>

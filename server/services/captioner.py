@@ -386,6 +386,7 @@ def generate_captions(
                     title_font_size=(style_overrides or {}).get("title_font_size"),
                     title_box_size=(style_overrides or {}).get("title_box_size"),
                     title_box_width=(style_overrides or {}).get("title_box_width"),
+                    title_bg_enabled=(style_overrides or {}).get("title_bg_enabled", True),
                 )
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             subs.save(output_path, encoding="utf-8")
@@ -632,6 +633,7 @@ def _add_title_event(
     title_font_size: int = None,
     title_box_size: int = None,
     title_box_width: int = None,
+    title_bg_enabled: bool = True,
 ):
     """Add a persistent title overlay (full duration) styled like the hook box.
 
@@ -645,13 +647,21 @@ def _add_title_event(
     title_style.fontname = "Arial"
     title_style.fontsize = title_font_size or 46
     title_style.bold = True
-    title_style.borderstyle = 3  # Opaque background box
     box_size = title_box_size or 24
-    title_style.outline = box_size
-    title_style.shadow = max(6, box_size // 4)
-    title_style.primarycolor = hex_to_ass_color("#FFFFFF")
-    title_style.outlinecolor = hex_to_ass_color("#0A0A0A")
-    title_style.backcolor = hex_to_ass_color("#000000B0")
+    if title_bg_enabled:
+        title_style.borderstyle = 3  # Opaque background box
+        title_style.outline = box_size
+        title_style.shadow = max(6, box_size // 4)
+        title_style.primarycolor = hex_to_ass_color("#FFFFFF")
+        title_style.outlinecolor = hex_to_ass_color("#0A0A0A")
+        title_style.backcolor = hex_to_ass_color("#000000B0")
+    else:
+        title_style.borderstyle = 1  # Outline only, no box
+        title_style.outline = max(3, box_size // 6)
+        title_style.shadow = 2
+        title_style.primarycolor = hex_to_ass_color("#FFFFFF")
+        title_style.outlinecolor = hex_to_ass_color("#000000")
+        title_style.backcolor = hex_to_ass_color("#00000080")
     title_style.alignment = 5  # center anchor (works for \pos)
     title_style.marginv = 0
     title_style.marginl = 0

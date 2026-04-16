@@ -161,6 +161,7 @@ class ClipResponse(BaseModel):
     title_y: Optional[int] = None
     title_box_size: Optional[int] = None
     title_box_width: Optional[int] = None
+    title_bg_enabled: Optional[bool] = True
     # Legacy positioning (kept for backwards compat)
     caption_y_pct: Optional[float] = None
     caption_align: Optional[str] = None
