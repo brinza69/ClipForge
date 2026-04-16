@@ -73,8 +73,21 @@ export default function EditorPage() {
   const [partLabelX, setPartLabelX] = useState<number>(88);
   const [partLabelY, setPartLabelY] = useState<number>(10);
 
+  // Creator tag (watermark) settings
+  const [creatorTagEnabled, setCreatorTagEnabled] = useState<boolean>(false);
+  const [creatorTagText, setCreatorTagText] = useState<string>("@yourhandle");
+  const [creatorTagX, setCreatorTagX] = useState<number>(50);
+  const [creatorTagY, setCreatorTagY] = useState<number>(92);
+  const [creatorTagOpacity, setCreatorTagOpacity] = useState<number>(0.7);
+  const [creatorTagFontSize, setCreatorTagFontSize] = useState<number>(32);
+
+  // Destination: Google Drive folder link
+  const [driveFolderLink, setDriveFolderLink] = useState<string>("");
+  const [driveUploading, setDriveUploading] = useState<boolean>(false);
+
   // Section toggles
   const [positionSectionOpen, setPositionSectionOpen] = useState<boolean>(false);
+  const [creatorTagOpen, setCreatorTagOpen] = useState<boolean>(false);
   // Export flow: show split settings panel in export area
   const [exportSplitOpen, setExportSplitOpen] = useState<boolean>(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -117,9 +130,21 @@ export default function EditorPage() {
     return () => ro.disconnect();
   }, [previewMode, exportResolution]);
 
+  // Compute whether the preview should render a blurred backdrop. Both the
+  // explicit blurred reframe mode AND landscape export (which letterboxes into
+  // a 9:16 container) fill the pad area with the same-source blur in the
+  // exporter, so the editor mirrors that truth for a faithful preview.
+  const needsBlurredBg = (() => {
+    if (reframeMode === "blurred") return true;
+    try {
+      const [w, h] = (exportResolution || "1080x1920").split("x").map(Number);
+      return w > h;
+    } catch { return false; }
+  })();
+
   // RAF-based sync loop: keep bgVideo.currentTime locked to foreground video
   useEffect(() => {
-    if (reframeMode !== "blurred") return;
+    if (!needsBlurredBg) return;
     let running = true;
     const sync = () => {
       if (!running) return;
@@ -141,7 +166,7 @@ export default function EditorPage() {
       running = false;
       if (bgSyncRafRef.current) cancelAnimationFrame(bgSyncRafRef.current);
     };
-  }, [reframeMode]);
+  }, [needsBlurredBg]);
 
   const { data: clip, isLoading: clipLoading } = useQuery({
     queryKey: ["clip", clipId],
@@ -203,6 +228,19 @@ export default function EditorPage() {
     setTitleBoxSize(clip.title_box_size || 24);
     setTitleBoxWidth(clip.title_box_width || clip.title_box_size || 24);
     setTitleBgEnabled(clip.title_bg_enabled ?? true);
+
+    // Creator tag hydration
+    setCreatorTagEnabled(clip.creator_tag_enabled ?? false);
+    setCreatorTagText(clip.creator_tag_text || "@yourhandle");
+    setCreatorTagX(clip.creator_tag_x ?? 50);
+    setCreatorTagY(clip.creator_tag_y ?? 92);
+    setCreatorTagOpacity(clip.creator_tag_opacity ?? 0.7);
+    setCreatorTagFontSize(clip.creator_tag_font_size ?? 32);
+    if (clip.creator_tag_enabled) setCreatorTagOpen(true);
+
+    // Destination link
+    setDriveFolderLink(clip.drive_folder_link || "");
+
     // Auto-open export split panel if split was previously configured
     if (clip.split_mode && clip.split_mode !== "off") setExportSplitOpen(true);
 
@@ -321,6 +359,13 @@ export default function EditorPage() {
       title_box_size: titleBoxSize,
       title_box_width: titleBoxWidth,
       title_bg_enabled: titleBgEnabled,
+      creator_tag_enabled: creatorTagEnabled,
+      creator_tag_text: creatorTagText,
+      creator_tag_x: creatorTagX,
+      creator_tag_y: creatorTagY,
+      creator_tag_opacity: creatorTagOpacity,
+      creator_tag_font_size: creatorTagFontSize,
+      drive_folder_link: driveFolderLink || null,
       transcript_text: override ? override : (clip?.transcript_text ?? undefined),
       transcript_segments: override
         ? [{ start: startTime, end: endTime, text: override }]
@@ -399,8 +444,10 @@ export default function EditorPage() {
               "w-full aspect-video"
             }`}
           >
-            {/* Blurred background (preview-only) */}
-            {reframeMode === "blurred" && !isLandscapeExport && (
+            {/* Blurred background — mirrors the exporter's split/overlay path.
+                Shown whenever the real render will include a blurred fill: either
+                explicit blurred reframe mode OR landscape export (letterbox). */}
+            {needsBlurredBg && (
               <video
                 ref={bgVideoRef}
                 src={sourceVideoUrl}
@@ -430,14 +477,14 @@ export default function EditorPage() {
               }}
               onPlay={() => {
                 // RAF sync loop handles bg play/pause, but kickstart immediately for responsiveness
-                if (bgVideoRef.current && reframeMode === "blurred") bgVideoRef.current.play().catch(() => {});
+                if (bgVideoRef.current && needsBlurredBg) bgVideoRef.current.play().catch(() => {});
               }}
               onPause={() => {
                 if (bgVideoRef.current) bgVideoRef.current.pause();
               }}
               onSeeked={() => {
                 // Immediate sync on seek for responsiveness (RAF loop is backup)
-                if (bgVideoRef.current && reframeMode === "blurred" && videoRef.current) {
+                if (bgVideoRef.current && needsBlurredBg && videoRef.current) {
                   bgVideoRef.current.currentTime = videoRef.current.currentTime;
                 }
               }}
@@ -593,6 +640,32 @@ export default function EditorPage() {
                 </div>
               )}
 
+              {/* Creator tag (watermark) — shown entire clip duration with opacity */}
+              {creatorTagEnabled && creatorTagText.trim().length > 0 && (
+                <div
+                  data-testid="preview-creator-tag"
+                  className="absolute"
+                  style={{
+                    left: `${creatorTagX}%`,
+                    top: `${creatorTagY}%`,
+                    transform: "translate(-50%, -50%)",
+                    opacity: creatorTagOpacity,
+                    pointerEvents: "none",
+                  }}
+                >
+                  <div
+                    className="font-bold whitespace-nowrap"
+                    style={{
+                      color: "#FFFFFF",
+                      fontSize: `${Math.max(8, creatorTagFontSize * previewScale)}px`,
+                      textShadow: "0 2px 4px #000, 0 0 2px #000",
+                    }}
+                  >
+                    {creatorTagText}
+                  </div>
+                </div>
+              )}
+
               {/* Captions — bottom-anchored at subtitleY% to match the ASS export's
                   alignment=2 + marginv=((100-subtitleY)/100 * 1920) interpretation. */}
               {currentCaptionGroup.length > 0 && currentCaptionWord && (
@@ -680,7 +753,7 @@ export default function EditorPage() {
               setStartTime(arr[0]);
               setEndTime(arr[1] || arr[0]);
               if (videoRef.current) videoRef.current.currentTime = arr[0];
-              if (bgVideoRef.current && reframeMode === "blurred") bgVideoRef.current.currentTime = arr[0];
+              if (bgVideoRef.current && needsBlurredBg) bgVideoRef.current.currentTime = arr[0];
             }}
             className="mt-2"
           />
@@ -1052,6 +1125,93 @@ export default function EditorPage() {
             )}
           </div>
 
+          {/* Creator Tag / Watermark */}
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setCreatorTagOpen(!creatorTagOpen)}
+              className="flex items-center gap-2 w-full text-sm font-semibold text-left"
+            >
+              <Tag className="h-4 w-4 text-primary" />
+              Creator Tag
+              {creatorTagOpen ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
+            </button>
+            <p className="text-[10px] text-muted-foreground">Persistent handle/watermark shown for the full clip duration in preview and export.</p>
+
+            {creatorTagOpen && (
+              <div className="space-y-3 pt-1">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs whitespace-nowrap min-w-[100px]">Show Creator Tag</Label>
+                  <button
+                    type="button"
+                    data-testid="creator-tag-toggle"
+                    onClick={() => setCreatorTagEnabled(!creatorTagEnabled)}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${creatorTagEnabled ? "bg-primary" : "bg-muted"}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${creatorTagEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
+                  </button>
+                </div>
+                <Input
+                  data-testid="creator-tag-text"
+                  value={creatorTagText}
+                  onChange={(e) => setCreatorTagText(e.target.value)}
+                  placeholder="@yourhandle"
+                  className="bg-card w-full"
+                  disabled={!creatorTagEnabled}
+                />
+                <div className={`space-y-3 ${creatorTagEnabled ? "" : "opacity-50 pointer-events-none"}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Font Size ({creatorTagFontSize})</Label>
+                    <Slider
+                      value={[creatorTagFontSize]}
+                      min={16}
+                      max={72}
+                      step={2}
+                      onValueChange={(val: number | readonly number[]) => setCreatorTagFontSize(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Opacity ({Math.round(creatorTagOpacity * 100)}%)</Label>
+                    <Slider
+                      value={[Math.round(creatorTagOpacity * 100)]}
+                      min={10}
+                      max={100}
+                      step={5}
+                      onValueChange={(val: number | readonly number[]) => {
+                        const v = Array.isArray(val) ? val[0] : val;
+                        setCreatorTagOpacity(v / 100);
+                      }}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">X ({creatorTagX}%)</Label>
+                    <Slider
+                      value={[creatorTagX]}
+                      min={5}
+                      max={95}
+                      step={1}
+                      onValueChange={(val: number | readonly number[]) => setCreatorTagX(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs whitespace-nowrap min-w-[100px]">Y ({creatorTagY}%)</Label>
+                    <Slider
+                      value={[creatorTagY]}
+                      min={5}
+                      max={95}
+                      step={1}
+                      onValueChange={(val: number | readonly number[]) => setCreatorTagY(Array.isArray(val) ? val[0] : val)}
+                      className="flex-1"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Export Resolution */}
           <div className="space-y-3">
             <Label className="flex items-center gap-2"><Maximize className="h-4 w-4 text-primary" /> Export Resolution</Label>
@@ -1234,6 +1394,70 @@ export default function EditorPage() {
               )}
             </div>
           )}
+
+          {/* Google Drive destination */}
+          <div className="space-y-2 bg-card/60 rounded-lg p-3 border border-border/30">
+            <Label className="text-xs flex items-center gap-2">
+              <Download className="h-3.5 w-3.5 text-primary" /> Google Drive folder (optional)
+            </Label>
+            <Input
+              data-testid="drive-folder-link"
+              value={driveFolderLink}
+              onChange={(e) => setDriveFolderLink(e.target.value)}
+              placeholder="https://drive.google.com/drive/folders/..."
+              className="bg-card w-full text-xs"
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="flex-1 text-[11px]"
+                disabled={!driveFolderLink.trim()}
+                onClick={async () => {
+                  try {
+                    const res = await api.clips.driveValidate(driveFolderLink.trim());
+                    if (res.valid) toast.success(`Valid Drive folder (id ${res.folder_id})`);
+                    else toast.error(res.reason || "Invalid Drive folder link");
+                  } catch (e) {
+                    const err = e as { message?: string };
+                    toast.error(err?.message || "Validation failed");
+                  }
+                }}
+              >
+                Validate Link
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="flex-1 text-[11px]"
+                disabled={!driveFolderLink.trim() || driveUploading || !clip.export_path}
+                onClick={async () => {
+                  try {
+                    setDriveUploading(true);
+                    await updateMutation.mutateAsync(buildSavePayload());
+                    const res = await api.clips.driveUpload(clipId, driveFolderLink.trim());
+                    if (res.status === "uploaded") {
+                      toast.success(`Uploaded ${res.uploaded?.length ?? 0} file(s) to Drive`);
+                    } else if (res.status === "blocked_missing_credentials") {
+                      toast.error("Drive upload blocked — Google Drive API credentials not configured on server");
+                    } else {
+                      toast.error(res.reason || "Upload failed");
+                    }
+                  } catch (e) {
+                    const err = e as { message?: string };
+                    toast.error(err?.message || "Drive upload failed");
+                  } finally {
+                    setDriveUploading(false);
+                  }
+                }}
+              >
+                {driveUploading ? "Uploading..." : "Upload to Drive"}
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Paste a Google Drive folder share link. Link is validated locally; actual upload requires server-side Drive credentials.
+            </p>
+          </div>
 
           <Button
             variant="secondary"

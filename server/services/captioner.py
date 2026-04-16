@@ -200,6 +200,7 @@ def generate_captions(
     style_overrides: Optional[Dict[str, Any]] = None,
     hook_bg_enabled: bool = True,
     title_text: Optional[str] = None,
+    creator_tag_text: Optional[str] = None,
 ) -> str:
     """
     Generate an ASS subtitle file with animated word-by-word captions.
@@ -366,8 +367,8 @@ def generate_captions(
 
     if not clip_words:
         logger.warning("No words found for caption generation")
-        # Still generate hook / title if present
-        if (hook_text or title_text) and output_path:
+        # Still generate hook / title / creator tag if present
+        if (hook_text or title_text or creator_tag_text) and output_path:
             if hook_text:
                 _add_hook_event(
                     subs, hook_text, hook_duration_ms, hook_fade_ms,
@@ -387,6 +388,15 @@ def generate_captions(
                     title_box_size=(style_overrides or {}).get("title_box_size"),
                     title_box_width=(style_overrides or {}).get("title_box_width"),
                     title_bg_enabled=(style_overrides or {}).get("title_bg_enabled", True),
+                )
+            if creator_tag_text:
+                clip_duration_ms = int((clip_end - clip_start) * 1000)
+                _add_creator_tag_event(
+                    subs, creator_tag_text, clip_duration_ms,
+                    tag_x=(style_overrides or {}).get("creator_tag_x"),
+                    tag_y=(style_overrides or {}).get("creator_tag_y"),
+                    tag_font_size=(style_overrides or {}).get("creator_tag_font_size"),
+                    tag_opacity=(style_overrides or {}).get("creator_tag_opacity"),
                 )
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             subs.save(output_path, encoding="utf-8")
@@ -439,6 +449,18 @@ def generate_captions(
             title_font_size=(style_overrides or {}).get("title_font_size"),
             title_box_size=(style_overrides or {}).get("title_box_size"),
             title_box_width=(style_overrides or {}).get("title_box_width"),
+            title_bg_enabled=(style_overrides or {}).get("title_bg_enabled", True),
+        )
+
+    # Insert persistent creator tag (full duration, translucent, no box)
+    if creator_tag_text:
+        clip_duration_ms = int((clip_end - clip_start) * 1000)
+        _add_creator_tag_event(
+            subs, creator_tag_text, clip_duration_ms,
+            tag_x=(style_overrides or {}).get("creator_tag_x"),
+            tag_y=(style_overrides or {}).get("creator_tag_y"),
+            tag_font_size=(style_overrides or {}).get("creator_tag_font_size"),
+            tag_opacity=(style_overrides or {}).get("creator_tag_opacity"),
         )
 
     # Save
@@ -689,6 +711,58 @@ def _add_title_event(
     text = f"{{\\q1{pos_tag}{fsp_tag}}}{title_text}"
     event = pysubs2.SSAEvent(start=0, end=duration_ms, text=text, style="Title")
     subs.events.insert(0, event)
+
+
+def _add_creator_tag_event(
+    subs: pysubs2.SSAFile,
+    tag_text: str,
+    duration_ms: int,
+    tag_x: int = None,
+    tag_y: int = None,
+    tag_font_size: int = None,
+    tag_opacity: float = None,
+):
+    """Add a persistent translucent creator-tag overlay (watermark) for the full duration.
+
+    Plain text — no background box — with per-character alpha driven by
+    tag_opacity (0.0 fully transparent … 1.0 fully opaque). Positioned via
+    percentage coords (tag_x, tag_y); defaults to bottom-center.
+    """
+    play_res_x = int(subs.info.get("PlayResX", 1080))
+    play_res_y = int(subs.info.get("PlayResY", 1920))
+
+    font_size = int(tag_font_size) if tag_font_size else 32
+    opacity = tag_opacity if tag_opacity is not None else 0.7
+    opacity = max(0.0, min(1.0, float(opacity)))
+    # ASS alpha byte: 00=opaque, FF=transparent — inverted from the familiar
+    # 0.0-1.0 opacity scale, so we map (1 - opacity) * 255.
+    alpha_byte = int((1.0 - opacity) * 255)
+    alpha_hex = f"{alpha_byte:02X}"
+
+    tag_style = pysubs2.SSAStyle()
+    tag_style.fontname = "Arial"
+    tag_style.fontsize = font_size
+    tag_style.bold = True
+    tag_style.borderstyle = 1  # Outline (no background box)
+    tag_style.outline = max(1, font_size // 16)
+    tag_style.shadow = max(1, font_size // 20)
+    tag_style.primarycolor = f"&H{alpha_hex}FFFFFF"  # white w/ alpha
+    tag_style.outlinecolor = f"&H{alpha_hex}000000"  # black outline w/ alpha
+    tag_style.backcolor = "&HFF000000"
+    tag_style.alignment = 5  # center anchor (for \pos)
+    tag_style.marginv = 0
+    tag_style.marginl = 0
+    tag_style.marginr = 0
+    subs.styles["CreatorTag"] = tag_style
+
+    # Default position: bottom-center at ~92% from top
+    px = int((tag_x if tag_x is not None else 50) / 100 * play_res_x)
+    py = int((tag_y if tag_y is not None else 92) / 100 * play_res_y)
+    pos_tag = f"\\pos({px},{py})"
+
+    text = f"{{{pos_tag}}}{tag_text}"
+    event = pysubs2.SSAEvent(start=0, end=duration_ms, text=text, style="CreatorTag")
+    subs.events.append(event)
 
 
 def _add_part_label_event(

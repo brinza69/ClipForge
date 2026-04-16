@@ -162,6 +162,13 @@ class ClipResponse(BaseModel):
     title_box_size: Optional[int] = None
     title_box_width: Optional[int] = None
     title_bg_enabled: Optional[bool] = True
+    creator_tag_enabled: Optional[bool] = False
+    creator_tag_text: Optional[str] = None
+    creator_tag_x: Optional[int] = None
+    creator_tag_y: Optional[int] = None
+    creator_tag_opacity: Optional[float] = None
+    creator_tag_font_size: Optional[int] = None
+    drive_folder_link: Optional[str] = None
     # Legacy positioning (kept for backwards compat)
     caption_y_pct: Optional[float] = None
     caption_align: Optional[str] = None

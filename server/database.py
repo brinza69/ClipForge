@@ -86,6 +86,13 @@ async def init_db() -> None:
             ("title_box_size", "INTEGER"),
             ("title_box_width", "INTEGER"),
             ("title_bg_enabled", "BOOLEAN DEFAULT 1"),
+            ("creator_tag_enabled", "BOOLEAN DEFAULT 0"),
+            ("creator_tag_text", "VARCHAR(200)"),
+            ("creator_tag_x", "INTEGER"),
+            ("creator_tag_y", "INTEGER"),
+            ("creator_tag_opacity", "REAL"),
+            ("creator_tag_font_size", "INTEGER"),
+            ("drive_folder_link", "TEXT"),
         ]
         for col, col_type in _style_migrations:
             try:
