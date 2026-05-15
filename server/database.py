@@ -106,6 +106,24 @@ async def init_db() -> None:
         except Exception:
             pass
 
+        # Batch-processing columns: group of projects all sharing an erase
+        # rectangle, submitted together via POST /api/utilities/batch.
+        _project_batch_migrations = [
+            ("batch_id", "VARCHAR(12)"),
+            ("batch_index", "INTEGER"),
+            ("erase_params", "TEXT"),
+            ("erased_video_path", "TEXT"),
+        ]
+        for col, col_type in _project_batch_migrations:
+            try:
+                await conn.execute(text(f"ALTER TABLE projects ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass
+        try:
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_projects_batch_id ON projects(batch_id)"))
+        except Exception:
+            pass
+
         # Fix any projects stuck at 'downloaded' that already have scored clips
         try:
             await conn.execute(text("""

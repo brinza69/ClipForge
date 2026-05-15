@@ -41,8 +41,13 @@ Algorithm = Literal["telea", "ns"]
 
 # ── Backend detection (cached) ───────────────────────────────────────────────
 
-_LAMA_MODEL = None           # lazy singleton
+_LAMA_MODEL = None           # lazy singleton (SimpleLama instance)
 _LAMA_AVAILABLE: Optional[bool] = None  # tri-state: None=not probed, True=ok, False=disabled
+# fp16 is opt-in: LaMa uses Fast Fourier Convolution internally, and cuFFT
+# in half precision only supports power-of-2 input dimensions. Caption ROIs
+# rarely satisfy that, so default to fp32 and let advanced users opt in.
+_LAMA_FP16 = os.environ.get("CLIPFORGE_LAMA_FP16", "0") == "1"
+_LAMA_BATCH = max(1, int(os.environ.get("CLIPFORGE_LAMA_BATCH", "8")))
 
 _NVENC_CACHE: dict[str, bool] = {}
 
@@ -124,8 +129,14 @@ def _try_load_lama():
         return None
     try:
         _LAMA_MODEL = SimpleLama()
+        if _LAMA_FP16:
+            try:
+                _LAMA_MODEL.model = _LAMA_MODEL.model.half()
+                logger.info("LaMa converted to fp16 (half-precision)")
+            except Exception as e:
+                logger.warning(f"LaMa fp16 conversion failed, staying on fp32: {e}")
         _LAMA_AVAILABLE = True
-        logger.info("LaMa model loaded (GPU inpainting enabled)")
+        logger.info(f"LaMa model loaded (GPU inpainting, batch={_LAMA_BATCH})")
         return _LAMA_MODEL
     except Exception as e:
         logger.warning(f"LaMa load failed, falling back to OpenCV: {e}")
@@ -287,31 +298,89 @@ async def inpaint_region(
         dec_drainer.start()
         enc_drainer.start()
 
-        # Pre-build a PIL mask for LaMa (constant across frames).
-        pil_mask = None
+        # Pre-build LaMa-side state that's constant across frames:
+        #   * mask padded to a multiple of 8 (LaMa downsamples 3× by 2)
+        #   * the padded mask tensor on-device, in the right dtype.
+        # We bypass SimpleLama.__call__ (which forces batch=1) and call the
+        # underlying torch.jit model directly with a batched tensor.
+        mask_tensor = None
+        roi_h_pad = roi_w_pad = 0
+        device = None
         if use_lama:
-            from PIL import Image
-            pil_mask = Image.fromarray(mask_roi)  # uint8 L mode
+            import torch
+            device = lama.device
+            roi_h_pad = ((roi_h + 7) // 8) * 8
+            roi_w_pad = ((roi_w + 7) // 8) * 8
+            m_arr = np.zeros((roi_h_pad, roi_w_pad), dtype=np.float32)
+            m_arr[:roi_h, :roi_w] = (mask_roi > 0).astype(np.float32)
+            mask_tensor = torch.from_numpy(m_arr).unsqueeze(0).unsqueeze(0).to(device)  # [1,1,H,W]
+            if _LAMA_FP16:
+                mask_tensor = mask_tensor.half()
+
+        # Buffers for the LaMa batch.
+        frame_buf: list[np.ndarray] = []   # full-frame numpy refs, write-back targets
+        roi_rgb_buf: list[np.ndarray] = [] # padded RGB float views fed to LaMa
+
+        def _flush_lama_batch():
+            if not roi_rgb_buf:
+                return
+            import torch
+            B = len(roi_rgb_buf)
+            batch = np.stack(roi_rgb_buf, axis=0).astype(np.float32) / 255.0  # [B,H,W,3]
+            batch = np.transpose(batch, (0, 3, 1, 2))                          # [B,3,H,W]
+            img_t = torch.from_numpy(batch).to(device, non_blocking=True)
+            if _LAMA_FP16:
+                img_t = img_t.half()
+            mask_b = mask_tensor.expand(B, -1, -1, -1).contiguous()
+            with torch.inference_mode():
+                out = lama.model(img_t, mask_b)
+            # Output is [B,3,H,W] in [0,1] RGB at padded size; trim back to ROI and to BGR.
+            out = out.float().clamp(0, 1)
+            out = (out * 255.0).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()  # [B,H,W,3] RGB uint8
+            out = out[:, :roi_h, :roi_w, ::-1]  # crop padding + RGB->BGR (writeable copy via slice + reverse)
+            for i, f in enumerate(frame_buf):
+                f[ry:ry2, rx:rx2] = out[i]
+                try:
+                    enc.stdin.write(f.tobytes())
+                except (BrokenPipeError, OSError) as e:
+                    logger.warning(f"ffmpeg encoder pipe closed early: {e}")
+                    return False
+            frame_buf.clear()
+            roi_rgb_buf.clear()
+            return True
 
         frame_idx = 0
         try:
             while True:
                 buf = dec.stdout.read(frame_nbytes)
                 if not buf or len(buf) < frame_nbytes:
+                    if use_lama:
+                        if _flush_lama_batch() is False:
+                            break
                     break
                 # Mutable view so the ROI write-back is in-place.
                 frame = np.frombuffer(bytearray(buf), dtype=np.uint8).reshape((vh, vw, 3))
-                roi = frame[ry:ry2, rx:rx2]
+
                 if use_lama:
-                    inpainted_roi = _inpaint_lama(lama, roi, pil_mask)
+                    # Pad ROI to (roi_h_pad, roi_w_pad), convert BGR -> RGB.
+                    roi = frame[ry:ry2, rx:rx2]
+                    roi_rgb = np.zeros((roi_h_pad, roi_w_pad, 3), dtype=np.uint8)
+                    roi_rgb[:roi_h, :roi_w] = roi[..., ::-1]  # BGR -> RGB
+                    frame_buf.append(frame)
+                    roi_rgb_buf.append(roi_rgb)
+                    if len(roi_rgb_buf) >= _LAMA_BATCH:
+                        if _flush_lama_batch() is False:
+                            break
                 else:
+                    roi = frame[ry:ry2, rx:rx2]
                     inpainted_roi = cv2.inpaint(roi, mask_roi, inpaint_radius, algo_flag)
-                frame[ry:ry2, rx:rx2] = inpainted_roi
-                try:
-                    enc.stdin.write(frame.tobytes())
-                except (BrokenPipeError, OSError) as e:
-                    logger.warning(f"ffmpeg encoder pipe closed early: {e}")
-                    break
+                    frame[ry:ry2, rx:rx2] = inpainted_roi
+                    try:
+                        enc.stdin.write(frame.tobytes())
+                    except (BrokenPipeError, OSError) as e:
+                        logger.warning(f"ffmpeg encoder pipe closed early: {e}")
+                        break
+
                 frame_idx += 1
                 if on_progress and total and frame_idx % 15 == 0:
                     try:
