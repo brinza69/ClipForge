@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Download, Eraser, Loader2, ArrowRight, CheckCircle2,
-  Play, Film, Clock, Sparkles, ExternalLink, Wand2,
+  Play, Film, Clock, Sparkles, ExternalLink, Wand2, ListVideo,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Project } from "@/types";
@@ -227,6 +227,43 @@ export default function UtilitiesPage() {
               className="w-full gap-2 border-amber-500/30 text-amber-300 hover:bg-amber-500/10 hover:text-amber-200 group-hover:border-amber-500/50"
             >
               Open Caption Eraser <ExternalLink className="h-3.5 w-3.5 ml-auto" />
+            </Button>
+          </Card>
+        </Link>
+
+        {/* Batch Process launcher */}
+        <Link href="/utilities/batch" className="block group">
+          <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-cyan-500/40 hover:bg-cyan-500/[0.03] transition-colors h-full flex flex-col">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10 shrink-0 group-hover:bg-cyan-500/20 transition-colors">
+                <ListVideo className="h-5 w-5 text-cyan-400" />
+              </div>
+              <div>
+                <h2 className="font-semibold">Batch Process</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Paste a list of URLs. Transcribe and erase the same region across all of them.
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs text-cyan-300">
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="font-semibold">One region, many videos</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Pick the erase rectangle once on the first video, then let the queue download,
+                transcribe, and erase the whole list. Per-video transcript + erased mp4 download.
+              </p>
+            </div>
+
+            <div className="flex-1" />
+
+            <Button
+              variant="outline"
+              className="w-full gap-2 border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10 hover:text-cyan-200 group-hover:border-cyan-500/50"
+            >
+              Open Batch Process <ExternalLink className="h-3.5 w-3.5 ml-auto" />
             </Button>
           </Card>
         </Link>
