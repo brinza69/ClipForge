@@ -75,6 +75,7 @@ class JobType(str, enum.Enum):
     export = "export"
     full_pipeline = "full_pipeline"
     erase = "erase"
+    erase_project = "erase_project"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -113,6 +114,15 @@ class ProjectModel(Base):
 
     # Processing mode: "clipping" (default) or "full_video_parts"
     processing_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    # Batch processing: when a project belongs to a /api/utilities/batch
+    # submission, batch_id groups it with siblings and batch_index gives the
+    # 1-based ordering the user typed. erase_params (JSON) holds the rectangle
+    # + mode that the eraser stage should apply at the end of the pipeline.
+    batch_id: Mapped[str | None] = mapped_column(String(12), index=True, nullable=True)
+    batch_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    erase_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    erased_video_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

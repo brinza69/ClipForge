@@ -748,12 +748,30 @@ async def handle_full_pipeline(
     metadata: Dict,
     queue,
 ):
-    """Full pipeline: download → transcribe → score."""
-    stages = [
-        (0.0, 0.4, handle_download),
-        (0.4, 0.8, handle_transcribe),
-        (0.8, 1.0, handle_score),
-    ]
+    """Full pipeline: download → transcribe → score (→ erase, if erase_params set)."""
+    # If the project carries erase_params (set by the batch endpoint), append
+    # an erase stage to the end so the user gets video_erased.mp4 alongside
+    # the downloaded source. Allocate ~20% of the progress bar to it.
+    has_erase_params = False
+    async with async_session() as session:
+        project = await session.get(ProjectModel, project_id)
+        if project and project.erase_params:
+            has_erase_params = True
+
+    if has_erase_params:
+        from workers.utility_jobs import handle_erase_project
+        stages = [
+            (0.0, 0.30, handle_download),
+            (0.30, 0.60, handle_transcribe),
+            (0.60, 0.80, handle_score),
+            (0.80, 1.00, handle_erase_project),
+        ]
+    else:
+        stages = [
+            (0.0, 0.4, handle_download),
+            (0.4, 0.8, handle_transcribe),
+            (0.8, 1.0, handle_score),
+        ]
 
     for start_pct, end_pct, handler in stages:
         # Create a localized proxy queue that maps the progress range
