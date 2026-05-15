@@ -21,6 +21,7 @@ from routers.campaigns import router as campaigns_router
 from routers.utilities import router as utilities_router
 from job_queue import job_queue
 from workers.pipeline import register_pipeline_handlers
+from workers.utility_jobs import register_utility_handlers
 
 # Configure logging
 logging.basicConfig(
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
 
     # Pipeline setup
     register_pipeline_handlers(job_queue)
+    register_utility_handlers(job_queue)
     queue_task = asyncio.create_task(job_queue.start())
     logger.info("Background job queue started.")
 

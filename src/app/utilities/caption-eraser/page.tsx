@@ -239,27 +239,91 @@ export default function CaptionEraserPage() {
     if (!file) return;
     if (rW <= 0 || rH <= 0) { toast.error("Region must have positive size"); return; }
     setLoading(true); setErrorMsg(""); setResultUrl("");
-    setProgress(mode === "inpaint" ? "Uploading…" : "Uploading…");
+    setProgress("Uploading…");
     const fd = new FormData();
     fd.append("file", file);
     fd.append("x", rX.toString()); fd.append("y", rY.toString());
     fd.append("w", rW.toString()); fd.append("h", rH.toString());
     fd.append("mode", mode);
     fd.append("algorithm", "telea");
+
     try {
-      setProgress(mode === "inpaint"
-        ? "Inpainting frames with OpenCV (this can take 30-90s)…"
-        : "Processing with FFmpeg blur…");
-      const res = await fetch(`${WORKER_URL}/api/utilities/erase`, { method: "POST", body: fd });
-      if (!res.ok) {
-        let msg = `Server error ${res.status}`;
-        try { const j = await res.json(); msg = j.detail || msg; } catch {}
+      // 1. Submit via XHR so we can show real upload progress (fetch hides this).
+      const { job_id, output_filename } = await new Promise<{ job_id: string; output_filename: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `${WORKER_URL}/api/utilities/erase`);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            const mb = (e.loaded / (1024 * 1024)).toFixed(1);
+            const totalMb = (e.total / (1024 * 1024)).toFixed(1);
+            setProgress(`Uploading ${mb} / ${totalMb} MB (${pct}%)`);
+          } else {
+            setProgress(`Uploading… ${(e.loaded / (1024 * 1024)).toFixed(1)} MB sent`);
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try { resolve(JSON.parse(xhr.responseText)); }
+            catch { reject(new Error("Bad response from server")); }
+          } else {
+            let msg = `Server error ${xhr.status}`;
+            try { const j = JSON.parse(xhr.responseText); msg = j.detail || msg; } catch {}
+            reject(new Error(msg));
+          }
+        };
+        xhr.onerror = () => reject(new Error("Network error while uploading"));
+        xhr.onabort = () => reject(new Error("Upload was cancelled"));
+        xhr.ontimeout = () => reject(new Error("Upload timed out"));
+        xhr.send(fd);
+      });
+      setProgress(mode === "inpaint" ? "Queued for inpainting…" : "Queued for blur…");
+
+      // 2. Poll status until done/failed/cancelled.
+      let attempts = 0;
+      const POLL_MS = 1500;
+      const MAX_QUIET_RETRIES = 6;  // tolerate ~9s of poll errors before giving up
+      let quietErrors = 0;
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        attempts++;
+        let job: any;
+        try {
+          const r = await fetch(`${WORKER_URL}/api/jobs/${job_id}`);
+          if (!r.ok) throw new Error(`status ${r.status}`);
+          job = await r.json();
+          quietErrors = 0;
+        } catch (e) {
+          quietErrors++;
+          if (quietErrors > MAX_QUIET_RETRIES) throw new Error("Lost connection to backend while polling job status.");
+          continue;
+        }
+        const status = job.status;
+        const pct = Math.max(0, Math.min(1, Number(job.progress) || 0));
+        const msg = job.progress_message || (status === "queued" ? "Waiting in queue…" : "Processing…");
+        setProgress(`${Math.round(pct * 100)}%  ${msg}`);
+        if (status === "done") break;
+        if (status === "failed") throw new Error(job.error || "Erase failed on the worker.");
+        if (status === "cancelled") throw new Error("Job was cancelled.");
+        // Safety cap: ~30 min of polling.
+        if (attempts > (30 * 60 * 1000) / POLL_MS) throw new Error("Job timed out after 30 minutes.");
+      }
+
+      // 3. Download the result.
+      setProgress("Downloading result…");
+      const dl = await fetch(`${WORKER_URL}/api/utilities/erase/${job_id}/download`);
+      if (!dl.ok) {
+        let msg = `Download failed ${dl.status}`;
+        try { const j = await dl.json(); msg = j.detail || msg; } catch {}
         throw new Error(msg);
       }
-      const blob = await res.blob();
+      const blob = await dl.blob();
       const url = URL.createObjectURL(blob);
       const stem = file.name.replace(/\.[^.]+$/, "");
-      setResultUrl(url); setResultName(`${stem}_erased.mp4`);
+      setResultUrl(url);
+      setResultName(output_filename || `${stem}_erased.mp4`);
       setProgress("");
       toast.success("Erase complete!");
     } catch (e: any) {
