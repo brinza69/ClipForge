@@ -7,6 +7,7 @@ End-to-end pipeline worker that orchestrates:
 import logging
 import asyncio
 import math
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -29,6 +30,37 @@ def _ensure_file(path: str, context: str) -> Path:
             "The source video may have been deleted. Please re-download the project."
         )
     return p
+
+
+def _has_audio_stream(path: str) -> bool:
+    """
+    Use ffprobe to check whether the file actually contains an audio stream.
+    Some sources (notably TikTok's HEVC variants) deliver video-only files
+    even when yt-dlp's metadata claims acodec=aac — guarding here gives a
+    clear error before faster-whisper hits PyAV's IndexError on streams.audio[0].
+    """
+    import shutil, subprocess
+    from config import settings
+    loc = settings.ffmpeg_location
+    ffprobe = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    if loc:
+        cand = Path(loc) / ffprobe
+        if cand.exists():
+            ffprobe = str(cand)
+    if ffprobe == ("ffprobe.exe" if os.name == "nt" else "ffprobe"):
+        resolved = shutil.which("ffprobe")
+        if resolved:
+            ffprobe = resolved
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        return bool((out.stdout or "").strip())
+    except Exception:
+        # If ffprobe isn't reachable, don't block — let the existing crash path run.
+        return True
 
 logger = logging.getLogger("clipforge.pipeline")
 
@@ -156,6 +188,15 @@ async def handle_transcribe(
             raise RuntimeError("No video file found for project")
         media_path = project.video_path
         _ensure_file(media_path, "Transcription")
+
+    # Pre-flight: refuse to call faster-whisper on a file with no audio stream.
+    # Without this, PyAV's streams.audio[0] raises IndexError deep in the worker
+    # and the user only sees "tuple index out of range".
+    if not _has_audio_stream(media_path):
+        raise RuntimeError(
+            "Source video has no audio track — nothing to transcribe. "
+            "If you downloaded from TikTok, re-download to pick a format that includes audio."
+        )
 
     await _update_project_status(project_id, ProjectStatus.transcribing)
 
