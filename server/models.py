@@ -74,6 +74,7 @@ class JobType(str, enum.Enum):
     score = "score"
     export = "export"
     full_pipeline = "full_pipeline"
+    erase = "erase"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────

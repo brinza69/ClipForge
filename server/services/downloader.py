@@ -21,7 +21,11 @@ Known limitations:
 
 import asyncio
 import logging
+import os
 import re
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any
 
 import yt_dlp
@@ -276,6 +280,129 @@ def _estimate_filesize(info: dict) -> int | None:
 
     return None
 
+def _ffmpeg_tools_paths() -> tuple[str, str]:
+    """Return (ffmpeg, ffprobe) paths, honoring CLIPFORGE_FFMPEG_PATH."""
+    from config import settings
+    ffmpeg_exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    ffprobe_exe = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    ffmpeg = ffmpeg_exe
+    ffprobe = ffprobe_exe
+    loc = settings.ffmpeg_location
+    if loc:
+        cand_m = Path(loc) / ffmpeg_exe
+        cand_p = Path(loc) / ffprobe_exe
+        if cand_m.exists():
+            ffmpeg = str(cand_m)
+        if cand_p.exists():
+            ffprobe = str(cand_p)
+    resolved_m = shutil.which(ffmpeg) if ffmpeg == ffmpeg_exe else ffmpeg
+    resolved_p = shutil.which(ffprobe) if ffprobe == ffprobe_exe else ffprobe
+    return resolved_m or ffmpeg, resolved_p or ffprobe
+
+
+def _file_has_audio(path: Path, ffprobe: str) -> bool:
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        return bool((out.stdout or "").strip())
+    except Exception:
+        return True  # if probe fails, don't block — let the existing path run
+
+
+def _ensure_audio_track(video_path: Path, url: str) -> Path:
+    """
+    Some sources (TikTok HEVC) hand back a video-only file even when yt-dlp's
+    metadata claims it has audio. If `video_path` lacks an audio stream, fetch
+    a known-muxed H.264 variant of the same URL, then remux: keep the original
+    video stream, splice in the donor's audio. Returns the (possibly new) path.
+    """
+    from config import settings
+    ffmpeg, ffprobe = _ffmpeg_tools_paths()
+
+    if _file_has_audio(video_path, ffprobe):
+        return video_path
+
+    logger.info(
+        f"Downloaded file has no audio stream, fetching audio donor "
+        f"({video_path.name}). This is the TikTok HEVC mute-file workaround."
+    )
+
+    donor_dir = video_path.parent / "_audio_donor"
+    donor_dir.mkdir(parents=True, exist_ok=True)
+    donor_tmpl = str(donor_dir / "donor.%(ext)s")
+
+    donor_opts = {
+        "outtmpl": donor_tmpl,
+        # Prefer muxed H.264 (avc1) — that's the variant that reliably carries
+        # audio on TikTok. Fall back to any format that yt-dlp thinks has audio.
+        "format": "best[vcodec*=avc1]/best[acodec!=none]/best",
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 20,
+        "retries": 2,
+        "concurrent_fragment_downloads": 1,
+    }
+    loc = settings.ffmpeg_location
+    if loc:
+        donor_opts["ffmpeg_location"] = loc
+
+    try:
+        with yt_dlp.YoutubeDL(donor_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+        downloads = info.get("requested_downloads") or []
+        donor_path = Path(downloads[0]["filepath"]) if downloads else None
+        if not donor_path or not donor_path.exists():
+            # Fallback: glob the donor dir
+            cands = list(donor_dir.glob("donor.*"))
+            donor_path = cands[0] if cands else None
+        if not donor_path or not donor_path.exists():
+            logger.warning("Audio donor download produced no file; keeping silent video.")
+            return video_path
+        if not _file_has_audio(donor_path, ffprobe):
+            logger.warning("Audio donor also lacks an audio stream; keeping silent video.")
+            return video_path
+
+        muxed_path = video_path.with_suffix(".muxed.mp4")
+        cmd = [
+            ffmpeg, "-y",
+            "-loglevel", "error",
+            "-i", str(video_path),
+            "-i", str(donor_path),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-shortest",
+            "-movflags", "+faststart",
+            str(muxed_path),
+        ]
+        creationflags = 0x08000000 if os.name == "nt" else 0
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, creationflags=creationflags)
+        if proc.returncode != 0 or not muxed_path.exists() or muxed_path.stat().st_size < 1000:
+            logger.warning(
+                f"ffmpeg audio remux failed (rc={proc.returncode}); keeping silent video. "
+                f"stderr tail: {(proc.stderr or '').strip().splitlines()[-3:]}"
+            )
+            muxed_path.unlink(missing_ok=True)
+            return video_path
+
+        # Swap original with muxed.
+        video_path.unlink(missing_ok=True)
+        muxed_path.rename(video_path)
+        logger.info(f"Audio remuxed in; final file has video+audio: {video_path}")
+        return video_path
+    finally:
+        # Always clean up the donor directory.
+        try:
+            shutil.rmtree(donor_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 async def download_video(
     url: str,
     project_id: str,
@@ -316,7 +443,20 @@ async def download_video(
 
     ydl_opts = {
         "outtmpl": outtmpl,
-        "format": "bestaudio[ext=m4a]/best" if audio_only else "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        # Format chain rationale:
+        #   1. bestvideo+bestaudio (m4a)  — wins on YouTube (separate streams).
+        #   2. best[vcodec*=avc1]         — H.264 muxed fallback. Critical for TikTok:
+        #                                   their HEVC (bytevc1) variants are video-only
+        #                                   despite advertising acodec=aac, so picking them
+        #                                   produces a silent file and transcription crashes.
+        #   3/4. generic mp4 / any best.
+        # Format chain: prefer separate streams (YouTube) → best mp4 (e.g. TikTok
+        # 1080p HEVC, which may end up audio-less — we fix that post-hoc by
+        # remuxing in audio from a known-good muxed H.264 variant below).
+        "format": (
+            "bestaudio[ext=m4a]/best" if audio_only else
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        ),
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
@@ -346,7 +486,6 @@ async def download_video(
         filepath = downloads[0].get("filepath", filepath)
 
     # Verify the file was actually created on disk
-    from pathlib import Path
     if not Path(filepath).exists():
         # Try to find any video file in the output directory
         found = list(output_dir.glob("video.*")) + list(output_dir.glob("audio.*"))
@@ -357,6 +496,16 @@ async def download_video(
                 f"Download appeared to succeed but no file found at {filepath}. "
                 f"Files in output dir: {list(output_dir.iterdir())}"
             )
+
+    # Post-process: if the video file came back without an audio stream (TikTok
+    # HEVC quirk), fetch a known-muxed donor and remux audio in. Returns the
+    # same path on success; falls back silently if the donor or ffmpeg fails.
+    if not audio_only:
+        try:
+            fixed = await loop.run_in_executor(None, _ensure_audio_track, Path(filepath), url)
+            filepath = str(fixed)
+        except Exception as e:
+            logger.warning(f"Audio remux step crashed; keeping original file: {e}")
 
     return {
         "video_path": filepath,
