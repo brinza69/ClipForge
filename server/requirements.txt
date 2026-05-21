@@ -11,6 +11,8 @@ faster-whisper>=1.0.0
 pysubs2>=1.6.0
 mediapipe>=0.10.9
 opencv-python>=4.9.0
+# OCR for auto-detecting on-screen captions (downloads ~200MB of model weights on first use)
+easyocr>=1.7.1
 # Google Drive upload (optional — backend tolerates missing imports)
 google-api-python-client>=2.100.0
 google-auth>=2.25.0

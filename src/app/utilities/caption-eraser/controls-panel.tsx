@@ -3,10 +3,19 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
-  Download, Eraser, Loader2, Wand2, Zap, AlertCircle,
+  Download, Eraser, Loader2, Wand2, Zap, AlertCircle, Sparkles, ScanText,
 } from "lucide-react";
 
 type EraseMode = "inpaint" | "blur";
+
+interface DetectedSegment {
+  start_t: number;
+  end_t: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 interface ControlsPanelProps {
   mode: EraseMode;
@@ -26,15 +35,23 @@ interface ControlsPanelProps {
   setFromPct: (axis: "x" | "y" | "w" | "h", pct: number) => void;
   resultUrl: string;
   onErase: () => void;
+  onAutoDetect?: () => void;
   onDownload: () => void;
   onClearResult: () => void;
+  detectedSegments?: DetectedSegment[] | null;
 }
 
 export function ControlsPanel({
   mode, setMode, loading, progress, errorMsg, dims,
   xPct, yPct, wPct, hPct, rX, rY, rW, rH, setFromPct,
-  resultUrl, onErase, onDownload, onClearResult,
+  resultUrl, onErase, onAutoDetect, onDownload, onClearResult,
+  detectedSegments,
 }: ControlsPanelProps) {
+  const fmt = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = (s % 60).toFixed(1);
+    return `${m}:${sec.padStart(4, "0")}`;
+  };
   return (
     <div className="space-y-4">
       <Card className="p-4 space-y-3 border-border/40 bg-card/60">
@@ -57,7 +74,7 @@ export function ControlsPanel({
               <span className="ml-auto text-[9px] rounded bg-emerald-500/15 text-emerald-400 px-1.5 py-0.5">Best</span>
             </div>
             <p className="text-[10px] text-muted-foreground mt-1">
-              OpenCV TELEA — seamless, natural-looking removal. Slower but much better quality.
+              LaMa GPU neural inpainting when available, OpenCV TELEA as fallback. Seamless, natural-looking removal.
             </p>
           </button>
           <button
@@ -122,16 +139,52 @@ export function ControlsPanel({
       )}
 
       {!resultUrl && (
-        <Button
-          size="lg"
-          className="w-full gap-2 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/30"
-          onClick={onErase}
-          disabled={loading}
-        >
-          {loading
-            ? <><Loader2 className="h-4 w-4 animate-spin" /> {progress || "Processing…"}</>
-            : <><Eraser className="h-4 w-4" /> Erase region ({mode === "inpaint" ? "Inpaint" : "Blur"})</>}
-        </Button>
+        <div className="space-y-2">
+          <Button
+            size="lg"
+            className="w-full gap-2 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/30"
+            onClick={onErase}
+            disabled={loading}
+          >
+            {loading
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> {progress || "Processing…"}</>
+              : <><Eraser className="h-4 w-4" /> Erase region ({mode === "inpaint" ? "Inpaint" : "Blur"})</>}
+          </Button>
+          {onAutoDetect && (
+          <Button
+            variant="outline"
+            className="w-full gap-2 border-indigo-500/40 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20"
+            onClick={onAutoDetect}
+            disabled={loading}
+            title="Scan the whole video with OCR, detect caption zones, and erase them automatically (including ones that move during the clip)"
+          >
+            <Sparkles className="h-4 w-4" />
+            Auto-detect &amp; erase captions
+          </Button>
+          )}
+          {onAutoDetect && (
+            <p className="text-[10px] text-muted-foreground text-center">
+              Auto-detect ignores your manual region. It uses OCR to find captions, tracks them across the clip, and inpaints each only when present.
+            </p>
+          )}
+        </div>
+      )}
+
+      {detectedSegments && detectedSegments.length > 0 && (
+        <Card className="p-3 border-indigo-500/40 bg-indigo-500/5 space-y-2">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-indigo-300 font-semibold">
+            <ScanText className="h-3.5 w-3.5" />
+            Detected {detectedSegments.length} caption zone{detectedSegments.length === 1 ? "" : "s"}
+          </div>
+          <ul className="space-y-1 text-[10px] text-muted-foreground">
+            {detectedSegments.map((s, i) => (
+              <li key={i} className="flex items-center justify-between font-mono">
+                <span className="text-indigo-200">{fmt(s.start_t)}–{fmt(s.end_t)}</span>
+                <span>{s.w}×{s.h}px @ ({s.x},{s.y})</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
       )}
 
       {resultUrl && (
