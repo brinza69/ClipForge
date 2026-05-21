@@ -120,16 +120,23 @@ async def erase_region(
     y: int = Form(0),
     w: int = Form(100),
     h: int = Form(50),
-    mode: str = Form("inpaint"),       # "inpaint" (OpenCV TELEA) or "blur" (ffmpeg avgblur)
+    mode: str = Form("inpaint"),       # "inpaint" (LaMa GPU / OpenCV TELEA) or "blur" (ffmpeg avgblur)
     algorithm: str = Form("telea"),    # "telea" or "ns" — only used when mode=inpaint
+    auto_detect: bool = Form(False),   # if true, OCR-detects captions and ignores x/y/w/h
 ):
     """
     Enqueue an erase job and return the job id immediately. The browser then
     polls GET /api/jobs/{id} for progress and GET /api/utilities/erase/{id}/download
-    for the result. This avoids long-running synchronous HTTP requests that
-    can drop ("Failed to fetch") on slow connections, sleeping tabs, or HMR.
+    for the result.
+
+    If `auto_detect=True`, the worker scans the video with OCR, clusters
+    detected captions into time-varying segments (caption zones that follow
+    the captions even when they move during the clip), and inpaints each
+    only during the frames it appears in.
     """
-    if w <= 0 or h <= 0:
+    if auto_detect and mode == "blur":
+        raise HTTPException(400, "Auto-detect only supports inpaint mode")
+    if not auto_detect and (w <= 0 or h <= 0):
         raise HTTPException(400, "Region width and height must be greater than 0")
 
     content = await file.read()
@@ -160,6 +167,7 @@ async def erase_region(
         "x": x, "y": y, "w": w, "h": h,
         "mode": mode,
         "algorithm": algorithm,
+        "auto_detect": auto_detect,
     }
 
     # Use the queue's enqueue helper but pin our pre-chosen id by inserting

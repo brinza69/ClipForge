@@ -235,17 +235,20 @@ export default function CaptionEraserPage() {
     return `${m}:${sec.toString().padStart(2, "0")}`;
   };
 
-  const handleErase = async () => {
+  const runErase = async (opts: { autoDetect: boolean }) => {
     if (!file) return;
-    if (rW <= 0 || rH <= 0) { toast.error("Region must have positive size"); return; }
+    if (!opts.autoDetect && (rW <= 0 || rH <= 0)) {
+      toast.error("Region must have positive size"); return;
+    }
     setLoading(true); setErrorMsg(""); setResultUrl("");
     setProgress("Uploading…");
     const fd = new FormData();
     fd.append("file", file);
     fd.append("x", rX.toString()); fd.append("y", rY.toString());
     fd.append("w", rW.toString()); fd.append("h", rH.toString());
-    fd.append("mode", mode);
+    fd.append("mode", opts.autoDetect ? "inpaint" : mode);
     fd.append("algorithm", "telea");
+    fd.append("auto_detect", opts.autoDetect ? "true" : "false");
 
     try {
       // 1. Submit via XHR so we can show real upload progress (fetch hides this).
@@ -333,6 +336,9 @@ export default function CaptionEraserPage() {
       toast.error("Erase failed", { description: msg });
     } finally { setLoading(false); }
   };
+
+  const handleErase = () => runErase({ autoDetect: false });
+  const handleAutoDetect = () => runErase({ autoDetect: true });
 
   const downloadResult = () => {
     if (!resultUrl) return;
@@ -532,6 +538,7 @@ export default function CaptionEraserPage() {
             setFromPct={setFromPct}
             resultUrl={resultUrl}
             onErase={handleErase}
+            onAutoDetect={handleAutoDetect}
             onDownload={downloadResult}
             onClearResult={() => { setResultUrl(""); setResultName(""); setErrorMsg(""); }}
           />

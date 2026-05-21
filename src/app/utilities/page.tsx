@@ -194,6 +194,42 @@ export default function UtilitiesPage() {
           </div>
         </Card>
 
+        {/* Batch processor launcher */}
+        <Link href="/utilities/batch" className="block group">
+          <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-emerald-500/40 hover:bg-emerald-500/[0.03] transition-colors h-full flex flex-col">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 shrink-0 group-hover:bg-emerald-500/20 transition-colors">
+                <ListVideo className="h-5 w-5 text-emerald-400" />
+              </div>
+              <div>
+                <h2 className="font-semibold">Batch Process</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Paste multiple URLs. Pick one erase region on the first video. Get transcripts + erased mp4s for all of them.
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1.5">
+              <div className="flex items-center gap-2 text-xs text-emerald-300">
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="font-semibold">One region — many videos</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Numbered 1..N automatically. Region picked on video 1 is scaled per-video. Inpaint or fast-blur mode.
+              </p>
+            </div>
+
+            <div className="flex-1" />
+
+            <Button
+              variant="outline"
+              className="w-full gap-2 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 hover:text-emerald-200 group-hover:border-emerald-500/50"
+            >
+              Open Batch Process <ExternalLink className="h-3.5 w-3.5 ml-auto" />
+            </Button>
+          </Card>
+        </Link>
+
         {/* Caption Eraser launcher */}
         <Link href="/utilities/caption-eraser" className="block group">
           <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-amber-500/40 hover:bg-amber-500/[0.03] transition-colors h-full flex flex-col">
@@ -204,7 +240,7 @@ export default function UtilitiesPage() {
               <div>
                 <h2 className="font-semibold">Caption / Logo Eraser</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Seamlessly remove burnt-in captions, logos, or watermarks using OpenCV inpainting.
+                  Seamlessly remove burnt-in captions, logos, or watermarks. LaMa GPU + auto-detect.
                 </p>
               </div>
             </div>
@@ -212,11 +248,11 @@ export default function UtilitiesPage() {
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2">
               <div className="flex items-center gap-2 text-xs text-amber-300">
                 <Wand2 className="h-3.5 w-3.5" />
-                <span className="font-semibold">Now with real inpainting</span>
+                <span className="font-semibold">LaMa GPU neural inpainting</span>
               </div>
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Frame-by-frame OpenCV TELEA algorithm reconstructs pixels from surrounding content
-                for natural-looking removal — far beyond simple blur.
+                Batched on-GPU LaMa with ROI cropping + NVENC encoding for fast, natural-looking erasure.
+                Auto-detect mode finds captions automatically — even when they move mid-clip.
               </p>
             </div>
 

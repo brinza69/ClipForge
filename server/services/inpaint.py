@@ -1,23 +1,29 @@
 """
 ClipForge — Inpainting Service
 
-Seamless region removal for captions, logos, and watermarks. The pipeline is:
+Seamless region removal for captions, logos, and watermarks. Two modes:
+
+  - Static rect  → pass x/y/w/h. One mask, every frame.
+  - Time-varying → pass `segments=[{start_t,end_t,x,y,w,h}, ...]`. Each
+                   segment defines a rect that's active only during its
+                   time range. Frames outside any segment pass through
+                   the encoder unchanged (huge speedup for sparse captions).
+
+The pipeline is:
 
   decoder ffmpeg (multi-threaded H.264) → bgr24 raw frames → per-frame inpaint
   → bgr24 raw frames → encoder ffmpeg (NVENC if available, else libx264)
   → mp4 with audio remuxed from the original input.
 
 The inpaint stage tries, in order:
-  1. LaMa (GPU, neural inpainting via PyTorch + simple_lama_inpainting). Best
-     quality; runs on the user's NVIDIA GPU when available.
-  2. OpenCV TELEA/NS on a tight ROI crop around the mask. Much faster than
-     calling cv2.inpaint on the full frame, since cv2's working buffers are
-     proportional to the input image size — not just the mask area.
+  1. LaMa (GPU, neural inpainting via simple_lama_inpainting). Best quality;
+     runs on the user's NVIDIA GPU. We batch frames from the same active
+     segment to keep the GPU fed.
+  2. OpenCV TELEA/NS on a tight ROI crop. cv2.inpaint's working buffers are
+     proportional to the input size, so cropping to the ROI before calling
+     it is far faster than full-frame inpaint.
 
-The decoder being a separate ffmpeg process is key: OpenCV's VideoCapture is
-single-threaded and ~3× slower than ffmpeg for H.264 decode. Piping bgr24
-frames out of ffmpeg lets libavcodec's threaded decoder feed the Python
-inpaint loop while libx264/NVENC consumes the encoder side concurrently.
+Separate decoder/encoder processes give parallel decode + inpaint + encode.
 """
 
 from __future__ import annotations
@@ -28,8 +34,9 @@ import os
 import shutil
 import subprocess
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal, Optional
+from typing import Callable, List, Literal, Optional
 
 import cv2
 import numpy as np
@@ -41,8 +48,8 @@ Algorithm = Literal["telea", "ns"]
 
 # ── Backend detection (cached) ───────────────────────────────────────────────
 
-_LAMA_MODEL = None           # lazy singleton (SimpleLama instance)
-_LAMA_AVAILABLE: Optional[bool] = None  # tri-state: None=not probed, True=ok, False=disabled
+_LAMA_MODEL = None
+_LAMA_AVAILABLE: Optional[bool] = None
 # fp16 is opt-in: LaMa uses Fast Fourier Convolution internally, and cuFFT
 # in half precision only supports power-of-2 input dimensions. Caption ROIs
 # rarely satisfy that, so default to fp32 and let advanced users opt in.
@@ -70,15 +77,14 @@ def _has_nvenc(ffmpeg_bin: str) -> bool:
     """
     Probe whether h264_nvenc is *actually usable* on this machine.
 
-    Just checking `-encoders` isn't enough — the encoder is compiled into the
-    Gyan.dev build but fails at runtime if the NVIDIA driver is older than the
-    nvenc API version ffmpeg was built against (e.g. ffmpeg 8.1.1 needs driver
-    570+). So we open a one-frame test encode and trust the exit code.
+    Just checking `-encoders` isn't enough — the encoder is compiled in but
+    fails at runtime if the NVIDIA driver is older than the nvenc API
+    version ffmpeg was built against (e.g. ffmpeg 8.1.1 needs driver 570+).
+    Real one-frame probe and cache the result.
     """
     if ffmpeg_bin in _NVENC_CACHE:
         return _NVENC_CACHE[ffmpeg_bin]
     try:
-        # Listed at all?
         listed = subprocess.run(
             [ffmpeg_bin, "-hide_banner", "-encoders"],
             capture_output=True, text=True, timeout=5,
@@ -87,7 +93,6 @@ def _has_nvenc(ffmpeg_bin: str) -> bool:
         if "h264_nvenc" not in (listed.stdout or ""):
             _NVENC_CACHE[ffmpeg_bin] = False
             return False
-        # Real probe: encode 1 frame to a discard sink.
         probe = subprocess.run(
             [
                 ffmpeg_bin, "-y", "-hide_banner", "-v", "error",
@@ -144,26 +149,102 @@ def _try_load_lama():
         return None
 
 
+# ── Per-segment precomputed state ────────────────────────────────────────────
+
+@dataclass
+class _SegState:
+    """All the precomputed bits we need to inpaint frames of one segment."""
+    start_t: float
+    end_t: float
+    rx: int
+    ry: int
+    rx2: int
+    ry2: int
+    roi_h: int
+    roi_w: int
+    mask_roi: np.ndarray            # uint8, shape (roi_h, roi_w)
+    # LaMa-only state (None when LaMa is not in use)
+    mask_tensor: object = None      # torch.Tensor [1,1,H_pad,W_pad]
+    roi_h_pad: int = 0
+    roi_w_pad: int = 0
+
+
+def _build_segment_state(
+    seg: dict,
+    vw: int,
+    vh: int,
+    dilate_px: int,
+    inpaint_radius: int,
+    lama,
+    device,
+) -> _SegState:
+    x = int(seg["x"]); y = int(seg["y"])
+    w = int(seg["w"]); h = int(seg["h"])
+
+    mx = max(0, min(x, vw - 1))
+    my = max(0, min(y, vh - 1))
+    mw = max(1, min(w, vw - mx))
+    mh = max(1, min(h, vh - my))
+
+    # ROI with margin around the mask for inpaint context.
+    roi_margin = max(dilate_px, 0) + max(inpaint_radius, 0) + 8
+    rx = max(0, mx - roi_margin)
+    ry = max(0, my - roi_margin)
+    rx2 = min(vw, mx + mw + roi_margin)
+    ry2 = min(vh, my + mh + roi_margin)
+    roi_h = ry2 - ry
+    roi_w = rx2 - rx
+
+    mask_roi = np.zeros((roi_h, roi_w), dtype=np.uint8)
+    mask_roi[my - ry : my - ry + mh, mx - rx : mx - rx + mw] = 255
+    if dilate_px > 0:
+        k = np.ones((dilate_px, dilate_px), np.uint8)
+        mask_roi = cv2.dilate(mask_roi, k, iterations=1)
+
+    state = _SegState(
+        start_t=float(seg.get("start_t", 0.0)),
+        end_t=float(seg.get("end_t", float("inf"))),
+        rx=rx, ry=ry, rx2=rx2, ry2=ry2,
+        roi_h=roi_h, roi_w=roi_w,
+        mask_roi=mask_roi,
+    )
+
+    if lama is not None:
+        import torch
+        roi_h_pad = ((roi_h + 7) // 8) * 8
+        roi_w_pad = ((roi_w + 7) // 8) * 8
+        m_arr = np.zeros((roi_h_pad, roi_w_pad), dtype=np.float32)
+        m_arr[:roi_h, :roi_w] = (mask_roi > 0).astype(np.float32)
+        mask_tensor = torch.from_numpy(m_arr).unsqueeze(0).unsqueeze(0).to(device)
+        if _LAMA_FP16:
+            mask_tensor = mask_tensor.half()
+        state.mask_tensor = mask_tensor
+        state.roi_h_pad = roi_h_pad
+        state.roi_w_pad = roi_w_pad
+
+    return state
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def inpaint_region(
     input_path: str,
     output_path: str,
-    x: int,
-    y: int,
-    w: int,
-    h: int,
+    x: int = 0,
+    y: int = 0,
+    w: int = 0,
+    h: int = 0,
     *,
+    segments: Optional[list[dict]] = None,
     algorithm: Algorithm = "telea",
     dilate_px: int = 6,
     inpaint_radius: int = 5,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> str:
     """
-    Seamlessly remove a rectangular region from every frame of a video.
+    Seamlessly remove one or more rectangular regions from a video.
 
-    The rect is in input-pixel coordinates (top-left origin). Audio from the
-    original video is muxed back into the output.
+    Audio from the original is muxed back into the output.
     """
 
     def _run() -> str:
@@ -179,27 +260,29 @@ async def inpaint_region(
         if vw == 0 or vh == 0:
             raise RuntimeError("Video has zero dimensions")
 
-        # ── Clamp mask rect to frame ─────────────────────────────────────────
-        mx = max(0, min(int(x), vw - 1))
-        my = max(0, min(int(y), vh - 1))
-        mw = max(1, min(int(w), vw - mx))
-        mh = max(1, min(int(h), vh - my))
+        # Normalize "static rect" into a single full-duration segment so the
+        # rest of the pipeline only deals with one code path.
+        use_segments = segments is not None and len(segments) > 0
+        if use_segments:
+            seg_list = list(segments)
+        else:
+            seg_list = [{
+                "start_t": 0.0, "end_t": float("inf"),
+                "x": x, "y": y, "w": w, "h": h,
+            }]
 
-        # ROI with margin around the mask for inpaint context.
-        roi_margin = max(dilate_px, 0) + max(inpaint_radius, 0) + 8
-        rx = max(0, mx - roi_margin)
-        ry = max(0, my - roi_margin)
-        rx2 = min(vw, mx + mw + roi_margin)
-        ry2 = min(vh, my + mh + roi_margin)
-        roi_h = ry2 - ry
-        roi_w = rx2 - rx
+        # ── Choose inpaint backend ───────────────────────────────────────────
+        lama = _try_load_lama()
+        use_lama = lama is not None
+        device = None
+        if use_lama:
+            device = lama.device
 
-        # ROI-local mask (white = erase, black = keep)
-        mask_roi = np.zeros((roi_h, roi_w), dtype=np.uint8)
-        mask_roi[my - ry : my - ry + mh, mx - rx : mx - rx + mw] = 255
-        if dilate_px > 0:
-            k = np.ones((dilate_px, dilate_px), np.uint8)
-            mask_roi = cv2.dilate(mask_roi, k, iterations=1)
+        # Build per-segment state (mask, ROI bounds, LaMa tensors)
+        seg_states: List[_SegState] = [
+            _build_segment_state(s, vw, vh, dilate_px, inpaint_radius, lama, device)
+            for s in seg_list
+        ]
 
         algo_flag = cv2.INPAINT_TELEA if algorithm == "telea" else cv2.INPAINT_NS
 
@@ -207,10 +290,6 @@ async def inpaint_region(
 
         ffmpeg = _resolve_ffmpeg()
         frame_nbytes = vw * vh * 3
-
-        # ── Choose inpaint backend ───────────────────────────────────────────
-        lama = _try_load_lama()
-        use_lama = lama is not None
 
         # ── Decoder (multi-threaded H.264 → bgr24 stdout) ────────────────────
         dec_cmd = [
@@ -228,7 +307,7 @@ async def inpaint_region(
         if _has_nvenc(ffmpeg):
             enc_video_args = [
                 "-c:v", "h264_nvenc",
-                "-preset", "p4",          # balanced quality/speed
+                "-preset", "p4",
                 "-tune", "hq",
                 "-rc", "vbr",
                 "-cq", "23",
@@ -267,8 +346,8 @@ async def inpaint_region(
         backend = "LaMa(GPU)" if use_lama else f"cv2.{algorithm}"
         logger.info(
             f"Inpaint start: {vw}x{vh} @ {fps:.2f}fps, {total} frames, "
-            f"rect=({mx},{my},{mw},{mh}), roi=({rx},{ry},{roi_w},{roi_h}), "
-            f"inpaint={backend}, encoder={enc_label}"
+            f"mode={'segments' if use_segments else 'static'} "
+            f"({len(seg_states)} seg), inpaint={backend}, encoder={enc_label}"
         )
 
         dec = subprocess.Popen(
@@ -285,7 +364,6 @@ async def inpaint_region(
             creationflags=_creationflags(),
         )
 
-        # Drain both stderrs concurrently so neither pipe fills up.
         dec_stderr_buf: list[bytes] = []
         enc_stderr_buf: list[bytes] = []
 
@@ -298,87 +376,99 @@ async def inpaint_region(
         dec_drainer.start()
         enc_drainer.start()
 
-        # Pre-build LaMa-side state that's constant across frames:
-        #   * mask padded to a multiple of 8 (LaMa downsamples 3× by 2)
-        #   * the padded mask tensor on-device, in the right dtype.
-        # We bypass SimpleLama.__call__ (which forces batch=1) and call the
-        # underlying torch.jit model directly with a batched tensor.
-        mask_tensor = None
-        roi_h_pad = roi_w_pad = 0
-        device = None
-        if use_lama:
-            import torch
-            device = lama.device
-            roi_h_pad = ((roi_h + 7) // 8) * 8
-            roi_w_pad = ((roi_w + 7) // 8) * 8
-            m_arr = np.zeros((roi_h_pad, roi_w_pad), dtype=np.float32)
-            m_arr[:roi_h, :roi_w] = (mask_roi > 0).astype(np.float32)
-            mask_tensor = torch.from_numpy(m_arr).unsqueeze(0).unsqueeze(0).to(device)  # [1,1,H,W]
-            if _LAMA_FP16:
-                mask_tensor = mask_tensor.half()
+        # ── Batched LaMa state ───────────────────────────────────────────────
+        # Buffers hold frames for the CURRENT batch (same segment).
+        batch_seg: Optional[_SegState] = None
+        frame_buf: list[np.ndarray] = []
+        roi_rgb_buf: list[np.ndarray] = []
 
-        # Buffers for the LaMa batch.
-        frame_buf: list[np.ndarray] = []   # full-frame numpy refs, write-back targets
-        roi_rgb_buf: list[np.ndarray] = [] # padded RGB float views fed to LaMa
-
-        def _flush_lama_batch():
-            if not roi_rgb_buf:
-                return
+        def _flush_lama_batch() -> bool:
+            """Flush the current LaMa batch (same segment). Returns False on pipe error."""
+            if not roi_rgb_buf or batch_seg is None:
+                return True
             import torch
+            seg = batch_seg
             B = len(roi_rgb_buf)
-            batch = np.stack(roi_rgb_buf, axis=0).astype(np.float32) / 255.0  # [B,H,W,3]
-            batch = np.transpose(batch, (0, 3, 1, 2))                          # [B,3,H,W]
+            batch = np.stack(roi_rgb_buf, axis=0).astype(np.float32) / 255.0
+            batch = np.transpose(batch, (0, 3, 1, 2))
             img_t = torch.from_numpy(batch).to(device, non_blocking=True)
             if _LAMA_FP16:
                 img_t = img_t.half()
-            mask_b = mask_tensor.expand(B, -1, -1, -1).contiguous()
+            mask_b = seg.mask_tensor.expand(B, -1, -1, -1).contiguous()
             with torch.inference_mode():
                 out = lama.model(img_t, mask_b)
-            # Output is [B,3,H,W] in [0,1] RGB at padded size; trim back to ROI and to BGR.
             out = out.float().clamp(0, 1)
-            out = (out * 255.0).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()  # [B,H,W,3] RGB uint8
-            out = out[:, :roi_h, :roi_w, ::-1]  # crop padding + RGB->BGR (writeable copy via slice + reverse)
+            out = (out * 255.0).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
+            out = out[:, :seg.roi_h, :seg.roi_w, ::-1]  # crop padding + RGB->BGR
             for i, f in enumerate(frame_buf):
-                f[ry:ry2, rx:rx2] = out[i]
+                f[seg.ry:seg.ry2, seg.rx:seg.rx2] = out[i]
                 try:
                     enc.stdin.write(f.tobytes())
                 except (BrokenPipeError, OSError) as e:
-                    logger.warning(f"ffmpeg encoder pipe closed early: {e}")
+                    logger.warning(f"encoder pipe closed early: {e}")
                     return False
             frame_buf.clear()
             roi_rgb_buf.clear()
             return True
+
+        def _find_active_segment(t: float) -> Optional[_SegState]:
+            """First segment whose [start_t, end_t) contains t. None if none."""
+            for s in seg_states:
+                if s.start_t <= t < s.end_t:
+                    return s
+            return None
 
         frame_idx = 0
         try:
             while True:
                 buf = dec.stdout.read(frame_nbytes)
                 if not buf or len(buf) < frame_nbytes:
+                    # Final flush before exit
                     if use_lama:
                         if _flush_lama_batch() is False:
                             break
                     break
-                # Mutable view so the ROI write-back is in-place.
-                frame = np.frombuffer(bytearray(buf), dtype=np.uint8).reshape((vh, vw, 3))
 
-                if use_lama:
+                # Mutable buffer so in-place writes (ROI overwrite) work.
+                frame = np.frombuffer(bytearray(buf), dtype=np.uint8).reshape((vh, vw, 3))
+                t = frame_idx / fps
+                active = _find_active_segment(t)
+
+                if active is None:
+                    # No segment active → pass frame through unchanged.
+                    if use_lama and batch_seg is not None:
+                        if _flush_lama_batch() is False:
+                            break
+                        batch_seg = None
+                    try:
+                        enc.stdin.write(frame.tobytes())
+                    except (BrokenPipeError, OSError) as e:
+                        logger.warning(f"encoder pipe closed early: {e}")
+                        break
+                elif use_lama:
+                    # Segment changed since last frame → flush.
+                    if batch_seg is not None and active is not batch_seg:
+                        if _flush_lama_batch() is False:
+                            break
+                    batch_seg = active
                     # Pad ROI to (roi_h_pad, roi_w_pad), convert BGR -> RGB.
-                    roi = frame[ry:ry2, rx:rx2]
-                    roi_rgb = np.zeros((roi_h_pad, roi_w_pad, 3), dtype=np.uint8)
-                    roi_rgb[:roi_h, :roi_w] = roi[..., ::-1]  # BGR -> RGB
+                    roi = frame[active.ry:active.ry2, active.rx:active.rx2]
+                    roi_rgb = np.zeros((active.roi_h_pad, active.roi_w_pad, 3), dtype=np.uint8)
+                    roi_rgb[:active.roi_h, :active.roi_w] = roi[..., ::-1]
                     frame_buf.append(frame)
                     roi_rgb_buf.append(roi_rgb)
                     if len(roi_rgb_buf) >= _LAMA_BATCH:
                         if _flush_lama_batch() is False:
                             break
                 else:
-                    roi = frame[ry:ry2, rx:rx2]
-                    inpainted_roi = cv2.inpaint(roi, mask_roi, inpaint_radius, algo_flag)
-                    frame[ry:ry2, rx:rx2] = inpainted_roi
+                    # OpenCV path: ROI-cropped cv2.inpaint
+                    roi = frame[active.ry:active.ry2, active.rx:active.rx2]
+                    inpainted_roi = cv2.inpaint(roi, active.mask_roi, inpaint_radius, algo_flag)
+                    frame[active.ry:active.ry2, active.rx:active.rx2] = inpainted_roi
                     try:
                         enc.stdin.write(frame.tobytes())
                     except (BrokenPipeError, OSError) as e:
-                        logger.warning(f"ffmpeg encoder pipe closed early: {e}")
+                        logger.warning(f"encoder pipe closed early: {e}")
                         break
 
                 frame_idx += 1
@@ -421,22 +511,3 @@ async def inpaint_region(
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _run)
-
-
-# ── LaMa per-frame helper ────────────────────────────────────────────────────
-
-def _inpaint_lama(lama, roi_bgr: np.ndarray, pil_mask) -> np.ndarray:
-    """Run LaMa on a single BGR ROI; returns BGR ROI of identical shape."""
-    from PIL import Image
-    # BGR → RGB for PIL
-    rgb = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb)
-    out = lama(pil_img, pil_mask)
-    # simple-lama returns a PIL Image in RGB; convert back to BGR uint8
-    arr = np.array(out, dtype=np.uint8)
-    if arr.ndim == 3 and arr.shape[2] == 3:
-        arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-    # LaMa may pad to multiples of 8; trim/resize to exact ROI shape
-    if arr.shape[:2] != roi_bgr.shape[:2]:
-        arr = cv2.resize(arr, (roi_bgr.shape[1], roi_bgr.shape[0]))
-    return arr

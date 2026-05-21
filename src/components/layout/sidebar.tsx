@@ -12,11 +12,13 @@ import {
   ChevronRight,
   TrendingUp,
   Wrench,
+  Mic,
 } from "lucide-react";
 
 const navItems = [
   { label: "Dashboard",  href: "/",           icon: LayoutDashboard },
   { label: "Campaigns",  href: "/campaigns",  icon: TrendingUp },
+  { label: "Voice Studio", href: "/tts",      icon: Mic },
   { label: "Utilities",  href: "/utilities",  icon: Wrench },
   { label: "Exports",    href: "/exports",    icon: HardDrive },
   { label: "Settings",   href: "/settings",   icon: Settings },

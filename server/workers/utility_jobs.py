@@ -43,7 +43,12 @@ def _creationflags() -> int:
 
 
 async def handle_erase(job_id, project_id, clip_id, metadata, queue):
-    """Run the eraser on an uploaded file. Metadata carries all params + paths."""
+    """Run the eraser on an uploaded file. Metadata carries all params + paths.
+
+    If metadata.auto_detect is true, x/y/w/h are ignored — the worker runs OCR
+    over the video, clusters detected captions into time-varying segments, and
+    passes them to inpaint_region instead of a single static rect.
+    """
     input_path = metadata["input_path"]
     output_path = metadata["output_path"]
     x = int(metadata.get("x", 0))
@@ -52,9 +57,12 @@ async def handle_erase(job_id, project_id, clip_id, metadata, queue):
     h = int(metadata.get("h", 0))
     mode = metadata.get("mode", "inpaint")
     algorithm = metadata.get("algorithm", "telea")
+    auto_detect = bool(metadata.get("auto_detect", False))
 
-    if w <= 0 or h <= 0:
+    if not auto_detect and (w <= 0 or h <= 0):
         raise RuntimeError("Region width and height must be greater than 0")
+    if auto_detect and mode != "inpaint":
+        raise RuntimeError("Auto-detect only supports inpaint mode")
     if not Path(input_path).exists():
         raise RuntimeError(f"Input file missing: {input_path}")
 
@@ -62,30 +70,67 @@ async def handle_erase(job_id, project_id, clip_id, metadata, queue):
 
     await queue.update_progress(job_id, 0.02, f"Starting {mode}...")
 
+    # Optional Stage A: OCR-based caption detection — produces a list of
+    # {start_t, end_t, x, y, w, h} segments that the inpaint loop will only
+    # apply during the frames where each is active.
+    detected_segments = None
+    if auto_detect:
+        from services.caption_detector import detect_caption_segments
+
+        loop = asyncio.get_event_loop()
+
+        def _det_progress(p: float, msg: str):
+            # Detection occupies 0.02 – 0.35 of the job; clamp.
+            mapped = 0.02 + min(1.0, max(0.0, p)) * 0.33
+            asyncio.run_coroutine_threadsafe(
+                queue.update_progress(job_id, mapped, msg), loop
+            )
+
+        await queue.update_progress(job_id, 0.03, "Loading OCR model…")
+        detected_segments = await loop.run_in_executor(
+            None,
+            lambda: detect_caption_segments(input_path, on_progress=_det_progress),
+        )
+        if not detected_segments:
+            raise RuntimeError(
+                "No on-screen captions detected. Try selecting a region manually."
+            )
+        await queue.update_progress(
+            job_id, 0.35,
+            f"Detected {len(detected_segments)} caption segment(s) — inpainting…",
+        )
+
     if mode == "inpaint":
         algo = algorithm if algorithm in ("telea", "ns") else "telea"
 
         loop = asyncio.get_event_loop()
 
+        # When auto-detect ran first it consumed 0.02–0.35. Map inpaint into the
+        # remaining 0.35–0.99 so the bar moves predictably.
+        inpaint_base = 0.35 if auto_detect else 0.05
+        inpaint_span = 0.99 - inpaint_base
+
         def _progress_cb(frame_idx: int, total: int):
             if total <= 0:
                 return
-            # Map frame progress into 0.05–0.99 so the user sees movement even on
-            # short clips while keeping headroom for the "finalizing" step.
-            p = 0.05 + 0.94 * (frame_idx / total)
+            p = inpaint_base + inpaint_span * (frame_idx / total)
             msg = f"Inpainting frame {frame_idx}/{total}"
             asyncio.run_coroutine_threadsafe(
                 queue.update_progress(job_id, p, msg), loop
             )
 
         try:
-            await inpaint_region(
+            kwargs = dict(
                 input_path=input_path,
                 output_path=output_path,
-                x=x, y=y, w=w, h=h,
                 algorithm=algo,
                 on_progress=_progress_cb,
             )
+            if detected_segments is not None:
+                kwargs["segments"] = detected_segments
+            else:
+                kwargs.update(x=x, y=y, w=w, h=h)
+            await inpaint_region(**kwargs)
         except Exception as e:
             logger.exception(f"Erase job {job_id} failed during inpaint")
             raise RuntimeError(f"Inpainting failed: {str(e)[-400:]}")
