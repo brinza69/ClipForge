@@ -13,12 +13,16 @@ import {
   TrendingUp,
   Wrench,
   Mic,
+  FileText,
+  AudioLines,
 } from "lucide-react";
 
 const navItems = [
   { label: "Dashboard",  href: "/",           icon: LayoutDashboard },
   { label: "Campaigns",  href: "/campaigns",  icon: TrendingUp },
   { label: "Voice Studio", href: "/tts",      icon: Mic },
+  { label: "Transcript Studio", href: "/transcript", icon: FileText },
+  { label: "Silence Remover", href: "/silence", icon: AudioLines },
   { label: "Utilities",  href: "/utilities",  icon: Wrench },
   { label: "Exports",    href: "/exports",    icon: HardDrive },
   { label: "Settings",   href: "/settings",   icon: Settings },

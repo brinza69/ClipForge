@@ -22,7 +22,7 @@ from pathlib import Path
 
 from config import settings
 from database import async_session
-from models import JobType, ProjectModel
+from models import JobModel, JobType, ProjectModel
 from services.inpaint import inpaint_region
 
 logger = logging.getLogger("clipforge.utility_jobs")
@@ -313,7 +313,67 @@ async def handle_erase_project(job_id, project_id, clip_id, metadata, queue):
     logger.info(f"erase_project {job_id}: done -> {output_path} ({output_path.stat().st_size // 1024} KB)")
 
 
+async def handle_silence_remove(job_id, project_id, clip_id, metadata, queue):
+    """
+    Remove silence from a user-uploaded audio or video file.
+    Metadata carries paths + pydub-style params (see services.silence_remover).
+    """
+    import asyncio as _asyncio
+    from services.silence_remover import remove_silence
+
+    input_path = metadata["input_path"]
+    output_path = metadata["output_path"]
+    mode = metadata.get("mode", "auto")
+    min_silence_ms = int(metadata.get("min_silence_ms", 100))
+    silence_thresh_db = float(metadata.get("silence_thresh_db", -45.0))
+    keep_silence_ms = int(metadata.get("keep_silence_ms", 50))
+
+    if not Path(input_path).exists():
+        raise RuntimeError(f"Input file missing: {input_path}")
+
+    await queue.update_progress(job_id, 0.02, "Starting silence removal…")
+
+    loop = _asyncio.get_event_loop()
+
+    def _on_progress(p: float, msg: str):
+        # Map service's 0..1 onto 0.02..0.99 to leave room for finalize.
+        mapped = 0.02 + max(0.0, min(1.0, p)) * 0.97
+        _asyncio.run_coroutine_threadsafe(
+            queue.update_progress(job_id, mapped, msg), loop
+        )
+
+    stats = await loop.run_in_executor(
+        None,
+        lambda: remove_silence(
+            input_path, output_path,
+            mode=mode,
+            min_silence_ms=min_silence_ms,
+            silence_thresh_db=silence_thresh_db,
+            keep_silence_ms=keep_silence_ms,
+            on_progress=_on_progress,
+        ),
+    )
+
+    # Persist stats on the job so the result endpoint can return them.
+    metadata["stats"] = stats
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+        if job:
+            job.metadata_json = json.dumps(metadata)
+            await session.commit()
+
+    await queue.update_progress(
+        job_id, 1.0,
+        f"Removed {stats['removed_pct']}% — {stats['segments']} segment(s) kept",
+    )
+    logger.info(
+        f"silence_remove {job_id}: {stats['before_ms']}ms -> {stats['after_ms']}ms "
+        f"(removed {stats['removed_pct']}%, {stats['segments']} segments)"
+    )
+
+
 def register_utility_handlers(queue):
     queue.register_handler(JobType.erase.value, handle_erase)
     queue.register_handler(JobType.erase_project.value, handle_erase_project)
+    queue.register_handler(JobType.silence_remove.value, handle_silence_remove)
     logger.info("Utility handlers registered")

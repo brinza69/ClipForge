@@ -173,18 +173,25 @@ async def elevenlabs_status():
 @router.post("/elevenlabs/key")
 async def set_elevenlabs_key(req: APIKeyRequest):
     """Save (or clear, when key is empty) the ElevenLabs API key on the server."""
-    from services.elevenlabs import set_api_key, get_user_info
+    from services.elevenlabs import set_api_key, get_user_info, list_voices
     key = (req.key or "").strip()
     set_api_key(key)
     if not key:
         return {"ok": True, "configured": False}
-    # Verify the key works by hitting /v1/user
+    # Verify by hitting /v1/voices (what the app actually uses). Modern
+    # ElevenLabs scoped keys often lack `user_read` but include `voices_read`
+    # + `text_to_speech`, so checking /v1/user would falsely reject valid keys.
     try:
-        info = await get_user_info()
+        await list_voices()
     except Exception as e:
-        # Roll back so we never persist a bad key
         set_api_key("")
         raise HTTPException(401, f"Key rejected by ElevenLabs: {str(e)[-200:]}")
+    # Best-effort usage info — don't fail the save if /v1/user is gated.
+    info: Optional[dict] = None
+    try:
+        info = await get_user_info()
+    except Exception:
+        pass
     return {"ok": True, "configured": True, "info": info}
 
 

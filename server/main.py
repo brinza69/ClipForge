@@ -20,6 +20,7 @@ from routers.exports import router as exports_router
 from routers.campaigns import router as campaigns_router
 from routers.utilities import router as utilities_router
 from routers.tts import router as tts_router
+from routers.transcript import router as transcript_router
 from job_queue import job_queue
 from workers.pipeline import register_pipeline_handlers
 from workers.utility_jobs import register_utility_handlers
@@ -96,6 +97,7 @@ app.include_router(exports_router)
 app.include_router(campaigns_router)
 app.include_router(utilities_router)
 app.include_router(tts_router)
+app.include_router(transcript_router)
 
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 app.mount("/exports", StaticFiles(directory=settings.exports_dir), name="exports")

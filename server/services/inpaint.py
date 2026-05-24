@@ -54,7 +54,9 @@ _LAMA_AVAILABLE: Optional[bool] = None
 # in half precision only supports power-of-2 input dimensions. Caption ROIs
 # rarely satisfy that, so default to fp32 and let advanced users opt in.
 _LAMA_FP16 = os.environ.get("CLIPFORGE_LAMA_FP16", "0") == "1"
-_LAMA_BATCH = max(1, int(os.environ.get("CLIPFORGE_LAMA_BATCH", "8")))
+# Batch size: 16 is the sweet spot on 8GB Turing/Ampere — bigger thrashes VRAM
+# on FFC layers (~1.4GB at B=8, ~2.6GB at B=16, ~5GB at B=32 with slowdown).
+_LAMA_BATCH = max(1, int(os.environ.get("CLIPFORGE_LAMA_BATCH", "16")))
 
 _NVENC_CACHE: dict[str, bool] = {}
 
@@ -132,6 +134,11 @@ def _try_load_lama():
             logger.info(f"LaMa GPU inpainting unavailable, will fall back to OpenCV: {e}")
         _LAMA_AVAILABLE = False
         return None
+    # Autotune cuDNN kernels for the recurring ROI shape. ~1.5x speedup on
+    # batched LaMa runs where every batch has identical (B,C,H,W).
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     try:
         _LAMA_MODEL = SimpleLama()
         if _LAMA_FP16:
@@ -316,13 +323,18 @@ async def inpaint_region(
             ]
             enc_label = "h264_nvenc"
         else:
+            # ultrafast preset removes most lookahead/refinement — the encoder
+            # was the end-to-end bottleneck (~2x faster vs veryfast on 1080p).
+            # crf 22 keeps near-veryfast quality despite the faster preset.
             enc_video_args = [
                 "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "20",
+                "-preset", "ultrafast",
+                "-tune", "fastdecode",
+                "-crf", "22",
+                "-threads", "0",
                 "-pix_fmt", "yuv420p",
             ]
-            enc_label = "libx264"
+            enc_label = "libx264:ultrafast"
 
         enc_cmd = [
             ffmpeg, "-y",

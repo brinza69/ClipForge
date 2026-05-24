@@ -246,6 +246,172 @@ async def download_erase_result(job_id: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Silence Remover — strip silence from an audio or video file.
+# Algorithm matches the NeuralFalcon HF Space; see services/silence_remover.py.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _silence_workdir(job_id: str) -> Path:
+    return Path(settings.temp_dir) / "silence" / job_id
+
+
+_SILENCE_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
+_SILENCE_VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}
+
+
+@router.post("/silence-remove")
+async def silence_remove(
+    file: UploadFile = File(...),
+    min_silence_ms: int = Form(100),
+    silence_thresh_db: float = Form(-45.0),
+    keep_silence_ms: int = Form(50),
+    output_format: Optional[str] = Form(None),  # for audio: mp3/wav/etc. None = keep input ext.
+):
+    """
+    Enqueue a silence-removal job. Audio inputs preserve format (or convert
+    to `output_format` if given); video inputs always output mp4.
+    Poll GET /api/jobs/{id} for progress, then GET /api/utilities/silence-remove/{id}/download.
+    """
+    suffix = Path(file.filename or "input").suffix.lower()
+    if suffix not in _SILENCE_AUDIO_EXTS and suffix not in _SILENCE_VIDEO_EXTS:
+        raise HTTPException(
+            400,
+            f"Unsupported file type {suffix or '(none)'}. "
+            f"Audio: {sorted(_SILENCE_AUDIO_EXTS)}  Video: {sorted(_SILENCE_VIDEO_EXTS)}",
+        )
+
+    content = await file.read()
+    if len(content) > 500 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum 500 MB.")
+    if len(content) < 100:
+        raise HTTPException(400, "File appears to be empty.")
+
+    if min_silence_ms < 20:
+        raise HTTPException(400, "min_silence_ms must be ≥ 20")
+    if keep_silence_ms < 0:
+        raise HTTPException(400, "keep_silence_ms must be ≥ 0")
+    if not (-80.0 <= silence_thresh_db <= 0.0):
+        raise HTTPException(400, "silence_thresh_db must be in [-80, 0]")
+
+    is_video = suffix in _SILENCE_VIDEO_EXTS
+    mode = "video" if is_video else "audio"
+
+    job_id = uuid.uuid4().hex[:12]
+    workdir = _silence_workdir(job_id)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    input_path = workdir / f"input{suffix}"
+    input_path.write_bytes(content)
+
+    if is_video:
+        out_suffix = ".mp4"
+    else:
+        out_suffix = f".{output_format.lower().lstrip('.')}" if output_format else suffix
+        if out_suffix not in _SILENCE_AUDIO_EXTS:
+            raise HTTPException(400, f"Unsupported output_format {output_format!r}")
+
+    stem = Path(file.filename or "audio").stem
+    out_filename = _safe_filename(stem, suffix=f"_nosilence{out_suffix}")
+    output_path = workdir / f"output{out_suffix}"
+
+    metadata = {
+        "input_path": str(input_path),
+        "output_path": str(output_path),
+        "output_filename": out_filename,
+        "mode": mode,
+        "min_silence_ms": min_silence_ms,
+        "silence_thresh_db": silence_thresh_db,
+        "keep_silence_ms": keep_silence_ms,
+    }
+
+    async with async_session() as session:
+        row = JobModel(
+            id=job_id,
+            project_id=_ERASE_WORK_PROJECT_ID,
+            type=JobType.silence_remove.value,
+            status=JobStatus.queued.value,
+            metadata_json=json.dumps(metadata),
+        )
+        session.add(row)
+        await session.commit()
+
+    logger.info(
+        f"silence-remove {job_id} enqueued: mode={mode} suffix={suffix} "
+        f"thresh={silence_thresh_db}dB keep={keep_silence_ms}ms min={min_silence_ms}ms"
+    )
+    return {"job_id": job_id, "status": "queued", "output_filename": out_filename}
+
+
+@router.get("/silence-remove/{job_id}/download")
+async def download_silence_remove_result(job_id: str):
+    """Stream the finished silence-removed output."""
+    import asyncio as _asyncio
+
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.type != JobType.silence_remove.value:
+        raise HTTPException(400, "Not a silence-remove job")
+    if job.status != JobStatus.done.value:
+        raise HTTPException(409, f"Job is not done (status={job.status})")
+
+    meta = json.loads(job.metadata_json or "{}")
+    out = Path(meta.get("output_path", ""))
+    if not out.exists():
+        raise HTTPException(410, "Output file no longer available")
+
+    filename = meta.get("output_filename") or out.name
+    mode = meta.get("mode", "audio")
+    media_type = "video/mp4" if mode == "video" else "audio/mpeg"
+    if out.suffix.lower() == ".wav":
+        media_type = "audio/wav"
+    elif out.suffix.lower() == ".flac":
+        media_type = "audio/flac"
+    elif out.suffix.lower() == ".ogg":
+        media_type = "audio/ogg"
+
+    async def _delayed_cleanup():
+        await _asyncio.sleep(300)
+        try:
+            wd = _silence_workdir(job_id)
+            for p in wd.glob("*"):
+                p.unlink(missing_ok=True)
+            wd.rmdir()
+        except Exception:
+            pass
+
+    _asyncio.create_task(_delayed_cleanup())
+
+    return FileResponse(
+        path=str(out),
+        media_type=media_type,
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/silence-remove/{job_id}/result")
+async def silence_remove_result(job_id: str):
+    """Return job stats (before/after duration etc.) once the job is done."""
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.type != JobType.silence_remove.value:
+        raise HTTPException(400, "Not a silence-remove job")
+    if job.status != JobStatus.done.value:
+        raise HTTPException(409, f"Job is not done (status={job.status})")
+    meta = json.loads(job.metadata_json or "{}")
+    return {
+        "job_id": job_id,
+        "stats": meta.get("stats") or {},
+        "output_filename": meta.get("output_filename"),
+        "mode": meta.get("mode"),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Batch processing: many URLs, shared erase rectangle.
 # ─────────────────────────────────────────────────────────────────────────────
 
