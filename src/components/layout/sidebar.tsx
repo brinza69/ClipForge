@@ -15,13 +15,17 @@ import {
   Mic,
   FileText,
   AudioLines,
+  Type,
+  Wand2,
 } from "lucide-react";
 
 const navItems = [
   { label: "Dashboard",  href: "/",           icon: LayoutDashboard },
   { label: "Campaigns",  href: "/campaigns",  icon: TrendingUp },
+  { label: "Remix Pipeline", href: "/remix",  icon: Wand2 },
   { label: "Voice Studio", href: "/tts",      icon: Mic },
   { label: "Transcript Studio", href: "/transcript", icon: FileText },
+  { label: "Caption Studio", href: "/captions", icon: Type },
   { label: "Silence Remover", href: "/silence", icon: AudioLines },
   { label: "Utilities",  href: "/utilities",  icon: Wrench },
   { label: "Exports",    href: "/exports",    icon: HardDrive },

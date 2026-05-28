@@ -99,9 +99,17 @@ start_backend() {
   fi
 
   echo "starting backend on :$BACKEND_PORT..."
+  # onnxruntime-gpu (used by rembg for AI background removal) needs the CUDA
+  # libraries that pip-installs into nvidia/* dirs to be on LD_LIBRARY_PATH.
+  # Without this, rembg silently falls back to CPU and runs ~11× slower.
+  NVIDIA_BASE='$VENV/lib/python3.12/site-packages/nvidia'
+  NVIDIA_LIB_DIRS=\""$NVIDIA_BASE/cublas/lib:$NVIDIA_BASE/cudnn/lib:$NVIDIA_BASE/cuda_runtime/lib:$NVIDIA_BASE/cufft/lib:$NVIDIA_BASE/curand/lib:$NVIDIA_BASE/cusolver/lib:$NVIDIA_BASE/cusparse/lib:$NVIDIA_BASE/nccl/lib:$NVIDIA_BASE/nvjitlink/lib"\"
+
   # setsid puts the child in a fresh process group so we can kill the whole tree.
   setsid bash -c "
     cd '$ROOT/server'
+    NV='$VENV/lib/python3.12/site-packages/nvidia'
+    export LD_LIBRARY_PATH=\"\$NV/cublas/lib:\$NV/cudnn/lib:\$NV/cuda_runtime/lib:\$NV/cufft/lib:\$NV/curand/lib:\$NV/cusolver/lib:\$NV/cusparse/lib:\$NV/nccl/lib:\$NV/nvjitlink/lib:\${LD_LIBRARY_PATH:-}\"
     exec '$VENV/bin/uvicorn' main:app --host 0.0.0.0 --port '$BACKEND_PORT'
   " >"$LOG_DIR/backend.log" 2>&1 < /dev/null &
   echo $! > "$pidfile"

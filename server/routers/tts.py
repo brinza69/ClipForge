@@ -307,6 +307,7 @@ async def _run_tts_job(job_id: str, req: SynthRequest):
                 stability=req.stability,
                 similarity_boost=req.similarity_boost,
                 style=req.style,
+                speed=req.speed,
             )
         elif req.engine == "local_clone":
             # Piper (RO TTS) → OpenVoice tone color converter (cloning)

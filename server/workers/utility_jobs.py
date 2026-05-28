@@ -372,8 +372,114 @@ async def handle_silence_remove(job_id, project_id, clip_id, metadata, queue):
     )
 
 
+async def handle_caption_burn(job_id, project_id, clip_id, metadata, queue):
+    """
+    Burn pre-baked manual caption overlays into a user-uploaded video.
+
+    The router has already written the .ass file from the overlay list; we
+    just shell out to ffmpeg + libass with the user-fonts directory wired in
+    so freshly uploaded fonts work without a server restart.
+    """
+    import asyncio as _asyncio
+
+    input_path = metadata["input_path"]
+    output_path = metadata["output_path"]
+    ass_path = metadata["ass_path"]
+    fonts_dir_arg = metadata.get("fonts_dir") or ""
+
+    if not Path(input_path).exists():
+        raise RuntimeError(f"Input file missing: {input_path}")
+    if not Path(ass_path).exists():
+        raise RuntimeError(f"ASS file missing: {ass_path}")
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    await queue.update_progress(job_id, 0.05, "Starting caption burn-in…")
+
+    ass_arg = str(ass_path).replace("\\", "/").replace(":", "\\:")
+    vf = f"subtitles=filename='{ass_arg}'"
+    if fonts_dir_arg:
+        fdir = str(fonts_dir_arg).replace("\\", "/").replace(":", "\\:")
+        vf += f":fontsdir='{fdir}'"
+
+    cmd = [
+        _ffmpeg_bin(), "-y", "-loglevel", "error",
+        "-i", str(input_path),
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+
+    loop = _asyncio.get_event_loop()
+
+    def _run() -> int:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            creationflags=_creationflags(),
+        )
+        if proc.returncode != 0:
+            tail = "\n".join((proc.stderr or "").strip().splitlines()[-8:])
+            raise RuntimeError(f"ffmpeg caption-burn failed: {tail[-500:]}")
+        return Path(output_path).stat().st_size
+
+    size = await loop.run_in_executor(None, _run)
+    await queue.update_progress(job_id, 1.0, f"Done ({size // 1024} KB)")
+    logger.info(f"caption_burn {job_id}: done -> {output_path} ({size // 1024} KB)")
+
+
+async def handle_commentator_bg_remove(job_id, project_id, clip_id, metadata, queue):
+    """
+    Run AI background removal (rembg / U²-Net) on a commentator preset's
+    raw video and save the result as processed.webm alongside it. Subsequent
+    composites use the alpha-baked WebM and skip chromakey entirely.
+    """
+    import asyncio as _asyncio
+    from services.bg_removal import remove_background_video
+    from services.commentators import _video_path, _ai_processed_path
+
+    preset_id = metadata["preset_id"]
+    src = _video_path(preset_id)
+    dst = _ai_processed_path(preset_id)
+    if not src.exists():
+        raise RuntimeError(f"source video missing for preset {preset_id}")
+
+    await queue.update_progress(job_id, 0.02, "Loading AI model…")
+
+    loop = _asyncio.get_event_loop()
+
+    def _on_progress(p: float, msg: str):
+        p = max(0.0, min(1.0, p))
+        _asyncio.run_coroutine_threadsafe(
+            queue.update_progress(job_id, p, msg), loop
+        )
+
+    stats = await loop.run_in_executor(
+        None,
+        lambda: remove_background_video(str(src), str(dst), on_progress=_on_progress),
+    )
+    metadata["bg_removal_stats"] = stats
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+        if job:
+            job.metadata_json = json.dumps(metadata)
+            await session.commit()
+
+    await queue.update_progress(
+        job_id, 1.0,
+        f"AI background removed ({stats['frame_count']} frames, "
+        f"{stats['output_size'] // 1024} KB output)",
+    )
+    logger.info(f"commentator_bg_remove {job_id}: {preset_id} → {dst.name}")
+
+
 def register_utility_handlers(queue):
     queue.register_handler(JobType.erase.value, handle_erase)
     queue.register_handler(JobType.erase_project.value, handle_erase_project)
     queue.register_handler(JobType.silence_remove.value, handle_silence_remove)
+    queue.register_handler(JobType.caption_burn.value, handle_caption_burn)
+    queue.register_handler(JobType.commentator_bg_remove.value, handle_commentator_bg_remove)
     logger.info("Utility handlers registered")
