@@ -17,7 +17,10 @@ interface SliderProps {
   min?: number
   max?: number
   step?: number
-  onValueChange?: (value: number | readonly number[]) => void
+  // Always invoked with an array — matches @radix-ui/react-slider semantics
+  // that all callers were written against. Single-value mode emits a 1-item
+  // array.
+  onValueChange?: (value: number[]) => void
 }
 
 function Slider({
@@ -48,7 +51,7 @@ function Slider({
       if (index === 1 && next[1] < next[0]) next[1] = next[0]
       onValueChange(next)
     } else {
-      onValueChange(newVal)
+      onValueChange([newVal])
     }
   }
 

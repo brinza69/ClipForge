@@ -16,7 +16,11 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 2
 
     # ── Pipeline & Video Generation Settings ──────────────────────────────────
-    whisper_model: str = "small"
+    # "small" → "medium" cuts WER roughly in half on accented speech (RO, FR,
+    # non-native EN) at the cost of ~3× transcribe time. Override via the
+    # CLIPFORGE_WHISPER_MODEL env var if you want "large-v3" (~5× slower
+    # again) or "tiny" (faster but noticeably worse).
+    whisper_model: str = "medium"
     whisper_device: str = "auto"
     whisper_compute_type: str = "float16"
     # Chunked transcription: split long audio into N-second chunks before

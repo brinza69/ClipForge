@@ -21,6 +21,9 @@ from routers.campaigns import router as campaigns_router
 from routers.utilities import router as utilities_router
 from routers.tts import router as tts_router
 from routers.transcript import router as transcript_router
+from routers.captions import router as captions_router
+from routers.remix import router as remix_router
+from routers.commentators import router as commentators_router
 from job_queue import job_queue
 from workers.pipeline import register_pipeline_handlers
 from workers.utility_jobs import register_utility_handlers
@@ -50,6 +53,8 @@ async def lifespan(app: FastAPI):
     # Pipeline setup
     register_pipeline_handlers(job_queue)
     register_utility_handlers(job_queue)
+    from workers.remix_pipeline import register_remix_handlers
+    register_remix_handlers(job_queue)
     queue_task = asyncio.create_task(job_queue.start())
     logger.info("Background job queue started.")
 
@@ -98,6 +103,9 @@ app.include_router(campaigns_router)
 app.include_router(utilities_router)
 app.include_router(tts_router)
 app.include_router(transcript_router)
+app.include_router(captions_router)
+app.include_router(remix_router)
+app.include_router(commentators_router)
 
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 app.mount("/exports", StaticFiles(directory=settings.exports_dir), name="exports")

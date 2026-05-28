@@ -77,6 +77,9 @@ class JobType(str, enum.Enum):
     erase = "erase"
     erase_project = "erase_project"
     silence_remove = "silence_remove"
+    caption_burn = "caption_burn"
+    remix_pipeline = "remix_pipeline"
+    commentator_bg_remove = "commentator_bg_remove"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────

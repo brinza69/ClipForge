@@ -218,6 +218,10 @@ export default function TTSPage() {
         body.stability = stability;
         body.similarity_boost = similarityBoost;
         body.style = style;
+        // ElevenLabs accepts speed too (0.7-1.2). Backend clamps to the
+        // engine-supported range, so we can safely send the same `speed`
+        // state the XTTS slider uses.
+        body.speed = speed;
       }
 
       const startRes = await fetch(`${WORKER_URL}/api/tts/synthesize`, {
@@ -611,6 +615,20 @@ export default function TTSPage() {
               </p>
             ) : (
               <>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Speed</span>
+                    <span className="font-mono text-foreground">{speed.toFixed(2)}x</span>
+                  </div>
+                  <Slider
+                    value={[Math.max(0.7, Math.min(1.2, speed))]}
+                    onValueChange={(v) => setSpeed(Array.isArray(v) ? v[0] : v)}
+                    min={0.7} max={1.2} step={0.05}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    ElevenLabs supports 0.7×–1.2× on multilingual_v2 / turbo / flash models.
+                  </p>
+                </div>
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">Stability</span>

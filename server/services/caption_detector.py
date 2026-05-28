@@ -115,13 +115,15 @@ def _ocr_frame(reader, frame: np.ndarray) -> List[tuple]:
 def detect_caption_segments(
     video_path: str,
     *,
-    sample_fps: float = 3.0,
-    min_conf: float = 0.35,
+    sample_fps: float = 5.0,        # was 3.0 — catches transient text
+    min_conf: float = 0.25,         # was 0.35 — stylized fonts score lower
     lane_threshold_frac: float = 0.08,
     min_detections_per_lane: int = 3,
     segment_gap_s: float = 1.5,
-    padding_px: int = 12,
-    bleed_s: float = 0.2,
+    padding_px: int = 6,            # was 12 — tighter bbox; inpaint dilates separately
+    bleed_s: float = 0.4,           # was 0.2 — covers brief fade-in/fade-out
+    drift_threshold: float = 0.30,  # NEW — split segments when bbox center
+                                     # drifts more than this fraction of current size
     on_progress: Optional[Callable[[float, str], None]] = None,
 ) -> List[dict]:
     """
@@ -211,7 +213,33 @@ def detect_caption_segments(
 
         cur = None
         for d in lane.detections:
-            if cur is None or (d.t - cur["last_t"]) > segment_gap_s:
+            # Three cases that close the current segment and start a fresh one:
+            #   (a) first detection in the lane (cur is None)
+            #   (b) time gap larger than `segment_gap_s` (caption disappeared)
+            #   (c) DRIFT — center of this detection is far from the running
+            #              segment center, relative to current segment size.
+            #              This is the fix for "OCR zone is much bigger than
+            #              the actual text": when a caption moves mid-display
+            #              (TikTok wobble / repositioning), we split into
+            #              two tighter segments instead of one huge union.
+            split_required = cur is None
+            if cur is not None:
+                if (d.t - cur["last_t"]) > segment_gap_s:
+                    split_required = True
+                else:
+                    cur_w = max(1, cur["x1"] - cur["x0"])
+                    cur_h = max(1, cur["y1"] - cur["y0"])
+                    cur_cx = (cur["x0"] + cur["x1"]) / 2
+                    cur_cy = (cur["y0"] + cur["y1"]) / 2
+                    d_cx = d.x + d.w / 2
+                    d_cy = d.y + d.h / 2
+                    if (
+                        abs(d_cx - cur_cx) > cur_w * drift_threshold
+                        or abs(d_cy - cur_cy) > cur_h * drift_threshold
+                    ):
+                        split_required = True
+
+            if split_required:
                 if cur is not None:
                     segments.append(_finalise_segment(cur, vw, vh, padding_px, bleed_s))
                 cur = {

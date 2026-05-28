@@ -139,9 +139,14 @@ async def synthesize(
     similarity_boost: float = 0.75,
     style: float = 0.0,
     speaker_boost: bool = True,
+    speed: float = 1.0,
 ) -> str:
     """
     POST to /v1/text-to-speech/{voice_id} and write the returned MP3 to disk.
+
+    `speed` (0.7-1.2, default 1.0) controls playback speed. Only supported
+    on multilingual_v2, turbo_v2_5, flash_v2, flash_v2_5 models. ElevenLabs
+    silently ignores it on other models, so it's safe to always pass.
 
     Returns the output path. Raises RuntimeError on API failure with the
     body of the error (which usually contains useful hints — e.g. quota
@@ -159,6 +164,7 @@ async def synthesize(
             "similarity_boost": max(0.0, min(1.0, float(similarity_boost))),
             "style": max(0.0, min(1.0, float(style))),
             "use_speaker_boost": bool(speaker_boost),
+            "speed": max(0.7, min(1.2, float(speed))),
         },
     }
 

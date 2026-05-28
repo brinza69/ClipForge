@@ -236,8 +236,76 @@ SYSTEM_PROMPT = (
     "3. Fix punctuation, capitalize properly, break into natural paragraphs.\n"
     "4. Remove obvious filler (uh, um, like, you know) and false starts.\n"
     "5. Do NOT invent facts or add information that was not in the original.\n"
-    "6. Output ONLY the cleaned text. No preface, no headings, no commentary."
+    "6. Output ONLY the cleaned text. NO preface, NO headings, NO commentary, "
+    "NO explanation of your edits, NO horizontal rules (---), NO repeated versions. "
+    "Do not write the text twice. Do not say 'Here is...' or 'Iată...' or "
+    "'This version...' or 'Acesta este...'. Just emit the cleaned prose once, "
+    "and stop."
 )
+
+
+# ----------------------------------------------------------------------------
+# Post-processing to undo common model misbehavior (works around small LLMs
+# that ignore "no commentary" instructions — qwen2.5:7b in particular).
+# ----------------------------------------------------------------------------
+
+# Markdown horizontal rules the model inserts before a meta-commentary section.
+_MD_HR_RE = re.compile(r"\n\s*[-–—_*]{3,}\s*\n")
+
+# Phrases that signal "I'm about to explain what I just did" — anything after
+# them is junk the TTS should never read. Multilingual.
+_META_HEADERS = [
+    # English
+    "here is the cleaned",
+    "here's the cleaned",
+    "this is the cleaned",
+    "this version",
+    "the cleaned version",
+    "note:",
+    "explanation:",
+    # Romanian
+    "iată textul",
+    "iată versiunea",
+    "iată variată",
+    "acesta este un text",
+    "aceasta este versiunea",
+    "pentru a fi mai natural",
+    "textul ar putea fi ajustat",
+    "respectă toate cerin",
+    "rămâne aproape la lungimea",
+    # Generic structural
+    "translated version:",
+    "cleaned version:",
+]
+
+
+def _strip_meta_commentary(text: str) -> str:
+    """Remove meta-commentary that small LLMs leak into the output."""
+    if not text:
+        return text
+
+    # 1. Hard cut at the first markdown horizontal rule. Everything after `---`
+    #    is, in qwen2.5's pattern, either a "natural Romanian version" rewrite
+    #    or a closing remark. Either way, not transcript prose.
+    parts = _MD_HR_RE.split(text, maxsplit=1)
+    head = parts[0]
+
+    # 2. Trim a trailing block that starts with a meta-header sentence.
+    #    Walk the text once looking for the EARLIEST meta-header occurrence
+    #    that has at least one paragraph of "real" content before it.
+    lower = head.lower()
+    earliest = -1
+    for needle in _META_HEADERS:
+        idx = lower.find(needle)
+        if idx > 0 and (earliest == -1 or idx < earliest):
+            earliest = idx
+    if earliest > 0:
+        head = head[:earliest]
+
+    # 3. Trim trailing punctuation/whitespace noise.
+    head = head.rstrip(" \n\t-–—_*:")
+
+    return head.strip()
 
 
 def _user_prompt(text: str, target_language: Optional[str]) -> str:
@@ -278,7 +346,7 @@ async def _call_ollama(text: str, target_language: Optional[str], model: str) ->
             raise RuntimeError(f"Ollama error {r.status_code}: {r.text[:300]}")
         data = r.json()
     msg = (data.get("message") or {}).get("content") or ""
-    return msg.strip()
+    return _strip_meta_commentary(msg)
 
 
 async def _call_openai(text: str, target_language: Optional[str], model: str) -> str:
@@ -306,7 +374,7 @@ async def _call_openai(text: str, target_language: Optional[str], model: str) ->
                 err = r.text
             raise RuntimeError(f"OpenAI error {r.status_code}: {str(err)[:300]}")
         data = r.json()
-    return (data["choices"][0]["message"]["content"] or "").strip()
+    return _strip_meta_commentary(data["choices"][0]["message"]["content"] or "")
 
 
 async def _call_anthropic(text: str, target_language: Optional[str], model: str) -> str:
@@ -339,7 +407,7 @@ async def _call_anthropic(text: str, target_language: Optional[str], model: str)
         data = r.json()
     parts = data.get("content", [])
     out = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
-    return out.strip()
+    return _strip_meta_commentary(out)
 
 
 # ---------------------------------------------------------------------------
