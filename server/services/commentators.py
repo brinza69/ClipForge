@@ -164,6 +164,45 @@ def _make_thumb(video_path: Path, thumb_path: Path, time_s: float = 0.5) -> None
         logger.warning(f"thumb generation failed: {r.stderr[-300:]}")
 
 
+def _probe_has_alpha(video_path: Path) -> bool:
+    """
+    Detect whether the uploaded video carries a real alpha channel.
+
+    Two cases that matter in practice:
+      - VP9 in WebM with `alpha_mode=1` tag (CapCut "Export with alpha"
+        and most modern editors produce this).
+      - QuickTime MOV with ProRes 4444 / Animation / HEVC with alpha,
+        which show up as `pix_fmt=yuva*` or `bgra` / `rgba` etc.
+
+    Returns False on probe failure so we don't accidentally skip chroma
+    keying for files that actually need it.
+    """
+    try:
+        r = subprocess.run(
+            [_ffprobe(), "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=pix_fmt:stream_tags=alpha_mode",
+             "-of", "default=noprint_wrappers=1", str(video_path)],
+            capture_output=True, text=True, timeout=15, creationflags=_creationflags(),
+        )
+    except Exception:
+        return False
+    text = (r.stdout or "").lower()
+    if "alpha_mode=1" in text:
+        return True
+    for pix in ("yuva420p", "yuva422p", "yuva444p", "bgra", "rgba", "argb", "abgr"):
+        if f"pix_fmt={pix}" in text:
+            return True
+    return False
+
+
+def _ffprobe() -> str:
+    f = _ffmpeg()
+    p = f.replace("ffmpeg", "ffprobe")
+    if Path(p).exists() or p == "ffprobe":
+        return p
+    return shutil.which("ffprobe") or "ffprobe"
+
+
 def save_preset(
     *,
     name: str,
@@ -221,11 +260,19 @@ def save_preset(
     except Exception:
         pass
 
+    has_alpha = _probe_has_alpha(video_path)
+    if has_alpha:
+        logger.info(f"preset {pid}: source has native alpha — chromakey will be skipped")
+
     meta = {
         "id": pid,
         "name": name.strip(),
         "default_position": default_position,
         "default_scale": float(default_scale),
+        # When the upload already carries alpha (CapCut-exported webm with
+        # alpha, ProRes 4444 mov, etc.), chroma settings are stored but
+        # bypassed by the overlay stage.
+        "has_native_alpha": has_alpha,
         "chroma_key": chroma_key,
         "chroma_similarity": float(chroma_similarity),
         "chroma_blend": float(chroma_blend),

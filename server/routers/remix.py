@@ -264,6 +264,10 @@ async def remix_result(job_id: str):
         "output_filename": meta.get("output_filename"),
         "cleaned_text": meta.get("cleaned_text"),
         "speed_match_stats": meta.get("speed_match_stats"),
+        "descriptions": meta.get("descriptions") or {
+            "original_translated": "",
+            "ai_generated": "",
+        },
     }
 
 

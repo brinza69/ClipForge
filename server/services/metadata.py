@@ -149,7 +149,7 @@ async def fetch_metadata(url: str, project_id: str) -> Dict[str, Any]:
             "estimated_size": estimated_size,
             "estimated_size_formatted": format_filesize(estimated_size),
             "upload_date": info.get("upload_date"),
-            "description": (info.get("description") or "")[:500],
+            "description": (info.get("description") or "")[:4000],
             "formats_available": unique_formats[:10],  # Top 10 formats
         }
 
