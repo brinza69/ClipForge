@@ -168,11 +168,14 @@ async def _stage_download(meta: Dict, slc: _Sliced, queue, job_id: str, project_
         project = await session.get(ProjectModel, project_id)
         if project and not project.duration:
             metdat = await fetch_metadata(meta["url"], project_id)
-            for f in ("title", "duration", "width", "height", "fps", "thumbnail_url"):
+            for f in ("title", "duration", "width", "height", "fps", "thumbnail_url", "description"):
                 if metdat.get(f):
                     setattr(project, f, metdat[f])
             project.status = ProjectStatus.metadata_ready.value
             await session.commit()
+        # Carry the source description forward — the descriptions stage needs it.
+        meta["source_description"] = (project.description if project else "") or ""
+        meta["source_title"] = (project.title if project else "") or meta.get("title", "")
 
     await slc.update(0.05, "Downloading video…")
 
@@ -194,6 +197,17 @@ async def _stage_download(meta: Dict, slc: _Sliced, queue, job_id: str, project_
 
 async def _stage_transcribe(video_path: Path, slc: _Sliced) -> Dict[str, Any]:
     from services.transcriber import transcribe
+    from workers.pipeline import _has_audio_stream
+
+    # Pre-flight: refuse to call faster-whisper on a file with no audio stream.
+    # Without this, PyAV's streams.audio[0] raises IndexError deep in the worker
+    # and the user only sees "tuple index out of range" on chunk 1/1.
+    if not _has_audio_stream(str(video_path)):
+        raise RuntimeError(
+            "Source video has no audio track — nothing to transcribe. "
+            "TikTok HEVC variants sometimes deliver video-only files; "
+            "try the URL again or pick a different source."
+        )
 
     await slc.update(0.0, "Transcribing audio…")
 
@@ -654,6 +668,34 @@ async def _stage_caption_burn(
     return output_path
 
 
+async def _stage_descriptions(
+    source_description: str,
+    transcript_for_ai: str,
+    cfg: Dict,
+    slc: _Sliced,
+) -> Dict[str, str]:
+    """Produce the two description variants. Re-uses the transcript cleaner's
+    engine choice so the user does not have to configure anything extra."""
+    from services.descriptions import generate_video_descriptions
+
+    engine = cfg.get("transcript_engine") or "ollama"
+    target_lang = cfg.get("transcript_target_lang") or None
+
+    await slc.update(0.1, "Writing descriptions…")
+    try:
+        result = await generate_video_descriptions(
+            original_description=source_description,
+            transcript=transcript_for_ai,
+            engine=engine,
+            target_language=target_lang,
+        )
+    except Exception as e:
+        logger.warning(f"descriptions stage failed: {e}")
+        result = {"original_translated": "", "ai_generated": ""}
+    await slc.update(1.0, "Descriptions ready")
+    return result
+
+
 # ── Main orchestrator ──────────────────────────────────────────────────────
 
 
@@ -728,9 +770,11 @@ async def handle_remix_pipeline(
     sm_stats = await _stage_speed_match(erased_path, voice_path, matched_path, slc_sm)
     voice_dur = sm_stats["voice_dur"]
 
-    # Stage 5 — caption burn (0.75–0.92 if commentator follows, else 0.75–1.00)
+    # Stage 5 — caption burn. With commentator: 0.75–0.90, without: 0.75–0.95.
+    # Stage 6 (commentator, optional): 0.90–0.95.
+    # Stage 7 (descriptions): 0.95–1.00 (always runs).
     has_commentator = bool(cfg.get("commentator_preset_id"))
-    cap_hi = 0.92 if has_commentator else 1.00
+    cap_hi = 0.90 if has_commentator else 0.95
     slc_cap = _Sliced(queue, job_id, 0.75, cap_hi)
     captioned_path = project_dir / ("video_captioned.mp4" if has_commentator else "video_final.mp4")
     await _stage_caption_burn(
@@ -738,17 +782,27 @@ async def handle_remix_pipeline(
         cfg, captioned_path, slc_cap,
     )
 
-    # Stage 6 (optional) — commentator overlay (0.92–1.00). When no commentator
-    # is selected, the captioned output IS the final.
+    # Stage 6 (optional) — commentator overlay. When no commentator is
+    # selected, the captioned output IS the final.
     final_path = project_dir / "video_final.mp4"
     commentator_stats = None
     if has_commentator:
-        slc_com = _Sliced(queue, job_id, 0.92, 1.00)
+        slc_com = _Sliced(queue, job_id, 0.90, 0.95)
         commentator_stats = await _stage_commentator(
             captioned_path, final_path, cfg, slc_com,
         )
     else:
         final_path = captioned_path
+
+    # Stage 7 — descriptions (0.95–1.00). Two short LLM calls; the user gets
+    # both an original-translated and an AI-generated description.
+    slc_desc = _Sliced(queue, job_id, 0.95, 1.00)
+    descriptions = await _stage_descriptions(
+        cfg.get("source_description", ""),
+        cleaned_text or raw_transcript_text,
+        cfg,
+        slc_desc,
+    )
 
     # Persist outputs on the job so the router can serve the final file.
     cfg.update({
@@ -762,6 +816,7 @@ async def handle_remix_pipeline(
         "cleaned_text": cleaned_text,
         "transcript_text": raw_transcript_text,
         "speed_match_stats": sm_stats,
+        "descriptions": descriptions,
         "output_filename": f"{Path(cfg.get('title') or project_id).stem}_remix.mp4",
     })
     async with async_session() as session:

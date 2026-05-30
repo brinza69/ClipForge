@@ -136,6 +136,7 @@ export default function RemixPage() {
     video_available: boolean;
     thumb_available: boolean;
     ai_processed?: boolean;     // true if processed.webm exists → AI alpha mode active
+    has_native_alpha?: boolean; // upload already carries alpha (e.g. CapCut webm export)
   }
   const [commentators, setCommentators] = useState<Commentator[]>([]);
   const [commentatorId, setCommentatorId] = useState<string>("");  // "" = None
@@ -165,6 +166,11 @@ export default function RemixPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [downloadUrl, setDownloadUrl] = useState("");
   const [downloadFilename, setDownloadFilename] = useState("");
+  const [descriptions, setDescriptions] = useState<{
+    original_translated: string;
+    ai_generated: string;
+  } | null>(null);
+  const [copiedDesc, setCopiedDesc] = useState<"orig" | "ai" | null>(null);
 
   // ── Past runs ──────────────────────────────────────────────────────────
   interface PastRun {
@@ -661,6 +667,8 @@ export default function RemixPage() {
     setProgressMsg("Submitting…");
     setJobStatus("queued");
     setDownloadUrl("");
+    setDescriptions(null);
+    setCopiedDesc(null);
 
     try {
       const r = await fetch(`/worker-api/remix/start`, {
@@ -702,6 +710,7 @@ export default function RemixPage() {
             if (meta.ok) {
               const m = await meta.json();
               setDownloadFilename(m.output_filename || `remix-${jobId}.mp4`);
+              if (m.descriptions) setDescriptions(m.descriptions);
             } else {
               setDownloadFilename(`remix-${jobId}.mp4`);
             }
@@ -744,7 +753,8 @@ export default function RemixPage() {
       { label: "Transcribe", lo: 10, hi: 20 },
       { label: "Erase  ‖  Voice", lo: 20, hi: 65 },
       { label: "Speed-match", lo: 65, hi: 75 },
-      { label: "Captions", lo: 75, hi: 100 },
+      { label: "Captions", lo: 75, hi: 95 },
+      { label: "Descriptions", lo: 95, hi: 100 },
     ];
     return ranges.map((s) => ({
       ...s,
@@ -1457,7 +1467,26 @@ export default function RemixPage() {
 
               return (
                 <div className="mt-3 rounded-md border border-border/40 bg-muted/20 p-3 space-y-3">
-                  {/* AI background removal — supersedes chroma key when active */}
+                  {/* Native alpha badge — supersedes everything below */}
+                  {com.has_native_alpha && (
+                    <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-2.5">
+                      <div className="text-xs font-semibold flex items-center gap-1.5 text-emerald-300">
+                        <Sparkles className="h-3 w-3" />
+                        Native alpha channel detected
+                        <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-400/40">
+                          active
+                        </Badge>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        Your upload already carries alpha transparency
+                        (CapCut/Premiere/DaVinci export with alpha). The pipeline uses
+                        it directly — no chroma keying, no AI processing needed. Cleanest result.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* AI background removal — supersedes chroma key when active. Hidden when native alpha is present. */}
+                  {!com.has_native_alpha && (
                   <div className="rounded-md border border-primary/30 bg-primary/5 p-2.5 space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <div>
@@ -1515,7 +1544,9 @@ export default function RemixPage() {
                       </p>
                     )}
                   </div>
+                  )}
 
+                  {!com.has_native_alpha && (<>
                   <div className="flex items-center justify-between">
                     <Label className={`text-xs font-semibold ${com.ai_processed ? "text-muted-foreground line-through" : ""}`}>
                       Background to remove (chroma key)
@@ -1618,6 +1649,7 @@ export default function RemixPage() {
                       Save to preset
                     </Button>
                   </div>
+                  </>)}
                 </div>
               );
             })()}
@@ -1674,6 +1706,52 @@ export default function RemixPage() {
             <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
               <div>{errorMsg}</div>
+            </div>
+          )}
+
+          {descriptions && (descriptions.original_translated || descriptions.ai_generated) && (
+            <div className="space-y-3">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
+                Video descriptions
+              </div>
+              {(["orig", "ai"] as const).map((kind) => {
+                const text = kind === "orig"
+                  ? descriptions.original_translated
+                  : descriptions.ai_generated;
+                if (!text) {
+                  return (
+                    <div
+                      key={kind}
+                      className="rounded-md border border-dashed border-border/40 bg-muted/30 p-3 text-xs text-muted-foreground"
+                    >
+                      {kind === "orig"
+                        ? "Original description: source had no description to translate."
+                        : "AI description: could not be generated (engine error)."}
+                    </div>
+                  );
+                }
+                return (
+                  <div key={kind} className="rounded-md border border-border/40 bg-card p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">
+                        {kind === "orig" ? "Original (translated)" : "AI-generated (from transcript)"}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(text);
+                          setCopiedDesc(kind);
+                          setTimeout(() => setCopiedDesc((c) => (c === kind ? null : c)), 1500);
+                        }}
+                        className="text-[11px] text-primary hover:underline"
+                      >
+                        {copiedDesc === kind ? "Copied!" : "Copy"}
+                      </button>
+                    </div>
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap">{text}</div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
