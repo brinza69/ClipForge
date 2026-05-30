@@ -538,14 +538,17 @@ export default function TTSPage() {
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
-              maxLength={2000}
               rows={6}
               placeholder="Type or paste the text you want the AI voice to read…"
               className="w-full rounded-md border border-border/40 bg-background/60 px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500/30 resize-y min-h-[120px]"
             />
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>{text.length} / 2000 chars</span>
-              <span>Tip: split long scripts into shorter takes for better pacing</span>
+              <span>{text.length.toLocaleString()} chars</span>
+              <span>
+                {text.length <= 1200
+                  ? "Single take"
+                  : `Will be auto-split into ~${Math.ceil(text.length / 1200)} chunks and concatenated`}
+              </span>
             </div>
           </Card>
 

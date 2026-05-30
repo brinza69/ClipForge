@@ -79,13 +79,20 @@ def composite_commentator(
     if not preset:
         raise FileNotFoundError(f"commentator preset not found: {preset_id}")
 
-    # AI-processed WebM (real alpha) takes precedence over the raw mp4 when
-    # the preset was processed with rembg. This bypasses chromakey entirely.
+    # Three sources, in precedence order:
+    #   1. AI-processed WebM (real alpha, baked by rembg)
+    #   2. Native-alpha upload (CapCut .webm export, ProRes .mov, etc.)
+    #   3. Raw video → needs chroma key
     ai_path = commentator_ai_path(preset_id)
+    raw_path = commentator_video_path(preset_id)
     use_ai = ai_path.exists()
-    src_overlay = ai_path if use_ai else commentator_video_path(preset_id)
+    has_native_alpha = bool(preset.get("has_native_alpha")) and not use_ai
+    src_overlay = ai_path if use_ai else raw_path
     if not src_overlay.exists():
         raise FileNotFoundError(f"commentator video missing for preset: {preset_id}")
+    # Either AI-baked OR native upload alpha → we'll skip chroma-key and
+    # rely on the alpha channel directly.
+    alpha_source = use_ai or has_native_alpha
 
     main_w, main_h = _probe_dims(main_video_path)
     # Even-align for libx264 yuv420p compatibility (already even for typical
@@ -97,9 +104,10 @@ def composite_commentator(
     #   "__none__" sentinel  → disable keying entirely (per-run override)
     #   explicit non-empty   → use override
     #   None/empty           → fall back to preset's saved value
-    # When AI-processed alpha is in use, force chroma_color=None so the
-    # already-baked alpha channel is what drives transparency.
-    if use_ai:
+    # When ANY real alpha is in use (AI-baked or uploaded native), force
+    # chroma_color=None so the already-baked alpha channel is what drives
+    # transparency.
+    if alpha_source:
         chroma_color = None
     elif chroma_override == "__none__":
         chroma_color = None
@@ -151,7 +159,8 @@ def composite_commentator(
     ]
     # VP9 WebM with `alpha_mode=1` needs the libvpx-vp9 decoder explicitly
     # — auto-detect picks a generic VP9 decoder that drops the alpha plane.
-    if use_ai:
+    # Applies to both AI-baked webm and any native upload that's webm.
+    if alpha_source and str(src_overlay).lower().endswith(".webm"):
         cmd += ["-c:v", "libvpx-vp9"]
     cmd += [
         "-i", str(src_overlay),           # input 1 = commentator clip
@@ -175,6 +184,7 @@ def composite_commentator(
         "overlay_size_px": [main_w, main_h],
         "anchor_xy": [0, 0],
         "chroma_key": chroma_color,
+        "alpha_source": "ai" if use_ai else ("native" if has_native_alpha else "chroma"),
     }
 
 
