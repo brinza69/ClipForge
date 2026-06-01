@@ -25,9 +25,11 @@ VENV="$ROOT/server/.venv"
 BACKEND_PORT="${CLIPFORGE_BACKEND_PORT:-8420}"
 FRONTEND_PORT="${CLIPFORGE_FRONTEND_PORT:-3000}"
 
-# Whisper model: "small" OOM-kills under WSL2's default memory cap; "base"
-# fits comfortably. Override with: CLIPFORGE_WHISPER_MODEL=small ./dev.sh start
-: "${CLIPFORGE_WHISPER_MODEL:=base}"
+# Whisper model: "medium" gives ~half the WER on RO/accented speech (project
+# default in config.py). It needs more RAM than "base"/"small" — if WSL2's
+# default memory cap OOM-kills the worker, either raise the cap in .wslconfig
+# or override: CLIPFORGE_WHISPER_MODEL=base ./dev.sh start
+: "${CLIPFORGE_WHISPER_MODEL:=medium}"
 export CLIPFORGE_WHISPER_MODEL
 
 mkdir -p "$RUN_DIR" "$LOG_DIR"
