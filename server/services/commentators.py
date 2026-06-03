@@ -46,6 +46,9 @@ MAX_VIDEO_BYTES = 200 * 1024 * 1024  # 200 MB ceiling — these are short loops,
 VALID_POSITIONS = {
     "bottom-left", "bottom-right", "top-left", "top-right",
     "bottom-center", "top-center", "custom",
+    # Remix commentators composite full-frame (scaled to main dims, overlay
+    # 0:0), so the corner labels don't apply — the upload sends "fullscreen".
+    "fullscreen",
 }
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
