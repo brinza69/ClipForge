@@ -107,13 +107,16 @@ start_backend() {
   NVIDIA_BASE='$VENV/lib/python3.12/site-packages/nvidia'
   NVIDIA_LIB_DIRS=\""$NVIDIA_BASE/cublas/lib:$NVIDIA_BASE/cudnn/lib:$NVIDIA_BASE/cuda_runtime/lib:$NVIDIA_BASE/cufft/lib:$NVIDIA_BASE/curand/lib:$NVIDIA_BASE/cusolver/lib:$NVIDIA_BASE/cusparse/lib:$NVIDIA_BASE/nccl/lib:$NVIDIA_BASE/nvjitlink/lib"\"
 
+  # Append (not truncate) so a restart doesn't wipe history — needed for
+  # cross-run comparisons (e.g. GPU inpaint timing). A separator marks each start.
+  { echo; echo "===== backend start $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG_DIR/backend.log"
   # setsid puts the child in a fresh process group so we can kill the whole tree.
   setsid bash -c "
     cd '$ROOT/server'
     NV='$VENV/lib/python3.12/site-packages/nvidia'
     export LD_LIBRARY_PATH=\"\$NV/cublas/lib:\$NV/cudnn/lib:\$NV/cuda_runtime/lib:\$NV/cufft/lib:\$NV/curand/lib:\$NV/cusolver/lib:\$NV/cusparse/lib:\$NV/nccl/lib:\$NV/nvjitlink/lib:\${LD_LIBRARY_PATH:-}\"
     exec '$VENV/bin/uvicorn' main:app --host 0.0.0.0 --port '$BACKEND_PORT'
-  " >"$LOG_DIR/backend.log" 2>&1 < /dev/null &
+  " >>"$LOG_DIR/backend.log" 2>&1 < /dev/null &
   echo $! > "$pidfile"
 
   if wait_for_port "$BACKEND_PORT" 20; then
@@ -143,10 +146,11 @@ start_frontend() {
   fi
 
   echo "starting frontend on :$FRONTEND_PORT..."
+  { echo; echo "===== frontend start $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG_DIR/frontend.log"
   setsid bash -c "
     cd '$ROOT'
     exec npm run dev -- --port '$FRONTEND_PORT'
-  " >"$LOG_DIR/frontend.log" 2>&1 < /dev/null &
+  " >>"$LOG_DIR/frontend.log" 2>&1 < /dev/null &
   echo $! > "$pidfile"
 
   if wait_for_port "$FRONTEND_PORT" 60; then
