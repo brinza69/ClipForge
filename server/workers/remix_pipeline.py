@@ -86,6 +86,12 @@ class _Sliced:
         mapped = self._lo + p * (self._hi - self._lo)
         await self._q.update_progress(self._jid, mapped, msg)
 
+    def sub(self, a: float, b: float) -> "_Sliced":
+        """Carve a child slice out of this one's [lo, hi] window. `a`/`b` are
+        0..1 fractions of the current slice."""
+        span = self._hi - self._lo
+        return _Sliced(self._q, self._jid, self._lo + a * span, self._lo + b * span)
+
 
 # ── Caption distribution from cleaned text ──────────────────────────────────
 
@@ -361,9 +367,8 @@ async def _stage_audio_chain(
     clean_transcript → TTS → silence_remove. Returns (final_voice_path, cleaned_text).
     """
     from services.transcript_cleaner import clean_transcript
-    from services.silence_remover import remove_silence
 
-    # 1/3 — clean
+    # 1/2 — clean (0–30% of the audio slice)
     await slc.update(0.0, "Cleaning transcript…")
     cleaned = await clean_transcript(
         transcript_text,
@@ -373,15 +378,36 @@ async def _stage_audio_chain(
     )
     if not cleaned:
         raise RuntimeError("Transcript cleaning produced empty text")
-    await slc.update(0.30, "Generating voice…")
 
-    # 2/3 — TTS
-    raw_voice = project_dir / "voice_raw.wav"
-    raw_voice_path = await _run_tts(cleaned, cfg, str(raw_voice), slc)
-    await slc.update(0.85, "Removing silence…")
+    # 2/2 — synthesize the voice from the cleaned text (30–100%).
+    voice = await synth_voice_from_text(cleaned, project_dir, cfg, slc.sub(0.30, 1.0))
+    return voice, cleaned
 
-    # 3/3 — desilence
-    desilenced_raw = project_dir / "voice_desilenced.wav"
+
+async def synth_voice_from_text(
+    cleaned: str,
+    project_dir: Path,
+    cfg: Dict,
+    slc: _Sliced,
+    *,
+    out_stem: str = "voice",
+) -> Path:
+    """TTS → desilence → loudnorm+fade. Returns the polished voice .wav.
+
+    Shared by the remix and parallel pipelines. `out_stem` namespaces the
+    intermediate files so concurrent variants in the same dir don't collide.
+    """
+    from services.silence_remover import remove_silence
+
+    await slc.update(0.0, "Generating voice…")
+
+    # 1/3 — TTS (0–80% of this slice)
+    raw_voice = project_dir / f"{out_stem}_raw.wav"
+    raw_voice_path = await _run_tts(cleaned, cfg, str(raw_voice), slc.sub(0.0, 0.80))
+    await slc.update(0.82, "Removing silence…")
+
+    # 2/3 — desilence
+    desilenced_raw = project_dir / f"{out_stem}_desilenced.wav"
     stats = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: remove_silence(
@@ -392,11 +418,11 @@ async def _stage_audio_chain(
     )
     logger.info(f"voice desilenced: {stats}")
 
-    # 4/3 — loudnorm + tiny fades. EBU R128 normalization to TikTok/Spotify
+    # 3/3 — loudnorm + tiny fades. EBU R128 normalization to TikTok/Spotify
     # standard (-16 LUFS). 50ms fade in/out removes the abrupt start/end
     # "click" you sometimes hear with TTS clips.
-    await slc.update(0.95, "Polishing audio (loudnorm + fade)…")
-    desilenced = project_dir / "voice.wav"
+    await slc.update(0.92, "Polishing audio (loudnorm + fade)…")
+    desilenced = project_dir / f"{out_stem}.wav"
     voice_dur = max(0.5, _probe_audio_dur(str(desilenced_raw)))
     fade_in = 0.05
     fade_out = 0.05
@@ -424,7 +450,7 @@ async def _stage_audio_chain(
     await polish_loop.run_in_executor(None, _polish)
 
     await slc.update(1.0, "Voice ready")
-    return desilenced, cleaned
+    return desilenced
 
 
 async def _run_tts(text: str, cfg: Dict, output_path: str, slc: _Sliced) -> str:

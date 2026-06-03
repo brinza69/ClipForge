@@ -54,9 +54,13 @@ _LAMA_AVAILABLE: Optional[bool] = None
 # in half precision only supports power-of-2 input dimensions. Caption ROIs
 # rarely satisfy that, so default to fp32 and let advanced users opt in.
 _LAMA_FP16 = os.environ.get("CLIPFORGE_LAMA_FP16", "0") == "1"
-# Batch size: 16 is the sweet spot on 8GB Turing/Ampere — bigger thrashes VRAM
-# on FFC layers (~1.4GB at B=8, ~2.6GB at B=16, ~5GB at B=32 with slowdown).
-_LAMA_BATCH = max(1, int(os.environ.get("CLIPFORGE_LAMA_BATCH", "16")))
+# Batch size: 16 is the sweet spot on 8GB cards — bigger thrashes VRAM on the
+# FFC layers (~1.4GB at B=8, ~2.6GB at B=16, ~5GB at B=32 with slowdown). On
+# cards with >=12GB we auto-raise to 24 at load time (more headroom → better
+# GPU utilisation). An explicit CLIPFORGE_LAMA_BATCH env var overrides both.
+# NOTE: 8GB cards (e.g. RTX 2080 Super) stay at exactly 16 — unchanged.
+_LAMA_BATCH_ENV = os.environ.get("CLIPFORGE_LAMA_BATCH")
+_LAMA_BATCH = max(1, int(_LAMA_BATCH_ENV)) if _LAMA_BATCH_ENV else 16
 
 _NVENC_CACHE: dict[str, bool] = {}
 
@@ -139,6 +143,19 @@ def _try_load_lama():
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
+
+    # Auto-raise the batch on cards with VRAM to spare. Only when the user did
+    # NOT pin CLIPFORGE_LAMA_BATCH. 8GB cards keep 16 (unchanged); >=12GB → 24.
+    global _LAMA_BATCH
+    if not _LAMA_BATCH_ENV:
+        try:
+            if torch.cuda.is_available():
+                vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+                if vram_gb >= 11.5:
+                    _LAMA_BATCH = 24
+                    logger.info(f"VRAM {vram_gb:.0f}GB ≥ 12GB → LaMa batch auto-raised to {_LAMA_BATCH}")
+        except Exception as e:
+            logger.warning(f"VRAM probe failed, keeping LaMa batch={_LAMA_BATCH}: {e}")
     try:
         _LAMA_MODEL = SimpleLama()
         if _LAMA_FP16:
