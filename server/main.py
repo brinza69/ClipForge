@@ -23,6 +23,9 @@ from routers.tts import router as tts_router
 from routers.transcript import router as transcript_router
 from routers.captions import router as captions_router
 from routers.remix import router as remix_router
+from routers.parallel import router as parallel_router
+from routers.variant_presets import router as variant_presets_router
+from routers.drive_auth import router as drive_auth_router
 from routers.commentators import router as commentators_router
 from job_queue import job_queue
 from workers.pipeline import register_pipeline_handlers
@@ -55,6 +58,8 @@ async def lifespan(app: FastAPI):
     register_utility_handlers(job_queue)
     from workers.remix_pipeline import register_remix_handlers
     register_remix_handlers(job_queue)
+    from workers.parallel_pipeline import register_parallel_handlers
+    register_parallel_handlers(job_queue)
     queue_task = asyncio.create_task(job_queue.start())
     logger.info("Background job queue started.")
 
@@ -105,6 +110,9 @@ app.include_router(tts_router)
 app.include_router(transcript_router)
 app.include_router(captions_router)
 app.include_router(remix_router)
+app.include_router(parallel_router)
+app.include_router(variant_presets_router)
+app.include_router(drive_auth_router)
 app.include_router(commentators_router)
 
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")

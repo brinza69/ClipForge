@@ -403,31 +403,9 @@ class DrivePayload(BaseModel):
 
 
 def _extract_drive_folder_id(link: str) -> Optional[str]:
-    """Parse a Google Drive folder URL or ID and return the folder ID.
-
-    Accepts common share-link shapes:
-      - https://drive.google.com/drive/folders/<ID>
-      - https://drive.google.com/drive/folders/<ID>?usp=sharing
-      - https://drive.google.com/drive/u/0/folders/<ID>
-      - https://drive.google.com/open?id=<ID>
-      - bare 25-44 char alphanumeric/_- ID
-    """
-    import re
-    s = (link or "").strip()
-    if not s:
-        return None
-    # Bare ID
-    if re.fullmatch(r"[A-Za-z0-9_-]{25,64}", s):
-        return s
-    # folders/<ID>
-    m = re.search(r"/folders/([A-Za-z0-9_-]{25,64})", s)
-    if m:
-        return m.group(1)
-    # ?id=<ID>
-    m = re.search(r"[?&]id=([A-Za-z0-9_-]{25,64})", s)
-    if m:
-        return m.group(1)
-    return None
+    """Parse a Google Drive folder URL or ID. Delegates to the shared helper."""
+    from services.drive_upload import extract_folder_id
+    return extract_folder_id(link)
 
 
 @router.post("/drive/validate")
@@ -490,71 +468,10 @@ async def upload_to_drive(
             "reason": "No rendered outputs found. Export the clip before uploading.",
         }
 
-    # Locate credentials
-    creds_env = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    creds_local = settings.data_dir / "drive_credentials.json"
-    creds_path: Optional[str] = None
-    if creds_env and Path(creds_env).exists():
-        creds_path = creds_env
-    elif creds_local.exists():
-        creds_path = str(creds_local)
-
-    if not creds_path:
-        return {
-            "clip_id": clip_id,
-            "status": "blocked_missing_credentials",
-            "folder_id": folder_id,
-            "reason": (
-                "Google Drive service-account credentials not found. Place a JSON key at "
-                f"{creds_local} or set GOOGLE_APPLICATION_CREDENTIALS. The folder link was "
-                "saved to the clip and files were located; only the API call is blocked."
-            ),
-            "files_located": [f.name for f in files_to_upload],
-        }
-
-    # Perform the upload (requires google-api-python-client + google-auth)
-    try:
-        from google.oauth2 import service_account  # type: ignore
-        from googleapiclient.discovery import build  # type: ignore
-        from googleapiclient.http import MediaFileUpload  # type: ignore
-    except ImportError:
-        return {
-            "clip_id": clip_id,
-            "status": "blocked_missing_credentials",
-            "folder_id": folder_id,
-            "reason": (
-                "Python packages 'google-api-python-client' and 'google-auth' are not installed "
-                "on the server. Install them and retry. The folder link was saved; only the API "
-                "call is blocked."
-            ),
-            "files_located": [f.name for f in files_to_upload],
-        }
-
-    try:
-        scopes = ["https://www.googleapis.com/auth/drive.file"]
-        creds = service_account.Credentials.from_service_account_file(creds_path, scopes=scopes)
-        service = build("drive", "v3", credentials=creds, cache_discovery=False)
-        uploaded: list[str] = []
-        for fp in files_to_upload:
-            meta = {"name": fp.name, "parents": [folder_id]}
-            media = MediaFileUpload(str(fp), mimetype="video/mp4", resumable=True)
-            created = service.files().create(body=meta, media_body=media, fields="id,name").execute()
-            uploaded.append(created.get("name", fp.name))
-            logger.info(f"Uploaded {fp.name} to Drive folder {folder_id}")
-        return {
-            "clip_id": clip_id,
-            "status": "uploaded",
-            "folder_id": folder_id,
-            "uploaded": uploaded,
-        }
-    except Exception as e:
-        logger.error(f"Drive upload failed: {e}")
-        return {
-            "clip_id": clip_id,
-            "status": "failed",
-            "folder_id": folder_id,
-            "reason": f"Drive API call failed: {str(e)[:300]}",
-        }
+    # Delegate the actual upload to the shared, file-agnostic helper.
+    from services.drive_upload import upload_files
+    result = upload_files(payload.folder_link, files_to_upload)
+    return {"clip_id": clip_id, **result}
 
 
 @router.get("/project/{project_id}/transcript")

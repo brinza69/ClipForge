@@ -17,12 +17,14 @@ import {
   AudioLines,
   Type,
   Wand2,
+  Layers,
 } from "lucide-react";
 
 const navItems = [
   { label: "Dashboard",  href: "/",           icon: LayoutDashboard },
   { label: "Campaigns",  href: "/campaigns",  icon: TrendingUp },
   { label: "Remix Pipeline", href: "/remix",  icon: Wand2 },
+  { label: "Parallel Processing", href: "/parallel", icon: Layers },
   { label: "Voice Studio", href: "/tts",      icon: Mic },
   { label: "Transcript Studio", href: "/transcript", icon: FileText },
   { label: "Caption Studio", href: "/captions", icon: Type },

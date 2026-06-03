@@ -16,3 +16,5 @@ easyocr>=1.7.1
 # Google Drive upload (optional — backend tolerates missing imports)
 google-api-python-client>=2.100.0
 google-auth>=2.25.0
+# OAuth user-account flow for Drive (uploads as the user → uses their 15GB quota)
+google-auth-oauthlib>=1.2.0
