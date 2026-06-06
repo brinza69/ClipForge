@@ -539,39 +539,38 @@ async def _stage_commentator(
     return stats
 
 
-async def _stage_speed_match(
+async def _stage_match_and_caption(
     erased_video: Path,
-    voice: Path,
-    output_path: Path,
-    slc: _Sliced,
-) -> Dict:
-    from services.speed_match import match_video_to_voice
-
-    await slc.update(0.05, "Matching video length to voice…")
-    loop = asyncio.get_event_loop()
-    stats = await loop.run_in_executor(
-        None,
-        lambda: match_video_to_voice(str(erased_video), str(voice), str(output_path)),
-    )
-    await slc.update(1.0, f"Speed-match done (factor {stats['factor']:.2f})")
-    return stats
-
-
-async def _stage_caption_burn(
-    speed_matched: Path,
-    cleaned_text: str,
-    voice_duration_s: float,
     voice_path: Path,
+    cleaned_text: str,
     cfg: Dict,
     output_path: Path,
     slc: _Sliced,
-) -> Path:
+) -> Dict:
+    """FUSED speed-match + caption burn — one encode instead of two.
+
+    Time-stretches the erased video to the voice length AND burns the captions
+    in a single ffmpeg pass, so the video is re-encoded once here (not twice).
+    Eliminates a whole generation of compression loss. Returns the speed stats.
+    """
     from services.caption_overlays import build_overlays_ass, probe_video_dims
     from services.font_manager import fonts_dir
+    from services.speed_match import compute_speed_plan
+
+    await slc.update(0.02, "Planning speed-match…")
+    # Compute the stretch plan (no encode) — gives us the voice length and the
+    # video filter chain we prepend before the subtitles filter.
+    plan = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: compute_speed_plan(str(erased_video), str(voice_path))
+    )
+    voice_duration_s = plan["voice_dur"]
+    speed_vfilter = plan["vfilter"]
 
     await slc.update(0.05, "Composing captions…")
 
-    w, h = probe_video_dims(str(speed_matched))
+    # Dims are unchanged by erase/speed-match, so the erased video's dims match
+    # the final output's — safe to build the ASS canvas from them.
+    w, h = probe_video_dims(str(erased_video))
     czone = cfg["caption_zone"]
     zw = int(czone.get("src_w") or w)
     zh = int(czone.get("src_h") or h)
@@ -659,24 +658,29 @@ async def _stage_caption_burn(
     ass_path = output_path.parent / "captions.ass"
     build_overlays_ass(overlays, w, h, str(ass_path))
 
-    await slc.update(0.20, "Burning captions…")
+    await slc.update(0.20, "Speed-matching + burning captions…")
 
     ass_arg = str(ass_path).replace("\\", "/").replace(":", "\\:")
     fdir = str(fonts_dir()).replace("\\", "/").replace(":", "\\:")
-    vf = f"subtitles=filename='{ass_arg}':fontsdir='{fdir}'"
+    subtitles_vf = f"subtitles=filename='{ass_arg}':fontsdir='{fdir}'"
+
+    # FUSED filtergraph: stretch the video to the voice length, then burn the
+    # captions — all in this single encode. The voice (input 1) is muxed as the
+    # audio track. crf=16 + preset=slow: this is the ONLY real quality pass now
+    # (the erased intermediate is near-lossless), so we spend bits here.
+    fused_vf = f"{speed_vfilter},{subtitles_vf}"
 
     ffmpeg = _ffmpeg_bin()
-    # FINAL stage = use a higher-quality encode. preset=slow keeps motion
-    # detail; crf=18 cuts compression artefacts vs the old crf=20. Costs
-    # ~2-3× the time of veryfast/20 but happens once, and the file lands
-    # on a social platform that re-encodes — better to feed it cleaner bits.
     cmd = [
         ffmpeg, "-y", "-loglevel", "error",
-        "-i", str(speed_matched),
-        "-vf", vf,
-        "-c:v", "libx264", "-preset", "slow", "-crf", "18",
+        "-i", str(erased_video),   # input 0: erased video (its audio is dropped)
+        "-i", str(voice_path),     # input 1: the TTS voice
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-filter:v", fused_vf,
+        "-c:v", "libx264", "-preset", "slow", "-crf", "16",
         "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
         "-movflags", "+faststart",
         str(output_path),
     ]
@@ -686,12 +690,13 @@ async def _stage_caption_burn(
         r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
         if r.returncode != 0:
             tail = "\n".join((r.stderr or "").strip().splitlines()[-8:])
-            raise RuntimeError(f"caption burn failed: {tail}")
+            raise RuntimeError(f"speed-match + caption burn failed: {tail}")
         return Path(output_path).stat().st_size
 
     size = await loop.run_in_executor(None, _run)
-    await slc.update(1.0, f"Final video ready ({size // 1024} KB)")
-    return output_path
+    await slc.update(1.0, f"Captioned video ready ({size // 1024} KB)")
+    plan["output_size_kb"] = size // 1024
+    return plan
 
 
 async def _stage_descriptions(
@@ -790,22 +795,16 @@ async def handle_remix_pipeline(
         erase_task, audio_task
     )
 
-    # Stage 4 — speed-match video to voice (0.65–0.75)
-    slc_sm = _Sliced(queue, job_id, 0.65, 0.75)
-    matched_path = project_dir / "video_voicematched.mp4"
-    sm_stats = await _stage_speed_match(erased_path, voice_path, matched_path, slc_sm)
-    voice_dur = sm_stats["voice_dur"]
-
-    # Stage 5 — caption burn. With commentator: 0.75–0.90, without: 0.75–0.95.
+    # Stage 4+5 FUSED — speed-match + caption burn in ONE encode (0.65–cap_hi).
+    # With commentator: 0.65–0.90, without: 0.65–0.95.
     # Stage 6 (commentator, optional): 0.90–0.95.
     # Stage 7 (descriptions): 0.95–1.00 (always runs).
     has_commentator = bool(cfg.get("commentator_preset_id"))
     cap_hi = 0.90 if has_commentator else 0.95
-    slc_cap = _Sliced(queue, job_id, 0.75, cap_hi)
+    slc_cap = _Sliced(queue, job_id, 0.65, cap_hi)
     captioned_path = project_dir / ("video_captioned.mp4" if has_commentator else "video_final.mp4")
-    await _stage_caption_burn(
-        matched_path, cleaned_text, voice_dur, voice_path,
-        cfg, captioned_path, slc_cap,
+    sm_stats = await _stage_match_and_caption(
+        erased_path, voice_path, cleaned_text, cfg, captioned_path, slc_cap,
     )
 
     # Stage 6 (optional) — commentator overlay. When no commentator is
@@ -835,7 +834,6 @@ async def handle_remix_pipeline(
         "video_path": str(video_path),
         "erased_path": str(erased_path),
         "voice_path": str(voice_path),
-        "matched_path": str(matched_path),
         "captioned_path": str(captioned_path),
         "commentator_stats": commentator_stats,
         "final_path": str(final_path),

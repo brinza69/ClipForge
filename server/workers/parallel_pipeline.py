@@ -42,8 +42,7 @@ from workers.remix_pipeline import (
     _stage_descriptions,
     _stage_download,
     _stage_erase,
-    _stage_speed_match,
-    _stage_caption_burn,
+    _stage_match_and_caption,
     _stage_transcribe,
     synth_voice_from_text,
 )
@@ -181,21 +180,15 @@ async def handle_parallel_pipeline(
             cleaned_text, vdir, vcfg, v_slc.sub(0.0, 0.40), out_stem="voice",
         )
 
-        # 2) speed-match the shared erased video to this variant's voice
-        await v_slc.update(0.40, f"[{i + 1}/{n}] {label}: speed-match…")
-        matched_path = vdir / "video_voicematched.mp4"
-        sm_stats = await _stage_speed_match(
-            erased_path, voice_path, matched_path, v_slc.sub(0.40, 0.55),
-        )
-        voice_dur = sm_stats["voice_dur"]
-
-        # 3) caption burn
+        # 2+3) FUSED speed-match + caption burn (one encode) on the shared
+        # erased video against this variant's voice.
+        await v_slc.update(0.40, f"[{i + 1}/{n}] {label}: speed-match + captions…")
         has_com = bool(com_id)
         cap_hi = 0.80 if has_com else 1.0
         captioned_path = vdir / ("video_captioned.mp4" if has_com else "video_final.mp4")
-        await _stage_caption_burn(
-            matched_path, cleaned_text, voice_dur, voice_path,
-            vcfg, captioned_path, v_slc.sub(0.55, cap_hi),
+        sm_stats = await _stage_match_and_caption(
+            erased_path, voice_path, cleaned_text, vcfg, captioned_path,
+            v_slc.sub(0.40, cap_hi),
         )
 
         # 4) commentator (optional)
