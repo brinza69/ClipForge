@@ -335,9 +335,13 @@ async def _stage_erase(
             mapped = max(0.0, min(0.4, p * 0.4))  # OCR uses 0-40% of erase slice
             asyncio.run_coroutine_threadsafe(slc.update(mapped, msg), loop)
 
+        # Constrain detection to the user's drawn erase rect — on busy/animated
+        # frames OCR sees text everywhere; we must only erase inside the band
+        # the user marked as the caption area.
+        roi = {"x": x, "y": y, "w": w, "h": h}
         detected_segments = await loop.run_in_executor(
             None,
-            lambda: detect_caption_segments(str(video_path), on_progress=_det_progress),
+            lambda: detect_caption_segments(str(video_path), roi=roi, on_progress=_det_progress),
         )
         if not detected_segments:
             logger.warning(

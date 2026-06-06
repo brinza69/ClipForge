@@ -124,6 +124,10 @@ def detect_caption_segments(
     bleed_s: float = 0.4,           # was 0.2 — covers brief fade-in/fade-out
     drift_threshold: float = 0.30,  # NEW — split segments when bbox center
                                      # drifts more than this fraction of current size
+    roi: Optional[dict] = None,     # {x,y,w,h} — only look for captions whose
+                                     # centre falls inside this region. The user's
+                                     # drawn erase rect, so scene text elsewhere
+                                     # (busy animated frames) is never erased.
     on_progress: Optional[Callable[[float, str], None]] = None,
 ) -> List[dict]:
     """
@@ -183,6 +187,20 @@ def detect_caption_segments(
     cap.release()
     logger.info(f"OCR done: {len(detections)} text detections across {sample_idx} sample frames")
 
+    # Restrict to the region of interest (the user's erase rect). Keep only
+    # detections whose CENTRE is inside it — busy frames have scene text all
+    # over, and we must not erase anything outside the marked caption band.
+    if roi:
+        rx, ry = int(roi.get("x", 0)), int(roi.get("y", 0))
+        rx2, ry2 = rx + int(roi.get("w", vw)), ry + int(roi.get("h", vh))
+        before = len(detections)
+        detections = [
+            d for d in detections
+            if rx <= (d.x + d.w / 2) <= rx2 and ry <= (d.y + d.h / 2) <= ry2
+        ]
+        logger.info(f"ROI filter: {before} → {len(detections)} detections inside "
+                    f"({rx},{ry})-({rx2},{ry2})")
+
     if not detections:
         return []
 
@@ -218,6 +236,12 @@ def detect_caption_segments(
         y0 = max(0, int(np.percentile(ys0, 3)) - padding_px)
         x1 = min(vw, int(np.percentile(xs1, 97)) + padding_px)
         y1 = min(vh, int(np.percentile(ys1, 97)) + padding_px)
+        # Never let the erase box spill outside the user's region.
+        if roi:
+            x0 = max(x0, int(roi.get("x", 0)))
+            y0 = max(y0, int(roi.get("y", 0)))
+            x1 = min(x1, int(roi.get("x", 0)) + int(roi.get("w", vw)))
+            y1 = min(y1, int(roi.get("y", 0)) + int(roi.get("h", vh)))
         if x1 - x0 < 8 or y1 - y0 < 8:
             continue
         zones.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1,
@@ -242,35 +266,43 @@ def _presence_segments(
     video_path: str, zones: List[dict], fps: float, total: int,
     bleed_s: float, on_progress: Optional[Callable[[float, str], None]],
 ) -> List[dict]:
-    """Per-frame edge-density scan inside each zone → contiguous time segments."""
+    """Presence scan inside each zone → contiguous time segments. Samples at
+    ~`presence_fps` (not every frame) using grab() to skip the decode of
+    skipped frames — captions persist far longer than 50ms, so this keeps the
+    timing accurate while cutting the extra decode pass ~3× on 60fps clips."""
+    presence_fps = 20.0
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return []
+    stride = max(1, int(round(fps / presence_fps)))
+    eff_fps = fps / stride
     dens: List[List[float]] = [[] for _ in zones]
     times: List[float] = []
     fidx = 0
     while True:
-        ret, frame = cap.read()
-        if not ret:
+        if not cap.grab():           # advance without decoding
             break
-        times.append(fidx / fps)
-        for zi, z in enumerate(zones):
-            crop = frame[z["y0"]:z["y1"], z["x0"]:z["x1"]]
-            if crop.size == 0:
-                dens[zi].append(0.0)
-                continue
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 60, 160)
-            dens[zi].append(float(edges.mean()))
+        if fidx % stride == 0:
+            ok, frame = cap.retrieve()  # decode only the sampled frame
+            if ok and frame is not None:
+                times.append(fidx / fps)
+                for zi, z in enumerate(zones):
+                    crop = frame[z["y0"]:z["y1"], z["x0"]:z["x1"]]
+                    if crop.size == 0:
+                        dens[zi].append(0.0)
+                        continue
+                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    edges = cv2.Canny(gray, 60, 160)
+                    dens[zi].append(float(edges.mean()))
+                if on_progress and total and len(times) % 30 == 0:
+                    on_progress(min(1.0, fidx / total), f"Scanning {fidx}/{total}")
         fidx += 1
-        if on_progress and total and fidx % 60 == 0:
-            on_progress(min(1.0, fidx / total), f"Scanning frames {fidx}/{total}")
     cap.release()
     if not times:
         return []
 
-    bridge = max(1, int(round(0.30 * fps)))   # fill flicker gaps up to ~0.3s
-    min_len = max(1, int(round(0.12 * fps)))   # drop sub-0.12s noise runs
+    bridge = max(1, int(round(0.30 * eff_fps)))   # fill flicker gaps up to ~0.3s
+    min_len = max(1, int(round(0.12 * eff_fps)))   # drop sub-0.12s noise runs
     out: List[dict] = []
     for zi, z in enumerate(zones):
         d = np.array(dens[zi], dtype=np.float32)
@@ -282,12 +314,12 @@ def _presence_segments(
         thr = lo + 0.30 * max(1e-3, hi - lo)
         present = d > thr
         n = len(present)
-        # Anchor: every frame OCR actually saw text is forced present (so a
-        # busy background that confuses the edge threshold can't drop a frame
-        # OCR already confirmed — no regression vs the old detector).
-        anchor = max(1, int(round(0.12 * fps)))
+        # Anchor: every sample OCR actually saw text is forced present (a busy
+        # background that confuses the edge threshold can't drop an OCR-confirmed
+        # moment → no regression vs the old detector).
+        anchor = max(1, int(round(0.12 * eff_fps)))
         for ot in z.get("ocr_times", []):
-            k = int(round(ot * fps))
+            k = int(round(ot * eff_fps))
             present[max(0, k - anchor):min(n, k + anchor + 1)] = True
         # Bridge short gaps so word-to-word transitions stay one segment.
         i = 0
