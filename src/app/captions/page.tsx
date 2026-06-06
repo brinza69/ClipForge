@@ -15,6 +15,7 @@ import {
   CheckCircle2, FileVideo, Palette, Sparkles, Save,
 } from "lucide-react";
 import { toast } from "sonner";
+import { CloneFromVideo } from "@/components/captions/clone-from-video";
 
 // Same-origin proxy through Next.js rewrites (see next.config.ts:
 // /worker-api/:path* → http://127.0.0.1:8420/api/:path*). Routing same-origin
@@ -858,6 +859,8 @@ export default function CaptionStudioPage() {
             {/* Templates picker */}
             <Card className="p-4 space-y-3">
               <h3 className="text-sm font-semibold">Templates</h3>
+              {/* Clone a caption style 1:1 from a reference video into a new template */}
+              <CloneFromVideo fonts={fonts} onSaved={loadTemplates} />
               <div className="grid grid-cols-2 gap-2 max-h-72 overflow-auto">
                 {templates.map((t) => {
                   const active = selected?.template_id === t.id;
