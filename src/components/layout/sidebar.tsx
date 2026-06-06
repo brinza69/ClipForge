@@ -8,10 +8,6 @@ import {
   Zap,
   ChevronRight,
   Wrench,
-  Mic,
-  FileText,
-  AudioLines,
-  Type,
   Wand2,
   Layers,
 } from "lucide-react";
@@ -19,10 +15,6 @@ import {
 const navItems = [
   { label: "Remix Pipeline", href: "/remix",  icon: Wand2 },
   { label: "Parallel Processing", href: "/parallel", icon: Layers },
-  { label: "Voice Studio", href: "/tts",      icon: Mic },
-  { label: "Transcript Studio", href: "/transcript", icon: FileText },
-  { label: "Caption Studio", href: "/captions", icon: Type },
-  { label: "Silence Remover", href: "/silence", icon: AudioLines },
   { label: "Utilities",  href: "/utilities",  icon: Wrench },
   { label: "Settings",   href: "/settings",   icon: Settings },
 ];

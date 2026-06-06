@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Eraser, AudioLines, Wand2, ExternalLink } from "lucide-react";
+import { Eraser, AudioLines, Wand2, ExternalLink, Mic, FileText, Type } from "lucide-react";
+
+// Full Tailwind class strings (no dynamic interpolation — it gets purged).
+const STUDIOS = [
+  { href: "/tts", icon: Mic, title: "Voice Studio", desc: "Generate voiceovers with ElevenLabs, XTTS or local cloning.", border: "hover:border-violet-500/40", iconBg: "bg-violet-500/10", iconFg: "text-violet-400" },
+  { href: "/transcript", icon: FileText, title: "Transcript Studio", desc: "Transcribe & clean/translate transcripts (Ollama / OpenAI / Anthropic).", border: "hover:border-emerald-500/40", iconBg: "bg-emerald-500/10", iconFg: "text-emerald-400" },
+  { href: "/captions", icon: Type, title: "Caption Studio", desc: "Add styled captions, clone a caption style, burn-in export.", border: "hover:border-rose-500/40", iconBg: "bg-rose-500/10", iconFg: "text-rose-400" },
+];
 
 export default function UtilitiesPage() {
   return (
@@ -11,8 +18,31 @@ export default function UtilitiesPage() {
       <div>
         <h1 className="text-2xl font-bold">Utilities</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Standalone tools for cleaning up your videos.
+          Standalone tools for creating and cleaning up your videos.
         </p>
+      </div>
+
+      {/* Studios */}
+      <div className="grid md:grid-cols-3 gap-4">
+        {STUDIOS.map((s) => (
+          <Link key={s.href} href={s.href} className="block group">
+            <Card className={`p-5 space-y-4 border-border/40 bg-card/60 ${s.border} transition-colors h-full flex flex-col`}>
+              <div className="flex items-start gap-3">
+                <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${s.iconBg} shrink-0`}>
+                  <s.icon className={`h-5 w-5 ${s.iconFg}`} />
+                </div>
+                <div>
+                  <h2 className="font-semibold">{s.title}</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">{s.desc}</p>
+                </div>
+              </div>
+              <div className="flex-1" />
+              <Button variant="outline" className="w-full gap-2">
+                Open {s.title} <ExternalLink className="h-3.5 w-3.5 ml-auto" />
+              </Button>
+            </Card>
+          </Link>
+        ))}
       </div>
 
       <div className="grid md:grid-cols-2 gap-4">
