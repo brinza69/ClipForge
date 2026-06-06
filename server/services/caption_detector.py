@@ -204,75 +204,119 @@ def detect_caption_segments(
 
     logger.info(f"Clustered into {len(lanes)} caption lanes")
 
-    # Per-lane: split by time gaps → segments, union boxes per segment
-    segments: List[dict] = []
+    # Per lane → a robust, tight zone bbox (percentile union drops the odd
+    # over-wide OCR box that would inflate the erase region).
+    zones: List[dict] = []
     for lane in lanes:
         if len(lane.detections) < min_detections_per_lane:
             continue
-        lane.detections.sort(key=lambda x: x.t)
+        xs0 = np.array([d.x for d in lane.detections], dtype=np.float32)
+        xs1 = np.array([d.x + d.w for d in lane.detections], dtype=np.float32)
+        ys0 = np.array([d.y for d in lane.detections], dtype=np.float32)
+        ys1 = np.array([d.y + d.h for d in lane.detections], dtype=np.float32)
+        x0 = max(0, int(np.percentile(xs0, 3)) - padding_px)
+        y0 = max(0, int(np.percentile(ys0, 3)) - padding_px)
+        x1 = min(vw, int(np.percentile(xs1, 97)) + padding_px)
+        y1 = min(vh, int(np.percentile(ys1, 97)) + padding_px)
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            continue
+        zones.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                      "ocr_times": sorted(d.t for d in lane.detections)})
 
-        cur = None
-        for d in lane.detections:
-            # Three cases that close the current segment and start a fresh one:
-            #   (a) first detection in the lane (cur is None)
-            #   (b) time gap larger than `segment_gap_s` (caption disappeared)
-            #   (c) DRIFT — center of this detection is far from the running
-            #              segment center, relative to current segment size.
-            #              This is the fix for "OCR zone is much bigger than
-            #              the actual text": when a caption moves mid-display
-            #              (TikTok wobble / repositioning), we split into
-            #              two tighter segments instead of one huge union.
-            split_required = cur is None
-            if cur is not None:
-                if (d.t - cur["last_t"]) > segment_gap_s:
-                    split_required = True
-                else:
-                    cur_w = max(1, cur["x1"] - cur["x0"])
-                    cur_h = max(1, cur["y1"] - cur["y0"])
-                    cur_cx = (cur["x0"] + cur["x1"]) / 2
-                    cur_cy = (cur["y0"] + cur["y1"]) / 2
-                    d_cx = d.x + d.w / 2
-                    d_cy = d.y + d.h / 2
-                    if (
-                        abs(d_cx - cur_cx) > cur_w * drift_threshold
-                        or abs(d_cy - cur_cy) > cur_h * drift_threshold
-                    ):
-                        split_required = True
+    if not zones:
+        return []
 
-            if split_required:
-                if cur is not None:
-                    segments.append(_finalise_segment(cur, vw, vh, padding_px, bleed_s))
-                cur = {
-                    "start_t": d.t,
-                    "last_t": d.t,
-                    "x0": d.x, "y0": d.y,
-                    "x1": d.x + d.w, "y1": d.y + d.h,
-                }
-            else:
-                cur["last_t"] = d.t
-                cur["x0"] = min(cur["x0"], d.x)
-                cur["y0"] = min(cur["y0"], d.y)
-                cur["x1"] = max(cur["x1"], d.x + d.w)
-                cur["y1"] = max(cur["y1"], d.y + d.h)
-        if cur is not None:
-            segments.append(_finalise_segment(cur, vw, vh, padding_px, bleed_s))
-
-    # Sort by time for nicer UX in the UI
+    # Frame-accurate presence: OCR (sampled) only located the zones; now scan
+    # EVERY frame's edge density inside each zone. Text = many edges, idle
+    # background = few. This catches frames OCR missed (hard-to-read words,
+    # fades, transitions) so no caption frame is left un-erased.
+    segments = _presence_segments(
+        video_path, zones, fps, total, bleed_s, on_progress
+    )
     segments.sort(key=lambda s: s["start_t"])
-    logger.info(f"Produced {len(segments)} caption segments")
+    logger.info(f"Produced {len(segments)} caption segments (per-frame presence)")
     return segments
 
 
-def _finalise_segment(cur: dict, vw: int, vh: int, padding: int, bleed: float) -> dict:
-    x = max(0, int(cur["x0"]) - padding)
-    y = max(0, int(cur["y0"]) - padding)
-    x_end = min(vw, int(cur["x1"]) + padding)
-    y_end = min(vh, int(cur["y1"]) + padding)
-    return {
-        "start_t": max(0.0, float(cur["start_t"]) - bleed),
-        "end_t": float(cur["last_t"]) + bleed,
-        "x": x,
-        "y": y,
-        "w": max(1, x_end - x),
-        "h": max(1, y_end - y),
-    }
+def _presence_segments(
+    video_path: str, zones: List[dict], fps: float, total: int,
+    bleed_s: float, on_progress: Optional[Callable[[float, str], None]],
+) -> List[dict]:
+    """Per-frame edge-density scan inside each zone → contiguous time segments."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return []
+    dens: List[List[float]] = [[] for _ in zones]
+    times: List[float] = []
+    fidx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        times.append(fidx / fps)
+        for zi, z in enumerate(zones):
+            crop = frame[z["y0"]:z["y1"], z["x0"]:z["x1"]]
+            if crop.size == 0:
+                dens[zi].append(0.0)
+                continue
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 60, 160)
+            dens[zi].append(float(edges.mean()))
+        fidx += 1
+        if on_progress and total and fidx % 60 == 0:
+            on_progress(min(1.0, fidx / total), f"Scanning frames {fidx}/{total}")
+    cap.release()
+    if not times:
+        return []
+
+    bridge = max(1, int(round(0.30 * fps)))   # fill flicker gaps up to ~0.3s
+    min_len = max(1, int(round(0.12 * fps)))   # drop sub-0.12s noise runs
+    out: List[dict] = []
+    for zi, z in enumerate(zones):
+        d = np.array(dens[zi], dtype=np.float32)
+        if d.max() <= 1e-3:
+            continue
+        # Adaptive threshold between the idle floor and the text peak.
+        lo = float(np.percentile(d, 20))
+        hi = float(np.percentile(d, 90))
+        thr = lo + 0.30 * max(1e-3, hi - lo)
+        present = d > thr
+        n = len(present)
+        # Anchor: every frame OCR actually saw text is forced present (so a
+        # busy background that confuses the edge threshold can't drop a frame
+        # OCR already confirmed — no regression vs the old detector).
+        anchor = max(1, int(round(0.12 * fps)))
+        for ot in z.get("ocr_times", []):
+            k = int(round(ot * fps))
+            present[max(0, k - anchor):min(n, k + anchor + 1)] = True
+        # Bridge short gaps so word-to-word transitions stay one segment.
+        i = 0
+        while i < n:
+            if present[i]:
+                i += 1
+                continue
+            j = i
+            while j < n and not present[j]:
+                j += 1
+            if 0 < i and j < n and (j - i) <= bridge:
+                present[i:j] = True
+            i = j
+        # Emit runs of True as segments.
+        i = 0
+        while i < n:
+            if not present[i]:
+                i += 1
+                continue
+            j = i
+            while j < n and present[j]:
+                j += 1
+            if (j - i) >= min_len:
+                out.append({
+                    "start_t": max(0.0, times[i] - bleed_s),
+                    "end_t": times[min(j, n - 1)] + bleed_s,
+                    "x": z["x0"], "y": z["y0"],
+                    "w": max(1, z["x1"] - z["x0"]),
+                    "h": max(1, z["y1"] - z["y0"]),
+                })
+            i = j
+    return out
