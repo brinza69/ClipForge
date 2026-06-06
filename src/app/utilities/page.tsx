@@ -1,236 +1,22 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Download, Eraser, Loader2, ArrowRight, CheckCircle2,
-  Play, Film, Clock, Sparkles, ExternalLink, Wand2, ListVideo,
-} from "lucide-react";
-import { toast } from "sonner";
-import type { Project } from "@/types";
-
-function formatDurationMMSS(seconds?: number | null) {
-  if (!seconds || seconds < 0) return "--:--";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-function relativeTime(iso?: string | null) {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
-  const diff = (Date.now() - t) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
+import { Button } from "@/components/ui/button";
+import { Eraser, AudioLines, Wand2, ExternalLink } from "lucide-react";
 
 export default function UtilitiesPage() {
-  const router = useRouter();
-  const [downloadUrl, setDownloadUrl] = useState("");
-  const [downloadTitle, setDownloadTitle] = useState("");
-
-  const { data: projects } = useQuery({
-    queryKey: ["projects"],
-    queryFn: api.projects.list,
-    refetchInterval: 5000,
-  });
-
-  const lastDownloaded: Project | null = (() => {
-    if (!projects || projects.length === 0) return null;
-    const withVideo = projects.filter(
-      (p: any) => p.video_path || p.status === "downloaded" || p.status === "transcribed" || p.status === "ready"
-    );
-    return (withVideo[0] || projects[0]) as Project;
-  })();
-
-  const downloadMutation = useMutation({
-    mutationFn: () => api.utilities.download(downloadUrl.trim(), downloadTitle.trim() || undefined),
-    onSuccess: (data) => {
-      toast.success("Download started!", {
-        description: `"${data.title}" is being processed.`,
-        action: { label: "Open project", onClick: () => router.push(`/projects/${data.project_id}`) },
-      });
-      setDownloadUrl("");
-      setDownloadTitle("");
-    },
-    onError: (err: Error) => toast.error("Download failed", { description: err.message }),
-  });
-
-  const handleDownload = () => {
-    if (!downloadUrl.trim()) { toast.error("Paste a URL first"); return; }
-    downloadMutation.mutate();
-  };
-
   return (
-    <div className="space-y-8 max-w-5xl">
+    <div className="mx-auto max-w-4xl space-y-6 p-6">
       <div>
         <h1 className="text-2xl font-bold">Utilities</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Quick tools for downloading and processing video content.
+          Standalone tools for cleaning up your videos.
         </p>
       </div>
 
-      {/* Last downloaded video hero */}
-      {lastDownloaded && (
-        <Link
-          href={`/projects/${lastDownloaded.id}`}
-          className="block group"
-        >
-          <Card className="p-4 border-border/40 bg-gradient-to-br from-card/80 via-card/60 to-primary/5 hover:border-primary/30 transition-colors">
-            <div className="flex items-center gap-4">
-              <div className="relative w-28 aspect-video rounded-lg overflow-hidden bg-black shrink-0 border border-border/20">
-                {lastDownloaded.thumbnail_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={lastDownloaded.thumbnail_url}
-                    alt={lastDownloaded.title}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <Film className="h-6 w-6 text-muted-foreground/40" />
-                  </div>
-                )}
-                <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Play className="h-6 w-6 text-white fill-white" />
-                </div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wider">
-                  <Clock className="h-3 w-3" />
-                  <span>Last downloaded</span>
-                  <span>·</span>
-                  <span>{relativeTime(lastDownloaded.created_at)}</span>
-                </div>
-                <h3 className="text-sm font-semibold mt-1 truncate group-hover:text-primary transition-colors">
-                  {lastDownloaded.title}
-                </h3>
-                <div className="flex items-center gap-3 mt-1.5 text-[11px] text-muted-foreground">
-                  {lastDownloaded.channel_name && <span className="truncate max-w-[160px]">{lastDownloaded.channel_name}</span>}
-                  {lastDownloaded.duration != null && <span>· {formatDurationMMSS(lastDownloaded.duration)}</span>}
-                  {lastDownloaded.status && (
-                    <span className="rounded bg-muted/30 px-1.5 py-0.5 text-[9px] uppercase tracking-wider">
-                      {lastDownloaded.status}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0" />
-            </div>
-          </Card>
-        </Link>
-      )}
-
-      {/* Two tool cards */}
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Downloader */}
-        <Card className="p-6 space-y-5 border-border/40 bg-card/60">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 shrink-0">
-              <Download className="h-5 w-5 text-primary" />
-            </div>
-            <div>
-              <h2 className="font-semibold">Shorts / TikTok Downloader</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Paste any YouTube Shorts, TikTok, or Instagram Reel URL and process it automatically.
-              </p>
-            </div>
-          </div>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Video URL</Label>
-              <Input
-                value={downloadUrl}
-                onChange={(e) => setDownloadUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleDownload()}
-                placeholder="https://youtube.com/shorts/..."
-                className="bg-background"
-                disabled={downloadMutation.isPending}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Title (optional)</Label>
-              <Input
-                value={downloadTitle}
-                onChange={(e) => setDownloadTitle(e.target.value)}
-                placeholder="Custom project name..."
-                className="bg-background"
-                disabled={downloadMutation.isPending}
-              />
-            </div>
-          </div>
-          <Button
-            className="w-full gap-2"
-            onClick={handleDownload}
-            disabled={downloadMutation.isPending || !downloadUrl.trim()}
-          >
-            {downloadMutation.isPending ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Processing…</>
-            ) : downloadMutation.isSuccess ? (
-              <><CheckCircle2 className="h-4 w-4 text-emerald-400" /> Started</>
-            ) : (
-              <><Download className="h-4 w-4" /> Download & Process <ArrowRight className="h-4 w-4 ml-auto" /></>
-            )}
-          </Button>
-          <div className="rounded-lg border border-border/30 bg-muted/20 p-3 space-y-1.5">
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-              Supported platforms
-            </div>
-            <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground">
-              <div className="flex items-center gap-1.5"><Play className="h-3.5 w-3.5 text-red-500" /> YouTube Shorts</div>
-              <div className="flex items-center gap-1.5"><Film className="h-3.5 w-3.5 text-pink-500" /> TikTok</div>
-              <div className="flex items-center gap-1.5"><Film className="h-3.5 w-3.5 text-purple-500" /> Instagram Reels</div>
-              <div className="flex items-center gap-1.5"><Film className="h-3.5 w-3.5 text-blue-400" /> Twitter/X</div>
-            </div>
-          </div>
-        </Card>
-
-        {/* Batch processor launcher */}
-        <Link href="/utilities/batch" className="block group">
-          <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-emerald-500/40 hover:bg-emerald-500/[0.03] transition-colors h-full flex flex-col">
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 shrink-0 group-hover:bg-emerald-500/20 transition-colors">
-                <ListVideo className="h-5 w-5 text-emerald-400" />
-              </div>
-              <div>
-                <h2 className="font-semibold">Batch Process</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Paste multiple URLs. Pick one erase region on the first video. Get transcripts + erased mp4s for all of them.
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1.5">
-              <div className="flex items-center gap-2 text-xs text-emerald-300">
-                <Sparkles className="h-3.5 w-3.5" />
-                <span className="font-semibold">One region — many videos</span>
-              </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Numbered 1..N automatically. Region picked on video 1 is scaled per-video. Inpaint or fast-blur mode.
-              </p>
-            </div>
-
-            <div className="flex-1" />
-
-            <Button
-              variant="outline"
-              className="w-full gap-2 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 hover:text-emerald-200 group-hover:border-emerald-500/50"
-            >
-              Open Batch Process <ExternalLink className="h-3.5 w-3.5 ml-auto" />
-            </Button>
-          </Card>
-        </Link>
-
-        {/* Caption Eraser launcher */}
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Caption / Logo Eraser */}
         <Link href="/utilities/caption-eraser" className="block group">
           <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-amber-500/40 hover:bg-amber-500/[0.03] transition-colors h-full flex flex-col">
             <div className="flex items-start gap-3">
@@ -244,62 +30,39 @@ export default function UtilitiesPage() {
                 </p>
               </div>
             </div>
-
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2">
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
               <div className="flex items-center gap-2 text-xs text-amber-300">
                 <Wand2 className="h-3.5 w-3.5" />
                 <span className="font-semibold">LaMa GPU neural inpainting</span>
               </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Batched on-GPU LaMa with ROI cropping + NVENC encoding for fast, natural-looking erasure.
+              <p className="text-[11px] text-muted-foreground leading-relaxed mt-1">
                 Auto-detect mode finds captions automatically — even when they move mid-clip.
               </p>
             </div>
-
             <div className="flex-1" />
-
-            <Button
-              variant="outline"
-              className="w-full gap-2 border-amber-500/30 text-amber-300 hover:bg-amber-500/10 hover:text-amber-200 group-hover:border-amber-500/50"
-            >
+            <Button variant="outline" className="w-full gap-2 border-amber-500/30 text-amber-300 hover:bg-amber-500/10 hover:text-amber-200 group-hover:border-amber-500/50">
               Open Caption Eraser <ExternalLink className="h-3.5 w-3.5 ml-auto" />
             </Button>
           </Card>
         </Link>
 
-        {/* Batch Process launcher */}
-        <Link href="/utilities/batch" className="block group">
-          <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-cyan-500/40 hover:bg-cyan-500/[0.03] transition-colors h-full flex flex-col">
+        {/* Silence Remover */}
+        <Link href="/silence" className="block group">
+          <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-sky-500/40 hover:bg-sky-500/[0.03] transition-colors h-full flex flex-col">
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10 shrink-0 group-hover:bg-cyan-500/20 transition-colors">
-                <ListVideo className="h-5 w-5 text-cyan-400" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-500/10 shrink-0 group-hover:bg-sky-500/20 transition-colors">
+                <AudioLines className="h-5 w-5 text-sky-400" />
               </div>
               <div>
-                <h2 className="font-semibold">Batch Process</h2>
+                <h2 className="font-semibold">Silence Remover</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Paste a list of URLs. Transcribe and erase the same region across all of them.
+                  Cut dead air from a video or audio file to tighten the pacing.
                 </p>
               </div>
             </div>
-
-            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-2">
-              <div className="flex items-center gap-2 text-xs text-cyan-300">
-                <Sparkles className="h-3.5 w-3.5" />
-                <span className="font-semibold">One region, many videos</span>
-              </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Pick the erase rectangle once on the first video, then let the queue download,
-                transcribe, and erase the whole list. Per-video transcript + erased mp4 download.
-              </p>
-            </div>
-
             <div className="flex-1" />
-
-            <Button
-              variant="outline"
-              className="w-full gap-2 border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10 hover:text-cyan-200 group-hover:border-cyan-500/50"
-            >
-              Open Batch Process <ExternalLink className="h-3.5 w-3.5 ml-auto" />
+            <Button variant="outline" className="w-full gap-2 border-sky-500/30 text-sky-300 hover:bg-sky-500/10 hover:text-sky-200 group-hover:border-sky-500/50">
+              Open Silence Remover <ExternalLink className="h-3.5 w-3.5 ml-auto" />
             </Button>
           </Card>
         </Link>

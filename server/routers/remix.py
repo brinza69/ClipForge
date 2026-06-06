@@ -109,10 +109,6 @@ class StartRequest(BaseModel):
 
     # Commentator overlay — runs AFTER caption burn. null = no commentator.
     commentator_preset_id: Optional[str] = None
-    commentator_position: Optional[str] = None       # legacy — ignored by new full-frame overlay
-    commentator_scale: Optional[float] = None        # legacy — ignored
-    commentator_x_pct: Optional[float] = None        # legacy — ignored
-    commentator_y_pct: Optional[float] = None        # legacy — ignored
     # Per-run chroma key override (null = use preset's saved value).
     # `commentator_chroma_color` can be "" (empty string) to explicitly
     # disable chroma keying for this run only.

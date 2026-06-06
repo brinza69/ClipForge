@@ -9,7 +9,6 @@ yt-dlp>=2025.3.0
 httpx>=0.28.0,<1.0
 faster-whisper>=1.0.0
 pysubs2>=1.6.0
-mediapipe>=0.10.9
 opencv-python>=4.9.0
 # OCR for auto-detecting on-screen captions (downloads ~200MB of model weights on first use)
 easyocr>=1.7.1

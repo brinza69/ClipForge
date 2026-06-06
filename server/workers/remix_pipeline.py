@@ -70,6 +70,31 @@ def _probe_audio_dur(path: str) -> float:
         return 0.0
 
 
+def _has_audio_stream(path: str) -> bool:
+    """ffprobe check for an audio stream. Some sources (TikTok HEVC) deliver
+    video-only files even when metadata claims audio — guarding here gives a
+    clear error before faster-whisper hits PyAV's IndexError on streams.audio[0]."""
+    ffprobe = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    loc = settings.ffmpeg_location
+    if loc:
+        cand = Path(loc) / ffprobe
+        if cand.exists():
+            ffprobe = str(cand)
+    if ffprobe in ("ffprobe", "ffprobe.exe"):
+        resolved = shutil.which("ffprobe")
+        if resolved:
+            ffprobe = resolved
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        return bool((out.stdout or "").strip())
+    except Exception:
+        return True  # if ffprobe isn't reachable, don't block
+
+
 # ── Progress slicing ────────────────────────────────────────────────────────
 
 
@@ -203,7 +228,6 @@ async def _stage_download(meta: Dict, slc: _Sliced, queue, job_id: str, project_
 
 async def _stage_transcribe(video_path: Path, slc: _Sliced) -> Dict[str, Any]:
     from services.transcriber import transcribe
-    from workers.pipeline import _has_audio_stream
 
     # Pre-flight: refuse to call faster-whisper on a file with no audio stream.
     # Without this, PyAV's streams.audio[0] raises IndexError deep in the worker

@@ -652,10 +652,6 @@ export default function RemixPage() {
       caption_words_per_chunk: captionWordsPerChunk,
       caption_strip_punct: captionStripPunct,
       commentator_preset_id: commentatorId || null,
-      // Position/scale are ignored by the new backend (full-frame overlay);
-      // we still send them as null to keep the schema strict.
-      commentator_position: null,
-      commentator_scale: null,
       // Chroma override: null = use preset's saved value
       commentator_chroma_color: chromaColor,
       commentator_chroma_similarity: chromaSimilarity,
