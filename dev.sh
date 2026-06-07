@@ -63,6 +63,28 @@ wait_for_port() {
 
 read_pid() { [ -f "$1" ] && cat "$1" 2>/dev/null || true; }
 
+# Run a command fully detached in its own session/process-group, portably.
+# Prefers `setsid` (clean process group → kill_group can take down the whole
+# tree). Falls back to `nohup ... &` when setsid is missing — some minimal
+# WSL/Linux installs don't ship util-linux's setsid. In the fallback case we
+# still get a usable PID; kill_group degrades to killing just the leader,
+# but stop_one's port-kill fallback (fuser/lsof) catches any stragglers.
+DETACH=""
+if command -v setsid >/dev/null 2>&1; then
+  DETACH="setsid"
+fi
+
+run_detached() {
+  # Usage: run_detached <logfile> <bash-script-string>
+  local logfile="$1" script="$2"
+  if [ -n "$DETACH" ]; then
+    setsid bash -c "$script" >>"$logfile" 2>&1 < /dev/null &
+  else
+    nohup bash -c "$script" >>"$logfile" 2>&1 < /dev/null &
+  fi
+  echo $!
+}
+
 # Kill a whole process group given a leader PID, escalating SIGTERM→SIGKILL.
 kill_group() {
   local pid="$1"
@@ -110,12 +132,14 @@ start_backend() {
   # Append (not truncate) so a restart doesn't wipe history — needed for
   # cross-run comparisons (e.g. GPU inpaint timing). A separator marks each start.
   { echo; echo "===== backend start $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG_DIR/backend.log"
-  # setsid puts the child in a fresh process group so we can kill the whole tree.
+  # Detach in a fresh process group (setsid) so kill_group can take down the
+  # whole tree. Falls back to nohup when setsid is missing (run_detached).
   # --reload: hot-reload on .py changes. We exclude .venv and __pycache__
   # explicitly — uvicorn's default exclude `.*` only filters basenames, not
   # nested paths, so without these it would try to register inotify watches
   # for the 50k+ files in .venv and either thrash CPU or hit ENOSPC.
-  setsid bash -c "
+  local pid
+  pid="$(run_detached "$LOG_DIR/backend.log" "
     cd '$ROOT/server'
     NV='$VENV/lib/python3.12/site-packages/nvidia'
     export LD_LIBRARY_PATH=\"\$NV/cublas/lib:\$NV/cudnn/lib:\$NV/cuda_runtime/lib:\$NV/cufft/lib:\$NV/curand/lib:\$NV/cusolver/lib:\$NV/cusparse/lib:\$NV/nccl/lib:\$NV/nvjitlink/lib:\${LD_LIBRARY_PATH:-}\"
@@ -125,8 +149,8 @@ start_backend() {
       --reload-exclude '**/.venv/**' \
       --reload-exclude '**/__pycache__/**' \
       --reload-exclude '**/*.log'
-  " >>"$LOG_DIR/backend.log" 2>&1 < /dev/null &
-  echo $! > "$pidfile"
+  ")"
+  echo "$pid" > "$pidfile"
 
   if wait_for_port "$BACKEND_PORT" 20; then
     c_green "backend up   (pid $(cat "$pidfile"))  http://localhost:$BACKEND_PORT"
@@ -156,11 +180,12 @@ start_frontend() {
 
   echo "starting frontend on :$FRONTEND_PORT..."
   { echo; echo "===== frontend start $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG_DIR/frontend.log"
-  setsid bash -c "
+  local pid
+  pid="$(run_detached "$LOG_DIR/frontend.log" "
     cd '$ROOT'
     exec npm run dev -- --port '$FRONTEND_PORT'
-  " >>"$LOG_DIR/frontend.log" 2>&1 < /dev/null &
-  echo $! > "$pidfile"
+  ")"
+  echo "$pid" > "$pidfile"
 
   if wait_for_port "$FRONTEND_PORT" 60; then
     c_green "frontend up  (pid $(cat "$pidfile"))  http://localhost:$FRONTEND_PORT"
