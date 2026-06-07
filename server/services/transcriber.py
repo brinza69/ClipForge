@@ -23,6 +23,93 @@ logger = logging.getLogger("clipforge.transcriber")
 
 # Lazy-load model to avoid startup cost
 _model = None
+# Snapshot of what _get_model() ended up loading. Populated on first load
+# (or after unload_model()). Used by the /api/transcript/device diagnostic
+# and the Settings UI so the user can confirm which device is actually in use
+# (the env-var setting can SILENTLY fall back from CUDA to CPU on failure).
+_model_info: dict = {
+    "configured_model": None,
+    "configured_device": None,
+    "actual_model": None,
+    "actual_device": None,
+    "actual_compute_type": None,
+    "fell_back_to_cpu": False,
+    "load_time_ms": None,
+    "error": None,
+}
+
+
+def get_model_info() -> dict:
+    """Return a dict describing what the loaded Whisper model is, or what
+    settings would be used if it hasn't loaded yet. Safe to call without
+    triggering a load — the UI poll uses this before the user presses Apply."""
+    if _model is not None:
+        return dict(_model_info)
+    # Predict what _get_model() would resolve to without actually loading.
+    cfg = _read_config_overrides()
+    desired_model = cfg.get("whisper_model") or settings.whisper_model
+    desired_device = cfg.get("whisper_device") or settings.whisper_device
+    if desired_device == "auto":
+        try:
+            import torch
+            desired_device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            desired_device = "cpu"
+    return {
+        "configured_model": desired_model,
+        "configured_device": desired_device,
+        "actual_model": None,
+        "actual_device": None,
+        "actual_compute_type": None,
+        "fell_back_to_cpu": False,
+        "load_time_ms": None,
+        "error": None,
+        "loaded": False,
+    }
+
+
+def unload_model() -> None:
+    """Drop the cached model so the next transcribe call reloads with current
+    settings/overrides. Called when the user changes whisper_device or
+    whisper_model from the UI."""
+    global _model, _model_info
+    _model = None
+    _model_info = {k: None for k in _model_info}
+    _model_info["fell_back_to_cpu"] = False
+    logger.info("Whisper model unloaded — will reload on next transcription")
+
+
+def _config_overrides_path():
+    from pathlib import Path
+    return Path(settings.data_dir) / "whisper_config.json"
+
+
+def _read_config_overrides() -> dict:
+    """Optional persistent overrides for whisper_model + whisper_device,
+    layered on top of the env-var defaults. The Settings UI writes here."""
+    import json
+    p = _config_overrides_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("could not read whisper_config.json")
+        return {}
+
+
+def write_config_overrides(model: Optional[str], device: Optional[str]) -> dict:
+    """Persist the user's whisper preferences. Returns the merged dict."""
+    import json
+    p = _config_overrides_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    cfg = _read_config_overrides()
+    if model is not None:
+        cfg["whisper_model"] = model
+    if device is not None:
+        cfg["whisper_device"] = device
+    p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return cfg
 
 # Strip every symbol/punctuation from transcript text. Keeps unicode letters,
 # digits, and whitespace only; output is lowercased so downstream caption
@@ -44,12 +131,25 @@ def _clean_text(text: str) -> str:
 
 
 def _get_model():
-    """Lazy-load the faster-whisper model."""
-    global _model
+    """Lazy-load the faster-whisper model.
+
+    Resolution order for model/device:
+      1. data/whisper_config.json (set via /settings UI)
+      2. CLIPFORGE_WHISPER_MODEL / CLIPFORGE_WHISPER_DEVICE env vars
+      3. config.py defaults
+
+    Records resolved values in `_model_info` so callers can introspect what
+    actually got loaded (CUDA can SILENTLY fall back to CPU — _model_info
+    tracks `fell_back_to_cpu` for the UI to flag).
+    """
+    global _model, _model_info
     if _model is None:
         from faster_whisper import WhisperModel
 
-        device = settings.whisper_device
+        overrides = _read_config_overrides()
+        model_name = overrides.get("whisper_model") or settings.whisper_model
+        device = overrides.get("whisper_device") or settings.whisper_device
+        configured_device = device
         if device == "auto":
             try:
                 import torch
@@ -62,27 +162,45 @@ def _get_model():
             compute_type = "int8"  # float16 not supported on CPU
 
         logger.info(
-            f"Loading Whisper model: {settings.whisper_model} "
-            f"(device={device}, compute_type={compute_type})"
+            f"Loading Whisper model: {model_name} "
+            f"(configured_device={configured_device}, device={device}, compute_type={compute_type})"
         )
 
+        fell_back = False
+        load_error: Optional[str] = None
+        load_start = time.time()
         try:
-            _model = WhisperModel(
-                settings.whisper_model,
-                device=device,
-                compute_type=compute_type,
-            )
+            _model = WhisperModel(model_name, device=device, compute_type=compute_type)
         except Exception as e:
+            load_error = f"{type(e).__name__}: {e}"
             if device == "cuda":
                 logger.warning(f"Failed to load Whisper on CUDA: {e}. Falling back to CPU...")
-                _model = WhisperModel(
-                    settings.whisper_model,
-                    device="cpu",
-                    compute_type="int8",
-                )
+                _model = WhisperModel(model_name, device="cpu", compute_type="int8")
+                device = "cpu"
+                compute_type = "int8"
+                fell_back = True
             else:
+                _model_info.update({
+                    "configured_model": model_name,
+                    "configured_device": configured_device,
+                    "error": load_error,
+                })
                 raise
-        logger.info("Whisper model loaded successfully")
+        elapsed_ms = int((time.time() - load_start) * 1000)
+        _model_info.update({
+            "configured_model": model_name,
+            "configured_device": configured_device,
+            "actual_model": model_name,
+            "actual_device": device,
+            "actual_compute_type": compute_type,
+            "fell_back_to_cpu": fell_back,
+            "load_time_ms": elapsed_ms,
+            "error": load_error if fell_back else None,
+        })
+        logger.info(
+            f"Whisper model loaded ({elapsed_ms}ms) — actual device={device}"
+            + (" [CUDA FELL BACK TO CPU]" if fell_back else "")
+        )
 
     return _model
 
