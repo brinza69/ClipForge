@@ -53,35 +53,44 @@ from workers.remix_pipeline import (
 logger = logging.getLogger("clipforge.parallel_pipeline")
 
 
-def _num_parts(duration_s: float) -> int:
-    """How many equal parts to split into. Whole minutes = X; if the leftover
-    beyond X minutes is more than 40s, add one more part (so no part runs much
-    past ~1:20). Min 1.
-        2:00→2  1:40→1  2:40→2  2:41→3  0:45→1
+def _split_plan(duration_s: float) -> List[float]:
+    """Part durations (seconds). Rules:
+      - a clip up to 1:30 stays ONE part (the max long part is 1:30);
+      - otherwise cut 1:00 parts, and the leftover becomes a final SHORT part
+        if it is >= 30s; if the leftover is < 30s it is folded into the last
+        part (which then runs 1:01–1:29).
+    So the short part is never < 30s and no part is ever longer than 1:30.
+        1:40→[60,40]  1:41→[60,41]  2:41→[60,60,41]  2:10→[60,70]  2:00→[60,60]
     """
-    x = int(duration_s // 60)
-    extra = duration_s - x * 60
-    parts = x + 1 if extra > 40.0 + 1e-6 else x
-    return max(1, parts)
+    if duration_s <= 90.0 + 1e-6:
+        return [duration_s]
+    n = int(duration_s // 60)
+    rem = duration_s - 60 * n
+    if rem <= 1e-6:
+        return [60.0] * n
+    if rem >= 30.0:
+        return [60.0] * n + [rem]
+    # leftover < 30s → fold it into the last full minute (60–89s)
+    return [60.0] * (n - 1) + [60.0 + rem]
 
 
 def _split_video(final_path: Path, out_stem: str) -> List[dict]:
-    """Split the finished mp4 into N equal parts (re-encoded for exact cuts).
-    Returns [] when the clip is short enough to stay a single part."""
+    """Split the finished mp4 per _split_plan (re-encoded for exact cuts).
+    Returns [] when the clip stays a single part."""
     from services.speed_match import probe_duration
     try:
         dur = float(probe_duration(str(final_path)))
     except Exception:
         return []
-    parts = _num_parts(dur)
-    if parts <= 1 or dur <= 0:
+    plan = _split_plan(dur)
+    if len(plan) <= 1 or dur <= 0:
         return []
-    part_len = dur / parts
     ffmpeg = _ffmpeg_bin()
     out: List[dict] = []
-    for k in range(parts):
-        start = k * part_len
-        dst = final_path.parent / f"{out_stem}_part{k + 1}of{parts}.mp4"
+    start = 0.0
+    total = len(plan)
+    for k, part_len in enumerate(plan):
+        dst = final_path.parent / f"{out_stem}_part{k + 1}of{total}.mp4"
         cmd = [
             ffmpeg, "-y", "-loglevel", "error",
             "-ss", f"{start:.3f}", "-i", str(final_path), "-t", f"{part_len:.3f}",
@@ -90,15 +99,16 @@ def _split_video(final_path: Path, out_stem: str) -> List[dict]:
             "-movflags", "+faststart", str(dst),
         ]
         r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
-        if r.returncode != 0 or not dst.exists():
-            logger.warning(f"split part {k + 1}/{parts} failed: "
-                           f"{(r.stderr or '')[-200:]}")
-            continue
-        out.append({
-            "part": k + 1, "of": parts, "path": str(dst), "filename": dst.name,
-            "start": round(start, 2), "duration": round(part_len, 2),
-        })
-    logger.info(f"split {final_path.name} into {len(out)}/{parts} parts ({part_len:.1f}s each)")
+        if r.returncode == 0 and dst.exists():
+            out.append({
+                "part": k + 1, "of": total, "path": str(dst), "filename": dst.name,
+                "start": round(start, 2), "duration": round(part_len, 2),
+            })
+        else:
+            logger.warning(f"split part {k + 1}/{total} failed: {(r.stderr or '')[-200:]}")
+        start += part_len
+    logger.info(f"split {final_path.name} into {len(out)}/{total} parts: "
+                f"{[round(p) for p in plan]}")
     return out
 
 

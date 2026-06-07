@@ -445,7 +445,7 @@ export function VariantCard({
         <span>
           Split into parts
           <span className="block text-[10px] text-muted-foreground">
-            Long clips are cut into equal parts (≤~1:20 each) for multi-part posting.
+            Cut into 1:00 parts + a final part (≥0:30, no part over 1:30). Clips ≤1:30 stay whole.
           </span>
         </span>
       </label>
