@@ -4,16 +4,21 @@ ClipForge — Google Drive OAuth Router
 Connect a personal Google account so uploads use the user's own 15 GB quota
 (service accounts have 0 GB and fail on personal My Drive).
 
-  GET  /api/drive-auth/status      — connected? which email? client configured?
-  POST /api/drive-auth/connect     — run the one-time browser consent flow
-  POST /api/drive-auth/disconnect  — forget the saved token
+  GET    /api/drive-auth/status      — connected? which email? client configured?
+  POST   /api/drive-auth/connect     — run the one-time browser consent flow
+  POST   /api/drive-auth/disconnect  — forget the saved token
+  POST   /api/drive-auth/client      — upload OAuth client JSON (Desktop type)
+  DELETE /api/drive-auth/client      — remove the client + token (forces re-setup)
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from services import drive_oauth
 
@@ -43,3 +48,94 @@ async def connect():
 async def disconnect():
     drive_oauth.disconnect()
     return {"connected": False}
+
+
+# ── OAuth client JSON management ──────────────────────────────────────────────
+
+def _client_path() -> Path:
+    from config import settings
+    return Path(settings.data_dir) / "drive_oauth_client.json"
+
+
+def _validate_oauth_client(doc: dict) -> str:
+    """Make sure the JSON looks like a Desktop OAuth client. Returns the type
+    label ("installed" or "web") for the UI. Raises ValueError otherwise."""
+    if not isinstance(doc, dict):
+        raise ValueError("Not a JSON object.")
+    for kind in ("installed", "web"):
+        block = doc.get(kind)
+        if isinstance(block, dict) and block.get("client_id") and block.get("client_secret"):
+            if kind == "web":
+                # The OAuth loopback flow used by ClipForge needs a Desktop
+                # client; the "web" client requires a registered redirect URI.
+                raise ValueError(
+                    "This looks like a 'Web application' OAuth client. "
+                    "ClipForge needs a 'Desktop app' OAuth Client ID — "
+                    "create one of those in Google Cloud Console."
+                )
+            return kind
+    raise ValueError(
+        "Doesn't look like a Google OAuth client JSON. "
+        "Expected an object with an 'installed' block containing 'client_id' "
+        "and 'client_secret'."
+    )
+
+
+class ClientJsonRequest(BaseModel):
+    """Inline-JSON alternative to multipart upload (for pasted client config)."""
+    content: str
+
+
+@router.post("/client")
+async def upload_client(
+    file: UploadFile | None = File(default=None),
+    body: ClientJsonRequest | None = None,
+):
+    """Accept the OAuth client JSON as either a multipart file or a JSON
+    body with `{content: "<raw json>"}`. Validates that it's a Desktop client,
+    then writes to data/drive_oauth_client.json. A stale saved token is
+    cleared so the next Connect re-consents with the new client."""
+    raw: str | None = None
+    if file is not None:
+        try:
+            raw_bytes = await file.read()
+            raw = raw_bytes.decode("utf-8")
+        except Exception as e:
+            raise HTTPException(400, f"Could not read uploaded file: {e}")
+    elif body and body.content:
+        raw = body.content
+    if not raw or not raw.strip():
+        raise HTTPException(400, "Provide either an uploaded file or a JSON body with `content`.")
+
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"Invalid JSON: {e}")
+
+    try:
+        _validate_oauth_client(doc)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    cp = _client_path()
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+    # Any token saved against the previous client is now stale.
+    drive_oauth.disconnect()
+
+    logger.info(f"Drive OAuth client JSON saved → {cp.name}")
+    return {"ok": True, "client_configured": True, "connected": False}
+
+
+@router.delete("/client")
+async def delete_client():
+    cp = _client_path()
+    existed = cp.exists()
+    if existed:
+        try:
+            cp.unlink()
+        except Exception as e:
+            raise HTTPException(500, f"Could not delete client JSON: {e}")
+    drive_oauth.disconnect()  # also forget any stored token
+    return {"ok": True, "removed_client": existed, "connected": False}

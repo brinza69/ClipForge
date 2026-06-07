@@ -3,11 +3,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import {
-  Zap, HardDrive, Cpu, Monitor, Info,
+  Zap, Cpu, Monitor, Info,
 } from "lucide-react";
+import { ApiKeysCard } from "@/components/settings/api-keys-card";
+import { DriveSetupCard } from "@/components/settings/drive-setup-card";
 
 export default function SettingsPage() {
   const { data: system } = useQuery({
@@ -21,11 +21,17 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
         <p className="mt-1 text-muted-foreground">
-          System configuration and preferences.
+          API keys, Google Drive setup, and system info — everything ClipForge needs to run.
         </p>
       </div>
 
-      {/* System Info */}
+      {/* API keys for the cloud engines that need them. */}
+      <ApiKeysCard />
+
+      {/* Google Drive / Sheets integration setup. */}
+      <DriveSetupCard />
+
+      {/* System Info — existing read-only summary. */}
       <Card className="border-border/30 bg-card/50 p-6 space-y-4">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <Cpu className="h-4 w-4 text-primary" /> System Information
@@ -67,7 +73,7 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      {/* Export Defaults */}
+      {/* Export Defaults — existing static summary. */}
       <Card className="border-border/30 bg-card/50 p-6 space-y-4">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <Monitor className="h-4 w-4 text-primary" /> Export Defaults
@@ -105,7 +111,6 @@ export default function SettingsPage() {
         </p>
       </Card>
 
-      {/* Version */}
       <div className="text-center text-xs text-muted-foreground pt-4">
         ClipForge v0.1.0 • Local AI Clipping Studio
       </div>
