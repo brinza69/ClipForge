@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -74,9 +75,23 @@ def _split_plan(duration_s: float) -> List[float]:
     return [60.0] * (n - 1) + [60.0 + rem]
 
 
-def _split_video(final_path: Path, out_stem: str) -> List[dict]:
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_stem(s: str) -> str:
+    """Sanitize a filename stem — keep alphanum/._-, collapse other chars to _."""
+    s = _SAFE_NAME_RE.sub("_", (s or "").strip())
+    return s.strip("._") or "output"
+
+
+def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") -> List[dict]:
     """Split the finished mp4 per _split_plan (re-encoded for exact cuts).
-    Returns [] when the clip stays a single part."""
+    Returns [] when the clip stays a single part.
+
+    `part_suffix` controls the per-part filename pattern:
+      - default "_part" → "<stem>_part1of3.mp4" (existing behaviour)
+      - "_p"            → "<stem>_p1.mp4"      (Sheets mode: short, no total)
+    """
     from services.speed_match import probe_duration
     try:
         dur = float(probe_duration(str(final_path)))
@@ -90,7 +105,10 @@ def _split_video(final_path: Path, out_stem: str) -> List[dict]:
     start = 0.0
     total = len(plan)
     for k, part_len in enumerate(plan):
-        dst = final_path.parent / f"{out_stem}_part{k + 1}of{total}.mp4"
+        if part_suffix == "_p":
+            dst = final_path.parent / f"{out_stem}_p{k + 1}.mp4"
+        else:
+            dst = final_path.parent / f"{out_stem}_part{k + 1}of{total}.mp4"
         cmd = [
             ffmpeg, "-y", "-loglevel", "error",
             "-ss", f"{start:.3f}", "-i", str(final_path), "-t", f"{part_len:.3f}",
@@ -263,9 +281,32 @@ async def handle_parallel_pipeline(
         else:
             final_path = captioned_path
 
-        base_name = Path(cfg.get("title") or project_id).stem
-        stem = f"{base_name}_{(vname or com_id or f'v{i + 1}')}"
+        # Naming: when the job is tied to a Sheets row, every variant's
+        # files are named after the row's <number>. Otherwise fall back to
+        # "<title>_<variant>" (existing behaviour).
+        sheets_number = (cfg.get("sheets_number") or "").strip()
+        if sheets_number:
+            stem = _safe_stem(sheets_number)
+            part_suffix = "_p"          # <num>_p1.mp4
+        else:
+            base_name = Path(cfg.get("title") or project_id).stem
+            stem = f"{base_name}_{(vname or com_id or f'v{i + 1}')}"
+            part_suffix = "_part"       # <stem>_part1of3.mp4
         out_name = f"{stem}.mp4"
+
+        # Rename the on-disk final video so Drive uploads + download all
+        # carry the proper name (drive_upload uses fp.name as Drive filename).
+        desired_final = final_path.parent / out_name
+        if final_path.exists() and final_path != desired_final:
+            try:
+                if desired_final.exists():
+                    desired_final.unlink()
+                final_path.rename(desired_final)
+                final_path = desired_final
+            except Exception as e:
+                logger.warning(
+                    f"could not rename {final_path.name} → {desired_final.name}: {e}"
+                )
 
         import asyncio as _asyncio
         loop_ = _asyncio.get_event_loop()
@@ -275,7 +316,9 @@ async def handle_parallel_pipeline(
         parts: List[dict] = []
         if variant.get("split_into_parts"):
             await v_slc.update(0.96, f"[{i + 1}/{n}] {label}: splitting into parts…")
-            parts = await loop_.run_in_executor(None, lambda: _split_video(final_path, stem))
+            parts = await loop_.run_in_executor(
+                None, lambda: _split_video(final_path, stem, part_suffix)
+            )
 
         # Optional: upload to the variant's Drive folder. When split, upload the
         # PARTS; otherwise the whole video. Download stays available either way.
@@ -315,6 +358,47 @@ async def handle_parallel_pipeline(
         _Sliced(queue, job_id, 0.97, 1.00),
     )
 
+    # ── Optional: commit description back to Google Sheets ─────────────────
+    # When the job was started with sheets_row, the AI-generated description
+    # for variant #0 (descriptions are shared across variants — they're
+    # generated once from the cleaned transcript) is written into the row's
+    # description column, and next_row is advanced. A failure here is logged
+    # but does NOT fail the job — the videos are already on disk and Drive.
+    sheets_commit_result = None
+    sheets_row = cfg.get("sheets_row")
+    if sheets_row:
+        ai_desc = (descriptions or {}).get("ai_generated") or ""
+        if not ai_desc.strip():
+            logger.warning(
+                f"sheets commit skipped: AI description is empty for job {job_id} "
+                f"(row {sheets_row})"
+            )
+            sheets_commit_result = {"status": "skipped_empty_description", "row": int(sheets_row)}
+        else:
+            try:
+                from services import sheets as _sheets, sheets_config as _scfg
+                _cfg_doc = _scfg.load()
+                if not _cfg_doc:
+                    raise RuntimeError("Sheets config disappeared between start and commit.")
+                _sheets.write_cell(
+                    _cfg_doc["spreadsheet_id"], _cfg_doc["tab"],
+                    _cfg_doc["col_description"], int(sheets_row), ai_desc,
+                )
+                _scfg.update_next_row(int(sheets_row) + 1)
+                sheets_commit_result = {
+                    "status": "written",
+                    "row": int(sheets_row),
+                    "next_row": int(sheets_row) + 1,
+                }
+                logger.info(f"sheets commit OK: row {sheets_row} → next_row {sheets_row + 1}")
+            except Exception as e:
+                logger.exception(f"sheets commit failed for row {sheets_row}")
+                sheets_commit_result = {
+                    "status": "failed",
+                    "row": int(sheets_row),
+                    "reason": str(e)[-300:],
+                }
+
     # Persist outputs on the job so the router can list/serve each variant.
     cfg.update({
         "video_path": str(video_path),
@@ -323,6 +407,7 @@ async def handle_parallel_pipeline(
         "transcript_text": raw_transcript_text,
         "descriptions": descriptions,
         "results": results,
+        "sheets_commit": sheets_commit_result,
     })
     async with async_session() as session:
         job = await session.get(JobModel, job_id)

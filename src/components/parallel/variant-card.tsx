@@ -156,8 +156,16 @@ export function VariantCard({
         const list: Voice[] = j.voices || [];
         setVoices(list);
         // Auto-pick the first voice if none selected or current not in list.
+        // For ElevenLabs, leave 15+ alphanumeric-char IDs alone — they're
+        // custom voice IDs pasted from the EL Voice Library that the user's
+        // /v1/voices doesn't return.
         if (list.length && !list.some((v) => v.id === value.tts_voice_id)) {
-          set("tts_voice_id", list[0].id);
+          const looksLikeCustomElevenlabsId =
+            value.tts_engine === "elevenlabs" &&
+            /^[A-Za-z0-9]{15,}$/.test(value.tts_voice_id);
+          if (!looksLikeCustomElevenlabsId) {
+            set("tts_voice_id", list[0]?.id || "");
+          }
         }
       } catch {
         if (!cancelled) setVoices([]);
@@ -168,6 +176,11 @@ export function VariantCard({
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.tts_engine]);
+
+  const isCustomVoice =
+    value.tts_engine === "elevenlabs" &&
+    !!value.tts_voice_id &&
+    !voices.some((v) => v.id === value.tts_voice_id);
 
   const allFonts = [
     ...fonts.user.map((f) => f.family),
@@ -256,16 +269,22 @@ export function VariantCard({
           <div>
             <Label className="text-[11px] text-muted-foreground">Voice</Label>
             <select
-              value={value.tts_voice_id}
-              onChange={(e) => set("tts_voice_id", e.target.value)}
+              value={isCustomVoice ? "__custom__" : value.tts_voice_id}
+              onChange={(e) => {
+                if (e.target.value === "__custom__") return; // handled by the input below
+                set("tts_voice_id", e.target.value);
+              }}
               className="w-full h-8 rounded-md border border-border/60 bg-background px-2 text-sm"
               disabled={loadingVoices}
             >
               {loadingVoices && <option>Loading…</option>}
-              {!loadingVoices && voices.length === 0 && <option value="">No voices</option>}
+              {!loadingVoices && voices.length === 0 && !isCustomVoice && <option value="">No voices</option>}
               {voices.map((v) => (
                 <option key={v.id} value={v.id}>{v.name}</option>
               ))}
+              {isCustomVoice && (
+                <option value="__custom__">Custom: {value.tts_voice_id.slice(0, 10)}…</option>
+              )}
             </select>
           </div>
           <div>
@@ -290,6 +309,23 @@ export function VariantCard({
             />
           </div>
         </div>
+
+        {value.tts_engine === "elevenlabs" && (
+          <div>
+            <Label className="text-[11px] text-muted-foreground">
+              Custom voice ID (overrides dropdown)
+            </Label>
+            <Input
+              value={isCustomVoice ? value.tts_voice_id : ""}
+              onChange={(e) => set("tts_voice_id", e.target.value.trim())}
+              placeholder="e.g. EXAVITQu4vr4xnSDxMaL — paste from elevenlabs.io"
+              className="h-8 text-xs font-mono"
+            />
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Use for voices from the public Voice Library that aren't in your account.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Captions */}

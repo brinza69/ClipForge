@@ -10,11 +10,13 @@ import {
   Wrench,
   Wand2,
   Layers,
+  FileSpreadsheet,
 } from "lucide-react";
 
 const navItems = [
   { label: "Remix Pipeline", href: "/remix",  icon: Wand2 },
   { label: "Parallel Processing", href: "/parallel", icon: Layers },
+  { label: "Parallel from Sheets", href: "/parallel-sheets", icon: FileSpreadsheet },
   { label: "Utilities",  href: "/utilities",  icon: Wrench },
   { label: "Settings",   href: "/settings",   icon: Settings },
 ];
@@ -44,7 +46,9 @@ export function Sidebar({ onClose }: SidebarProps) {
       {/* Nav */}
       <nav className="flex-1 space-y-0.5 px-3 py-2">
         {navItems.map((item) => {
-          const active = pathname.startsWith(item.href);
+          // Exact match OR prefix followed by `/` — so `/parallel` doesn't
+          // light up while we're on `/parallel-sheets`.
+          const active = pathname === item.href || pathname.startsWith(item.href + "/");
 
           return (
             <Link

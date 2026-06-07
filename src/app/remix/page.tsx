@@ -447,8 +447,14 @@ export default function RemixPage() {
           gender: v.gender,
         }));
         setTtsVoices(voices);
+        // Don't clobber a custom-pasted ElevenLabs voice_id (Voice Library)
+        // — looks like 15+ alphanumeric chars and isn't in /v1/voices.
         if (voices.length > 0 && !voices.find((v) => v.id === ttsVoice)) {
-          setTtsVoice(voices[0].id);
+          const looksLikeCustomElevenlabsId =
+            ttsEngine === "elevenlabs" && /^[A-Za-z0-9]{15,}$/.test(ttsVoice);
+          if (!looksLikeCustomElevenlabsId) {
+            setTtsVoice(voices[0].id);
+          }
         }
       } catch {
         setTtsVoices([]);
@@ -1055,17 +1061,43 @@ export default function RemixPage() {
             </div>
             <div>
               <Label className="text-xs">Voice</Label>
-              <select
-                value={ttsVoice}
-                onChange={(e) => setTtsVoice(e.target.value)}
-                disabled={!!jobId || ttsVoices.length === 0}
-                className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-              >
-                {ttsVoices.length === 0 && <option value="">(no voices)</option>}
-                {ttsVoices.map((v) => (
-                  <option key={v.id} value={v.id}>{v.name}{v.gender ? ` · ${v.gender}` : ""}</option>
-                ))}
-              </select>
+              {(() => {
+                const isCustom =
+                  ttsEngine === "elevenlabs" &&
+                  !!ttsVoice &&
+                  !ttsVoices.some((v) => v.id === ttsVoice);
+                return (
+                  <select
+                    value={isCustom ? "__custom__" : ttsVoice}
+                    onChange={(e) => {
+                      if (e.target.value === "__custom__") return;
+                      setTtsVoice(e.target.value);
+                    }}
+                    disabled={!!jobId || (ttsVoices.length === 0 && !isCustom)}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+                  >
+                    {ttsVoices.length === 0 && !isCustom && <option value="">(no voices)</option>}
+                    {ttsVoices.map((v) => (
+                      <option key={v.id} value={v.id}>{v.name}{v.gender ? ` · ${v.gender}` : ""}</option>
+                    ))}
+                    {isCustom && (
+                      <option value="__custom__">Custom: {ttsVoice.slice(0, 10)}…</option>
+                    )}
+                  </select>
+                );
+              })()}
+              {ttsEngine === "elevenlabs" && (
+                <input
+                  type="text"
+                  value={
+                    ttsVoices.some((v) => v.id === ttsVoice) ? "" : ttsVoice
+                  }
+                  onChange={(e) => setTtsVoice(e.target.value.trim())}
+                  disabled={!!jobId}
+                  placeholder="Custom voice ID (e.g. EXAVITQu4vr4xnSDxMaL)"
+                  className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-xs font-mono"
+                />
+              )}
             </div>
             <div>
               <Label className="text-xs">TTS language</Label>

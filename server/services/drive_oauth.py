@@ -25,7 +25,14 @@ from typing import Optional
 
 logger = logging.getLogger("clipforge.drive_oauth")
 
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+    # Sheets read+write — needed for the "Parallel from Sheets" feature
+    # (read source URL + number, write description). Older tokens that lack
+    # this scope keep working for Drive uploads; Sheets calls will surface a
+    # 403 with a "reconnect" hint until the user re-consents.
+    "https://www.googleapis.com/auth/spreadsheets",
+]
 _LOOPBACK_PORT = 8421
 
 
