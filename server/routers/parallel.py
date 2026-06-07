@@ -82,6 +82,13 @@ class StartRequest(BaseModel):
 
     variants: List[VariantConfig] = Field(min_length=2, max_length=4)
 
+    # Optional Sheets integration — when set, the job is tied to a Sheets row.
+    # The pipeline overrides the output filename to use `sheets_number` and,
+    # after variant #0 succeeds, writes the AI-generated description back into
+    # the row's description column (and advances next_row).
+    sheets_row: Optional[int] = None
+    sheets_number: Optional[str] = None
+
 
 @router.post("/start")
 async def parallel_start(req: StartRequest):
@@ -121,6 +128,8 @@ async def parallel_start(req: StartRequest):
         "transcript_engine": req.transcript_engine,
         "transcript_target_lang": req.transcript_target_lang,
         "variants": [v.model_dump() for v in req.variants],
+        "sheets_row": req.sheets_row,
+        "sheets_number": (req.sheets_number or "").strip() or None,
     }
 
     async with async_session() as session:
@@ -197,6 +206,9 @@ async def parallel_result(job_id: str):
             "ai_generated": "",
         },
         "variants": [_variant_view(r) for r in results],
+        "sheets_commit": meta.get("sheets_commit"),
+        "sheets_row": meta.get("sheets_row"),
+        "sheets_number": meta.get("sheets_number"),
     }
 
 

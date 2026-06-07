@@ -23,6 +23,7 @@ from routers.parallel import router as parallel_router
 from routers.variant_presets import router as variant_presets_router
 from routers.drive_auth import router as drive_auth_router
 from routers.commentators import router as commentators_router
+from routers.sheets import router as sheets_router
 from job_queue import job_queue
 from workers.utility_jobs import register_utility_handlers
 
@@ -104,6 +105,7 @@ app.include_router(parallel_router)
 app.include_router(variant_presets_router)
 app.include_router(drive_auth_router)
 app.include_router(commentators_router)
+app.include_router(sheets_router)
 
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 app.mount("/exports", StaticFiles(directory=settings.exports_dir), name="exports")
