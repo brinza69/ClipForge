@@ -353,7 +353,8 @@ export default function RemixPage() {
       toast.success(`Added "${j.name}"`);
       await reloadCommentators();
       setCommentatorId(j.id);
-      setCommentatorChroma("");
+      // Reset chroma override back to "use commentator's saved default".
+      setChromaColor(null);
     } catch (e: any) {
       toast.error("Commentator upload failed", { description: e.message });
     } finally {

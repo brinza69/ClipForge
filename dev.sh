@@ -111,11 +111,20 @@ start_backend() {
   # cross-run comparisons (e.g. GPU inpaint timing). A separator marks each start.
   { echo; echo "===== backend start $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG_DIR/backend.log"
   # setsid puts the child in a fresh process group so we can kill the whole tree.
+  # --reload: hot-reload on .py changes. We exclude .venv and __pycache__
+  # explicitly — uvicorn's default exclude `.*` only filters basenames, not
+  # nested paths, so without these it would try to register inotify watches
+  # for the 50k+ files in .venv and either thrash CPU or hit ENOSPC.
   setsid bash -c "
     cd '$ROOT/server'
     NV='$VENV/lib/python3.12/site-packages/nvidia'
     export LD_LIBRARY_PATH=\"\$NV/cublas/lib:\$NV/cudnn/lib:\$NV/cuda_runtime/lib:\$NV/cufft/lib:\$NV/curand/lib:\$NV/cusolver/lib:\$NV/cusparse/lib:\$NV/nccl/lib:\$NV/nvjitlink/lib:\${LD_LIBRARY_PATH:-}\"
-    exec '$VENV/bin/uvicorn' main:app --host 0.0.0.0 --port '$BACKEND_PORT'
+    exec '$VENV/bin/uvicorn' main:app \
+      --host 0.0.0.0 --port '$BACKEND_PORT' \
+      --reload \
+      --reload-exclude '**/.venv/**' \
+      --reload-exclude '**/__pycache__/**' \
+      --reload-exclude '**/*.log'
   " >>"$LOG_DIR/backend.log" 2>&1 < /dev/null &
   echo $! > "$pidfile"
 
@@ -162,7 +171,7 @@ start_frontend() {
 }
 
 stop_one() {
-  local name="$1" pidfile="$RUN_DIR/$1.pid"
+  local name="$1" port="$2" pidfile="$RUN_DIR/$1.pid"
   local pid; pid="$(read_pid "$pidfile")"
   if is_alive "${pid:-}"; then
     echo "stopping $name (pid $pid)..."
@@ -173,7 +182,28 @@ stop_one() {
       c_green "$name stopped"
     fi
   else
-    c_dim "$name not running"
+    c_dim "$name pid not tracked"
+  fi
+  # Even if our tracked PID was already gone, the port may still be bound by
+  # a zombie from a previous start (a child that outlived its group leader,
+  # eg. uvicorn started by `--reload` whose supervisor died first). Without
+  # this fallback, the next `./dev.sh start` errors with "port already in use"
+  # and leaves the user manually hunting the PID.
+  if port_in_use "$port"; then
+    c_yellow "$name port $port still bound by an untracked process — force-killing"
+    if command -v fuser >/dev/null 2>&1; then
+      fuser -k "$port/tcp" 2>/dev/null || true
+    elif command -v lsof >/dev/null 2>&1; then
+      local zombies
+      zombies="$(lsof -ti :"$port" 2>/dev/null || true)"
+      [ -n "$zombies" ] && kill -KILL $zombies 2>/dev/null || true
+    fi
+    sleep 0.5
+    if port_in_use "$port"; then
+      c_red "$name port $port STILL bound — manual: lsof -i :$port"
+    else
+      c_green "$name port $port freed"
+    fi
   fi
   rm -f "$pidfile"
 }
@@ -190,8 +220,8 @@ cmd_start() {
 }
 
 cmd_stop() {
-  stop_one backend
-  stop_one frontend
+  stop_one backend "$BACKEND_PORT"
+  stop_one frontend "$FRONTEND_PORT"
 }
 
 cmd_status() {
