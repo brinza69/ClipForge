@@ -189,10 +189,13 @@ async def handle_parallel_pipeline(
     """
     cfg = dict(metadata)
     variants: List[Dict] = list(cfg.get("variants") or [])
-    if len(variants) < 2:
-        raise RuntimeError("Parallel processing needs at least 2 variants.")
+    # Allow 1 variant — the /auto endpoint reuses this pipeline for headless
+    # single-variant automation. UI-driven /parallel still enforces 2+ via
+    # its StartRequest schema.
+    if len(variants) < 1:
+        raise RuntimeError("Pipeline needs at least 1 variant.")
     if len(variants) > 4:
-        raise RuntimeError("Parallel processing supports at most 4 variants.")
+        raise RuntimeError("Pipeline supports at most 4 variants.")
 
     project_dir = Path(settings.media_dir) / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
