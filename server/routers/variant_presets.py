@@ -43,6 +43,7 @@ class PresetBody(BaseModel):
 
     commentator_preset_id: Optional[str] = None
     drive_folder: Optional[str] = None
+    split_into_parts: bool = False
 
 
 @router.get("")
