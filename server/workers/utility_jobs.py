@@ -86,10 +86,14 @@ async def handle_erase(job_id, project_id, clip_id, metadata, queue):
                 queue.update_progress(job_id, mapped, msg), loop
             )
 
+        # If the user drew a rect, constrain detection to it (so busy frames
+        # don't get scene text erased outside the caption band). No rect →
+        # whole-frame scan (fallback).
+        roi = {"x": x, "y": y, "w": w, "h": h} if (w > 0 and h > 0) else None
         await queue.update_progress(job_id, 0.03, "Loading OCR model…")
         detected_segments = await loop.run_in_executor(
             None,
-            lambda: detect_caption_segments(input_path, on_progress=_det_progress),
+            lambda: detect_caption_segments(input_path, roi=roi, on_progress=_det_progress),
         )
         if not detected_segments:
             raise RuntimeError(

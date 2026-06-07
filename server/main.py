@@ -13,11 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from database import init_db
-from routers.projects import router as projects_router
 from routers.jobs import router as jobs_router
-from routers.clips import router as clips_router
-from routers.exports import router as exports_router
-from routers.campaigns import router as campaigns_router
 from routers.utilities import router as utilities_router
 from routers.tts import router as tts_router
 from routers.transcript import router as transcript_router
@@ -28,7 +24,6 @@ from routers.variant_presets import router as variant_presets_router
 from routers.drive_auth import router as drive_auth_router
 from routers.commentators import router as commentators_router
 from job_queue import job_queue
-from workers.pipeline import register_pipeline_handlers
 from workers.utility_jobs import register_utility_handlers
 
 # Configure logging
@@ -54,7 +49,6 @@ async def lifespan(app: FastAPI):
     logger.info(f"Database ready: {settings.db_path}")
 
     # Pipeline setup
-    register_pipeline_handlers(job_queue)
     register_utility_handlers(job_queue)
     from workers.remix_pipeline import register_remix_handlers
     register_remix_handlers(job_queue)
@@ -100,11 +94,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(projects_router)
 app.include_router(jobs_router)
-app.include_router(clips_router)
-app.include_router(exports_router)
-app.include_router(campaigns_router)
 app.include_router(utilities_router)
 app.include_router(tts_router)
 app.include_router(transcript_router)

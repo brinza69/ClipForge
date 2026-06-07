@@ -328,26 +328,29 @@ async def inpaint_region(
         ]
 
         # ── Encoder: NVENC if available, libx264 otherwise ───────────────────
+        # This is now an INTERMEDIATE feeding the fused speed-match+caption
+        # pass, which is the only real quality encode. So keep it near-lossless
+        # (low cq/crf) to minimise generational loss, while staying fast.
         if _has_nvenc(ffmpeg):
             enc_video_args = [
                 "-c:v", "h264_nvenc",
                 "-preset", "p4",
                 "-tune", "hq",
                 "-rc", "vbr",
-                "-cq", "23",
+                "-cq", "17",
                 "-b:v", "0",
                 "-pix_fmt", "yuv420p",
             ]
             enc_label = "h264_nvenc"
         else:
-            # ultrafast preset removes most lookahead/refinement — the encoder
-            # was the end-to-end bottleneck (~2x faster vs veryfast on 1080p).
-            # crf 22 keeps near-veryfast quality despite the faster preset.
+            # ultrafast keeps the encoder from being the end-to-end bottleneck
+            # (~2x faster vs veryfast on 1080p). crf 16 makes this intermediate
+            # near-visually-lossless so the fused final pass has clean bits.
             enc_video_args = [
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-tune", "fastdecode",
-                "-crf", "22",
+                "-crf", "16",
                 "-threads", "0",
                 "-pix_fmt", "yuv420p",
             ]

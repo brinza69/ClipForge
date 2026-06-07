@@ -35,6 +35,7 @@ interface VariantResult {
   file_available: boolean;
   file_size: number;
   drive?: { status: string; folder_id?: string; reason?: string; uploaded?: string[] } | null;
+  parts?: { part: number; of: number; filename: string; start: number; duration: number; available: boolean }[];
 }
 
 function driveLabel(d: VariantResult["drive"]): { text: string; cls: string } | null {
@@ -195,6 +196,7 @@ export default function ParallelPage() {
         caption_strip_punct: v.caption_strip_punct,
         commentator_preset_id: v.commentator_preset_id || null,
         drive_folder: v.drive_folder || null,
+        split_into_parts: v.split_into_parts,
       })),
     };
 
@@ -418,26 +420,43 @@ export default function ParallelPage() {
             <div className="space-y-2">
               <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Results</div>
               {results.map((r) => (
-                <div key={r.index} className="flex items-center gap-3 rounded-md border border-border/40 bg-card p-3">
-                  <Badge variant="outline" className="text-[11px] shrink-0">#{r.index + 1}</Badge>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{r.name || r.commentator_preset_id || `Variant ${r.index + 1}`}</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {r.commentator_preset_id ? `Commentator: ${r.commentator_preset_id}` : "No commentator"}
-                      {r.file_size > 0 && ` · ${(r.file_size / 1024 / 1024).toFixed(1)} MB`}
+                <div key={r.index} className="rounded-md border border-border/40 bg-card p-3 space-y-2">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="text-[11px] shrink-0">#{r.index + 1}</Badge>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{r.name || r.commentator_preset_id || `Variant ${r.index + 1}`}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {r.commentator_preset_id ? `Commentator: ${r.commentator_preset_id}` : "No commentator"}
+                        {r.file_size > 0 && ` · ${(r.file_size / 1024 / 1024).toFixed(1)} MB`}
+                      </div>
+                      {(() => {
+                        const d = driveLabel(r.drive);
+                        return d ? <div className={`text-[11px] mt-0.5 ${d.cls}`} title={r.drive?.reason || ""}>{d.text}</div> : null;
+                      })()}
                     </div>
-                    {(() => {
-                      const d = driveLabel(r.drive);
-                      return d ? <div className={`text-[11px] mt-0.5 ${d.cls}`} title={r.drive?.reason || ""}>{d.text}</div> : null;
-                    })()}
+                    {r.file_available ? (
+                      <a href={`/worker-api/parallel/${jobId}/download/${r.index}`} download={r.output_filename}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors">
+                        <Download className="h-3.5 w-3.5" /> {r.parts && r.parts.length ? "Full" : "Download"}
+                      </a>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px] text-muted-foreground shrink-0">file gone</Badge>
+                    )}
                   </div>
-                  {r.file_available ? (
-                    <a href={`/worker-api/parallel/${jobId}/download/${r.index}`} download={r.output_filename}
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors">
-                      <Download className="h-3.5 w-3.5" /> Download
-                    </a>
-                  ) : (
-                    <Badge variant="outline" className="text-[10px] text-muted-foreground shrink-0">file gone</Badge>
+                  {r.parts && r.parts.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pl-9">
+                      {r.parts.map((p) => (
+                        p.available ? (
+                          <a key={p.part} href={`/worker-api/parallel/${jobId}/download/${r.index}/part/${p.part}`} download={p.filename}
+                            className="inline-flex items-center gap-1 rounded-md border border-border/50 bg-background px-2 py-1 text-[11px] hover:border-primary/40 hover:text-primary transition-colors"
+                            title={`${p.duration}s, starts at ${p.start}s`}>
+                            <Download className="h-3 w-3" /> Part {p.part}/{p.of}
+                          </a>
+                        ) : (
+                          <span key={p.part} className="text-[10px] text-muted-foreground">Part {p.part} gone</span>
+                        )
+                      ))}
+                    </div>
                   )}
                 </div>
               ))}

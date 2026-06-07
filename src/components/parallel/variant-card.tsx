@@ -32,6 +32,7 @@ export interface VariantState {
   caption_strip_punct: boolean;
   commentator_preset_id: string; // "" = none
   drive_folder: string; // "" = none; Google Drive folder link
+  split_into_parts: boolean; // split the finished video into equal parts
 }
 
 export function makeDefaultVariant(): VariantState {
@@ -51,6 +52,7 @@ export function makeDefaultVariant(): VariantState {
     caption_strip_punct: true,
     commentator_preset_id: "",
     drive_folder: "",
+    split_into_parts: false,
   };
 }
 
@@ -106,6 +108,7 @@ export function VariantCard({
       caption_strip_punct: p.caption_strip_punct,
       commentator_preset_id: p.commentator_preset_id || "",
       drive_folder: p.drive_folder || "",
+      split_into_parts: !!p.split_into_parts,
     });
   };
 
@@ -430,6 +433,22 @@ export function VariantCard({
           When set, the finished video is uploaded here automatically. Download stays available.
         </p>
       </div>
+
+      {/* Split into parts — for multi-part posting */}
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={value.split_into_parts}
+          onChange={(e) => set("split_into_parts", e.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          Split into parts
+          <span className="block text-[10px] text-muted-foreground">
+            Cut into 1:00 parts + a final part (≥0:30, no part over 1:30). Clips ≤1:30 stay whole.
+          </span>
+        </span>
+      </label>
     </Card>
   );
 }

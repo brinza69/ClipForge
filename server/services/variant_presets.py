@@ -32,6 +32,7 @@ _FIELDS = (
     "caption_words_per_chunk", "caption_strip_punct",
     "commentator_preset_id",
     "drive_folder",
+    "split_into_parts",
 )
 
 

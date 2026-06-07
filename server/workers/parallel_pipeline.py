@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -38,17 +39,77 @@ from models import JobModel, JobType
 # orchestration.
 from workers.remix_pipeline import (
     _Sliced,
+    _creationflags,
+    _ffmpeg_bin,
     _stage_commentator,
     _stage_descriptions,
     _stage_download,
     _stage_erase,
-    _stage_speed_match,
-    _stage_caption_burn,
+    _stage_match_and_caption,
     _stage_transcribe,
     synth_voice_from_text,
 )
 
 logger = logging.getLogger("clipforge.parallel_pipeline")
+
+
+def _split_plan(duration_s: float) -> List[float]:
+    """Part durations (seconds). Rules:
+      - a clip up to 1:30 stays ONE part (the max long part is 1:30);
+      - otherwise cut 1:00 parts, and the leftover becomes a final SHORT part
+        if it is >= 30s; if the leftover is < 30s it is folded into the last
+        part (which then runs 1:01–1:29).
+    So the short part is never < 30s and no part is ever longer than 1:30.
+        1:40→[60,40]  1:41→[60,41]  2:41→[60,60,41]  2:10→[60,70]  2:00→[60,60]
+    """
+    if duration_s <= 90.0 + 1e-6:
+        return [duration_s]
+    n = int(duration_s // 60)
+    rem = duration_s - 60 * n
+    if rem <= 1e-6:
+        return [60.0] * n
+    if rem >= 30.0:
+        return [60.0] * n + [rem]
+    # leftover < 30s → fold it into the last full minute (60–89s)
+    return [60.0] * (n - 1) + [60.0 + rem]
+
+
+def _split_video(final_path: Path, out_stem: str) -> List[dict]:
+    """Split the finished mp4 per _split_plan (re-encoded for exact cuts).
+    Returns [] when the clip stays a single part."""
+    from services.speed_match import probe_duration
+    try:
+        dur = float(probe_duration(str(final_path)))
+    except Exception:
+        return []
+    plan = _split_plan(dur)
+    if len(plan) <= 1 or dur <= 0:
+        return []
+    ffmpeg = _ffmpeg_bin()
+    out: List[dict] = []
+    start = 0.0
+    total = len(plan)
+    for k, part_len in enumerate(plan):
+        dst = final_path.parent / f"{out_stem}_part{k + 1}of{total}.mp4"
+        cmd = [
+            ffmpeg, "-y", "-loglevel", "error",
+            "-ss", f"{start:.3f}", "-i", str(final_path), "-t", f"{part_len:.3f}",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart", str(dst),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+        if r.returncode == 0 and dst.exists():
+            out.append({
+                "part": k + 1, "of": total, "path": str(dst), "filename": dst.name,
+                "start": round(start, 2), "duration": round(part_len, 2),
+            })
+        else:
+            logger.warning(f"split part {k + 1}/{total} failed: {(r.stderr or '')[-200:]}")
+        start += part_len
+    logger.info(f"split {final_path.name} into {len(out)}/{total} parts: "
+                f"{[round(p) for p in plan]}")
+    return out
 
 
 # Fields that belong to a single variant. Everything else in the request is
@@ -64,7 +125,7 @@ _VARIANT_KEYS = (
     "caption_strip_punct",
     "commentator_preset_id", "commentator_chroma_color",
     "commentator_chroma_similarity", "commentator_chroma_blend",
-    "drive_folder",
+    "drive_folder", "split_into_parts",
 )
 
 
@@ -181,21 +242,15 @@ async def handle_parallel_pipeline(
             cleaned_text, vdir, vcfg, v_slc.sub(0.0, 0.40), out_stem="voice",
         )
 
-        # 2) speed-match the shared erased video to this variant's voice
-        await v_slc.update(0.40, f"[{i + 1}/{n}] {label}: speed-match…")
-        matched_path = vdir / "video_voicematched.mp4"
-        sm_stats = await _stage_speed_match(
-            erased_path, voice_path, matched_path, v_slc.sub(0.40, 0.55),
-        )
-        voice_dur = sm_stats["voice_dur"]
-
-        # 3) caption burn
+        # 2+3) FUSED speed-match + caption burn (one encode) on the shared
+        # erased video against this variant's voice.
+        await v_slc.update(0.40, f"[{i + 1}/{n}] {label}: speed-match + captions…")
         has_com = bool(com_id)
         cap_hi = 0.80 if has_com else 1.0
         captioned_path = vdir / ("video_captioned.mp4" if has_com else "video_final.mp4")
-        await _stage_caption_burn(
-            matched_path, cleaned_text, voice_dur, voice_path,
-            vcfg, captioned_path, v_slc.sub(0.55, cap_hi),
+        sm_stats = await _stage_match_and_caption(
+            erased_path, voice_path, cleaned_text, vcfg, captioned_path,
+            v_slc.sub(0.40, cap_hi),
         )
 
         # 4) commentator (optional)
@@ -209,18 +264,29 @@ async def handle_parallel_pipeline(
             final_path = captioned_path
 
         base_name = Path(cfg.get("title") or project_id).stem
-        out_name = f"{base_name}_{(vname or com_id or f'v{i + 1}')}.mp4"
+        stem = f"{base_name}_{(vname or com_id or f'v{i + 1}')}"
+        out_name = f"{stem}.mp4"
 
-        # Optional: upload this variant's final mp4 to its Drive folder. The
-        # download option stays available regardless — this is in addition.
+        import asyncio as _asyncio
+        loop_ = _asyncio.get_event_loop()
+
+        # Optional: split the finished video into equal parts for multi-part
+        # posting (e.g. a 2:40 clip → two 1:20 parts).
+        parts: List[dict] = []
+        if variant.get("split_into_parts"):
+            await v_slc.update(0.96, f"[{i + 1}/{n}] {label}: splitting into parts…")
+            parts = await loop_.run_in_executor(None, lambda: _split_video(final_path, stem))
+
+        # Optional: upload to the variant's Drive folder. When split, upload the
+        # PARTS; otherwise the whole video. Download stays available either way.
         drive_result = None
         drive_folder = (variant.get("drive_folder") or "").strip()
         if drive_folder:
             await v_slc.update(0.98, f"[{i + 1}/{n}] {label}: uploading to Drive…")
             from services.drive_upload import upload_files
-            import asyncio as _asyncio
-            drive_result = await _asyncio.get_event_loop().run_in_executor(
-                None, lambda: upload_files(drive_folder, [final_path])
+            targets = [Path(p["path"]) for p in parts] if parts else [final_path]
+            drive_result = await loop_.run_in_executor(
+                None, lambda: upload_files(drive_folder, targets)
             )
             logger.info(f"variant {i} Drive upload: {drive_result.get('status')}")
 
@@ -234,6 +300,7 @@ async def handle_parallel_pipeline(
             "caption_template_id": vcfg.get("caption_template_id"),
             "final_path": str(final_path),
             "output_filename": out_name,
+            "parts": parts,
             "speed_match_stats": sm_stats,
             "commentator_stats": commentator_stats,
             "drive": drive_result,

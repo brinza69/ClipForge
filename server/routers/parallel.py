@@ -63,6 +63,9 @@ class VariantConfig(BaseModel):
     # uploaded there in addition to staying downloadable.
     drive_folder: Optional[str] = None
 
+    # Split the finished video into equal parts for multi-part posting.
+    split_into_parts: bool = False
+
 
 class StartRequest(BaseModel):
     url: str
@@ -160,6 +163,15 @@ def _variant_view(r: dict) -> dict:
         "file_size": size,
         "file_available": exists,
         "drive": r.get("drive"),
+        "parts": [
+            {
+                "part": p.get("part"), "of": p.get("of"),
+                "filename": p.get("filename"),
+                "start": p.get("start"), "duration": p.get("duration"),
+                "available": bool(p.get("path") and Path(p["path"]).exists()),
+            }
+            for p in (r.get("parts") or [])
+        ],
     }
 
 
@@ -213,6 +225,34 @@ async def parallel_download(job_id: str, index: int):
         path=str(out),
         media_type="video/mp4",
         filename=safe,
+        headers={"Content-Disposition": f'attachment; filename="{safe}"'},
+    )
+
+
+@router.get("/{job_id}/download/{index}/part/{part}")
+async def parallel_download_part(job_id: str, index: int, part: int):
+    """Stream part `part` (1-based) of variant `index`."""
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+    if not job or job.type != JobType.parallel_pipeline.value:
+        raise HTTPException(404, "Job not found")
+    if job.status != JobStatus.done.value:
+        raise HTTPException(409, f"Job not done (status={job.status})")
+    meta = json.loads(job.metadata_json or "{}")
+    match = next((r for r in (meta.get("results") or [])
+                  if int(r.get("index", -1)) == index), None)
+    if not match:
+        raise HTTPException(404, f"Variant {index} not found")
+    pmatch = next((p for p in (match.get("parts") or [])
+                   if int(p.get("part", -1)) == part), None)
+    if not pmatch:
+        raise HTTPException(404, f"Part {part} not found")
+    out = Path(pmatch.get("path", ""))
+    if not out.exists():
+        raise HTTPException(410, "Part no longer available")
+    safe = _safe_filename(out.stem) + ".mp4"
+    return FileResponse(
+        path=str(out), media_type="video/mp4", filename=safe,
         headers={"Content-Disposition": f'attachment; filename="{safe}"'},
     )
 

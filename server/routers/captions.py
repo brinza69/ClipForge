@@ -179,6 +179,45 @@ async def upload_source(file: UploadFile = File(...)):
     return {"session_id": session_id, "width": w, "height": h, "filename": file.filename}
 
 
+@router.post("/clone")
+async def clone_style(file: UploadFile = File(...)):
+    """Analyse a reference caption video and return a draft caption template
+    plus diagnostics (reference crop, font candidates, confidence notes). The
+    UI shows the draft for the user to confirm/tweak, then POSTs /templates to
+    save it. Runs in a threadpool (~30-60s incl. OCR + font matching).
+    """
+    suffix = Path(file.filename or "video").suffix.lower() or ".mp4"
+    if suffix not in {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}:
+        raise HTTPException(400, f"Unsupported video format: {suffix}")
+    content = await file.read()
+    if len(content) > 300 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum 300 MB.")
+    if len(content) < 500:
+        raise HTTPException(400, "File appears to be empty.")
+
+    import asyncio
+    import uuid as _uuid
+    from services.caption_cloner import clone_caption_style
+
+    sdir = Path(settings.temp_dir) / "caption_clone"
+    sdir.mkdir(parents=True, exist_ok=True)
+    src = sdir / f"{_uuid.uuid4().hex[:12]}{suffix}"
+    src.write_bytes(content)
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: clone_caption_style(str(src))
+        )
+    except Exception as e:
+        logger.warning(f"caption clone failed: {e}")
+        raise HTTPException(422, str(e))
+    finally:
+        try:
+            src.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return result
+
+
 def _resolve_source(session_id: str) -> Path:
     sdir = _session_dir(session_id)
     meta_path = sdir / "meta.json"

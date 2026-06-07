@@ -4,33 +4,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard,
-  HardDrive,
   Settings,
   Zap,
-  WifiOff,
   ChevronRight,
-  TrendingUp,
   Wrench,
-  Mic,
-  FileText,
-  AudioLines,
-  Type,
   Wand2,
   Layers,
 } from "lucide-react";
 
 const navItems = [
-  { label: "Dashboard",  href: "/",           icon: LayoutDashboard },
-  { label: "Campaigns",  href: "/campaigns",  icon: TrendingUp },
   { label: "Remix Pipeline", href: "/remix",  icon: Wand2 },
   { label: "Parallel Processing", href: "/parallel", icon: Layers },
-  { label: "Voice Studio", href: "/tts",      icon: Mic },
-  { label: "Transcript Studio", href: "/transcript", icon: FileText },
-  { label: "Caption Studio", href: "/captions", icon: Type },
-  { label: "Silence Remover", href: "/silence", icon: AudioLines },
   { label: "Utilities",  href: "/utilities",  icon: Wrench },
-  { label: "Exports",    href: "/exports",    icon: HardDrive },
   { label: "Settings",   href: "/settings",   icon: Settings },
 ];
 
@@ -59,10 +44,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       {/* Nav */}
       <nav className="flex-1 space-y-0.5 px-3 py-2">
         {navItems.map((item) => {
-          const active =
-            item.href === "/"
-              ? pathname === "/" || pathname.startsWith("/projects")
-              : pathname.startsWith(item.href);
+          const active = pathname.startsWith(item.href);
 
           return (
             <Link
