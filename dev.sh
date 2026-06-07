@@ -32,6 +32,15 @@ FRONTEND_PORT="${CLIPFORGE_FRONTEND_PORT:-3000}"
 : "${CLIPFORGE_WHISPER_MODEL:=medium}"
 export CLIPFORGE_WHISPER_MODEL
 
+# Hot-reload: OFF by default. The project lives on /mnt/f (a Windows drive
+# mounted in WSL2) where inotify file-watching does NOT work — uvicorn's
+# --reload reloader hangs/fails during startup on the 9p mount, which is why
+# the backend silently failed to bind after --reload was naively added.
+# Opt in with CLIPFORGE_RELOAD=1 ONLY if your project lives on the native
+# Linux filesystem (e.g. ~/ClipForge inside WSL, not /mnt/f). When enabled
+# we force watchfiles into polling mode so it works even on 9p (at a CPU cost).
+: "${CLIPFORGE_RELOAD:=0}"
+
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
 c_red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -128,30 +137,37 @@ start_backend() {
   # Append (not truncate) so a restart doesn't wipe history — needed for
   # cross-run comparisons (e.g. GPU inpaint timing). A separator marks each start.
   { echo; echo "===== backend start $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG_DIR/backend.log"
+  # Build the uvicorn reload flags only when explicitly enabled (see
+  # CLIPFORGE_RELOAD note above — OFF by default because it breaks on /mnt/f).
+  # When ON we force watchfiles polling so it works on the 9p mount, and
+  # exclude .venv/__pycache__/logs (uvicorn's default `.*` exclude only
+  # matches basenames, not nested paths, so without these it would watch
+  # the 50k+ files in .venv).
+  local reload_args="" reload_env=""
+  if [ "$CLIPFORGE_RELOAD" = "1" ]; then
+    reload_args="--reload --reload-exclude '**/.venv/**' --reload-exclude '**/__pycache__/**' --reload-exclude '**/*.log'"
+    reload_env="export WATCHFILES_FORCE_POLLING=true;"
+  fi
+
   # Detach via setsid (clean process group) or nohup fallback. Background
   # DIRECTLY here and capture $! in the same shell — see the note on
   # _DETACH_CMD above for why we avoid command substitution.
-  # --reload: hot-reload on .py changes. We exclude .venv and __pycache__
-  # explicitly — uvicorn's default exclude `.*` only filters basenames, not
-  # nested paths, so without these it would try to register inotify watches
-  # for the 50k+ files in .venv and either thrash CPU or hit ENOSPC.
   "$_DETACH_CMD" bash -c "
     cd '$ROOT/server'
+    $reload_env
     NV='$VENV/lib/python3.12/site-packages/nvidia'
     export LD_LIBRARY_PATH=\"\$NV/cublas/lib:\$NV/cudnn/lib:\$NV/cuda_runtime/lib:\$NV/cufft/lib:\$NV/curand/lib:\$NV/cusolver/lib:\$NV/cusparse/lib:\$NV/nccl/lib:\$NV/nvjitlink/lib:\${LD_LIBRARY_PATH:-}\"
-    exec '$VENV/bin/uvicorn' main:app \
-      --host 0.0.0.0 --port '$BACKEND_PORT' \
-      --reload \
-      --reload-exclude '**/.venv/**' \
-      --reload-exclude '**/__pycache__/**' \
-      --reload-exclude '**/*.log'
+    exec '$VENV/bin/uvicorn' main:app --host 0.0.0.0 --port '$BACKEND_PORT' $reload_args
   " >>"$LOG_DIR/backend.log" 2>&1 < /dev/null &
   echo $! > "$pidfile"
 
-  if wait_for_port "$BACKEND_PORT" 20; then
+  # 45s, not 20s: the backend imports torch + faster_whisper + onnxruntime at
+  # startup, which can take 30s+ on a cold cache. A false "failed to bind" at
+  # 20s sent the user chasing a non-bug while uvicorn was still importing.
+  if wait_for_port "$BACKEND_PORT" 45; then
     c_green "backend up   (pid $(cat "$pidfile"))  http://localhost:$BACKEND_PORT"
   else
-    c_red "backend failed to bind :$BACKEND_PORT within 20s — see $LOG_DIR/backend.log"
+    c_red "backend failed to bind :$BACKEND_PORT within 45s — see $LOG_DIR/backend.log"
     return 1
   fi
 }
