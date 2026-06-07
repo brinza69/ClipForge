@@ -172,6 +172,74 @@ async def set_anthropic(req: APIKeyRequest):
 
 
 # ---------------------------------------------------------------------------
+# Whisper device + model — diagnostics and live config
+# ---------------------------------------------------------------------------
+
+WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
+WHISPER_DEVICES = ["auto", "cuda", "cpu"]
+
+
+class WhisperConfigRequest(BaseModel):
+    whisper_model: Optional[str] = None
+    whisper_device: Optional[str] = None
+
+
+@router.get("/device")
+async def whisper_device_status(verify: bool = False):
+    """Report what Whisper model/device is configured + (optional) actually load
+    the model to verify CUDA works. With verify=false (default) it just
+    introspects config without paying the load cost (~10s for medium).
+    With verify=true it forces a load and reports the resolved device — use
+    this to confirm CUDA isn't silently falling back to CPU."""
+    from services.transcriber import get_model_info, _get_model
+
+    info = get_model_info()
+    if verify:
+        try:
+            # Loading in the main process for diagnostics (separate cache
+            # from the subprocess used by the actual transcribe pipeline).
+            _get_model()
+            info = get_model_info()
+        except Exception as e:
+            info = {**info, "error": f"{type(e).__name__}: {str(e)[-200:]}"}
+
+    # Probe torch.cuda directly for an extra signal — the UI shows this
+    # next to the configured device so the user can see if their GPU is
+    # actually visible to PyTorch.
+    try:
+        import torch
+        info["cuda_available"] = bool(torch.cuda.is_available())
+        info["cuda_device_name"] = (
+            torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+        )
+    except Exception:
+        info["cuda_available"] = False
+        info["cuda_device_name"] = None
+
+    info["models"] = WHISPER_MODELS
+    info["devices"] = WHISPER_DEVICES
+    return info
+
+
+@router.post("/device")
+async def whisper_device_set(req: WhisperConfigRequest):
+    """Persist model/device preferences to data/whisper_config.json and drop
+    the cached model so the next transcribe loads with the new values."""
+    from services.transcriber import write_config_overrides, unload_model
+
+    if req.whisper_model and req.whisper_model not in WHISPER_MODELS:
+        raise HTTPException(400, f"Unknown model. Use one of {WHISPER_MODELS}.")
+    if req.whisper_device and req.whisper_device not in WHISPER_DEVICES:
+        raise HTTPException(400, f"Unknown device. Use one of {WHISPER_DEVICES}.")
+
+    cfg = write_config_overrides(
+        model=req.whisper_model, device=req.whisper_device,
+    )
+    unload_model()
+    return {"ok": True, "saved": cfg}
+
+
+# ---------------------------------------------------------------------------
 # Clean job
 # ---------------------------------------------------------------------------
 

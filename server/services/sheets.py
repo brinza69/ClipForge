@@ -71,6 +71,29 @@ def _cell_a1(tab: str, col: str, row: int) -> str:
     return f"{tab_part}!{col}{int(row)}"
 
 
+_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+
+
+def _token_scopes_from_file() -> list[str]:
+    """Read the actual granted scopes from data/drive_oauth_token.json.
+    `Credentials.from_authorized_user_file` returns the scopes ARG that was
+    passed at construction time, not the ones the token was granted — so
+    that check would always pass after we widened SCOPES. The file's
+    "scopes" array is the ground truth."""
+    import json
+    from services.drive_oauth import _token_path
+
+    tp = _token_path()
+    if not tp.exists():
+        return []
+    try:
+        doc = json.loads(tp.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    s = doc.get("scopes")
+    return list(s) if isinstance(s, list) else []
+
+
 def _service():
     """Build a Sheets service using the same user OAuth credentials as Drive."""
     from services.drive_oauth import get_user_credentials
@@ -78,15 +101,18 @@ def _service():
     creds = get_user_credentials()
     if not creds:
         raise SheetsError(
-            "Google Drive is not connected. Go to /parallel and click 'Connect Google Drive'."
+            "Google Drive is not connected. Go to Settings and click 'Connect Google Drive'."
         )
-    # Detect a token that pre-dates the Sheets scope addition.
-    scopes = getattr(creds, "scopes", None) or []
-    if scopes and "https://www.googleapis.com/auth/spreadsheets" not in scopes:
+    # Detect a token that pre-dates the Sheets scope addition. The check uses
+    # the JSON file directly (see _token_scopes_from_file) because google-auth
+    # echoes the constructor's `scopes` arg back on the creds object.
+    granted = _token_scopes_from_file()
+    if granted and _SHEETS_SCOPE not in granted:
         raise SheetsScopeMissing(
-            "Your saved Drive token doesn't include Google Sheets permission yet. "
-            "Click 'Disconnect' and then 'Connect Google Drive' again to re-consent "
-            "with the new scope."
+            "Your saved Drive token doesn't include Google Sheets permission. "
+            "Go to Settings → Google Drive → Disconnect, then Connect again. "
+            "The Google consent screen must include 'See, edit, create, and "
+            "delete all your Google Sheets spreadsheets'."
         )
     try:
         from googleapiclient.discovery import build

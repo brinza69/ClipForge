@@ -86,6 +86,13 @@ class ClientJsonRequest(BaseModel):
     content: str
 
 
+# Real Google OAuth client JSONs are ~600B–1.5KB. Anything significantly
+# larger is either the wrong file or an attempt to waste memory by parsing
+# a multi-MB blob as JSON. Capped at 50KB to leave generous headroom
+# without making the parser do work it doesn't need to.
+_MAX_CLIENT_JSON_BYTES = 50 * 1024
+
+
 @router.post("/client")
 async def upload_client(
     file: UploadFile | None = File(default=None),
@@ -97,12 +104,38 @@ async def upload_client(
     cleared so the next Connect re-consents with the new client."""
     raw: str | None = None
     if file is not None:
+        # Probe the content length header first if the client sent one — saves
+        # a wasted .read() on obviously oversized payloads.
         try:
-            raw_bytes = await file.read()
-            raw = raw_bytes.decode("utf-8")
+            advertised = int(file.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            advertised = 0
+        if advertised and advertised > _MAX_CLIENT_JSON_BYTES:
+            raise HTTPException(
+                413,
+                f"Uploaded file is {advertised} bytes; OAuth client JSON should be under "
+                f"{_MAX_CLIENT_JSON_BYTES // 1024}KB. Picked the wrong file?",
+            )
+        try:
+            raw_bytes = await file.read(_MAX_CLIENT_JSON_BYTES + 1)
         except Exception as e:
             raise HTTPException(400, f"Could not read uploaded file: {e}")
+        if len(raw_bytes) > _MAX_CLIENT_JSON_BYTES:
+            raise HTTPException(
+                413,
+                f"Uploaded file exceeds {_MAX_CLIENT_JSON_BYTES // 1024}KB; "
+                f"OAuth client JSON is normally under 2KB.",
+            )
+        try:
+            raw = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise HTTPException(400, f"File is not valid UTF-8 text: {e}")
     elif body and body.content:
+        if len(body.content) > _MAX_CLIENT_JSON_BYTES:
+            raise HTTPException(
+                413,
+                f"Pasted content exceeds {_MAX_CLIENT_JSON_BYTES // 1024}KB.",
+            )
         raw = body.content
     if not raw or not raw.strip():
         raise HTTPException(400, "Provide either an uploaded file or a JSON body with `content`.")

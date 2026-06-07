@@ -44,6 +44,14 @@ interface PulledRow {
   url: string;
 }
 
+type SheetsCommit =
+  | { status: "written"; row: number; next_row: number }
+  // For "failed" we also stash the description that was supposed to be
+  // written, so the Retry button has something to send.
+  | { status: "failed"; row: number; reason?: string; description?: string }
+  | { status: "skipped_empty_description"; row: number }
+  | null;
+
 export default function ParallelSheetsPage() {
   const [url, setUrl] = useState("");
   const [config, setConfig] = useState<SheetsConfig>({ configured: false });
@@ -51,6 +59,8 @@ export default function ParallelSheetsPage() {
   const [saving, setSaving] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [pulled, setPulled] = useState<PulledRow | null>(null);
+  const [lastCommit, setLastCommit] = useState<SheetsCommit>(null);
+  const [retryCommitting, setRetryCommitting] = useState(false);
 
   // Form state for the configure / edit form
   const [fSpread, setFSpread] = useState("");
@@ -161,14 +171,76 @@ export default function ParallelSheetsPage() {
     }
   };
 
-  // After a job completes, the backend has already written the description
-  // and advanced next_row server-side. Refresh the config to show the new
-  // next_row + clear the pulled-row badge so the next click is fresh.
-  const handleJobDone = useCallback(() => {
-    setPulled(null);
-    setUrl("");
-    loadConfig();
+  // After a job completes, inspect the backend's sheets_commit verdict.
+  // The auto-commit happens after the pipeline runs, and it CAN fail (token
+  // expired between start and end, Sheets API hiccup, rate limit, ...). In
+  // that case the videos are on disk and Drive, but the row is NOT written
+  // and next_row was NOT advanced — the user has to retry or commit manually.
+  // Pre-fix, this failure was silent and the user thought the row was done.
+  const handleJobDone = useCallback((data: { raw: Record<string, unknown> }) => {
+    const commit = (data.raw?.sheets_commit ?? null) as SheetsCommit;
+    if (!commit) {
+      // No sheets_row was attached to this run (e.g. user typed URL manually
+      // even on this page) — just reset.
+      setLastCommit(null);
+      setPulled(null);
+      setUrl("");
+      loadConfig();
+      return;
+    }
+    if (commit.status === "written") {
+      setLastCommit(commit);
+      toast.success(`Row ${commit.row} written → next: row ${commit.next_row}`);
+      setPulled(null);
+      setUrl("");
+      loadConfig();
+    } else if (commit.status === "failed") {
+      // Stash the AI description so the inline Retry button has something
+      // to send via POST /api/sheets/commit without re-running the pipeline.
+      const desc = ((data.raw?.descriptions as Record<string, unknown> | undefined)
+        ?.ai_generated as string | undefined) || "";
+      setLastCommit({ ...commit, description: desc });
+      toast.error(`Sheets commit FAILED for row ${commit.row}`, {
+        description:
+          (commit.reason || "Unknown reason.") +
+          " Videos are saved/uploaded; row is NOT written and next_row was NOT advanced. Use the Retry button on the Sheets card.",
+        duration: 15000,
+      });
+      // Keep `pulled` so the user can also re-run the pipeline on the same row.
+    } else if (commit.status === "skipped_empty_description") {
+      setLastCommit(commit);
+      toast.warning(`Row ${commit.row}: AI description was empty — row not written`, {
+        description: "Pipeline succeeded but the description stage produced no text. next_row was NOT advanced.",
+        duration: 12000,
+      });
+    }
   }, [loadConfig]);
+
+  // Retry the Sheets write without re-running the pipeline. Only available
+  // when the auto-commit failed AND we have the description text in memory
+  // (set by handleJobDone above).
+  const retryCommit = async () => {
+    if (!lastCommit || lastCommit.status !== "failed" || !lastCommit.description) return;
+    setRetryCommitting(true);
+    try {
+      const r = await fetch(`/worker-api/sheets/commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ row: lastCommit.row, description: lastCommit.description }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail || `Commit failed (${r.status})`);
+      toast.success(`Row ${lastCommit.row} written on retry → next: row ${j.next_row}`);
+      setLastCommit({ status: "written", row: lastCommit.row, next_row: j.next_row || lastCommit.row + 1 });
+      setPulled(null);
+      setUrl("");
+      await loadConfig();
+    } catch (e: any) {
+      toast.error("Retry failed", { description: e.message });
+    } finally {
+      setRetryCommitting(false);
+    }
+  };
 
   const startExtras = useCallback(() => {
     if (!pulled) return {};
@@ -237,6 +309,48 @@ export default function ParallelSheetsPage() {
               <SkipForward className="h-3.5 w-3.5" />
             </Button>
           </div>
+
+          {/* Last commit status — persistent indicator after each run, so a
+              silent failure (token expired, Sheets API hiccup) can't slip past
+              the user. */}
+          {lastCommit && (
+            <div className={
+              "rounded-md border px-3 py-2 text-xs flex items-center gap-2 " +
+              (lastCommit.status === "written"
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                : lastCommit.status === "failed"
+                  ? "border-destructive/40 bg-destructive/10 text-destructive"
+                  : "border-amber-500/40 bg-amber-500/10 text-amber-400")
+            }>
+              {lastCommit.status === "written" && (
+                <>
+                  <span className="font-medium">✓ Last commit</span>
+                  <span>— row {lastCommit.row} written, next: row {lastCommit.next_row}</span>
+                </>
+              )}
+              {lastCommit.status === "failed" && (
+                <>
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1 truncate" title={lastCommit.reason || ""}>
+                    <span className="font-medium">Commit FAILED</span> — row {lastCommit.row}: {lastCommit.reason || "unknown"}
+                  </span>
+                  {lastCommit.description ? (
+                    <Button size="sm" variant="outline" onClick={retryCommit} disabled={retryCommitting}>
+                      {retryCommitting ? <Loader2 className="h-3 w-3 animate-spin" /> : "Retry"}
+                    </Button>
+                  ) : (
+                    <span className="text-[10px] opacity-70">(no desc cached — re-run)</span>
+                  )}
+                </>
+              )}
+              {lastCommit.status === "skipped_empty_description" && (
+                <>
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span>Row {lastCommit.row} skipped — pipeline ran but produced no AI description</span>
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
 

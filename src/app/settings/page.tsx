@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { ApiKeysCard } from "@/components/settings/api-keys-card";
 import { DriveSetupCard } from "@/components/settings/drive-setup-card";
+import { WhisperCard } from "@/components/settings/whisper-card";
 
 export default function SettingsPage() {
   const { data: system } = useQuery({
@@ -30,6 +31,9 @@ export default function SettingsPage() {
 
       {/* Google Drive / Sheets integration setup. */}
       <DriveSetupCard />
+
+      {/* Whisper model + device picker — confirms GPU is actually used. */}
+      <WhisperCard />
 
       {/* System Info — existing read-only summary. */}
       <Card className="border-border/30 bg-card/50 p-6 space-y-4">

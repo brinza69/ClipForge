@@ -17,6 +17,8 @@ interface SliderProps {
   min?: number
   max?: number
   step?: number
+  /** When true, both thumbs are inert and dimmed. */
+  disabled?: boolean
   // Always invoked with an array — matches @radix-ui/react-slider semantics
   // that all callers were written against. Single-value mode emits a 1-item
   // array.
@@ -30,6 +32,7 @@ function Slider({
   min = 0,
   max = 100,
   step = 1,
+  disabled = false,
   onValueChange,
 }: SliderProps) {
   const values = React.useMemo(() => {
@@ -63,7 +66,13 @@ function Slider({
   return (
     <div
       data-slot="slider"
-      className={cn("relative flex w-full items-center select-none", className)}
+      data-disabled={disabled ? "true" : undefined}
+      aria-disabled={disabled || undefined}
+      className={cn(
+        "relative flex w-full items-center select-none",
+        disabled && "opacity-50 pointer-events-none",
+        className,
+      )}
       style={{ height: 20 }}
     >
       {/* Track background */}
@@ -86,6 +95,7 @@ function Slider({
             max={max}
             step={step}
             value={values[0]}
+            disabled={disabled}
             onChange={(e) => handleChange(0, Number(e.target.value))}
             className="slider-thumb-input absolute w-full"
             style={{ pointerEvents: "none", zIndex: 2 }}
@@ -96,6 +106,7 @@ function Slider({
             max={max}
             step={step}
             value={values[1]}
+            disabled={disabled}
             onChange={(e) => handleChange(1, Number(e.target.value))}
             className="slider-thumb-input absolute w-full"
             style={{ pointerEvents: "none", zIndex: 3 }}
@@ -108,6 +119,7 @@ function Slider({
           max={max}
           step={step}
           value={values[0]}
+          disabled={disabled}
           onChange={(e) => handleChange(0, Number(e.target.value))}
           className="slider-thumb-input absolute w-full"
           style={{ zIndex: 2 }}

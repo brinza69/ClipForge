@@ -20,6 +20,8 @@ import {
   Eraser, Type, Mic, FileText, Languages, Gauge,
 } from "lucide-react";
 import { toast } from "sonner";
+import { RemixPastRuns } from "@/components/remix/past-runs";
+import { CommentatorPicker } from "@/components/remix/commentator-picker";
 
 // Same-origin proxy through Next.js rewrites — avoids extension content
 // scripts that intercept cross-port fetches.
@@ -173,25 +175,11 @@ export default function RemixPage() {
   const [copiedDesc, setCopiedDesc] = useState<"orig" | "ai" | null>(null);
 
   // ── Past runs ──────────────────────────────────────────────────────────
-  interface PastRun {
-    job_id: string;
-    project_id: string;
-    title: string;
-    output_filename: string;
-    file_size: number;
-    file_available: boolean;
-    finished_at: string | null;
-    tts_engine?: string;
-    transcript_target_lang?: string;
-  }
-  const [pastRuns, setPastRuns] = useState<PastRun[]>([]);
-  const loadPastRuns = useCallback(async () => {
-    try {
-      const r = await fetch(`/worker-api/remix/recent?limit=10`);
-      if (!r.ok) return;
-      const j = await r.json();
-      setPastRuns(j.runs || []);
-    } catch { /* */ }
+  // Component-owned state lives in <RemixPastRuns />. The parent bumps
+  // `pastRunsKey` to ask it to reload (e.g. after a finished job).
+  const [pastRunsKey, setPastRunsKey] = useState(0);
+  const loadPastRuns = useCallback(() => {
+    setPastRunsKey((k) => k + 1);
   }, []);
 
   // ── Canvas refs ────────────────────────────────────────────────────────
@@ -353,7 +341,8 @@ export default function RemixPage() {
       toast.success(`Added "${j.name}"`);
       await reloadCommentators();
       setCommentatorId(j.id);
-      setCommentatorChroma("");
+      // Reset chroma override back to "use commentator's saved default".
+      setChromaColor(null);
     } catch (e: any) {
       toast.error("Commentator upload failed", { description: e.message });
     } finally {
@@ -1346,342 +1335,25 @@ export default function RemixPage() {
             )}
           </div>
 
-          {/* Commentator picker — optional layer that gets composited AFTER captions */}
-          <div className="pt-3 border-t border-border/40">
-            <div className="flex items-center justify-between mb-2">
-              <Label className="text-xs flex items-center gap-1.5">
-                <Mic className="h-3 w-3" /> Commentator overlay
-              </Label>
-              <input
-                ref={commentatorFileRef}
-                type="file"
-                accept=".mp4,.mov,.webm,.mkv"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) uploadCommentator(f);
-                  if (commentatorFileRef.current) commentatorFileRef.current.value = "";
-                }}
-              />
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={!!jobId || uploadingCommentator}
-                onClick={() => commentatorFileRef.current?.click()}
-                className="h-7 text-[11px]"
-              >
-                {uploadingCommentator ? (
-                  <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Uploading…</>
-                ) : (
-                  <>+ Add new</>
-                )}
-              </Button>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-              {/* None card */}
-              <button
-                type="button"
-                onClick={() => setCommentatorId("")}
-                disabled={!!jobId}
-                className={`text-left rounded-md border-2 p-2 transition-colors ${
-                  commentatorId === ""
-                    ? "border-primary bg-primary/5"
-                    : "border-border/40 hover:border-border disabled:opacity-50"
-                }`}
-              >
-                <div className="h-16 flex items-center justify-center rounded bg-muted/30 text-[10px] text-muted-foreground mb-1.5">
-                  no overlay
-                </div>
-                <div className="text-xs font-semibold">None</div>
-                <div className="text-[10px] text-muted-foreground">Skip this stage</div>
-              </button>
-
-              {commentators.map((c) => {
-                const active = commentatorId === c.id;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => {
-                      setCommentatorId(c.id);
-                      // Clear any per-run override state — start fresh from the preset's saved chroma.
-                      setChromaColor(null);
-                      setChromaSimilarity(null);
-                      setChromaBlend(null);
-                    }}
-                    disabled={!!jobId}
-                    className={`text-left rounded-md border-2 p-2 transition-colors relative group ${
-                      active
-                        ? "border-primary bg-primary/5"
-                        : "border-border/40 hover:border-border disabled:opacity-50"
-                    }`}
-                  >
-                    <div className="h-16 rounded bg-black overflow-hidden mb-1.5 flex items-center justify-center">
-                      {c.thumb_available ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={`/worker-api/commentators/${c.id}/thumb`}
-                          alt={c.name}
-                          className="h-full object-contain"
-                        />
-                      ) : (
-                        <div className="text-[10px] text-muted-foreground">no thumb</div>
-                      )}
-                    </div>
-                    <div className="text-xs font-semibold truncate">{c.name}</div>
-                    <div className="text-[10px] text-muted-foreground">
-                      {c.duration ? `${c.duration.toFixed(1)}s loop` : c.id}
-                    </div>
-                    {/* Delete on hover */}
-                    <span
-                      onClick={(ev) => {
-                        ev.stopPropagation();
-                        deleteCommentator(c.id);
-                      }}
-                      className="absolute top-1 right-1 h-5 w-5 rounded-full bg-destructive/80 text-destructive-foreground text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                      title="Delete"
-                    >
-                      ×
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {commentatorId && (() => {
-              const com = commentators.find((c) => c.id === commentatorId);
-              if (!com) return null;
-              // Effective values shown in the controls: per-run override
-              // takes precedence over the preset's saved values.
-              const effectiveColor =
-                chromaColor !== null ? chromaColor : (com.chroma_key || "");
-              const effectiveSimilarity =
-                chromaSimilarity !== null ? chromaSimilarity : (com.chroma_similarity ?? 0.10);
-              const effectiveBlend =
-                chromaBlend !== null ? chromaBlend : (com.chroma_blend ?? 0.05);
-              const isKeyingOff = effectiveColor === "";
-
-              const saveToPreset = async () => {
-                try {
-                  const body: any = {
-                    chroma_similarity: effectiveSimilarity,
-                    chroma_blend: effectiveBlend,
-                  };
-                  // Only send chroma_key if user explicitly changed it
-                  if (chromaColor !== null) body.chroma_key = chromaColor;
-                  const r = await fetch(`/worker-api/commentators/${com.id}/chroma`, {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(body),
-                  });
-                  if (!r.ok) {
-                    const j = await r.json().catch(() => ({}));
-                    throw new Error(j.detail || `Save failed (${r.status})`);
-                  }
-                  toast.success("Saved to preset");
-                  await reloadCommentators();
-                  // Reset overrides — they're now baked into the preset.
-                  setChromaColor(null);
-                  setChromaSimilarity(null);
-                  setChromaBlend(null);
-                } catch (e: any) {
-                  toast.error("Save failed", { description: e.message });
-                }
-              };
-
-              const hasOverride =
-                chromaColor !== null || chromaSimilarity !== null || chromaBlend !== null;
-
-              return (
-                <div className="mt-3 rounded-md border border-border/40 bg-muted/20 p-3 space-y-3">
-                  {/* Native alpha badge — supersedes everything below */}
-                  {com.has_native_alpha && (
-                    <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-2.5">
-                      <div className="text-xs font-semibold flex items-center gap-1.5 text-emerald-300">
-                        <Sparkles className="h-3 w-3" />
-                        Native alpha channel detected
-                        <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-400/40">
-                          active
-                        </Badge>
-                      </div>
-                      <p className="text-[10px] text-muted-foreground mt-1">
-                        Your upload already carries alpha transparency
-                        (CapCut/Premiere/DaVinci export with alpha). The pipeline uses
-                        it directly — no chroma keying, no AI processing needed. Cleanest result.
-                      </p>
-                    </div>
-                  )}
-
-                  {/* AI background removal — supersedes chroma key when active. Hidden when native alpha is present. */}
-                  {!com.has_native_alpha && (
-                  <div className="rounded-md border border-primary/30 bg-primary/5 p-2.5 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <div className="text-xs font-semibold flex items-center gap-1.5">
-                          <Sparkles className="h-3 w-3 text-primary" />
-                          AI background removal
-                          {com.ai_processed && (
-                            <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-400/40">
-                              active
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="text-[10px] text-muted-foreground mt-0.5">
-                          Uses U²-Net (same kind of model as CapCut's background remove).
-                          Works on any background — no green screen required.
-                          One-time processing per preset, then cached forever.
-                        </p>
-                      </div>
-                      {com.ai_processed ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => removeAiProcessed(com.id)}
-                          disabled={!!jobId}
-                          className="h-7 text-[11px] shrink-0"
-                        >
-                          Remove
-                        </Button>
-                      ) : aiJobs[com.id] && !aiJobs[com.id].done ? (
-                        <div className="text-[11px] text-muted-foreground shrink-0 text-right">
-                          <div className="flex items-center gap-1.5">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            <span>{aiJobs[com.id].progress}%</span>
-                          </div>
-                          <div className="text-[10px] mt-0.5 max-w-[180px] truncate">
-                            {aiJobs[com.id].msg}
-                          </div>
-                        </div>
-                      ) : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={() => startAiRemoval(com.id)}
-                          disabled={!!jobId}
-                          className="h-7 text-[11px] shrink-0"
-                        >
-                          Process with AI
-                        </Button>
-                      )}
-                    </div>
-                    {com.ai_processed && (
-                      <p className="text-[10px] text-emerald-400/90">
-                        The chroma-key settings below are ignored while AI mode is active.
-                      </p>
-                    )}
-                  </div>
-                  )}
-
-                  {!com.has_native_alpha && (<>
-                  <div className="flex items-center justify-between">
-                    <Label className={`text-xs font-semibold ${com.ai_processed ? "text-muted-foreground line-through" : ""}`}>
-                      Background to remove (chroma key)
-                    </Label>
-                    {hasOverride && !com.ai_processed && (
-                      <Badge variant="outline" className="text-[10px] text-amber-400 border-amber-400/40">
-                        unsaved overrides
-                      </Badge>
-                    )}
-                  </div>
-
-                  {/* Color picker + hex input + "off" toggle */}
-                  <div>
-                    <Label className="text-xs">Color</Label>
-                    <div className="mt-1 flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={effectiveColor || "#FFFFFF"}
-                        onChange={(e) => setChromaColor(e.target.value)}
-                        disabled={!!jobId || isKeyingOff}
-                        className="h-9 w-12 rounded-md border border-input bg-background cursor-pointer disabled:opacity-50"
-                      />
-                      <Input
-                        value={effectiveColor}
-                        onChange={(e) => setChromaColor(e.target.value)}
-                        placeholder="#FFFFFF or empty to disable"
-                        disabled={!!jobId}
-                        className="flex-1 text-xs font-mono"
-                      />
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={isKeyingOff ? "default" : "outline"}
-                        onClick={() => setChromaColor(isKeyingOff ? (com.chroma_key || "#FFFFFF") : "")}
-                        disabled={!!jobId}
-                        className="text-[11px] h-9 shrink-0"
-                      >
-                        {isKeyingOff ? "Keying OFF" : "Turn OFF"}
-                      </Button>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground mt-1">
-                      {isKeyingOff
-                        ? "Chroma keying disabled — the entire commentator video will cover the main one."
-                        : "Pixels matching this color (and similar ones) become transparent so the main video shows through."}
-                    </p>
-                  </div>
-
-                  {/* Similarity slider */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <Label className="text-xs">Similarity tolerance</Label>
-                      <Badge variant="secondary" className="text-[10px] font-mono">
-                        {(effectiveSimilarity * 100).toFixed(0)}%
-                      </Badge>
-                    </div>
-                    <Slider
-                      value={[effectiveSimilarity]}
-                      min={0.01} max={0.5} step={0.01}
-                      onValueChange={([v]) => setChromaSimilarity(v)}
-                      disabled={!!jobId || isKeyingOff}
-                    />
-                    <p className="text-[10px] text-muted-foreground mt-1">
-                      How aggressively similar colors are also keyed out. Higher = more removed
-                      (good if your background has JPEG compression or shading).
-                    </p>
-                  </div>
-
-                  {/* Blend slider */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <Label className="text-xs">Edge softness</Label>
-                      <Badge variant="secondary" className="text-[10px] font-mono">
-                        {(effectiveBlend * 100).toFixed(0)}%
-                      </Badge>
-                    </div>
-                    <Slider
-                      value={[effectiveBlend]}
-                      min={0.0} max={0.3} step={0.01}
-                      onValueChange={([v]) => setChromaBlend(v)}
-                      disabled={!!jobId || isKeyingOff}
-                    />
-                    <p className="text-[10px] text-muted-foreground mt-1">
-                      Soft edges blur the boundary between kept and removed pixels.
-                      0 = hard cut, higher = softer transition.
-                    </p>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 pt-1">
-                    <p className="text-[10px] text-muted-foreground flex-1">
-                      Changes apply to this run. Use "Save to preset" to make them the default.
-                    </p>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={saveToPreset}
-                      disabled={!!jobId || !hasOverride}
-                      className="text-[11px] h-7 shrink-0"
-                    >
-                      Save to preset
-                    </Button>
-                  </div>
-                  </>)}
-                </div>
-              );
-            })()}
-          </div>
+          <CommentatorPicker
+            commentators={commentators}
+            commentatorId={commentatorId}
+            setCommentatorId={setCommentatorId}
+            chromaColor={chromaColor}
+            setChromaColor={setChromaColor}
+            chromaSimilarity={chromaSimilarity}
+            setChromaSimilarity={setChromaSimilarity}
+            chromaBlend={chromaBlend}
+            setChromaBlend={setChromaBlend}
+            aiJobs={aiJobs}
+            startAiRemoval={startAiRemoval}
+            removeAiProcessed={removeAiProcessed}
+            uploadingCommentator={uploadingCommentator}
+            uploadCommentator={uploadCommentator}
+            deleteCommentator={deleteCommentator}
+            reloadCommentators={reloadCommentators}
+            disabled={!!jobId}
+          />
         </Card>
       )}
 
@@ -1799,66 +1471,7 @@ export default function RemixPage() {
         </Card>
       )}
 
-      {/* Past runs — always visible if there's at least one finished remix on disk */}
-      {pastRuns.length > 0 && (
-        <Card className="p-4 space-y-3 border-border/40">
-          <div className="flex items-center justify-between">
-            <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
-              Past remix runs ({pastRuns.length})
-            </div>
-            <button
-              type="button"
-              onClick={loadPastRuns}
-              className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Refresh
-            </button>
-          </div>
-          <div className="divide-y divide-border/40">
-            {pastRuns.map((r) => {
-              const sizeMb = (r.file_size / 1024 / 1024).toFixed(1);
-              const when = r.finished_at
-                ? new Date(r.finished_at).toLocaleString()
-                : "";
-              return (
-                <div
-                  key={r.job_id}
-                  className="flex items-center gap-3 py-2 first:pt-0 last:pb-0"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate" title={r.title}>
-                      {r.title}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
-                      <span>{sizeMb} MB</span>
-                      {when && <span>· {when}</span>}
-                      {r.tts_engine && <span>· {r.tts_engine}</span>}
-                      {r.transcript_target_lang && (
-                        <span>· {r.transcript_target_lang}</span>
-                      )}
-                      <span className="font-mono">· {r.job_id}</span>
-                    </div>
-                  </div>
-                  {r.file_available ? (
-                    <a
-                      href={`/worker-api/remix/${r.job_id}/download`}
-                      download={r.output_filename}
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Download
-                    </a>
-                  ) : (
-                    <Badge variant="outline" className="text-[10px] text-muted-foreground border-border/40 shrink-0">
-                      file gone
-                    </Badge>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
+      <RemixPastRuns refreshKey={pastRunsKey} />
     </div>
   );
 }

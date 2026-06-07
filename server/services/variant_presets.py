@@ -48,6 +48,23 @@ def _slugify(name: str) -> str:
     return s[:63] or "preset"
 
 
+def load_preset(preset_id: str) -> Optional[dict]:
+    """Read one preset by id. Returns the stored fields with `id` injected,
+    or None if the file doesn't exist / is unreadable."""
+    if not preset_id or not _ID_RE.match(preset_id):
+        return None
+    p = _root() / f"{preset_id}.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data["id"] = p.stem
+        return data
+    except Exception:
+        logger.warning(f"could not read preset {preset_id}")
+        return None
+
+
 def list_presets() -> List[dict]:
     """All saved presets, newest first."""
     out: List[dict] = []
