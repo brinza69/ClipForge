@@ -265,11 +265,17 @@ async def inpaint_region(
     dilate_px: int = 6,
     inpaint_radius: int = 5,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> str:
     """
     Seamlessly remove one or more rectangular regions from a video.
 
     Audio from the original is muxed back into the output.
+
+    `is_cancelled`, if provided, is polled each frame; when it returns True the
+    ffmpeg decode/encode subprocesses are killed and JobCancelledError is
+    raised so the pipeline stops promptly (asyncio task.cancel() alone can't
+    interrupt this run_in_executor thread).
     """
 
     def _run() -> str:
@@ -469,6 +475,18 @@ async def inpaint_region(
                     raise RuntimeError(
                         f"Inpaint exceeded {int(_INPAINT_MAX_S)}s wall clock "
                         f"({frame_idx}/{total} frames) — aborting."
+                    )
+                # Poll for user cancellation between frames so a cancel takes
+                # effect within a frame or two instead of after the whole
+                # (potentially minutes-long) inpaint finishes.
+                if is_cancelled is not None and is_cancelled():
+                    try:
+                        dec.kill(); enc.kill()
+                    except Exception:
+                        pass
+                    from job_queue import JobCancelledError
+                    raise JobCancelledError(
+                        f"Inpaint cancelled by user at {frame_idx}/{total} frames"
                     )
                 buf = dec.stdout.read(frame_nbytes)
                 if not buf or len(buf) < frame_nbytes:

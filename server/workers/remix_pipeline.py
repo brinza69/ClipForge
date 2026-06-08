@@ -36,7 +36,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import settings
 from database import async_session
@@ -261,6 +261,7 @@ async def _stage_erase(
     mode: str = "inpaint",
     algorithm: str = "telea",
     auto_detect: bool = False,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> Path:
     """Run the eraser on a single rect or auto-detected time-varying segments.
 
@@ -371,6 +372,7 @@ async def _stage_erase(
             segments=detected_segments,
             algorithm=algorithm,
             on_progress=_progress_cb,
+            is_cancelled=is_cancelled,
         )
     else:
         await inpaint_region(
@@ -378,6 +380,7 @@ async def _stage_erase(
             x=x, y=y, w=w, h=h,
             algorithm=algorithm,
             on_progress=_progress_cb,
+            is_cancelled=is_cancelled,
         )
     if not output_path.exists():
         raise RuntimeError("Inpaint produced no output")
@@ -811,6 +814,7 @@ async def handle_remix_pipeline(
             mode=cfg.get("erase_mode", "inpaint"),
             algorithm=cfg.get("erase_algorithm", "telea"),
             auto_detect=bool(cfg.get("erase_auto_detect", False)),
+            is_cancelled=(lambda: queue.is_cancelled(job_id)),
         )
     )
     audio_task = asyncio.create_task(

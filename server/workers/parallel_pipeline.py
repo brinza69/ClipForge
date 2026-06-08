@@ -222,6 +222,7 @@ async def handle_parallel_pipeline(
         mode=cfg.get("erase_mode", "inpaint"),
         algorithm=cfg.get("erase_algorithm", "telea"),
         auto_detect=bool(cfg.get("erase_auto_detect", False)),
+        is_cancelled=(lambda: queue.is_cancelled(job_id)),
     )
 
     # ── Shared stage 4 — clean transcript ONCE (0.40–0.48) ─────────────────
