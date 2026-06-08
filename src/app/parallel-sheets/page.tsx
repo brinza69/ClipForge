@@ -23,6 +23,7 @@ import {
   FileSpreadsheet, Loader2, Save, Edit3, Trash2, ArrowRight, AlertCircle, SkipForward,
 } from "lucide-react";
 import { toast } from "sonner";
+import { errorToast } from "@/lib/toast-helpers";
 import { ParallelProcessor } from "@/components/parallel/parallel-processor";
 
 interface SheetsConfig {
@@ -87,7 +88,7 @@ export default function ParallelSheetsPage() {
         setFStart(j.start_row || 2);
       }
     } catch (e: any) {
-      toast.error("Sheets config failed", { description: e.message });
+      errorToast.api("load the Sheets config", e);
     }
   }, []);
 
@@ -117,7 +118,7 @@ export default function ParallelSheetsPage() {
       setEditing(false);
       toast.success(`Sheets config saved — next row ${j.next_row}`);
     } catch (e: any) {
-      toast.error("Save failed", { description: e.message });
+      errorToast.api("save the Sheets config", e);
     } finally {
       setSaving(false);
     }
@@ -132,7 +133,7 @@ export default function ParallelSheetsPage() {
       setEditing(true);
       toast.success("Sheets config cleared");
     } catch (e: any) {
-      toast.error("Could not clear", { description: e.message });
+      errorToast.api("clear the config", e);
     }
   };
 
@@ -153,7 +154,7 @@ export default function ParallelSheetsPage() {
         toast.success(`Pulled row ${j.row}${j.number ? ` (#${j.number})` : ""}`);
       }
     } catch (e: any) {
-      toast.error("Pull failed", { description: e.message });
+      errorToast.api("pull the next row", e);
     } finally {
       setPulling(false);
     }
@@ -167,7 +168,7 @@ export default function ParallelSheetsPage() {
       toast.info(`Advanced to row ${j.next_row}`);
       await loadConfig();
     } catch (e: any) {
-      toast.error("Skip failed", { description: e.message });
+      errorToast.api("skip the row", e);
     }
   };
 
@@ -236,7 +237,7 @@ export default function ParallelSheetsPage() {
       setUrl("");
       await loadConfig();
     } catch (e: any) {
-      toast.error("Retry failed", { description: e.message });
+      errorToast.api("retry the commit", e);
     } finally {
       setRetryCommitting(false);
     }
