@@ -1556,19 +1556,118 @@ short SHA.
 6. **OCR localization gaps.** If OCR never sampled the caption in a slightly
    shifted position (jitter), the union zone may not cover it.
 
-### 11.3 The guiding principle (this is the whole insight)
+### 11.2b UPDATED GOALS (the user refined the requirement — read carefully)
 
-**The cost is asymmetric.** Inpainting a band frame that has NO caption is
-**visually free** — LaMa just reconstructs background over background, and
-the user already marked that band as "the caption area", so there's nothing
-precious there. But MISSING a caption frame is a visible defect.
+The user added two requirements that CHANGE the design away from the
+"over-erase the whole band" idea below. The new target is:
 
-→ The detector must be **biased hard toward over-erasing.** Every tuning
-choice should prefer "erase a few extra idle frames" over "risk leaving a
-caption frame." Today the detector is balanced; rebalancing it toward
-over-erase is most of the fix.
+1. **Minimal mask.** Erase as LITTLE as possible — ideally only the text
+   glyphs + their outline/shadow, NOT a rectangle. Less background touched
+   = clearer output. So a tight, per-pixel mask, not a band rectangle.
+2. **No manual box.** Fully automatic. The user will NOT draw the erase
+   rect (they want to script it). So the detector must (a) localize the
+   caption on its own and (b) reject scene text (signs/labels/UI in the
+   source) WITHOUT the box that used to do that job.
 
-### 11.4 The plan — three tiers (ship Tier 0 + Tier 1; Tier 2 optional)
+These two pull AGAINST simple "over-erase for zero leak". The resolution is
+in §11.3b. (Keep the old §11.3/§11.4 below as the *fallback* design — a
+guaranteed-safe band mode — but the PRIMARY goal is now tight + auto.)
+
+### 11.3 (OLD) The cost-asymmetry principle — now the FALLBACK only
+
+**The cost is asymmetric.** Inpainting a band frame with NO caption is
+visually free (LaMa reconstructs background over background). Missing a
+caption frame is a visible defect. So a *band-rectangle* mode can bias
+toward over-erase for guaranteed zero leak. This is still the right idea
+for the **safety fallback** (§11.4 Tier 0), but it erases too much for the
+user's new clarity goal — see §11.3b.
+
+### 11.3b THE NEW GUIDING DESIGN (tight + automatic, resolves the tension)
+
+Two axes are in tension: **completeness** (no leak) vs **minimality**
+(clarity). The insight that gives BOTH:
+
+> **A caption is HELD IDENTICAL for its whole on-screen duration.**
+> So compute ONE tight per-glyph mask per "caption display", from its
+> clearest (fully-opaque) frame, and reuse that exact mask for EVERY frame
+> of that display.
+
+Why this wins on both axes:
+- **Tight** — the mask follows the actual glyph shapes (per-pixel), not a
+  rectangle → minimal background touched.
+- **Complete** — every frame of the display gets the same, correct mask, so
+  there's no per-frame jitter and no boundary leak. Fade-in/out frames get
+  the full opaque mask, which slightly over-covers the faint glyphs — which
+  is exactly right (covers the ghost) and still tight.
+- **Fits the existing inpaint architecture** — a segment already carries a
+  `mask_roi`. Today it's a filled rectangle; make it the tight glyph mask
+  instead. The inpaint loop already applies one mask to all frames of a
+  segment. So redefine a "segment" = **one caption display** (split at every
+  TEXT CHANGE, not just at gaps). Inpaint barely changes; all the work is in
+  the detector.
+
+**Three sub-problems and how to solve each:**
+
+**(A) Tight per-glyph mask (minimality).**
+OCR already gives a tight quadrilateral per text line. Inside that quad:
+crop → grayscale → **adaptive/Otsu threshold** to separate glyph pixels from
+their immediate background → binary glyph mask → **dilate 2–3px** to cover
+the outline/shadow (captions almost always have one). Union the line masks
+of a display → that display's tight mask. Cheap (one threshold per display,
+~20–40 displays per clip, not per frame).
+
+**(B) Auto-localization + scene-text rejection (no box).**
+The manual box used to mean "the caption is HERE, ignore text elsewhere."
+Replace it with a VOTE over signals that distinguish a burned-in caption
+from scene text:
+  - **Held-still ≥ ~0.5s (STRONGEST).** A caption's text pixels stay fixed
+    while the video moves; scene text moves with the camera/objects. Reject
+    any text region that drifts more than a few px over its lifetime.
+  - **Recurs in a consistent band.** Cluster all held-still detections by
+    Y-center over the WHOLE clip; the band(s) with the most cumulative
+    text-time = caption lane(s). Scene text is scattered → filtered out.
+  - **Transcript-timing correlation (we already have it!).** The pipeline
+    already produced the speech transcript with timestamps. A real caption
+    appears in sync with speech; a static lower-third graphic does not.
+    Correlate text-present intervals with speech intervals → strong caption
+    confidence. This is a signal a generic eraser CAN'T use but ClipForge
+    can, because transcription runs first.
+  - **Style consistency (weak tiebreak).** Caption font height/colour is
+    constant across the clip; scene text varies.
+  Combine into a confidence; keep regions above threshold as caption. No box.
+
+**(C) Catching faint / fade / missed frames (completeness, from §11.2).**
+Because the mask is per-DISPLAY (reused across the hold), the only risk is
+getting the DISPLAY's time bounds right. Use the dual presence signal from
+the old plan (edge density OR temporal-stability×gradient) just to mark the
+display's start/end frames, then apply the tight mask across that whole
+range + a small temporal dilation. Fade frames are inside the range → they
+get the full mask → no ghost.
+
+**Honest hard cases (tell the user these up-front):**
+- **Scene text in the SAME band that's also held still** (e.g., a static
+  burned-in logo / lower-third in the caption lane). Held-still + band both
+  fire → it'd be erased too. The transcript-correlation signal helps (a logo
+  isn't in sync with speech) but it's not bulletproof. This is the one case
+  where dropping the manual box genuinely loses information.
+- **Very low-contrast captions with no outline** — adaptive threshold may
+  under-segment. Fall back to dilating the mask or to band-rectangle mode.
+- **Two captions overlapping a text change (cross-fade)** — OR the two
+  adjacent displays' masks across the transition window.
+For these, keep the §11.4 band-rectangle mode as a one-click fallback.
+
+### 11.3c Architecture change in inpaint (small but required)
+
+Today `_build_segment_state` fills a RECTANGLE into `mask_roi`. To erase
+tightly, let a segment optionally carry a `mask` (a binary ndarray in
+input-pixel coords, or a list of polygons). When present, `_build_segment_state`
+rasterizes THAT into `mask_roi` (cropped to the segment's tight bbox + the
+inpaint context margin) instead of filling the rectangle. Everything
+downstream (LaMa tensor, batching, the per-frame apply loop) is unchanged —
+it already applies an arbitrary `mask_roi`. So this is a ~30-line change
+plus passing the mask through `detect_caption_segments → segments[i]["mask"]`.
+
+### 11.4 (FALLBACK) Band-rectangle modes — three tiers
 
 Expose an **"Erase coverage"** choice in the UI (Remix + Parallel shared
 settings, next to "Auto-detect captions"): `Thorough` (Tier 0) | `Smart`
@@ -1647,82 +1746,135 @@ warm-up. Keep this as a fallback/experiment; Tier 1 (OCR for localization +
 Signal B for presence) is the recommended default because OCR localization
 is reliable and cheap.
 
-### 11.5 Files to touch
+### 11.5 PRIMARY implementation path (tight glyph masks + auto-localize)
+
+This is the path that satisfies the user's refined goals (§11.2b). Build it
+in this order; each step is independently verifiable.
+
+**Step 1 — Auto-localize the caption lane (no box).**
+New `auto_locate_caption_band(video_path, transcript_segments) -> roi|None`
+in `caption_detector.py`:
+  - OCR-detect text on sampled frames (reuse the existing sampling loop).
+  - For each detection, measure its **drift**: track the same text region
+    across the next few samples; if its centre moves > ~1% of frame size, it
+    is scene text → drop it. Keep only **held-still** detections.
+  - Cluster the held-still detections by Y-centre over the whole clip
+    (existing lane logic). Score each lane by cumulative text-time.
+  - If `transcript_segments` are available, multiply each lane's score by how
+    well its text-present intervals overlap the speech intervals (caption
+    tracks speech). Pick the top lane(s).
+  - Return that lane's bbox as the auto-ROI (or None → fall back to a default
+    bottom band, or to Thorough mode). This REPLACES the user's manual box.
+
+**Step 2 — Per-display segmentation (split at text changes).**
+In the detection pass, group consecutive samples into **displays**: a new
+display starts when the OCR text content changes materially (string
+similarity drops) OR after a gap. Each display = {start_t, end_t, the text,
+the line quads}. This replaces today's lane-time-range segments.
+
+**Step 3 — Tight per-glyph mask per display (minimality, §11.3b-A).**
+For each display, from its clearest sample (highest OCR confidence / mid-
+display frame): for each line quad, crop → grayscale → Otsu/adaptive
+threshold → glyph binary → dilate 2–3px → union → the display's tight
+`mask` (full-frame-coord binary ndarray, or a list of polygons). Store it
+on the segment: `segments[i]["mask"] = ...` alongside its tight bbox.
+
+**Step 4 — inpaint accepts per-segment arbitrary masks (§11.3c).**
+`_build_segment_state`: if `seg.get("mask")` is present, rasterize it into
+`mask_roi` (cropped to the tight bbox + context margin) instead of filling
+the rectangle. ~30 lines; nothing else in inpaint changes.
+
+**Step 5 — completeness on the time bounds (§11.3b-C).**
+Run the dual presence signal (edge-density OR temporal-stability) ONLY to
+nudge each display's start/end outward to the real first/last frame the
+glyphs are visible (including fades), then apply that display's tight mask
+across the whole range + ~0.3s temporal dilation. The mask is reused, so
+fade frames are covered with no per-frame work.
+
+### 11.5b Files to touch (primary path)
 
 - `server/services/caption_detector.py`
-  - `_presence_segments`: add Signal B (ring buffer + temporal-diff ×
-    gradient), OR the signals, full-width segments, `expand_s` dilation,
-    bigger bridge, lower threshold.
-  - `detect_caption_segments`: thread a `coverage` / `full_width` flag.
+  - NEW `auto_locate_caption_band()` (Step 1).
+  - Per-display grouping + tight-mask extraction (Steps 2–3); emit
+    `segments[i]` with `mask`, tight `x/y/w/h`, `start_t/end_t`.
+  - Keep `_presence_segments` for Step-5 boundary nudging.
+- `server/services/inpaint.py`
+  - `_build_segment_state`: rasterize `seg["mask"]` when present (Step 4).
 - `server/workers/remix_pipeline.py` + `parallel_pipeline.py`
-  - `_stage_erase`: handle `coverage="thorough"` (skip detect, full-band
-    static inpaint). Bump `dilate_px` for auto segments. Pass the ROI width
-    through for full-width masks.
-- `server/routers/remix.py` + `routers/parallel.py` + `routers/auto.py`
-  - Accept an `erase_coverage` field (`"smart"` default | `"thorough"`).
-- Frontend: `src/components/parallel/parallel-processor.tsx` (+ /remix) —
-  a small select next to "Auto-detect captions": Smart / Thorough.
+  - `_stage_erase`: when `auto_detect` and NO roi given → call
+    `auto_locate_caption_band` first; if it returns None → Thorough fallback.
+    Pass tight masks through.
+- `server/routers/{remix,parallel,auto}.py`
+  - Make `erase_zone` OPTIONAL when `erase_auto_detect=true` (auto-localize).
+    Add `erase_coverage: "tight" (default) | "band" | "thorough"`.
+- Frontend `parallel-processor.tsx` (+ /remix): when auto-detect is on, the
+  zone picker becomes optional; add the coverage select.
+- **`/api/auto` (the user's automation): with `erase_auto_detect=true` and no
+  zones, it now works fully hands-off — this is the whole point.**
 
-### 11.6 New / changed params (document defaults inline)
+### 11.6 Params (tight path)
 
 ```
-# caption_detector._presence_segments
-PRESENCE_FPS        = 20.0     # unchanged
-EDGE_THR_FRAC       = 0.15     # was 0.30 — bias to present
-EXPAND_S            = 0.40     # NEW morphological grow each side
-BRIDGE_S            = 0.60     # was 0.30
-STABILITY_WINDOW    = 5        # frames in the ring buffer (Signal B)
-STABILITY_GRAD_MIN  = 40       # Sobel/Canny gradient floor for "text edge"
-STABILITY_DIFF_MAX  = 12       # max temporal abs-diff for "held still"
-STABILITY_MIN_PIX   = 0.01     # fraction of band pixels that must be
-                               # stable-gradient to call the frame "present"
-DILATE_PX (auto)    = 10       # was 6 — overshoot outlines/shadows
+DRIFT_MAX_FRAC      = 0.01   # held-still threshold (Step 1 scene-text reject)
+DISPLAY_SIM_MIN     = 0.6    # text-similarity below this = new display (Step 2)
+GLYPH_DILATE_PX     = 3      # cover outline/shadow on the tight mask (Step 3)
+BOUND_EXPAND_S      = 0.30   # nudge display bounds outward for fades (Step 5)
+SPEECH_OVERLAP_MIN  = 0.3    # lane must overlap speech ≥ this to score as caption
 ```
 
 ### 11.7 How to verify (don't ship without this)
 
-There's no substitute for looking at frames. Build a tiny verification
-harness (throwaway script, not committed):
-
-1. Pick 3 test clips: (a) the RO TikTok story (fade-in/out captions),
-   (b) a clip with long sentences (horizontal extent varies),
-   (c) a clip where the caption moves mid-clip.
-2. Run the eraser (Smart mode) on each.
-3. **Re-run OCR on the OUTPUT video** at full frame rate inside the ROI
-   band. If OCR finds ANY text with conf>0.3 in the band on ANY frame →
-   that's a leak; log the timestamp + dump the frame. Target: **zero leaks**.
-4. Also dump 10 evenly-spaced output frames per clip for eyeballing
-   (automated OCR can miss a faint ghost a human sees).
-5. Compare Smart vs Thorough: Smart should match Thorough's leak count
-   (zero) while inpainting fewer frames (faster).
-
-Acceptance: zero OCR-detected text in the band on the output for all 3
-clips, in both Smart and Thorough. Smart's inpaint frame-count < Thorough's
-(proves the presence detection still saves time).
+Throwaway harness (not committed). Two things to measure — leak AND tightness:
+1. Clips: (a) RO TikTok story (fades), (b) long sentences, (c) moving
+   caption, (d) a clip WITH scene text outside the caption band (to prove
+   auto-localize doesn't erase it).
+2. Run the eraser fully auto (no box).
+3. **Leak:** re-OCR the OUTPUT inside the detected band at full fps → ZERO
+   text with conf>0.3 = pass. Dump 10 frames/clip for eyeballing.
+4. **Tightness:** report mean erased-pixels-per-frame. The tight path should
+   be MUCH lower than band-rectangle (that's the clarity win). Dump a frame
+   with the mask overlaid to confirm it hugs the glyphs.
+5. **Scene-text safety (clip d):** confirm the scene text OUTSIDE the band is
+   untouched in the output.
+Acceptance: zero leak on a–c, scene text intact on d, erased-pixel count
+well below band mode.
 
 ### 11.8 Effort + order
 
-1. **Tier 0 (Thorough)** — ~30 min. Ship first; gives a guaranteed-correct
-   option immediately and a baseline for the verification harness.
-2. **Verification harness** — ~45 min. Build before tuning Tier 1 so you can
-   measure leak objectively instead of guessing.
-3. **Tier 1 (a) full-width** — ~30 min. Biggest single robustness win,
-   simplest change.
-4. **Tier 1 (c) aggressive temporal morphology** — ~45 min. Kills boundary
-   leak.
-5. **Tier 1 (b) Signal B temporal-stability** — ~2h. The real engineering;
-   kills fade leak. Do last, measure with the harness.
-6. **Tier 1 (d) dilate_px bump** + UI select — ~30 min.
+1. **Tier 0 Thorough fallback** (§11.4) — ~30 min. Ship first as the safety
+   net + a baseline for the harness.
+2. **Verification harness** — ~1h. Measures leak AND tightness AND scene-text
+   safety. Build before tuning so you optimize against numbers, not vibes.
+3. **Step 4 — inpaint per-segment mask** — ~45 min. Unblocks everything tight.
+4. **Steps 2–3 — per-display + tight glyph masks** — ~2h. The minimality win.
+5. **Step 1 — auto-localize (no box)** — ~2.5h. The automation win; hardest
+   part is the held-still scene-text rejection + transcript correlation.
+6. **Step 5 — boundary nudging for fades** — ~1h. Closes residual leak.
+7. UI: optional zone picker + coverage select — ~45 min.
 
-Total ~5h. Tiers 0 + 1(a)(c)(d) alone (~2h) likely eliminate 90% of the
-leak; Signal B closes the fade gap.
+Total ~8h. If time-boxed: Steps 4+2+3 (~3.5h) give tight masks with the box
+still drawn; Step 1 (~2.5h) removes the box. Both are needed for the user's
+full goal (tight + no box).
 
-### 11.9 Commit messages
+### 11.9 Honest expectation (set this with the user)
 
-- `feat(eraser): Thorough coverage mode — full-band inpaint, zero leak (T20.0)`
-- `feat(eraser): full-ROI-width caption masks — kill horizontal leak (T20.1a)`
-- `fix(eraser): aggressive temporal dilation of presence mask (T20.1c)`
-- `feat(eraser): temporal-stability presence signal — catch fade frames (T20.1b)`
+"Perfect" tight + auto is achievable on **clean, conventional captions**
+(consistent band, outlined text, in sync with speech — i.e. exactly the RO
+TikTok story style the user works with). It will NOT be 100% on the hard
+cases in §11.3b (static scene-text inside the caption band; ultra-low-
+contrast captions with no outline). For those, the one-click **Thorough**
+fallback guarantees no leak at the cost of erasing the whole band. So the
+product answer is: **tight + auto by default; Thorough button when a clip
+fights it.** Don't promise 100% auto on adversarial clips — promise it on the
+clips the user actually makes, plus a guaranteed fallback.
+
+### 11.10 Commit messages
+
+- `feat(eraser): Thorough fallback mode — full-band inpaint, zero leak`
+- `feat(inpaint): per-segment arbitrary masks (not just rectangles)`
+- `feat(eraser): per-display tight glyph masks — minimal erase, clearer output`
+- `feat(eraser): auto-localize caption band — no manual box (held-still + transcript)`
+- `fix(eraser): nudge display time-bounds for fade frames`
 
 ---
 
