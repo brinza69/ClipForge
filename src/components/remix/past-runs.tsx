@@ -5,14 +5,15 @@
  * + state. Parent can request a refresh by incrementing `refreshKey`
  * (typically after a finished job); the inline Refresh button works too.
  *
- * Renders nothing when the backend returns no runs (the empty card was
- * just visual noise on first load).
+ * Paginated (10/page) with Prev/Next, and each run can be deleted (removes
+ * its media files + the job row). Renders nothing when there are no runs.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Download } from "lucide-react";
+import { Download, Trash2, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 interface PastRun {
   job_id: string;
@@ -26,30 +27,66 @@ interface PastRun {
   transcript_target_lang?: string;
 }
 
+const PAGE = 10;
+
 export function RemixPastRuns({ refreshKey }: { refreshKey: number }) {
   const [runs, setRuns] = useState<PastRun[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [localKey, setLocalKey] = useState(0);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`/worker-api/remix/recent?limit=10`);
+      const r = await fetch(`/worker-api/remix/recent?limit=${PAGE}&offset=${offset}`);
       if (!r.ok) return;
       const j = await r.json();
       setRuns(j.runs || []);
+      setTotal(typeof j.total === "number" ? j.total : (j.runs || []).length);
     } catch {
       /* keep last value */
     }
-  }, []);
+  }, [offset]);
 
   useEffect(() => { load(); }, [load, refreshKey, localKey]);
 
-  if (runs.length === 0) return null;
+  // When a parent refresh or delete leaves the current page empty (e.g. last
+  // item on the last page deleted), step back a page.
+  useEffect(() => {
+    if (runs.length === 0 && offset > 0) setOffset((o) => Math.max(0, o - PAGE));
+  }, [runs.length, offset]);
+
+  const del = async (run: PastRun) => {
+    const mb = (run.file_size / 1024 / 1024).toFixed(0);
+    if (!window.confirm(`Delete "${run.title}" and its files (~${mb} MB)? This can't be undone.`)) return;
+    setDeleting(run.job_id);
+    try {
+      const r = await fetch(`/worker-api/remix/${run.job_id}`, { method: "DELETE" });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.detail || `Delete failed (${r.status})`);
+      }
+      toast.success("Run deleted");
+      setLocalKey((k) => k + 1);
+    } catch (e: any) {
+      toast.error("Delete failed", { description: e.message });
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  if (total === 0 && runs.length === 0) return null;
+
+  const from = total === 0 ? 0 : offset + 1;
+  const to = offset + runs.length;
+  const hasPrev = offset > 0;
+  const hasNext = offset + PAGE < total;
 
   return (
     <Card className="p-4 space-y-3 border-border/40">
       <div className="flex items-center justify-between">
         <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
-          Past remix runs ({runs.length})
+          Past remix runs {total > 0 && <span className="normal-case font-normal">({from}–{to} of {total})</span>}
         </div>
         <button
           type="button"
@@ -91,10 +128,40 @@ export function RemixPastRuns({ refreshKey }: { refreshKey: number }) {
                   file gone
                 </Badge>
               )}
+              <button
+                type="button"
+                onClick={() => del(r)}
+                disabled={deleting === r.job_id}
+                className="text-muted-foreground hover:text-destructive transition-colors p-1 shrink-0"
+                title="Delete run + files"
+              >
+                {deleting === r.job_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </button>
             </div>
           );
         })}
       </div>
+
+      {(hasPrev || hasNext) && (
+        <div className="flex items-center justify-between pt-1">
+          <button
+            type="button"
+            onClick={() => setOffset((o) => Math.max(0, o - PAGE))}
+            disabled={!hasPrev}
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" /> Prev
+          </button>
+          <button
+            type="button"
+            onClick={() => setOffset((o) => o + PAGE)}
+            disabled={!hasNext}
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground"
+          >
+            Next <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
     </Card>
   );
 }

@@ -191,21 +191,34 @@ async def remix_start(req: StartRequest):
 
 
 @router.get("/recent")
-async def remix_recent(limit: int = 10):
+async def remix_recent(limit: int = 10, offset: int = 0):
     """
-    Return the last `limit` completed remix_pipeline jobs, newest first,
-    with enough metadata to show download buttons in the UI.
+    Return completed remix_pipeline jobs, newest first, with enough metadata
+    to show download buttons. Paginated: `limit` (1–50) + `offset`. Also
+    returns `total` so the UI can render "showing X–Y of Z".
     """
-    from sqlalchemy import select, desc
+    from sqlalchemy import select, desc, func
+
+    lim = max(1, min(50, int(limit)))
+    off = max(0, int(offset))
 
     async with async_session() as session:
+        total = (
+            await session.execute(
+                select(func.count())
+                .select_from(JobModel)
+                .where(JobModel.type == JobType.remix_pipeline.value)
+                .where(JobModel.status == JobStatus.done.value)
+            )
+        ).scalar() or 0
         rows = (
             await session.execute(
                 select(JobModel)
                 .where(JobModel.type == JobType.remix_pipeline.value)
                 .where(JobModel.status == JobStatus.done.value)
                 .order_by(desc(JobModel.updated_at))
-                .limit(max(1, min(50, int(limit))))
+                .limit(lim)
+                .offset(off)
             )
         ).scalars().all()
 
@@ -239,7 +252,7 @@ async def remix_recent(limit: int = 10):
             "tts_engine": meta.get("tts_engine"),
             "transcript_target_lang": meta.get("transcript_target_lang"),
         })
-    return {"runs": out, "count": len(out)}
+    return {"runs": out, "count": len(out), "total": int(total), "offset": off, "limit": lim}
 
 
 @router.get("/{job_id}/result")
@@ -290,3 +303,39 @@ async def remix_download(job_id: str):
         filename=safe,
         headers={"Content-Disposition": f'attachment; filename="{safe}"'},
     )
+
+
+@router.delete("/{job_id}")
+async def remix_delete(job_id: str):
+    """Delete a finished remix run: its media files + the job row.
+
+    Removes data/media/<project_id> (the final video + scratch) and the
+    JobModel row so it disappears from the Past Runs list. Returns the
+    number of bytes freed."""
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        if job.type != JobType.remix_pipeline.value:
+            raise HTTPException(400, "Not a remix job")
+        project_id = job.project_id
+
+        # Free the on-disk workspace (final video lives under media/<project>).
+        freed = 0
+        if project_id:
+            try:
+                from services.cleanup import cleanup_job_workspace
+                import asyncio
+                loop = asyncio.get_event_loop()
+                stats = await loop.run_in_executor(
+                    None, lambda: cleanup_job_workspace(project_id)
+                )
+                freed = stats.get("freed_bytes", 0)
+            except Exception:
+                logger.exception(f"could not clean media for {job_id}")
+
+        await session.delete(job)
+        await session.commit()
+
+    logger.info(f"remix run {job_id} deleted (freed {freed} bytes)")
+    return {"ok": True, "job_id": job_id, "freed_bytes": freed}
