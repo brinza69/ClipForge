@@ -118,6 +118,10 @@ class JobQueue:
             await session.commit()
         self._running_jobs.pop(job_id, None)
         logger.error(f"Job {job_id} failed: {error}")
+        # Reclaim the failed job's scratch files (downloaded source, erased
+        # video, per-variant dirs). Best-effort — never let cleanup mask the
+        # original failure.
+        await self._cleanup_workspace(job_id)
 
     async def cancel_job(self, job_id: str):
         """Cancel a running or queued job."""
@@ -155,6 +159,30 @@ class JobQueue:
 
             await session.commit()
         logger.info(f"Job {job_id} cancelled")
+        # Reclaim scratch files for the cancelled job.
+        await self._cleanup_workspace(job_id)
+
+    async def _cleanup_workspace(self, job_id: str):
+        """Best-effort disk cleanup for a cancelled/failed job's project dir.
+        Runs the blocking rmtree in a thread so we don't stall the loop."""
+        try:
+            async with async_session() as session:
+                job = await session.get(JobModel, job_id)
+            project_id = job.project_id if job else None
+            if not project_id:
+                return
+            from services.cleanup import cleanup_job_workspace
+            loop = asyncio.get_event_loop()
+            stats = await loop.run_in_executor(
+                None, lambda: cleanup_job_workspace(project_id)
+            )
+            if stats.get("freed_bytes"):
+                logger.info(
+                    f"Job {job_id}: freed {stats['freed_bytes'] // (1024*1024)} MB "
+                    f"of scratch files"
+                )
+        except Exception:
+            logger.exception(f"workspace cleanup for {job_id} failed")
 
     def is_cancelled(self, job_id: str) -> bool:
         return job_id in self._cancelled_jobs
