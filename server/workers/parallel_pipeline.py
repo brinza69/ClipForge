@@ -116,7 +116,7 @@ def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") ->
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(dst),
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=600)
         if r.returncode == 0 and dst.exists():
             out.append({
                 "part": k + 1, "of": total, "path": str(dst), "filename": dst.name,

@@ -105,6 +105,7 @@ def _probe_meta(path: str) -> dict:
          "-show_entries", "stream=width,height,avg_frame_rate,nb_frames,duration",
          "-of", "default=noprint_wrappers=1", str(path)],
         capture_output=True, text=True, creationflags=_creationflags(),
+        timeout=60,
     )
     out: dict = {}
     for line in (r.stdout or "").splitlines():
@@ -173,7 +174,7 @@ def remove_background_video(
             "-q:v", "1",
             str(frames_in / "f_%06d.png"),
         ]
-        r = subprocess.run(extract_cmd, capture_output=True, text=True, creationflags=_creationflags())
+        r = subprocess.run(extract_cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=1800)
         if r.returncode != 0:
             raise RuntimeError(f"frame extract failed: {(r.stderr or '')[-500:]}")
 
@@ -224,7 +225,7 @@ def remove_background_video(
             "-auto-alt-ref", "0",        # required for alpha
             str(dst_webm),
         ]
-        r = subprocess.run(encode_cmd, capture_output=True, text=True, creationflags=_creationflags())
+        r = subprocess.run(encode_cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=1800)
         if r.returncode != 0:
             raise RuntimeError(f"webm encode failed: {(r.stderr or '')[-500:]}")
         if on_progress:

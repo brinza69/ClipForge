@@ -393,6 +393,7 @@ def _split_audio_to_chunks(
         check=True,
         capture_output=True,
         creationflags=creationflags,
+        timeout=600,
     )
     return sorted(out_dir.glob("chunk_*.wav"))
 

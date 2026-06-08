@@ -166,6 +166,7 @@ async def handle_erase(job_id, project_id, clip_id, metadata, queue):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=_creationflags(),
+                timeout=1800,
             )
 
         proc = await loop.run_in_executor(None, _run)
@@ -296,6 +297,7 @@ async def handle_erase_project(job_id, project_id, clip_id, metadata, queue):
                 cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 creationflags=_creationflags(),
+                timeout=1800,
             ),
         )
         if proc.returncode != 0:
@@ -424,6 +426,7 @@ async def handle_caption_burn(job_id, project_id, clip_id, metadata, queue):
             capture_output=True,
             text=True,
             creationflags=_creationflags(),
+            timeout=1800,
         )
         if proc.returncode != 0:
             tail = "\n".join((proc.stderr or "").strip().splitlines()[-8:])

@@ -34,6 +34,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Literal, Optional
@@ -450,9 +451,25 @@ async def inpaint_region(
                     return s
             return None
 
+        # Wall-clock safety cap for the whole decode→inpaint→encode stream.
+        # Popen has no `timeout=`, so without this a wedged ffmpeg would hang
+        # the job forever. 1h is a huge margin: a 3-min clip inpaints in ~5min
+        # on GPU; only a genuine deadlock hits this.
+        _INPAINT_MAX_S = 3600.0
+        _inpaint_start = time.time()
+
         frame_idx = 0
         try:
             while True:
+                if time.time() - _inpaint_start > _INPAINT_MAX_S:
+                    try:
+                        dec.kill(); enc.kill()
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"Inpaint exceeded {int(_INPAINT_MAX_S)}s wall clock "
+                        f"({frame_idx}/{total} frames) — aborting."
+                    )
                 buf = dec.stdout.read(frame_nbytes)
                 if not buf or len(buf) < frame_nbytes:
                     # Final flush before exit
@@ -519,8 +536,15 @@ async def inpaint_region(
             except Exception:
                 pass
 
-        dec_rc = dec.wait()
-        enc_rc = enc.wait()
+        # Bounded waits so a wedged ffmpeg at EOF can't hang the worker.
+        try:
+            dec_rc = dec.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            dec.kill(); dec_rc = dec.wait()
+        try:
+            enc_rc = enc.wait(timeout=300)
+        except subprocess.TimeoutExpired:
+            enc.kill(); enc_rc = enc.wait()
         dec_drainer.join(timeout=10)
         enc_drainer.join(timeout=10)
         dec_err = b"".join(dec_stderr_buf).decode("utf-8", errors="replace")

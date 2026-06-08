@@ -174,7 +174,7 @@ def composite_commentator(
         str(output_path),
     ]
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=1800)
     if r.returncode != 0:
         tail = "\n".join((r.stderr or "").strip().splitlines()[-10:])
         raise RuntimeError(f"commentator overlay ffmpeg failed: {tail}")
@@ -197,6 +197,7 @@ def _probe_dims(path: str) -> tuple[int, int]:
          "-show_entries", "stream=width,height",
          "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
         capture_output=True, text=True, creationflags=_creationflags(),
+        timeout=60,
     )
     if r.returncode != 0:
         raise RuntimeError(f"ffprobe failed for {path}: {r.stderr[-300:]}")

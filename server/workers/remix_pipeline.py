@@ -307,7 +307,7 @@ async def _stage_erase(
             str(output_path),
         ]
         def _run_blur() -> int:
-            r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+            r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=1800)
             if r.returncode != 0:
                 tail = "\n".join((r.stderr or "").strip().splitlines()[-8:])
                 raise RuntimeError(f"blur ffmpeg failed: {tail}")
@@ -469,7 +469,7 @@ async def synth_voice_from_text(
     ]
     polish_loop = asyncio.get_event_loop()
     def _polish() -> None:
-        r = subprocess.run(polish_cmd, capture_output=True, text=True, creationflags=_creationflags())
+        r = subprocess.run(polish_cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=600)
         if r.returncode != 0:
             # Don't fail the whole pipeline if loudnorm trips — just keep the raw.
             tail = "\n".join((r.stderr or "").strip().splitlines()[-5:])
@@ -715,7 +715,7 @@ async def _stage_match_and_caption(
     loop = asyncio.get_event_loop()
 
     def _run() -> int:
-        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=1800)
         if r.returncode != 0:
             tail = "\n".join((r.stderr or "").strip().splitlines()[-8:])
             raise RuntimeError(f"speed-match + caption burn failed: {tail}")

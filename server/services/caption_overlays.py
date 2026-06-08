@@ -235,6 +235,7 @@ def extract_source_frame(video_path: str, time_s: float = 0.5) -> Path:
     ]
     r = subprocess.run(
         cmd, capture_output=True, text=True, creationflags=_creationflags(),
+        timeout=60,
     )
     if r.returncode != 0 or not cache.exists():
         raise RuntimeError(
@@ -258,6 +259,7 @@ def probe_video_dims(video_path: str) -> Tuple[int, int]:
             str(video_path),
         ],
         capture_output=True, text=True, creationflags=_creationflags(),
+        timeout=60,
     )
     if r.returncode != 0:
         raise RuntimeError(f"ffprobe failed: {r.stderr[-400:]}")
@@ -316,6 +318,7 @@ def render_preview_frame(
         ]
         r = subprocess.run(
             cmd, capture_output=True, text=True, creationflags=_creationflags(),
+            timeout=120,
         )
         if r.returncode != 0 or not out_png.exists():
             raise RuntimeError(
