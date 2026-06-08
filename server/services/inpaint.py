@@ -220,8 +220,23 @@ def _build_segment_state(
     roi_h = ry2 - ry
     roi_w = rx2 - rx
 
+    # T20: a segment may carry an arbitrary full-frame `mask` (tight per-glyph
+    # or box mask). When present, crop it to this ROI instead of filling the
+    # whole rectangle — that's what makes the erase minimal/clear. Falls back
+    # to the filled rectangle (legacy behaviour) when no mask is given.
+    seg_mask = seg.get("mask")
     mask_roi = np.zeros((roi_h, roi_w), dtype=np.uint8)
-    mask_roi[my - ry : my - ry + mh, mx - rx : mx - rx + mw] = 255
+    used_arbitrary = False
+    if seg_mask is not None:
+        try:
+            sub = np.asarray(seg_mask)[ry:ry2, rx:rx2]
+            if sub.shape[:2] == (roi_h, roi_w) and sub.any():
+                mask_roi = (sub > 0).astype(np.uint8) * 255
+                used_arbitrary = True
+        except Exception:
+            used_arbitrary = False
+    if not used_arbitrary:
+        mask_roi[my - ry : my - ry + mh, mx - rx : mx - rx + mw] = 255
     if dilate_px > 0:
         k = np.ones((dilate_px, dilate_px), np.uint8)
         mask_roi = cv2.dilate(mask_roi, k, iterations=1)
