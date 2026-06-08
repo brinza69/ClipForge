@@ -899,4 +899,95 @@ Italic + Povestitor commentator + Sheets automation live.
 
 ---
 
+# ════════════════════════════════════════════════════════════════════════
+# SESSION 4 — 2026-06-08 (T20 eraser: tight masks + auto-localize, REAL-TESTED)
+# ════════════════════════════════════════════════════════════════════════
+
+> Branch still `claude/parallel-processing`, PR #21. This session designed
+> AND implemented AND real-tested the caption-eraser rewrite (plan §11 / T20).
+
+## S4.0 — Key unlock: I CAN run the Linux venv from the Windows agent
+`wsl.exe -e bash -c "cd /mnt/f/ClipForge && server/.venv/bin/python ..."`
+works from the agent's git-bash. So I can run cv2/easyocr/pytest/the real
+pipeline pieces — not just static checks. This is how T20 got real-tested.
+The running backend is also reachable on localhost:8420 for curl tests.
+GOTCHA: EasyOCR + LaMa both want the 8GB GPU; to run a heavy test, stop the
+backend first (`./dev.sh stop`) to free the GPU, then `./dev.sh start` after.
+
+## S4.1 — T20 eraser, the design (plan §11, fully written there)
+The user wanted the eraser to: (1) erase MINIMALLY (per-glyph, not a band
+rectangle — clarity), (2) need NO manual box (full automation), (3) leave
+NO caption frames after erase. Design:
+- **Tight per-display masks**: one segment per "display" (held-still text,
+  split at text changes via difflib similarity). One tight mask per display,
+  reused across its hold → tight AND complete at once.
+- **Glyph vs box** (§11.3d): box style (solid bg behind text) → mask the
+  whole box; else mask the glyphs. Box detected when the interior is uniform
+  AND differs from the video just outside the bbox.
+- **Auto-localize** (no box): held-still filter (captions hold, scene text
+  moves) + Y-lane clustering + transcript-speech correlation (ClipForge has
+  the speech timing — a generic eraser can't use this).
+- **inpaint change**: `_build_segment_state` rasterizes an arbitrary
+  `seg["mask"]` instead of filling a rectangle.
+
+## S4.2 — T20 implementation (commits)
+- 75a10fa — Step A: `erase_coverage` field (tight|band|thorough) on
+  remix/parallel/auto; `_stage_erase` Thorough mode = full-band inpaint
+  (guaranteed-no-leak fallback).
+- f99574a — Step B: inpaint accepts arbitrary per-segment `mask`.
+- 8492627 — Step C: `detect_caption_displays()` — per-display tight
+  glyph/box masks.
+- 63ef50a — Step D: `auto_locate_caption_band()` — no manual box; threads
+  `speech_intervals` from the transcribe result via `_speech_intervals_from_tx`.
+- 60e7844 — Step E + F: fade-boundary expansion + `scripts/verify_eraser.py`
+  (re-OCRs the OUTPUT band; any text = a leak).
+- b4302c0 — fix: box-vs-glyph must compare interior to the SURROUNDING video
+  (caught by a synthetic unit test — glyph on uniform bg was wrongly called a
+  box and over-erased). Also fixed the jobs status-filter smoke test (307).
+
+## S4.3 — REAL end-to-end test caught + fixed 2 leak bugs (commit 6660682)
+Ran the full chain on a 20s TikTok clip (auto-localize → tight detect →
+LaMa inpaint → re-OCR the output). Harness reported **45 leaks** first. Two
+real bugs, both fixed, then **45 → 0 caption leaks**:
+1. **Index-seek grabbed the wrong frame.** `cap.set(POS_FRAMES, idx)` on
+   long-GOP mp4 lands on the nearest keyframe → the mask was built from the
+   wrong text. Fix: Pass 3 decodes the video ONCE sequentially and builds the
+   mask the moment it reaches the exact best frame.
+2. **Otsu left the outline as a ghost.** Captions are bright FILL + dark
+   OUTLINE; Otsu masks one polarity, so inpaint erased the white fill and
+   left a readable dark outline ("teacher" still legible). Fix:
+   **local-contrast mask** = `|gray - heavy_blur(gray)| > thr`, high for BOTH
+   fill and outline, low for smooth background → covers the whole glyph+
+   outline, tight, on any background. Verified visually (mask hugs fill+
+   outline). Coverage ~24% of the band (vs 100% for a rectangle) — still
+   minimal. The one remaining OCR hit was the character's SHIRT LOGO (scene
+   text), correctly NOT erased.
+
+## S4.4 — Verified facts about the test
+- `auto_locate_caption_band` found the band with NO box: {268,1374,547,139}.
+- 62 displays on the 20s clip (word-by-word caption).
+- 12/12 smoke tests pass via `wsl … pytest tests/`.
+- Cost: detect ~30s + inpaint ~32s for 20s of 1080×1920 on the 2080 Super
+  (GPU, backend stopped). Word-by-word makes many displays → many sequential
+  decodes in Pass 3 (works; a future opt could cache frames).
+
+## S4.5 — KNOWN open issue at session end (the user's "91.mp4")
+The user reports that on a specific clip (`91.mp4`) there are STILL
+un-erased fragments ("relics"). T20's 0-leak was proven on ONE 20s clip;
+91.mp4 is a different/harder case. The likely culprits to investigate (in
+order): (a) word-by-word DISPLAY boundaries — if a word appears between the
+5fps OCR samples its display window may miss it; (b) the local-contrast
+threshold (GLYPH_LOCAL_THR=28) under-segmenting thin/anti-aliased outlines;
+(c) auto-localized band too tight vertically, clipping ascenders/descenders;
+(d) the BOUND_EXPAND_S clamp leaving a sub-frame gap between adjacent
+displays at fast word changes. Use `scripts/verify_eraser.py` on the 91.mp4
+output to locate the exact leak frames, then dump those frames + the active
+segment's mask (as in S4.3 diagnostics) to see WHICH cause it is.
+
+## S4 — Conventions reminder (unchanged)
+- Run heavy Python tests via `wsl.exe -e bash -c "… server/.venv/bin/python …"`;
+  stop the backend first to free the GPU. Romanian replies, short + concrete.
+
+---
+
 End of handover.
