@@ -1493,11 +1493,11 @@ to this file at the bottom for the user to prioritize.
 | T2   |   `[x]`     | c2f567f |
 | T3   |   `[x]`     | 77697cf |
 | T4   |   `[x]`     | 26cd37e |
-| T5   |   `[ ]`     |        |
-| T6   |   `[ ]`     |        |
-| T7   |   `[ ]`     |        |
-| T8   |   `[ ]`     |        |
-| T9   |   `[ ]`     |        |
+| T5   |   `[x]`     | 77ffcd1 |
+| T6   |   `[ ]`     | (deferred — most invasive P1; see note) |
+| T7   |   `[x]`     | 77ffcd1 |
+| T8   |   `[x]`     | 5f20900 |
+| T9   |   `[x]`     | 084a714 |
 | T10  |   `[ ]`     |        |
 | T11  |   `[ ]`     |        |
 | T12  |   `[ ]`     |        |
