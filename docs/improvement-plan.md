@@ -1489,10 +1489,10 @@ to this file at the bottom for the user to prioritize.
 
 | Task | Status | Commit |
 |------|--------|--------|
-| T1   |   `[ ]`     |        |
-| T2   |   `[ ]`     |        |
-| T3   |   `[ ]`     |        |
-| T4   |   `[ ]`     |        |
+| T1   |   `[x]`     | 817e0f5 |
+| T2   |   `[x]`     | c2f567f |
+| T3   |   `[x]`     | 77697cf |
+| T4   |   `[x]`     | 26cd37e |
 | T5   |   `[ ]`     |        |
 | T6   |   `[ ]`     |        |
 | T7   |   `[ ]`     |        |
