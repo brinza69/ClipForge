@@ -384,6 +384,14 @@ async def _stage_erase(
         )
     if not output_path.exists():
         raise RuntimeError("Inpaint produced no output")
+    # Reclaim LaMa's ~2-3GB of VRAM now that erase is done — the rest of the
+    # pipeline (caption burn, mux, commentator) is ffmpeg-only. On 8GB cards
+    # this frees headroom for large-v3 Whisper on the next run. No-op on CPU.
+    try:
+        from services.gpu_utils import unload_inpaint_model
+        unload_inpaint_model()
+    except Exception:
+        pass
     await slc.update(1.0, "Erase complete")
     return output_path
 

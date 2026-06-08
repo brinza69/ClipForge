@@ -84,27 +84,20 @@ export function DriveSetupCard() {
       if (!r.ok || !j.auth_url) throw new Error(j.detail || "Could not start auth");
       window.open(j.auth_url, "_blank", "noopener");
       toast.info("Complete the Google login in the new tab…");
+      // Single polling loop. Fetches status directly (not via the stale
+      // `status` closure) until connected or the 3-minute deadline.
       const deadline = Date.now() + 180000;
       const poll = setInterval(async () => {
-        await refresh();
-        if (status.connected || Date.now() > deadline) {
-          clearInterval(poll);
-          setConnecting(false);
-        }
-      }, 2000);
-      // The interval reads stale `status`. Re-poll inside ourselves until done.
-      const pollSelf = setInterval(async () => {
         try {
-          const r2 = await fetch(`/worker-api/drive-auth/status`);
-          const s2: Status = await r2.json();
-          setStatus(s2);
-          if (s2.connected || Date.now() > deadline) {
-            clearInterval(pollSelf);
+          const sr = await fetch(`/worker-api/drive-auth/status`);
+          const s: Status = await sr.json();
+          setStatus(s);
+          if (s.connected || Date.now() > deadline) {
             clearInterval(poll);
             setConnecting(false);
-            if (s2.connected) toast.success(`Drive connected${s2.email ? ` as ${s2.email}` : ""}`);
+            if (s.connected) toast.success(`Drive connected${s.email ? ` as ${s.email}` : ""}`);
           }
-        } catch {}
+        } catch { /* keep polling until deadline */ }
       }, 2000);
     } catch (e: any) {
       setConnecting(false);
