@@ -614,4 +614,214 @@ for visibility.
 
 ---
 
+# ════════════════════════════════════════════════════════════════════════
+# SESSION 3 — 2026-06-07 (Sheets automation + Settings + GPU + stability)
+# ════════════════════════════════════════════════════════════════════════
+
+> Branch: still `claude/parallel-processing`. This session pushed it and
+> opened **PR #21** (vs main). All work below is on top of PR #21. The
+> branch now has ~15 extra commits beyond S2.
+
+## S3.0 — Three user-requested features, then an audit + fixes
+
+The session went: (1) custom ElevenLabs voice ID, (2) "Parallel from
+Sheets" automation, (3) Settings page for keys + Drive, then a codebase
+audit producing `docs/improvement-plan.md` (19 tasks T1–T19), then
+executing the P0 batch (T1–T4). A long detour fixing `dev.sh` (the
+backend wouldn't start) is documented in S3.7 — read it, it'll save you.
+
+## S3.1 — Custom ElevenLabs voice ID (commit 9bd04d1)
+The Voice dropdown only listed voices in the user's EL account
+(`/v1/voices`). The public **Voice Library** (thousands of shared voices)
+wasn't reachable. Added a "Custom voice ID" text field (visible only when
+engine = elevenlabs) on BOTH `/parallel` (per-variant card) and `/remix`
+(single voice). Paste a voice_id from elevenlabs.io and it's used directly
+at TTS time (backend never validated voice_id — it just POSTs to
+`/v1/text-to-speech/{id}`). The dropdown shows "Custom: XXXX…" when the
+current id isn't in the account list; engine-change auto-pick preserves a
+15+ alphanumeric custom id instead of clobbering it.
+- Files: `src/components/parallel/variant-card.tsx`, `src/app/remix/page.tsx`.
+
+## S3.2 — Parallel from Sheets (the big feature, commit 8b172eb)
+New page `/parallel-sheets` — drives the SAME parallel pipeline but pulls
+the source URL + a number from a Google Sheet, and writes the AI-generated
+description back into the row when done.
+
+**User decisions (locked in):**
+  - Single-part filename → `<num>.mp4`; split → `<num>_p1.mp4`, `_p2.mp4`…
+  - Description written = the **AI-generated** one (not source-translated)
+  - At N variants, **only variant #0** writes to Sheets
+  - If the row already has a description → **overwrite**
+
+**Backend:**
+  - `services/sheets.py` — Google Sheets API wrapper (read/write/batch +
+    friendly errors; `SheetsScopeMissing` → 401 reconnect hint).
+  - `services/sheets_config.py` — persists config + `next_row` in
+    `data/sheets_config.json`. ONE config per install (columns constant).
+  - `routers/sheets.py` — `/api/sheets/{config,pull-next,commit,skip-row}`.
+    `pull-next` reads the next row but does NOT advance; `commit` writes the
+    description and advances `next_row`.
+  - `services/drive_oauth.py` — `SCOPES` gained
+    `https://www.googleapis.com/auth/spreadsheets`. **The user had to
+    re-consent** (Cloud Console → Google Auth Platform → Data Access → add
+    the `spreadsheets` scope, then Disconnect+Connect Drive in the app).
+  - `routers/parallel.py` — `StartRequest` accepts `sheets_row` +
+    `sheets_number`; `/result` surfaces `sheets_commit`.
+  - `workers/parallel_pipeline.py` — filename override when `sheets_number`
+    set; after descriptions stage, auto-writes variant #0's AI description
+    to the row + advances `next_row`. Failure is logged in
+    `sheets_commit.status` but never fails the job.
+
+**Frontend refactor (to stay under the 500-line rule):**
+  - `components/parallel/parallel-processor.tsx` (NEW, 458 lines) — the body
+    of `/parallel` extracted, reusable via `topContent` / `startPayloadExtras`
+    / `onJobDone` props.
+  - `components/parallel/drive-card.tsx` (NEW) — Drive connect card extracted.
+  - `app/parallel/page.tsx` — now a thin 28-line wrapper.
+  - `app/parallel-sheets/page.tsx` (NEW) — Sheets config form + Pull next /
+    Skip buttons + "Row N · #num" badge + (added in C3) a persistent
+    last-commit status indicator with a Retry button.
+  - Sidebar: new "Parallel from Sheets" entry; fixed a prefix-match bug so
+    `/parallel` doesn't light up while on `/parallel-sheets`.
+
+**Headless API (commit 0f87d31, plan task F1):** `POST /api/auto`
+(`routers/auto.py`) runs the whole parallel pipeline from one POST — either
+an explicit `url` + `variant_preset_ids`, or `from_sheets: true` to pull the
+next row. Default erase/caption zones from yt-dlp dims, auto-detect on.
+Reuses `variant_presets.load_preset()` (new helper). The pipeline's
+`len(variants) < 2` guard was relaxed to `< 1` so /auto can run a single
+variant (the UI still enforces 2+ via its schema). This is the building
+block for full Sheets→ClipForge→post automation.
+
+## S3.3 — Settings page rewrite (commit 56f8935)
+`/settings` was read-only system info. Now it manages everything needed to
+run the app:
+  - `components/settings/api-keys-card.tsx` — ElevenLabs / OpenAI /
+    Anthropic key inputs (show/hide, Save & Verify → round-trips the
+    provider, Clear, configured/not badges; EL shows tier + usage).
+  - `components/settings/drive-setup-card.tsx` — two-step Drive setup:
+    upload OAuth client JSON (`POST /api/drive-auth/client`, validates it's
+    a Desktop client, 50KB cap) then Connect (popup OAuth, reminds the
+    consent must include the Sheets scope). Reset wipes both files.
+  - `components/settings/whisper-card.tsx` — see S3.4.
+  - `routers/drive_auth.py` — new `POST/DELETE /api/drive-auth/client`.
+
+## S3.4 — Whisper device/model UI + silent-CPU-fallback fix (commit ff2369a)
+Whisper runs in a spawned SUBPROCESS (killable), whose logger never reached
+backend.log — so nobody could tell if faster-whisper actually used CUDA or
+had silently fallen back to CPU. Added:
+  - `services/transcriber.py`: `_model_info` snapshot (configured vs actual
+    device/model, `fell_back_to_cpu` flag), `get_model_info()`,
+    `unload_model()`, and `data/whisper_config.json` overrides (layered on
+    top of `CLIPFORGE_WHISPER_*` env vars). `_get_model()` records what it
+    actually loaded.
+  - `routers/transcript.py`: `GET /api/transcript/device` (with
+    `?verify=true` it force-loads to confirm), `POST /api/transcript/device`
+    (saves model+device, drops the cached model).
+  - `components/settings/whisper-card.tsx`: configured-vs-actual side by
+    side, model picker (tiny→large-v3), device picker (auto/cuda/cpu),
+    Apply + "Verify GPU".
+**CONFIRMED on the user's box:** RTX 2080 Super runs **large-v3 on cuda**
+(actual device = cuda, ~3GB VRAM, ready). User switched to large-v3 for
+best RO accuracy. First load was ~62s (model download); cached after.
+NOTE: Whisper (~3GB) isn't unloaded before the erase stage's LaMa (~2-3GB)
+— both resident is still <8GB so it's fine, but plan task T12 (free VRAM
+between stages) would add headroom if an OOM ever shows up.
+
+## S3.5 — Priority fixes from the first audit (commit da36cdb)
+Seven items found by reviewing the codebase, all verified:
+  - **A1**: `/remix` had an orphan `setCommentatorChroma("")` (setter removed
+    in S2.9) → replaced with `setChromaColor(null)`. Caught by tsc.
+  - **A2**: `Slider` (`components/ui/slider.tsx`) was missing a `disabled`
+    prop that 7 call sites passed → added it properly (both range inputs +
+    dimmed container). Fixed the last 8 pre-existing TS errors → repo is now
+    **0 TypeScript errors**.
+  - **A3**: `services/sheets.py` scope check read `creds.scopes` which
+    google-auth echoes from the constructor arg (always "present") → now
+    reads the real granted scopes from `drive_oauth_token.json`.
+  - **C3**: Sheets commit failures were silent (token expired mid-run →
+    `sheets_commit.status=failed` but nothing told the user). Now a
+    destructive toast + a persistent indicator on the Sheets card + a Retry
+    button (re-commits the cached description without re-running the
+    pipeline).
+  - **E1**: `POST /api/drive-auth/client` capped at 50KB (real OAuth client
+    JSONs are <2KB).
+
+## S3.6 — Codebase cleanup + remix split (commits 72abefc, 9cd27f3)
+  - **A4**: pruned dead legacy-flow code. `src/lib/api.ts` 210→25 lines,
+    `src/types/index.ts` 209→17, deleted `src/lib/stores/project-store.ts`
+    (zero imports). ~454 lines of dead code gone. `api.system` now goes
+    through `/worker-api/` (was the last `localhost:8420` bypass).
+  - **B (partial)**: `/remix/page.tsx` 1864→1477 by extracting
+    `components/remix/past-runs.tsx` (100) + `components/remix/commentator-picker.tsx`
+    (425). Still over 500 — plan task T14 lists the remaining extracts
+    (voice card, caption card, zone picker).
+
+## S3.7 — dev.sh saga (CRITICAL — read before touching dev.sh)
+The backend wouldn't start via `./dev.sh start` and it took several
+iterations to find why. THREE stacked bugs:
+  1. **`setsid` is missing on this WSL.** dev.sh launched the backend with
+     `setsid bash -c ...` which failed ("setsid: command not found"), wrote
+     the start marker, but never ran uvicorn. The backend that "worked"
+     earlier was always one the user started manually. Fix: a
+     `$_DETACH_CMD` that uses `setsid` if present else `nohup`, backgrounding
+     DIRECTLY (NOT via a `$()` subshell — that was an intermediate broken
+     attempt; backgrounding inside command-substitution doesn't detach
+     reliably). Commits 78600be, 1e53be2.
+  3. **`--reload` breaks on /mnt/f.** The project lives on `/mnt/f` (a
+     Windows drive in WSL2) where inotify file-watching doesn't work on the
+     9p mount, so uvicorn's `--reload` reloader hung at startup and the port
+     never bound. Reload is now **OPT-IN via `CLIPFORGE_RELOAD=1`** (default
+     OFF), and when on it forces `WATCHFILES_FORCE_POLLING=true`. The
+     bind-wait timeout was bumped 20s→45s (torch/whisper imports are slow on
+     a cold cache). Commit 4eda229.
+**Consequence:** with reload OFF, backend changes do NOT hot-reload — run
+`./dev.sh restart backend` after editing `.py`. Don't "fix" this by adding
+`--reload` back unless the project moves to native Linux fs (`~/ClipForge`).
+Also note `setsid` missing means `kill_group` degrades to killing just the
+leader; `stop_one`'s `fuser -k <port>/tcp` fallback (added in D1) catches
+stragglers.
+
+## S3.8 — Improvement plan + P0 execution (commits 817e0f5, c2f567f, 77697cf, 26cd37e)
+Wrote `docs/improvement-plan.md` — 19 self-contained tasks (T1–T19) graded
+P0/P1/P2, each with goal/files/steps/code-snippets/acceptance/commit-msg,
+specified so a weaker model can execute them. A status board at the bottom
+tracks progress. Then executed the **P0 batch**:
+  - **T1** (817e0f5): `timeout=` on every `subprocess.run` across 13 files
+    (60s probes / 120s previews / 300–600s extracts / 1800s encodes), plus
+    a 1h wall-clock cap + bounded `.wait()` on the inpaint Popen pair. An
+    AST scan confirmed zero un-timed calls remain.
+  - **T2** (c2f567f): `services/retry.py` — `with_retry()` exponential
+    backoff. Wrapped ElevenLabs synth+voices and OpenAI/Anthropic/Ollama
+    chat calls. 4xx never retried; 5xx/429/conn-errors retried (4 attempts,
+    Ollama 2). Error-message formats preserved for the routers.
+  - **T3** (77697cf): `services/cleanup.py::cleanup_job_workspace` removes
+    `data/media/<project_id>` on cancel + fail (wired into `cancel_job` /
+    `fail_job`). `complete_job` does NOT clean (keeps the finished video).
+  - **T4** (26cd37e): `inpaint_region` polls an `is_cancelled` callback each
+    frame, kills ffmpeg + raises `JobCancelledError` on cancel. Threaded
+    through `_stage_erase` in both pipelines. The erase stage is the long
+    one (5–40 min) so that's where mid-run cancel matters; the shorter
+    encode passes stay timeout-bounded (Popen+drain there risks a deadlock
+    for little gain).
+
+## S3 — Branch / PR state at session end
+`claude/parallel-processing`, **PR #21 open vs main**. P0 tasks (T1–T4)
+done + pushed; plan status board updated. **P1 (T5–T9) and P2 (T10–T19)
+remain** — see `docs/improvement-plan.md`. Repo is at 0 TypeScript errors.
+The user's working combo: large-v3/cuda Whisper + ElevenLabs (scoped key,
+`/v1/user` 401 is expected/harmless) + Ollama qwen2.5:7b + Inter Black
+Italic + Povestitor commentator + Sheets automation live.
+
+## S3 — Conventions reminder (unchanged, still apply)
+- Romanian replies, short + concrete. `/worker-api/` proxy in frontend.
+  Slider as `value={[x]}` + `onValueChange={([v])=>…}`. Files ≤500 lines.
+- Backend changes need `./dev.sh restart backend` (no hot-reload on /mnt/f).
+- After non-trivial frontend edits, if Turbopack serves a stale bundle:
+  `./dev.sh stop && rm -rf .next && ./dev.sh start`, then close+reopen the
+  tab (a ChunkLoadError on /settings was exactly this).
+- Commits: `feat/fix/refactor/perf/chore/docs(scope): description`.
+
+---
+
 End of handover.
