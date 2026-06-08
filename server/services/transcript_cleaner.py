@@ -62,7 +62,8 @@ def _resolve_key(env_var: str, cfg_key: str) -> Optional[str]:
     cfg = _read_config()
     cv = cfg.get(cfg_key)
     if cv and isinstance(cv, str) and cv.strip():
-        return cv.strip()
+        from services.secret_storage import decrypt
+        return (decrypt(cv.strip()) or "").strip() or None
     return None
 
 
@@ -77,7 +78,8 @@ def get_anthropic_key() -> Optional[str]:
 def set_openai_key(key: str) -> None:
     cfg = _read_config()
     if key and key.strip():
-        cfg["openai_api_key"] = key.strip()
+        from services.secret_storage import encrypt
+        cfg["openai_api_key"] = encrypt(key.strip())
     else:
         cfg.pop("openai_api_key", None)
     _write_config(cfg)
@@ -86,7 +88,8 @@ def set_openai_key(key: str) -> None:
 def set_anthropic_key(key: str) -> None:
     cfg = _read_config()
     if key and key.strip():
-        cfg["anthropic_api_key"] = key.strip()
+        from services.secret_storage import encrypt
+        cfg["anthropic_api_key"] = encrypt(key.strip())
     else:
         cfg.pop("anthropic_api_key", None)
     _write_config(cfg)

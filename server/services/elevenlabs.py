@@ -58,14 +58,16 @@ def get_api_key() -> Optional[str]:
     cfg = _read_config()
     val = cfg.get("elevenlabs_api_key")
     if val and isinstance(val, str) and val.strip():
-        return val.strip()
+        from services.secret_storage import decrypt
+        return (decrypt(val.strip()) or "").strip() or None
     return None
 
 
 def set_api_key(key: str) -> None:
     cfg = _read_config()
     if key and key.strip():
-        cfg["elevenlabs_api_key"] = key.strip()
+        from services.secret_storage import encrypt
+        cfg["elevenlabs_api_key"] = encrypt(key.strip())
     else:
         cfg.pop("elevenlabs_api_key", None)
     _write_config(cfg)

@@ -46,6 +46,15 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     logger.info(f"Data directory ready: {settings.data_dir}")
 
+    # One-shot: encrypt any plaintext API keys left in the config files.
+    try:
+        from services.secret_storage import migrate_config_file
+        d = settings.data_dir
+        migrate_config_file(d / "tts_config.json", ["elevenlabs_api_key"])
+        migrate_config_file(d / "transcript_config.json", ["openai_api_key", "anthropic_api_key"])
+    except Exception:
+        logger.exception("API key encryption migration failed (non-fatal)")
+
     # Initialize DB (creates sqlite file and schemas)
     await init_db()
     logger.info(f"Database ready: {settings.db_path}")
