@@ -38,7 +38,8 @@ logger = logging.getLogger("clipforge.caption_detector")
 # ── T20 tight-mask params (see docs/improvement-plan.md §11.6) ───────────────
 DISPLAY_SIM_MIN = 0.6      # text-similarity below this = a new display
 DISPLAY_GAP_S = 0.8       # time gap above this = a new display
-GLYPH_DILATE_PX = 3       # grow the glyph mask to cover outline/shadow
+GLYPH_DILATE_PX = 4       # grow the glyph mask to cover outline/shadow edges
+GLYPH_LOCAL_THR = 28      # local-contrast threshold for a glyph/outline pixel
 BOX_STD_MAX = 25.0        # non-glyph colour std below this = a solid box style
 BOUND_EXPAND_S = 0.30     # extend each display's time bounds (cover fades)
 
@@ -388,41 +389,45 @@ def _glyph_or_box_mask(
             continue
         crop = frame_bgr[y0:y1, x0:x1]
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        # Otsu's polarity is arbitrary; text is the MINORITY of pixels, so flip
-        # if the foreground is the majority.
-        if th.mean() > 127:
-            th = 255 - th
 
-        # Box-vs-glyph. A real caption BOX has an interior fill that is (1)
-        # near-uniform AND (2) DIFFERENT from the video just OUTSIDE the text
-        # bbox. Glyphs over plain video fail test (2) — the "background" inside
-        # the bbox is the same scene as outside — so they stay tight (this is
-        # the common case and the user's clarity goal).
+        # LOCAL-CONTRAST glyph mask (robust to OUTLINED text). Captions are
+        # almost always a bright FILL with a dark OUTLINE (or vice-versa). Otsu
+        # picks only one polarity, leaving the other as a readable ghost. The
+        # absolute difference from a heavily-blurred version of the crop is
+        # HIGH for BOTH the bright fill and the dark outline (both stand out
+        # from the local background) and LOW for the smooth background — so the
+        # mask covers the whole glyph + outline, tight, on any background.
+        bh = max(1, y1 - y0)
+        sigma = max(5.0, bh / 4.0)
+        blurred = cv2.GaussianBlur(gray, (0, 0), sigma)
+        local = cv2.absdiff(gray, blurred)
+        glyph = (local > GLYPH_LOCAL_THR).astype(np.uint8) * 255
+        # Close small holes so a glyph is solid, drop tiny specks.
+        glyph = cv2.morphologyEx(glyph, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+        # Box-vs-glyph (§11.3d). A real caption BOX has an interior fill that is
+        # (1) near-uniform AND (2) DIFFERENT from the video just OUTSIDE the
+        # bbox. Glyphs over plain video fail test (2) → stay tight.
         is_box = False
-        bg_mask = th == 0
+        bg_mask = glyph == 0
         if bg_mask.any():
             interior = crop[bg_mask].reshape(-1, 3).astype(np.float32)
             if interior.std(axis=0).mean() < BOX_STD_MAX:
-                # Sample a thin ring strictly OUTSIDE the bbox (4 border strips,
-                # never the bbox interior — else the glyph pixels pollute it).
                 m = 6
                 strips = []
-                top = frame_bgr[max(0, y0 - m):y0, x0:x1]
-                bot = frame_bgr[y1:min(vh, y1 + m), x0:x1]
-                lft = frame_bgr[y0:y1, max(0, x0 - m):x0]
-                rgt = frame_bgr[y0:y1, x1:min(vw, x1 + m)]
-                for s in (top, bot, lft, rgt):
+                for s in (frame_bgr[max(0, y0 - m):y0, x0:x1],
+                          frame_bgr[y1:min(vh, y1 + m), x0:x1],
+                          frame_bgr[y0:y1, max(0, x0 - m):x0],
+                          frame_bgr[y0:y1, x1:min(vw, x1 + m)]):
                     if s.size:
                         strips.append(s.reshape(-1, 3).astype(np.float32))
                 if strips:
                     outer = np.concatenate(strips, axis=0)
-                    dist = float(np.linalg.norm(interior.mean(0) - outer.mean(0)))
-                    is_box = dist > BOX_STD_MAX  # interior fill ≠ surroundings
+                    is_box = float(np.linalg.norm(interior.mean(0) - outer.mean(0))) > BOX_STD_MAX
         if is_box:
             full[y0:y1, x0:x1] = 255            # solid box → erase whole rect
         else:
-            full[y0:y1, x0:x1] = np.maximum(full[y0:y1, x0:x1], th)  # tight glyphs
+            full[y0:y1, x0:x1] = np.maximum(full[y0:y1, x0:x1], glyph)  # tight glyphs
     return full
 
 
@@ -521,35 +526,47 @@ def detect_caption_displays(
     logger.info(f"detect_caption_displays: {len(samples)} text samples → "
                 f"{len(displays)} displays")
 
-    # Pass 3: for each display, seek its best frame, build the tight mask.
+    # Pass 3: build each display's tight mask from its BEST frame. We decode
+    # the video SEQUENTIALLY (not cap.set(POS_FRAMES) — index seeking lands on
+    # the nearest keyframe on long-GOP mp4, so the mask would be built from the
+    # WRONG frame's text and leak). Build the mask the moment we reach the
+    # needed frame, then discard it (low memory).
+    need: dict = {}   # best frame_idx → display
+    for disp in displays:
+        need.setdefault(disp["best"]["fidx"], disp)
+    built: dict = {}  # frame_idx → (mask, bbox)
     cap = cv2.VideoCapture(video_path)
+    fpos = 0
+    remaining = set(need.keys())
+    while remaining:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if fpos in remaining:
+            disp = need[fpos]
+            boxes = [(d.x, d.y, d.w, d.h) for d in disp["best"]["dets"]]
+            mask = _glyph_or_box_mask(frame, boxes, vw, vh)
+            ys, xs = np.where(mask > 0)
+            if xs.size:
+                built[fpos] = (mask, (int(xs.min()), int(ys.min()),
+                                      int(xs.max()), int(ys.max())))
+            remaining.discard(fpos)
+        fpos += 1
+    cap.release()
+
     out: List[dict] = []
-    for di, disp in enumerate(displays):
-        best = disp["best"]
-        cap.set(cv2.CAP_PROP_POS_FRAMES, best["fidx"])
-        ok, frame = cap.read()
-        if not ok or frame is None:
+    for disp in displays:
+        fidx = disp["best"]["fidx"]
+        if fidx not in built:
             continue
-        boxes = [(d.x, d.y, d.w, d.h) for d in best["dets"]]
-        mask = _glyph_or_box_mask(frame, boxes, vw, vh)
-        ys, xs = np.where(mask > 0)
-        if xs.size == 0:
-            continue
-        x0, x1 = int(xs.min()), int(xs.max())
-        y0, y1 = int(ys.min()), int(ys.max())
-        start_t = disp["samples"][0]["t"]
-        end_t = disp["samples"][-1]["t"]
+        mask, (x0, y0, x1, y1) = built[fidx]
         out.append({
-            "start_t": max(0.0, start_t),
-            "end_t": end_t,
+            "start_t": max(0.0, disp["samples"][0]["t"]),
+            "end_t": disp["samples"][-1]["t"],
             "x": x0, "y": y0, "w": max(1, x1 - x0 + 1), "h": max(1, y1 - y0 + 1),
             "mask": mask,
             "mask_kind": "tight",
         })
-        if on_progress:
-            on_progress(min(1.0, (di + 1) / max(1, len(displays))),
-                        f"Mask {di + 1}/{len(displays)}")
-    cap.release()
     out.sort(key=lambda s: s["start_t"])
 
     # T20 Step E — fade/boundary completeness. Extend each display's time
