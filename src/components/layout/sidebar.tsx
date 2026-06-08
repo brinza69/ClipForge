@@ -12,6 +12,7 @@ import {
   Layers,
   FileSpreadsheet,
 } from "lucide-react";
+import { RunningJobsBadge } from "@/components/layout/running-jobs-badge";
 
 const navItems = [
   { label: "Remix Pipeline", href: "/remix",  icon: Wand2 },
@@ -74,6 +75,9 @@ export function Sidebar({ onClose }: SidebarProps) {
           );
         })}
       </nav>
+
+      {/* Active job indicator — visible from any page while a pipeline runs */}
+      <RunningJobsBadge />
 
       {/* Footer — worker status placeholder */}
       <div className="border-t border-border/20 px-4 py-3">

@@ -17,13 +17,22 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 @router.get("/", response_model=list[JobResponse])
 async def list_jobs(
     project_id: str = None,
+    status: str = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """List jobs, optionally filtered by project."""
+    """List jobs, optionally filtered by project and/or status.
+
+    `status` accepts a single value or a comma-separated list, e.g.
+    `?status=running` or `?status=queued,running` (used by the sidebar
+    running-jobs badge)."""
     query = select(JobModel).order_by(JobModel.created_at.desc())
 
     if project_id:
         query = query.where(JobModel.project_id == project_id)
+    if status:
+        wanted = [s.strip() for s in status.split(",") if s.strip()]
+        if wanted:
+            query = query.where(JobModel.status.in_(wanted))
 
     result = await session.execute(query.limit(100))
     return result.scalars().all()
