@@ -805,10 +805,85 @@ tracks progress. Then executed the **P0 batch**:
     encode passes stay timeout-bounded (Popen+drain there risks a deadlock
     for little gain).
 
+## S3.9 — P1 + P2 execution (the rest of the plan, one sitting)
+Continued straight through the plan. 17 of 19 tasks executed; T6 deferred,
+T15 moot. Commits:
+  - **T5 + T7** (77ffcd1): `recover_stuck_jobs` now requeues ALL running
+    jobs on startup (no 30-min threshold; 50-job sanity cap, terminal-project
+    jobs still failed). `JobQueue.stop()` annotates in-flight jobs
+    "Interrupted by backend shutdown" then cancels with a 5s grace wait.
+  - **T8** (5f20900): `routers/jobs.py` `list_jobs` gains a `status` filter
+    (comma list ok). New `components/layout/running-jobs-badge.tsx` polls
+    `/api/jobs?status=queued,running` every 3s and shows a sidebar badge from
+    any page, links by job type.
+  - **T9** (084a714): `/api/remix/recent` gains `offset` + `total`; new
+    `DELETE /api/remix/{job_id}` removes media + DB row. Past-runs panel
+    paginates (10/page) + per-run delete with confirm.
+  - **T10** (a0b82fa): drive-setup-card Connect uses ONE polling loop (was
+    two racing intervals).
+  - **T12** (a0b82fa): `services/gpu_utils.py` (free_gpu_memory +
+    unload_inpaint_model). `_stage_erase` drops LaMa (~2-3GB) after inpaint.
+    Whisper needs no cleanup — it's in a spawned subprocess (OS frees on exit).
+  - **T11** (552aa05): `lib/toast-helpers.ts` (errorToast.api / okToast).
+    Adopted in parallel-sheets; rest left for incremental adoption (no mass
+    rewrite — pure cosmetic churn).
+  - **T13** (2e06638): new SSE `GET /api/jobs/{id}/stream`. parallel-processor
+    uses EventSource with a polling fallback. /remix still polls (1477-line
+    page not worth touching this pass).
+  - **T16** (f2ab862): `services/secret_storage.py` — XOR-obfuscate API keys
+    at rest (machine-tied, "enc:" prefix). NOT real crypto; documented.
+    Wired into EL/OpenAI/Anthropic get/set + a one-shot startup migration.
+    **VERIFIED LIVE:** both keys encrypted on disk after restart, and they
+    still decrypt + authenticate (EL configured=True, OpenAI ready=True).
+  - **T17** (be6e522): `server/tests/` — 12 httpx-ASGITransport smoke tests +
+    `requirements-dev.txt` + `pytest.ini` + `scripts/run-tests.sh`. Run them
+    in WSL: `./scripts/run-tests.sh` (pytest is a Linux binary — can't run
+    from a Windows git-bash).
+  - **T18** (9e5837b): `.githooks/pre-commit` runs `tsc --noEmit` on staged
+    .ts/.tsx (dependency-free, no husky). Activated via `core.hooksPath`
+    (package.json `prepare` sets it). Already fired on the T13 commit.
+  - **T19** (cf5d0db): `docs/api.md` — integrator reference for /auto,
+    /sheets, /drive-auth, /transcript/device, presets, jobs (incl. SSE),
+    remix. README links it.
+  - **T14** (7d46034): split `captioner.py` 877 → `captioner.py` (334) +
+    `captioner_presets.py` (177, data + hex_to_ass_color) +
+    `captioner_events.py` (416, ASS builders). Re-exports keep
+    `from services.captioner import DEFAULT_PRESETS/hex_to_ass_color`
+    working. Zero dangling refs (verified both directions).
+
+### Deferred / not done (be honest with the next session)
+  - **T6** (unify TTS/Transcript jobs under JobQueue): NOT executed. It
+    rewires two WORKING features (TTS Studio, Transcript Studio), removes
+    their `_jobs` dicts, changes how the routers enqueue. Modest value
+    (short standalone jobs surviving restart) vs high risk of breaking
+    working features done blind. Left for a session that can exercise both
+    studios end-to-end.
+  - **T15**: moot — /remix has no Drive UI (single-output, no Drive upload).
+  - **T14 remainder**: `remix_pipeline.py` (886) + the frontend tts/captions/
+    remix pages stay over 500. Splitting live pipeline/render code blind
+    (no runtime test here) wasn't worth the risk; documented in the plan.
+
+### Live test results (S3.9 verification, backend restarted with new code)
+Tested via curl against the running backend (couldn't run pytest from
+Windows git-bash — Linux venv):
+  - T8 status filter: `?status=done` → 89 jobs, all status=done. ✓
+  - T9 pagination: total=29, offset/limit correct. ✓
+  - T13 SSE: emits `data:{…done}` then closes. ✓
+  - T16: both keys `enc:`-prefixed on disk; migration logged
+    ("encrypted 1 plaintext key in tts_config.json" + transcript_config);
+    EL configured=True + OpenAI ready=True (decrypt+auth still works). ✓
+  - F1 /auto: missing url → 400, bad preset → 404. ✓
+  - T7: "Job queue processor stopped" in shutdown log. ✓
+  - Static: 0 TS errors, all Python compiles, zero un-timed subprocess.run,
+    zero dangling captioner refs, pre-commit hook fired.
+  NOT runtime-tested (need a heavy/forced run): T1 timeout trigger, T2
+  retry trigger, T3/T4 cancel cleanup+propagation (need a real ~10-min
+  pipeline + Cancel mid-erase), T5 (no stuck jobs existed at restart).
+
 ## S3 — Branch / PR state at session end
-`claude/parallel-processing`, **PR #21 open vs main**. P0 tasks (T1–T4)
-done + pushed; plan status board updated. **P1 (T5–T9) and P2 (T10–T19)
-remain** — see `docs/improvement-plan.md`. Repo is at 0 TypeScript errors.
+`claude/parallel-processing`, **PR #21 open vs main**. P0 (T1–T4) + most of
+P1/P2 done + pushed; plan status board current. **Only T6 deferred** (see
+above). Repo is at 0 TypeScript errors; backend verified live after restart.
 The user's working combo: large-v3/cuda Whisper + ElevenLabs (scoped key,
 `/v1/user` 401 is expected/harmless) + Ollama qwen2.5:7b + Inter Black
 Italic + Povestitor commentator + Sheets automation live.

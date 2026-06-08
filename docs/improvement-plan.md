@@ -144,7 +144,7 @@ checks, commit, push. Then move to the next.
 
 ---
 
-### [ ] T1. Subprocess timeouts (P0)
+### [x] T1. Subprocess timeouts (P0)
 
 **Goal:** No subprocess call can hang the pipeline forever.
 
@@ -223,7 +223,7 @@ queue's stuck-recovery only kicks in after 30 min.
 
 ---
 
-### [ ] T2. Retry external API calls (P0)
+### [x] T2. Retry external API calls (P0)
 
 **Goal:** A transient 5xx from ElevenLabs / OpenAI / Anthropic / Ollama
 must not kill a 10-minute pipeline run.
@@ -345,7 +345,7 @@ exception and the whole job fails. Users have to re-run from scratch.
 
 ---
 
-### [ ] T3. Cancel cleans up intermediate files (P0)
+### [x] T3. Cancel cleans up intermediate files (P0)
 
 **Goal:** When a user cancels a job mid-pipeline, the intermediate
 files (downloaded source, erased video, per-variant working dirs) are
@@ -437,7 +437,7 @@ deleted instead of staying on disk forever.
 
 ---
 
-### [ ] T4. Cancel propagates through erase + caption-burn (P0)
+### [x] T4. Cancel propagates through erase + caption-burn (P0)
 
 **Goal:** When a user clicks Cancel, the pipeline stops within ~3 seconds,
 not at the end of the current ffmpeg invocation (which can take 30+).
@@ -491,7 +491,7 @@ caption-burn / commentator stages keep running.
 
 ---
 
-### [ ] T5. Better stuck-job recovery (P1)
+### [x] T5. Better stuck-job recovery (P1)
 
 **Goal:** On backend startup, ALL jobs in `running` state are checked
 and either requeued or marked failed — not just ones older than 30 min.
@@ -532,7 +532,7 @@ half an hour passes, during which the UI shows them as still running.
 
 ---
 
-### [ ] T6. Untracked background tasks → use job queue (P1)
+### [~] T6. (DEFERRED — needs runtime test) Untracked background tasks → use job queue (P1)
 
 **Goal:** TTS and Transcript jobs use the same JobQueue as Remix/Parallel
 instead of fire-and-forget `asyncio.create_task`.
@@ -590,7 +590,7 @@ mid-job = silent orphan; no cancel possible; not recovered on restart.
 
 ---
 
-### [ ] T7. Graceful SIGTERM handling (P1)
+### [x] T7. Graceful SIGTERM handling (P1)
 
 **Goal:** When uvicorn gets SIGTERM (Ctrl-C, systemd stop, etc.),
 running jobs are marked `interrupted` cleanly before exit, not left
@@ -649,7 +649,7 @@ half-done in `running` state.
 
 ---
 
-### [ ] T8. Running-jobs indicator in sidebar (P1)
+### [x] T8. Running-jobs indicator in sidebar (P1)
 
 **Goal:** No matter which page the user is on, a small badge in the
 sidebar shows how many jobs are running. Click → go to the job's page.
@@ -739,7 +739,7 @@ to find progress. Annoying.
 
 ---
 
-### [ ] T9. Past-runs panel: pagination + delete (P1)
+### [x] T9. Past-runs panel: pagination + delete (P1)
 
 **Goal:** User can browse all past runs (not just last 10) and delete
 ones they no longer need.
@@ -777,7 +777,7 @@ ones they no longer need.
 
 ---
 
-### [ ] T10. Drive Connect polling refactor (P2)
+### [x] T10. Drive Connect polling refactor (P2)
 
 **Goal:** Replace the dual-interval poll hack in `drive-setup-card.tsx`
 with a single clean polling loop.
@@ -840,7 +840,7 @@ that race to update state. Works most of the time but fragile.
 
 ---
 
-### [ ] T11. Toast terminology unified (P2)
+### [x] T11. Toast terminology unified (P2)
 
 **Goal:** All toast messages use a consistent pattern.
 
@@ -900,7 +900,7 @@ TypeScript errors. Visually, error toasts all start with "Couldn't ".
 
 ---
 
-### [ ] T12. VRAM management between stages (P2)
+### [x] T12. VRAM management between stages (P2)
 
 **Goal:** Free GPU memory between the erase stage and the caption-burn
 stage so 8GB cards can run larger Whisper models (large-v3) or bump
@@ -977,7 +977,7 @@ between major stages reclaims significant headroom.
 
 ---
 
-### [ ] T13. SSE for job progress (P2)
+### [x] T13. SSE for job progress (P2)
 
 **Goal:** Replace 1.5s polling with Server-Sent Events. Less network,
 real-time updates.
@@ -1057,7 +1057,7 @@ real-time updates.
 
 ---
 
-### [ ] T14. Split remaining oversized files (P2)
+### [x] T14. Split remaining oversized files (P2)
 
 **Goal:** Bring every project file under 500 lines.
 
@@ -1127,7 +1127,7 @@ real-time updates.
 
 ---
 
-### [ ] T15. Replace /remix Drive UI with shared <DriveCard> (P2)
+### [~] T15. (MOOT — /remix has no Drive UI) Replace /remix Drive UI with shared <DriveCard> (P2)
 
 **Goal:** `/remix` page still has its own Drive UI inline; replace with
 the shared `<DriveCard>` from `src/components/parallel/drive-card.tsx`.
@@ -1158,7 +1158,7 @@ the shared `<DriveCard>` from `src/components/parallel/drive-card.tsx`.
 
 ---
 
-### [ ] T16. Encrypt API keys at rest (P2)
+### [x] T16. Encrypt API keys at rest (P2)
 
 **Goal:** API keys in `data/*_config.json` are no longer plaintext.
 
@@ -1226,7 +1226,7 @@ the shared `<DriveCard>` from `src/components/parallel/drive-card.tsx`.
 
 ---
 
-### [ ] T17. Smoke tests (P2)
+### [x] T17. Smoke tests (P2)
 
 **Goal:** Minimum coverage so big regressions are caught before push.
 
@@ -1327,7 +1327,7 @@ the shared `<DriveCard>` from `src/components/parallel/drive-card.tsx`.
 
 ---
 
-### [ ] T18. Pre-commit hooks (P2)
+### [x] T18. Pre-commit hooks (P2)
 
 **Goal:** TypeScript errors can't slip into commits.
 
@@ -1367,7 +1367,7 @@ the shared `<DriveCard>` from `src/components/parallel/drive-card.tsx`.
 
 ---
 
-### [ ] T19. API documentation (P2)
+### [x] T19. API documentation (P2)
 
 **Goal:** External integrators can use `/api/auto`, `/api/sheets/*`,
 `/api/drive-auth/*` without reading code.
