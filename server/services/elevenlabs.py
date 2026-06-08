@@ -81,15 +81,21 @@ async def list_voices() -> List[dict]:
     if not key:
         raise RuntimeError("ElevenLabs API key not configured")
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.get(
-            f"{ELEVENLABS_API_BASE}/voices",
-            headers={"xi-api-key": key, "accept": "application/json"},
-        )
-        if r.status_code == 401:
-            raise RuntimeError("ElevenLabs API key invalid or expired")
-        r.raise_for_status()
-        data = r.json()
+    from services.retry import with_retry
+
+    async def _call() -> dict:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(
+                f"{ELEVENLABS_API_BASE}/voices",
+                headers={"xi-api-key": key, "accept": "application/json"},
+            )
+            if r.status_code == 401:
+                # 401 is terminal — don't retry an invalid key.
+                raise RuntimeError("ElevenLabs API key invalid or expired")
+            r.raise_for_status()
+            return r.json()
+
+    data = await with_retry(_call, label="ElevenLabs voices")
 
     out: List[dict] = []
     for v in data.get("voices", []):
@@ -168,31 +174,42 @@ async def synthesize(
         },
     }
 
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        r = await client.post(
-            f"{ELEVENLABS_API_BASE}/text-to-speech/{voice_id}",
-            headers={
-                "xi-api-key": key,
-                "accept": "audio/mpeg",
-                "content-type": "application/json",
-            },
-            json=payload,
-        )
-        if r.status_code != 200:
-            # Try to extract a useful error message
-            try:
-                err = r.json()
-                detail = err.get("detail") or err
-            except Exception:
-                detail = r.text
-            msg = str(detail)[:500]
-            raise RuntimeError(f"ElevenLabs API error {r.status_code}: {msg}")
+    from services.retry import with_retry
 
-        out = Path(output_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(r.content)
-        logger.info(f"ElevenLabs synth OK: {out.stat().st_size // 1024}KB → {out.name}")
-        return str(out)
+    async def _call() -> bytes:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            r = await client.post(
+                f"{ELEVENLABS_API_BASE}/text-to-speech/{voice_id}",
+                headers={
+                    "xi-api-key": key,
+                    "accept": "audio/mpeg",
+                    "content-type": "application/json",
+                },
+                json=payload,
+            )
+            # raise_for_status() lets with_retry see 5xx/429 and back off.
+            r.raise_for_status()
+            return r.content
+
+    try:
+        content = await with_retry(_call, label=f"ElevenLabs TTS voice={voice_id}")
+    except httpx.HTTPStatusError as e:
+        # Non-retryable (4xx) or a 5xx that exhausted retries — map to the
+        # existing message format the routers surface to the user.
+        resp = e.response
+        try:
+            err = resp.json()
+            detail = err.get("detail") or err
+        except Exception:
+            detail = resp.text
+        msg = str(detail)[:500]
+        raise RuntimeError(f"ElevenLabs API error {resp.status_code}: {msg}")
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(content)
+    logger.info(f"ElevenLabs synth OK: {out.stat().st_size // 1024}KB → {out.name}")
+    return str(out)
 
 
 # Sensible language list for the UI — ElevenLabs multilingual_v2 supports

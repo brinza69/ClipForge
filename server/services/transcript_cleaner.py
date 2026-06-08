@@ -340,11 +340,20 @@ async def _call_ollama(text: str, target_language: Optional[str], model: str) ->
             {"role": "user", "content": _user_prompt(text, target_language)},
         ],
     }
-    async with httpx.AsyncClient(timeout=600.0) as client:
-        r = await client.post(f"{OLLAMA_BASE}/api/chat", json=payload)
-        if r.status_code != 200:
-            raise RuntimeError(f"Ollama error {r.status_code}: {r.text[:300]}")
-        data = r.json()
+    from services.retry import with_retry
+
+    async def _call() -> dict:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            r = await client.post(f"{OLLAMA_BASE}/api/chat", json=payload)
+            r.raise_for_status()
+            return r.json()
+
+    # Local engine — retry only twice (a 5xx usually means the model crashed;
+    # one retry is enough, more just delays a clear failure).
+    try:
+        data = await with_retry(_call, max_attempts=2, label="Ollama chat")
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"Ollama error {e.response.status_code}: {e.response.text[:300]}")
     msg = (data.get("message") or {}).get("content") or ""
     return _strip_meta_commentary(msg)
 
@@ -361,19 +370,27 @@ async def _call_openai(text: str, target_language: Optional[str], model: str) ->
             {"role": "user", "content": _user_prompt(text, target_language)},
         ],
     }
-    async with httpx.AsyncClient(timeout=600.0) as client:
-        r = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "content-type": "application/json"},
-            json=payload,
-        )
-        if r.status_code != 200:
-            try:
-                err = r.json().get("error", {}).get("message") or r.text
-            except Exception:
-                err = r.text
-            raise RuntimeError(f"OpenAI error {r.status_code}: {str(err)[:300]}")
-        data = r.json()
+    from services.retry import with_retry
+
+    async def _call() -> dict:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            r = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "content-type": "application/json"},
+                json=payload,
+            )
+            r.raise_for_status()
+            return r.json()
+
+    try:
+        data = await with_retry(_call, label="OpenAI chat")
+    except httpx.HTTPStatusError as e:
+        resp = e.response
+        try:
+            err = resp.json().get("error", {}).get("message") or resp.text
+        except Exception:
+            err = resp.text
+        raise RuntimeError(f"OpenAI error {resp.status_code}: {str(err)[:300]}")
     return _strip_meta_commentary(data["choices"][0]["message"]["content"] or "")
 
 
@@ -388,23 +405,31 @@ async def _call_anthropic(text: str, target_language: Optional[str], model: str)
         "system": SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": _user_prompt(text, target_language)}],
     }
-    async with httpx.AsyncClient(timeout=600.0) as client:
-        r = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json=payload,
-        )
-        if r.status_code != 200:
-            try:
-                err = r.json().get("error", {}).get("message") or r.text
-            except Exception:
-                err = r.text
-            raise RuntimeError(f"Anthropic error {r.status_code}: {str(err)[:300]}")
-        data = r.json()
+    from services.retry import with_retry
+
+    async def _call() -> dict:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+            )
+            r.raise_for_status()
+            return r.json()
+
+    try:
+        data = await with_retry(_call, label="Anthropic messages")
+    except httpx.HTTPStatusError as e:
+        resp = e.response
+        try:
+            err = resp.json().get("error", {}).get("message") or resp.text
+        except Exception:
+            err = resp.text
+        raise RuntimeError(f"Anthropic error {resp.status_code}: {str(err)[:300]}")
     parts = data.get("content", [])
     out = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
     return _strip_meta_commentary(out)
