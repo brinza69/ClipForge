@@ -46,6 +46,54 @@ async def get_job(job_id: str, session: AsyncSession = Depends(get_session)):
     return JobResponse.model_validate(job)
 
 
+@router.get("/{job_id}/stream")
+async def stream_job(job_id: str):
+    """Server-Sent Events stream of a job's progress. Emits a `data:` event
+    whenever progress/status/message changes, and closes when the job hits a
+    terminal state. Replaces 1.5s polling — one open connection instead of
+    N×M repeated GETs across tabs. The frontend uses EventSource and falls
+    back to polling on error."""
+    import asyncio
+    import json as _json
+
+    from database import async_session
+    from fastapi.responses import StreamingResponse
+
+    async def events():
+        last = None
+        # Safety cap so a wedged job can't keep a connection open forever.
+        deadline = asyncio.get_event_loop().time() + 3600
+        while True:
+            async with async_session() as session:
+                job = await session.get(JobModel, job_id)
+            if not job:
+                yield 'event: error\ndata: {"detail":"not found"}\n\n'
+                return
+            cur = (job.progress, job.status, job.progress_message)
+            if cur != last:
+                last = cur
+                payload = {
+                    "id": job.id,
+                    "status": job.status,
+                    "progress": job.progress,
+                    "progress_message": job.progress_message,
+                    "error": job.error,
+                }
+                yield f"data: {_json.dumps(payload)}\n\n"
+            if job.status in ("done", "failed", "cancelled"):
+                return
+            if asyncio.get_event_loop().time() > deadline:
+                yield 'event: error\ndata: {"detail":"stream timeout"}\n\n'
+                return
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/{job_id}/cancel")
 async def cancel_job(job_id: str, session: AsyncSession = Depends(get_session)):
     job = await session.get(JobModel, job_id)

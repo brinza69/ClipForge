@@ -214,35 +214,74 @@ export function ParallelProcessor({
   useEffect(() => {
     if (!jobId) return;
     let stop = false;
-    const tick = async () => {
+    let es: EventSource | null = null;
+    let pollId: ReturnType<typeof setInterval> | null = null;
+
+    const onDone = async () => {
       try {
-        const r = await fetch(`/worker-api/jobs/${jobId}`);
-        if (!r.ok) return;
-        const j = await r.json();
-        if (stop) return;
-        setProgress(Math.round((j.progress || 0) * 100));
-        setProgressMsg(j.progress_message || "");
-        setJobStatus(j.status);
-        if (j.status === "done") {
-          stop = true;
-          try {
-            const meta = await fetch(`/worker-api/parallel/${jobId}/result`);
-            if (meta.ok) {
-              const m = await meta.json();
-              const vs: VariantResult[] = m.variants || [];
-              setResults(vs);
-              const d = m.descriptions || null;
-              if (d) setDescriptions(d);
-              onJobDone?.({ jobId, results: vs, descriptions: d, raw: m });
-            }
-          } catch {}
-        } else if (j.status === "failed") { stop = true; setErrorMsg(j.error || "Pipeline failed"); }
-        else if (j.status === "cancelled") { stop = true; setErrorMsg("Cancelled"); }
+        const meta = await fetch(`/worker-api/parallel/${jobId}/result`);
+        if (meta.ok) {
+          const m = await meta.json();
+          const vs: VariantResult[] = m.variants || [];
+          setResults(vs);
+          const d = m.descriptions || null;
+          if (d) setDescriptions(d);
+          onJobDone?.({ jobId, results: vs, descriptions: d, raw: m });
+        }
       } catch {}
     };
-    tick();
-    const id = setInterval(tick, 1500);
-    return () => { stop = true; clearInterval(id); };
+
+    const apply = (j: { status: string; progress: number; progress_message?: string; error?: string }) => {
+      if (stop) return;
+      setProgress(Math.round((j.progress || 0) * 100));
+      setProgressMsg(j.progress_message || "");
+      setJobStatus(j.status);
+      if (j.status === "done") { stop = true; onDone(); }
+      else if (j.status === "failed") { stop = true; setErrorMsg(j.error || "Pipeline failed"); }
+      else if (j.status === "cancelled") { stop = true; setErrorMsg("Cancelled"); }
+    };
+
+    // Polling fallback (also the path when EventSource errors).
+    const startPolling = () => {
+      if (pollId) return;
+      const tick = async () => {
+        if (stop) return;
+        try {
+          const r = await fetch(`/worker-api/jobs/${jobId}`);
+          if (r.ok) apply(await r.json());
+        } catch {}
+      };
+      tick();
+      pollId = setInterval(tick, 1500);
+    };
+
+    // Prefer SSE — one open connection, real-time. Fall back to polling if
+    // the browser lacks EventSource or the stream errors.
+    if (typeof EventSource !== "undefined") {
+      try {
+        es = new EventSource(`/worker-api/jobs/${jobId}/stream`);
+        es.onmessage = (ev) => {
+          try { apply(JSON.parse(ev.data)); } catch {}
+          if (stop && es) es.close();
+        };
+        es.onerror = () => {
+          // Stream dropped (or job already terminal) — close and let polling
+          // confirm the final state.
+          if (es) { es.close(); es = null; }
+          if (!stop) startPolling();
+        };
+      } catch {
+        startPolling();
+      }
+    } else {
+      startPolling();
+    }
+
+    return () => {
+      stop = true;
+      if (es) es.close();
+      if (pollId) clearInterval(pollId);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
 
