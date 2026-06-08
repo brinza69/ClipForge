@@ -393,16 +393,36 @@ def _glyph_or_box_mask(
         # if the foreground is the majority.
         if th.mean() > 127:
             th = 255 - th
-        # Box-vs-glyph: look at the colour spread of the NON-text pixels.
+
+        # Box-vs-glyph. A real caption BOX has an interior fill that is (1)
+        # near-uniform AND (2) DIFFERENT from the video just OUTSIDE the text
+        # bbox. Glyphs over plain video fail test (2) — the "background" inside
+        # the bbox is the same scene as outside — so they stay tight (this is
+        # the common case and the user's clarity goal).
+        is_box = False
         bg_mask = th == 0
         if bg_mask.any():
-            bg = crop[bg_mask].reshape(-1, 3).astype(np.float32)
-            if bg.std(axis=0).mean() < BOX_STD_MAX:
-                # Solid background box → erase the whole rectangle.
-                full[y0:y1, x0:x1] = 255
-                continue
-        # Glyph style → keep the tight Otsu foreground.
-        full[y0:y1, x0:x1] = np.maximum(full[y0:y1, x0:x1], th)
+            interior = crop[bg_mask].reshape(-1, 3).astype(np.float32)
+            if interior.std(axis=0).mean() < BOX_STD_MAX:
+                # Sample a thin ring strictly OUTSIDE the bbox (4 border strips,
+                # never the bbox interior — else the glyph pixels pollute it).
+                m = 6
+                strips = []
+                top = frame_bgr[max(0, y0 - m):y0, x0:x1]
+                bot = frame_bgr[y1:min(vh, y1 + m), x0:x1]
+                lft = frame_bgr[y0:y1, max(0, x0 - m):x0]
+                rgt = frame_bgr[y0:y1, x1:min(vw, x1 + m)]
+                for s in (top, bot, lft, rgt):
+                    if s.size:
+                        strips.append(s.reshape(-1, 3).astype(np.float32))
+                if strips:
+                    outer = np.concatenate(strips, axis=0)
+                    dist = float(np.linalg.norm(interior.mean(0) - outer.mean(0)))
+                    is_box = dist > BOX_STD_MAX  # interior fill ≠ surroundings
+        if is_box:
+            full[y0:y1, x0:x1] = 255            # solid box → erase whole rect
+        else:
+            full[y0:y1, x0:x1] = np.maximum(full[y0:y1, x0:x1], th)  # tight glyphs
     return full
 
 

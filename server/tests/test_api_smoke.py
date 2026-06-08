@@ -93,7 +93,9 @@ async def test_variant_presets_list(client):
 
 
 async def test_jobs_status_filter(client):
-    r = await client.get("/api/jobs?status=running")
+    # Trailing slash is the canonical form; without it FastAPI 307-redirects
+    # (the frontend fetch + curl -L follow it automatically).
+    r = await client.get("/api/jobs/?status=running")
     assert r.status_code == 200
     assert isinstance(r.json(), list)
 
