@@ -48,6 +48,7 @@ from workers.remix_pipeline import (
     _stage_erase,
     _stage_match_and_caption,
     _stage_transcribe,
+    _speech_intervals_from_tx,
     synth_voice_from_text,
 )
 
@@ -224,6 +225,7 @@ async def handle_parallel_pipeline(
         auto_detect=bool(cfg.get("erase_auto_detect", False)),
         is_cancelled=(lambda: queue.is_cancelled(job_id)),
         coverage=cfg.get("erase_coverage", "tight"),
+        speech_intervals=_speech_intervals_from_tx(tx_result),
     )
 
     # ── Shared stage 4 — clean transcript ONCE (0.40–0.48) ─────────────────

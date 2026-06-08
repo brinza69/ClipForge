@@ -532,3 +532,153 @@ def detect_caption_displays(
     out.sort(key=lambda s: s["start_t"])
     logger.info(f"detect_caption_displays: produced {len(out)} tight-mask segments")
     return out
+
+
+# ── T20 Step D — auto-localize the caption band (no manual box) ──────────────
+
+DRIFT_MAX_FRAC = 0.012     # held-still: centre may move < this × frame diagonal
+SPEECH_OVERLAP_MIN = 0.25  # a caption lane should overlap speech at least this
+
+
+def _overlap_fraction(intervals_a, intervals_b) -> float:
+    """Fraction of total time in `intervals_a` that overlaps any interval in
+    `intervals_b`. Both are lists of (start, end) seconds."""
+    if not intervals_a:
+        return 0.0
+    total = sum(max(0.0, e - s) for s, e in intervals_a)
+    if total <= 0:
+        return 0.0
+    ov = 0.0
+    for s, e in intervals_a:
+        for bs, be in intervals_b:
+            lo, hi = max(s, bs), min(e, be)
+            if hi > lo:
+                ov += hi - lo
+    return min(1.0, ov / total)
+
+
+def auto_locate_caption_band(
+    video_path: str,
+    *,
+    speech_intervals: Optional[List[tuple]] = None,
+    sample_fps: float = 3.0,
+    min_conf: float = 0.25,
+    on_progress: Optional[Callable[[float, str], None]] = None,
+) -> Optional[dict]:
+    """Find the caption lane automatically — no manual box. Returns an ROI
+    {x,y,w,h} or None if no convincing caption lane is found (caller should
+    then fall back to a default band or Thorough mode).
+
+    Discriminators (vs scene text): held-still (captions hold, scene text
+    moves), recurs in a consistent band, and — when `speech_intervals` are
+    given — overlaps speech in time (captions track the voice).
+    """
+    reader = _get_reader()
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    step = max(1, int(round(fps / max(0.5, sample_fps))))
+    diag = (vw ** 2 + vh ** 2) ** 0.5
+    drift_max = DRIFT_MAX_FRAC * diag
+
+    # Sample → per-sample list of detections over the WHOLE frame.
+    per_sample: List[List[_Detection]] = []
+    fidx = 0
+    nsmp = (total // step) if step else 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if fidx % step == 0:
+            t = fidx / fps
+            try:
+                results = _ocr_frame(reader, frame)
+            except Exception:
+                results = []
+            dets = []
+            for bbox, text, conf in results:
+                if conf is None or conf < min_conf or not (text and text.strip()):
+                    continue
+                bx, by, bw, bh = _bbox_from_easyocr(bbox)
+                dets.append(_Detection(t=t, x=bx, y=by, w=bw, h=bh, text=text, conf=float(conf)))
+            per_sample.append(dets)
+            if on_progress and nsmp:
+                k = fidx // step
+                if k % 5 == 0:
+                    on_progress(min(1.0, k / nsmp), f"Locating band {k}/{nsmp}")
+        fidx += 1
+    cap.release()
+
+    # Held-still filter: keep a detection only if a detection in the adjacent
+    # sample sits at nearly the same centre (it persisted in place).
+    held: List[_Detection] = []
+    for i, dets in enumerate(per_sample):
+        neighbours = []
+        if i > 0:
+            neighbours += per_sample[i - 1]
+        if i + 1 < len(per_sample):
+            neighbours += per_sample[i + 1]
+        for d in dets:
+            dcx, dcy = d.x + d.w / 2, d.y + d.h / 2
+            for o in neighbours:
+                ocx, ocy = o.x + o.w / 2, o.y + o.h / 2
+                if ((dcx - ocx) ** 2 + (dcy - ocy) ** 2) ** 0.5 <= drift_max:
+                    held.append(d)
+                    break
+    if not held:
+        logger.info("auto_locate_caption_band: no held-still text found")
+        return None
+
+    # Cluster held-still detections into lanes by Y-centre.
+    lane_threshold = vh * 0.08
+    lanes: List[_Lane] = []
+    for d in sorted(held, key=lambda x: x.t):
+        best, bd = None, lane_threshold
+        for lane in lanes:
+            dist = abs(d.y_center - lane.y_center)
+            if dist < bd:
+                best, bd = lane, dist
+        if best is not None:
+            best.add(d)
+        else:
+            lanes.append(_Lane(y_center=d.y_center, detections=[d]))
+
+    # Score each lane: distinct sample-times with text × (speech overlap if given).
+    best_lane, best_score = None, 0.0
+    for lane in lanes:
+        times = sorted({round(d.t, 2) for d in lane.detections})
+        if len(times) < 3:
+            continue
+        coverage = len(times)
+        score = float(coverage)
+        if speech_intervals:
+            # Build the lane's text-present intervals (merge close sample times).
+            ivs = [(t - 0.3, t + 0.3) for t in times]
+            ov = _overlap_fraction(ivs, speech_intervals)
+            if ov < SPEECH_OVERLAP_MIN:
+                score *= 0.3   # demote lanes that don't track speech (logos etc.)
+            else:
+                score *= (1.0 + ov)
+        if score > best_score:
+            best_lane, best_score = lane, score
+
+    if best_lane is None:
+        logger.info("auto_locate_caption_band: no lane scored high enough")
+        return None
+
+    xs0 = np.array([d.x for d in best_lane.detections], dtype=np.float32)
+    xs1 = np.array([d.x + d.w for d in best_lane.detections], dtype=np.float32)
+    ys0 = np.array([d.y for d in best_lane.detections], dtype=np.float32)
+    ys1 = np.array([d.y + d.h for d in best_lane.detections], dtype=np.float32)
+    pad = 10
+    x0 = max(0, int(np.percentile(xs0, 5)) - pad)
+    y0 = max(0, int(np.percentile(ys0, 5)) - pad)
+    x1 = min(vw, int(np.percentile(xs1, 95)) + pad)
+    y1 = min(vh, int(np.percentile(ys1, 95)) + pad)
+    roi = {"x": x0, "y": y0, "w": max(1, x1 - x0), "h": max(1, y1 - y0)}
+    logger.info(f"auto_locate_caption_band: lane at {roi} (score={best_score:.1f})")
+    return roi

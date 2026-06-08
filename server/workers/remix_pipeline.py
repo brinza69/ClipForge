@@ -226,6 +226,21 @@ async def _stage_download(meta: Dict, slc: _Sliced, queue, job_id: str, project_
     return Path(video_path)
 
 
+def _speech_intervals_from_tx(tx_result: Dict[str, Any]) -> List[tuple]:
+    """Extract (start_s, end_s) speech intervals from a transcribe result, for
+    auto-localizing the caption band (captions track the voice). Empty list if
+    the result has no usable segment timing."""
+    out: List[tuple] = []
+    for seg in (tx_result.get("segments") or []):
+        try:
+            s = float(seg.get("start")); e = float(seg.get("end"))
+            if e > s:
+                out.append((s, e))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 async def _stage_transcribe(video_path: Path, slc: _Sliced) -> Dict[str, Any]:
     from services.transcriber import transcribe
 
@@ -263,6 +278,7 @@ async def _stage_erase(
     auto_detect: bool = False,
     is_cancelled: Optional[Callable[[], bool]] = None,
     coverage: str = "tight",   # tight | band | thorough (T20)
+    speech_intervals: Optional[List[tuple]] = None,  # (start,end) s — for auto-localize
 ) -> Path:
     """Run the eraser on a single rect or auto-detected time-varying segments.
 
@@ -363,6 +379,24 @@ async def _stage_erase(
         # Constrain detection to the erase rect — on busy/animated frames OCR
         # sees text everywhere; only erase inside the marked caption band.
         roi = {"x": x, "y": y, "w": w, "h": h}
+
+        # T20-D: auto-localize the caption band so no manual box is needed.
+        # Refines `roi` to the real caption lane (held-still + speech-correlated).
+        # Falls back to the passed rect if it can't find a convincing lane.
+        try:
+            from services.caption_detector import auto_locate_caption_band
+            located = await loop.run_in_executor(
+                None,
+                lambda: auto_locate_caption_band(
+                    str(video_path), speech_intervals=speech_intervals,
+                    on_progress=_det_progress,
+                ),
+            )
+            if located:
+                roi = located
+                logger.info(f"auto-localized caption band: {roi}")
+        except Exception:
+            logger.exception("auto-localize failed; using passed erase rect")
 
         if coverage == "tight":
             # T20: per-display tight glyph/box masks — erase the least.
@@ -850,6 +884,9 @@ async def handle_remix_pipeline(
     slc_erase = _Sliced(queue, job_id, 0.20, 0.65)
     slc_audio = _Sliced(queue, job_id, 0.20, 0.55)
 
+    # Speech timing → helps auto-localize the caption band (captions track speech).
+    speech_intervals = _speech_intervals_from_tx(tx_result)
+
     erase_task = asyncio.create_task(
         _stage_erase(
             video_path, erased_path, cfg["erase_zone"],
@@ -859,6 +896,7 @@ async def handle_remix_pipeline(
             auto_detect=bool(cfg.get("erase_auto_detect", False)),
             is_cancelled=(lambda: queue.is_cancelled(job_id)),
             coverage=cfg.get("erase_coverage", "tight"),
+            speech_intervals=speech_intervals,
         )
     )
     audio_task = asyncio.create_task(
