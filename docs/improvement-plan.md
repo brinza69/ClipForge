@@ -1494,20 +1494,20 @@ to this file at the bottom for the user to prioritize.
 | T3   |   `[x]`     | 77697cf |
 | T4   |   `[x]`     | 26cd37e |
 | T5   |   `[x]`     | 77ffcd1 |
-| T6   |   `[ ]`     | (deferred — most invasive P1; see note) |
+| T6   | DEFERRED | needs runtime test — rewires working TTS/Transcript studios |
 | T7   |   `[x]`     | 77ffcd1 |
 | T8   |   `[x]`     | 5f20900 |
 | T9   |   `[x]`     | 084a714 |
-| T10  |   `[ ]`     |        |
-| T11  |   `[ ]`     |        |
-| T12  |   `[ ]`     |        |
-| T13  |   `[ ]`     |        |
-| T14  |   `[ ]`     |        |
-| T15  |   `[ ]`     |        |
-| T16  |   `[ ]`     |        |
-| T17  |   `[ ]`     |        |
-| T18  |   `[ ]`     |        |
-| T19  |   `[ ]`     |        |
+| T10  |   `[x]`     | a0b82fa |
+| T11  |   `[x]`     | 552aa05 (helper + parallel-sheets; rest incremental) |
+| T12  |   `[x]`     | a0b82fa |
+| T13  |   `[x]`     | 2e06638 (parallel-processor; /remix still polls) |
+| T14  |   `[x]`     | 7d46034 (captioner split; remix_pipeline + FE pages deferred) |
+| T15  | MOOT | /remix has no Drive UI; nothing to unify |
+| T16  |   `[x]`     | f2ab862 |
+| T17  |   `[x]`     | be6e522 |
+| T18  |   `[x]`     | 9e5837b |
+| T19  |   `[x]`     | cf5d0db |
 
 When you complete a task, change `[ ]` to `[x]` and add the commit
 short SHA.
