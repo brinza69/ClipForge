@@ -354,26 +354,31 @@ async def _stage_erase(
 
     detected_segments = None
     if auto_detect:
-        # Auto-detect: OCR-scan the video to find time-varying caption boxes.
-        # Solves both "OCR zone is too large" (per-segment tight bboxes with
-        # drift split) and "fragments not erased" (higher sample rate +
-        # lower confidence threshold) compared to the old defaults.
-        from services.caption_detector import detect_caption_segments
-
         await slc.update(0.0, "Scanning for captions (OCR)…")
 
         def _det_progress(p: float, msg: str):
             mapped = max(0.0, min(0.4, p * 0.4))  # OCR uses 0-40% of erase slice
             asyncio.run_coroutine_threadsafe(slc.update(mapped, msg), loop)
 
-        # Constrain detection to the user's drawn erase rect — on busy/animated
-        # frames OCR sees text everywhere; we must only erase inside the band
-        # the user marked as the caption area.
+        # Constrain detection to the erase rect — on busy/animated frames OCR
+        # sees text everywhere; only erase inside the marked caption band.
         roi = {"x": x, "y": y, "w": w, "h": h}
-        detected_segments = await loop.run_in_executor(
-            None,
-            lambda: detect_caption_segments(str(video_path), roi=roi, on_progress=_det_progress),
-        )
+
+        if coverage == "tight":
+            # T20: per-display tight glyph/box masks — erase the least.
+            from services.caption_detector import detect_caption_displays
+            detected_segments = await loop.run_in_executor(
+                None,
+                lambda: detect_caption_displays(str(video_path), roi=roi, on_progress=_det_progress),
+            )
+        else:
+            # "band": legacy per-segment rectangle zones.
+            from services.caption_detector import detect_caption_segments
+            detected_segments = await loop.run_in_executor(
+                None,
+                lambda: detect_caption_segments(str(video_path), roi=roi, on_progress=_det_progress),
+            )
+
         if not detected_segments:
             logger.warning(
                 "auto-detect found no captions; falling back to user-drawn rect"
