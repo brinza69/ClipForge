@@ -40,6 +40,7 @@ DISPLAY_SIM_MIN = 0.6      # text-similarity below this = a new display
 DISPLAY_GAP_S = 0.8       # time gap above this = a new display
 GLYPH_DILATE_PX = 3       # grow the glyph mask to cover outline/shadow
 BOX_STD_MAX = 25.0        # non-glyph colour std below this = a solid box style
+BOUND_EXPAND_S = 0.30     # extend each display's time bounds (cover fades)
 
 _reader = None
 _reader_lock = None  # lazy init
@@ -530,6 +531,21 @@ def detect_caption_displays(
                         f"Mask {di + 1}/{len(displays)}")
     cap.release()
     out.sort(key=lambda s: s["start_t"])
+
+    # T20 Step E — fade/boundary completeness. Extend each display's time
+    # bounds outward by BOUND_EXPAND_S so the (reused) tight mask also covers
+    # fade-in/out frames. Clamp into the GAP to the neighbouring display so two
+    # adjacent displays (different masks) never overlap in time — in the
+    # overlap zone _find_active_segment would pick one mask and the other text
+    # would leak.
+    for i, seg in enumerate(out):
+        prev_end = out[i - 1]["end_t"] if i > 0 else -1e9
+        next_start = out[i + 1]["start_t"] if i + 1 < len(out) else 1e9
+        new_start = max(seg["start_t"] - BOUND_EXPAND_S, prev_end)
+        new_end = min(seg["end_t"] + BOUND_EXPAND_S, next_start)
+        seg["start_t"] = max(0.0, min(new_start, seg["start_t"]))
+        seg["end_t"] = max(seg["end_t"], new_end)
+
     logger.info(f"detect_caption_displays: produced {len(out)} tight-mask segments")
     return out
 
