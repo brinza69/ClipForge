@@ -1516,9 +1516,20 @@ short SHA.
 
 ## 11. DEEP DIVE — Caption auto-detect: eliminate post-erase leak (T20)
 
-> **Status:** `[ ]` not started. This is a dedicated design + task for the
-> eraser, written after the user reported: "after erasing, a few frames
-> STILL show the caption." Read this whole section before coding.
+> **Status:** `[x]` IMPLEMENTED + REAL-TESTED (commits 75a10fa, f99574a,
+> 8492627, 63ef50a, 60e7844, b4302c0, 6660682). Steps A–F all done. Tested
+> end-to-end on a 20s TikTok clip via the Linux venv (auto-localize → tight
+> detect → LaMa inpaint → re-OCR the output): **caption leaks 45 → 0**, mask
+> coverage ~24% of the band (vs 100% for a rectangle), scene text (a shirt
+> logo) correctly preserved, band auto-located with NO manual box. Two bugs
+> were caught by the harness and fixed: (1) index-seek grabbed the wrong
+> frame for the mask → sequential decode; (2) Otsu masked only the bright
+> fill and left the dark outline as a ghost → local-contrast mask covering
+> fill+outline. Section kept below as the design record.
+
+> This is a dedicated design + task for the eraser, written after the user
+> reported: "after erasing, a few frames STILL show the caption." Read this
+> whole section before touching the eraser.
 
 ### 11.1 What happens today (read the code first)
 
