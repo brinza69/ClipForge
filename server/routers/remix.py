@@ -83,6 +83,11 @@ class StartRequest(BaseModel):
     erase_algorithm: str = "telea"               # telea | ns  (only used when mode=inpaint)
     erase_auto_detect: bool = False              # if True, OCR the video and inpaint only the time-varying caption boxes
                                                   # (ignores erase_zone except as a clamp)
+    # How much of the band to erase when auto-detecting (T20):
+    #   "tight"    — per-glyph/box masks, minimal erase (best clarity)
+    #   "band"     — the detected zone rectangle (legacy behaviour)
+    #   "thorough" — the whole ROI band for the whole clip (guaranteed no leak, slower)
+    erase_coverage: str = "tight"
 
     transcript_engine: str = "ollama"            # ollama | openai | anthropic
     transcript_target_lang: Optional[str] = None  # "en" / "ro" / null = keep original
@@ -153,6 +158,7 @@ async def remix_start(req: StartRequest):
         "erase_mode": req.erase_mode,
         "erase_algorithm": req.erase_algorithm,
         "erase_auto_detect": req.erase_auto_detect,
+        "erase_coverage": req.erase_coverage,
         "transcript_engine": req.transcript_engine,
         "transcript_target_lang": req.transcript_target_lang,
         "tts_engine": req.tts_engine,

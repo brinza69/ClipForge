@@ -262,6 +262,7 @@ async def _stage_erase(
     algorithm: str = "telea",
     auto_detect: bool = False,
     is_cancelled: Optional[Callable[[], bool]] = None,
+    coverage: str = "tight",   # tight | band | thorough (T20)
 ) -> Path:
     """Run the eraser on a single rect or auto-detected time-varying segments.
 
@@ -321,6 +322,35 @@ async def _stage_erase(
     if algorithm not in ("telea", "ns"):
         algorithm = "telea"
     from services.inpaint import inpaint_region
+
+    # T20 Thorough — guaranteed-no-leak fallback: inpaint the whole ROI band
+    # for the whole clip (no detection). Slower but bulletproof.
+    if coverage == "thorough":
+        await slc.update(0.0, "Erasing whole band (thorough)…")
+
+        def _thorough_progress(frame_idx: int, total: int):
+            if total > 0:
+                p = max(0.0, min(1.0, frame_idx / total))
+                asyncio.run_coroutine_threadsafe(
+                    slc.update(p, f"Erasing {frame_idx}/{total} (thorough)"), loop
+                )
+
+        await inpaint_region(
+            str(video_path), str(output_path),
+            x=x, y=y, w=w, h=h,
+            algorithm=algorithm,
+            on_progress=_thorough_progress,
+            is_cancelled=is_cancelled,
+        )
+        if not output_path.exists():
+            raise RuntimeError("Inpaint produced no output (thorough)")
+        try:
+            from services.gpu_utils import unload_inpaint_model
+            unload_inpaint_model()
+        except Exception:
+            pass
+        await slc.update(1.0, "Erase complete (thorough)")
+        return output_path
 
     detected_segments = None
     if auto_detect:
@@ -823,6 +853,7 @@ async def handle_remix_pipeline(
             algorithm=cfg.get("erase_algorithm", "telea"),
             auto_detect=bool(cfg.get("erase_auto_detect", False)),
             is_cancelled=(lambda: queue.is_cancelled(job_id)),
+            coverage=cfg.get("erase_coverage", "tight"),
         )
     )
     audio_task = asyncio.create_task(

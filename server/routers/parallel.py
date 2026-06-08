@@ -77,6 +77,7 @@ class StartRequest(BaseModel):
     erase_mode: str = "inpaint"
     erase_algorithm: str = "telea"
     erase_auto_detect: bool = False
+    erase_coverage: str = "tight"   # tight | band | thorough (T20)
     transcript_engine: str = "ollama"
     transcript_target_lang: Optional[str] = None
 
@@ -125,6 +126,7 @@ async def parallel_start(req: StartRequest):
         "erase_mode": req.erase_mode,
         "erase_algorithm": req.erase_algorithm,
         "erase_auto_detect": req.erase_auto_detect,
+        "erase_coverage": req.erase_coverage,
         "transcript_engine": req.transcript_engine,
         "transcript_target_lang": req.transcript_target_lang,
         "variants": [v.model_dump() for v in req.variants],
