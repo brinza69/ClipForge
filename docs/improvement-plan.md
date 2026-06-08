@@ -1514,4 +1514,216 @@ short SHA.
 
 ---
 
+## 11. DEEP DIVE — Caption auto-detect: eliminate post-erase leak (T20)
+
+> **Status:** `[ ]` not started. This is a dedicated design + task for the
+> eraser, written after the user reported: "after erasing, a few frames
+> STILL show the caption." Read this whole section before coding.
+
+### 11.1 What happens today (read the code first)
+
+- `server/services/caption_detector.py::detect_caption_segments`
+  1. OCR (EasyOCR) samples frames at ~5fps → finds text bboxes.
+  2. Clusters bboxes into vertical "lanes", takes a percentile-union bbox
+     per lane → caption **zones** (rectangles).
+  3. `_presence_segments`: scans ~20fps, measures **edge density** (Canny
+     `.mean()`) inside each zone; thresholds it (adaptive `lo + 0.30*(hi-lo)`)
+     → a boolean `present[]` per sampled frame; bridges short gaps; emits
+     time segments `{start_t, end_t, x, y, w, h}` (+ `bleed_s=0.4`).
+- `server/services/inpaint.py`: builds one rectangular mask per segment.
+  `_find_active_segment(t)` returns the segment whose `[start_t, end_t)`
+  contains `t`. **If no segment contains `t`, the frame passes through
+  UNTOUCHED** — this is the leak.
+
+### 11.2 Why captions leak (root causes — all of these are real)
+
+1. **Temporal boundary quantization.** Segment start/end come from the
+   20fps presence samples. A caption that appears between two samples isn't
+   covered until the next sample (+`bleed_s`). If bleed is too small, the
+   first/last frames leak.
+2. **Fade in/out.** During a fade the caption is semi-transparent → fewer
+   edges → edge-density drops below threshold → marked "absent" → not
+   erased, but the ghost is still visible. **This is the #1 cause of the
+   user's complaint.**
+3. **Sparse-text frames.** A single short word dilutes the edge-density
+   mean over the whole (wide) zone → below threshold → missed.
+4. **Horizontal under-coverage.** The zone bbox is a percentile UNION of
+   sampled widths. A frame whose caption is wider than the union (long
+   sentence) leaks at the left/right edges.
+5. **Threshold fragility.** `lo + 0.30*(hi-lo)` is balanced. On clips where
+   the background band is itself busy, the floor rises and real captions
+   fall under threshold.
+6. **OCR localization gaps.** If OCR never sampled the caption in a slightly
+   shifted position (jitter), the union zone may not cover it.
+
+### 11.3 The guiding principle (this is the whole insight)
+
+**The cost is asymmetric.** Inpainting a band frame that has NO caption is
+**visually free** — LaMa just reconstructs background over background, and
+the user already marked that band as "the caption area", so there's nothing
+precious there. But MISSING a caption frame is a visible defect.
+
+→ The detector must be **biased hard toward over-erasing.** Every tuning
+choice should prefer "erase a few extra idle frames" over "risk leaving a
+caption frame." Today the detector is balanced; rebalancing it toward
+over-erase is most of the fix.
+
+### 11.4 The plan — three tiers (ship Tier 0 + Tier 1; Tier 2 optional)
+
+Expose an **"Erase coverage"** choice in the UI (Remix + Parallel shared
+settings, next to "Auto-detect captions"): `Thorough` (Tier 0) | `Smart`
+(Tier 1, default). Backend reads it from the erase config.
+
+#### Tier 0 — "Thorough": full-band, full-duration (GUARANTEED zero leak)
+
+The simplest bulletproof answer. When the user picks Thorough (or when
+`auto_detect` is on but the clip is short), **inpaint the entire ROI band
+for the entire clip** — no presence detection, no OCR. One static segment =
+the user's rect, `start_t=0, end_t=∞`. Zero leak is mathematically
+guaranteed because every frame's band is inpainted.
+
+- Cost: more frames through LaMa (the whole clip, not just caption frames).
+  On the user's RTX 2080 Super that's ~18fps inpaint, so a 60s/1800-frame
+  clip ≈ 100s. Acceptable given ~10min total runs.
+- Implementation: trivial — in `_stage_erase`, when coverage=="thorough",
+  skip `detect_caption_segments` and call `inpaint_region(x,y,w,h=ROI)`
+  with no `segments`. **Do this first; it's ~20 lines and gives the user a
+  guaranteed-correct option immediately.**
+
+#### Tier 1 — "Smart": robust presence + full-width mask + aggressive dilation
+
+Keep OCR for **localization only** (finding the vertical sub-band), but make
+PRESENCE and the MASK leak-proof. Four changes to `caption_detector.py`:
+
+**(a) Erase the FULL ROI WIDTH (kills horizontal leak, cause #4).**
+Stop fitting the bbox to text width. The user drew the band; captions live
+across it. Set each segment's `x = roi.x`, `w = roi.w`. Keep the vertical
+extent tight to the detected lane (so a tall ROI doesn't erase more height
+than needed) — or full ROI height in Thorough. Horizontal leak becomes
+impossible.
+
+**(b) Dual/triple presence signal, OR-ed (kills fade + sparse leak, #2/#3).**
+In `_presence_segments`, compute per sampled frame, inside the (now
+full-width) band:
+  - **Signal A — edge density** (current Canny mean). Good for crisp text.
+  - **Signal B — temporal-stability × gradient (NEW, the key addition).**
+    Keep a ring buffer of the last `K≈5` decoded band crops. A caption pixel
+    is one that has **high spatial gradient** (text edge) AND **low temporal
+    difference** vs the buffered neighbors (the caption holds still while the
+    background video moves). Count such pixels; a caption frame has a large
+    connected cluster, a no-caption frame (moving video) has few. **This
+    fires even on faded/semi-transparent captions**, because a fading caption
+    still holds its SHAPE over several frames while the background moves —
+    exactly the case edge-density misses.
+  - **Signal C — OCR anchors** (current): frames OCR confidently saw text.
+  Mark `present = A_over_thr OR B_over_thr OR C_anchor`. ORing means any one
+  signal catching it is enough — no single failure mode leaks.
+
+**(c) Aggressive temporal morphology (kills boundary leak, #1).**
+After `present[]`:
+  - **Dilate** every True run by a generous margin (≈0.4s each side,
+    configurable `expand_s`, default up from today's 0.4 bleed to a real
+    morphological grow). Over-erasing idle band frames is free (§11.3).
+  - **Bridge** gaps up to ≈0.6s (up from 0.3) so word-to-word and brief
+    fades stay one segment.
+  - **Lower the threshold** for Signal A to `lo + 0.15*(hi-lo)` (from 0.30)
+    and add a hard rule: a frame adjacent (±expand) to any confirmed-present
+    frame is present. Bias-to-present.
+
+**(d) Spatial mask dilation in inpaint (kills 1-px edge leak).**
+Bump `dilate_px` for auto-detect segments from 6 → ~10, so the inpaint mask
+slightly overshoots the text outline (captions have outlines/shadows that
+extend a few px beyond the glyph).
+
+#### Tier 2 — OPTIONAL, no-OCR presence (if EasyOCR ever becomes a problem)
+
+The user asked "if OCR can't be perfect, find another way." Tier 1's Signal
+B is already OCR-independent for PRESENCE. If we also drop OCR for
+LOCALIZATION: the user already draws the band, so we don't need OCR to find
+WHERE. Run Signal B (temporal-stability × gradient) across the **full ROI**,
+and the vertical sub-band = the rows where stable-gradient pixels cluster.
+Result: a fully signal-based detector, no EasyOCR dependency, no model
+warm-up. Keep this as a fallback/experiment; Tier 1 (OCR for localization +
+Signal B for presence) is the recommended default because OCR localization
+is reliable and cheap.
+
+### 11.5 Files to touch
+
+- `server/services/caption_detector.py`
+  - `_presence_segments`: add Signal B (ring buffer + temporal-diff ×
+    gradient), OR the signals, full-width segments, `expand_s` dilation,
+    bigger bridge, lower threshold.
+  - `detect_caption_segments`: thread a `coverage` / `full_width` flag.
+- `server/workers/remix_pipeline.py` + `parallel_pipeline.py`
+  - `_stage_erase`: handle `coverage="thorough"` (skip detect, full-band
+    static inpaint). Bump `dilate_px` for auto segments. Pass the ROI width
+    through for full-width masks.
+- `server/routers/remix.py` + `routers/parallel.py` + `routers/auto.py`
+  - Accept an `erase_coverage` field (`"smart"` default | `"thorough"`).
+- Frontend: `src/components/parallel/parallel-processor.tsx` (+ /remix) —
+  a small select next to "Auto-detect captions": Smart / Thorough.
+
+### 11.6 New / changed params (document defaults inline)
+
+```
+# caption_detector._presence_segments
+PRESENCE_FPS        = 20.0     # unchanged
+EDGE_THR_FRAC       = 0.15     # was 0.30 — bias to present
+EXPAND_S            = 0.40     # NEW morphological grow each side
+BRIDGE_S            = 0.60     # was 0.30
+STABILITY_WINDOW    = 5        # frames in the ring buffer (Signal B)
+STABILITY_GRAD_MIN  = 40       # Sobel/Canny gradient floor for "text edge"
+STABILITY_DIFF_MAX  = 12       # max temporal abs-diff for "held still"
+STABILITY_MIN_PIX   = 0.01     # fraction of band pixels that must be
+                               # stable-gradient to call the frame "present"
+DILATE_PX (auto)    = 10       # was 6 — overshoot outlines/shadows
+```
+
+### 11.7 How to verify (don't ship without this)
+
+There's no substitute for looking at frames. Build a tiny verification
+harness (throwaway script, not committed):
+
+1. Pick 3 test clips: (a) the RO TikTok story (fade-in/out captions),
+   (b) a clip with long sentences (horizontal extent varies),
+   (c) a clip where the caption moves mid-clip.
+2. Run the eraser (Smart mode) on each.
+3. **Re-run OCR on the OUTPUT video** at full frame rate inside the ROI
+   band. If OCR finds ANY text with conf>0.3 in the band on ANY frame →
+   that's a leak; log the timestamp + dump the frame. Target: **zero leaks**.
+4. Also dump 10 evenly-spaced output frames per clip for eyeballing
+   (automated OCR can miss a faint ghost a human sees).
+5. Compare Smart vs Thorough: Smart should match Thorough's leak count
+   (zero) while inpainting fewer frames (faster).
+
+Acceptance: zero OCR-detected text in the band on the output for all 3
+clips, in both Smart and Thorough. Smart's inpaint frame-count < Thorough's
+(proves the presence detection still saves time).
+
+### 11.8 Effort + order
+
+1. **Tier 0 (Thorough)** — ~30 min. Ship first; gives a guaranteed-correct
+   option immediately and a baseline for the verification harness.
+2. **Verification harness** — ~45 min. Build before tuning Tier 1 so you can
+   measure leak objectively instead of guessing.
+3. **Tier 1 (a) full-width** — ~30 min. Biggest single robustness win,
+   simplest change.
+4. **Tier 1 (c) aggressive temporal morphology** — ~45 min. Kills boundary
+   leak.
+5. **Tier 1 (b) Signal B temporal-stability** — ~2h. The real engineering;
+   kills fade leak. Do last, measure with the harness.
+6. **Tier 1 (d) dilate_px bump** + UI select — ~30 min.
+
+Total ~5h. Tiers 0 + 1(a)(c)(d) alone (~2h) likely eliminate 90% of the
+leak; Signal B closes the fade gap.
+
+### 11.9 Commit messages
+
+- `feat(eraser): Thorough coverage mode — full-band inpaint, zero leak (T20.0)`
+- `feat(eraser): full-ROI-width caption masks — kill horizontal leak (T20.1a)`
+- `fix(eraser): aggressive temporal dilation of presence mask (T20.1c)`
+- `feat(eraser): temporal-stability presence signal — catch fade frames (T20.1b)`
+
+---
+
 End of plan.
