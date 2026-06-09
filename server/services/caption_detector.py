@@ -40,6 +40,8 @@ DISPLAY_SIM_MIN = 0.6      # text-similarity below this = a new display
 DISPLAY_GAP_S = 0.8       # time gap above this = a new display
 GLYPH_DILATE_PX = 4       # grow the glyph mask to cover outline/shadow edges
 GLYPH_LOCAL_THR = 28      # local-contrast threshold for a glyph/outline pixel
+GLYPH_LINE_BRIDGE = 0.9   # horizontal close kernel = this × text height (bridge
+                          # inter-word gaps into one line strip — anti-relic)
 BOX_STD_MAX = 25.0        # non-glyph colour std below this = a solid box style
 BOUND_EXPAND_S = 0.30     # extend each display's time bounds (cover fades)
 
@@ -428,6 +430,19 @@ def _glyph_or_box_mask(
             full[y0:y1, x0:x1] = 255            # solid box → erase whole rect
         else:
             full[y0:y1, x0:x1] = np.maximum(full[y0:y1, x0:x1], glyph)  # tight glyphs
+
+    # LINE-STRIP close (the anti-RELIC step). Bridge horizontal gaps between
+    # letters AND between adjacent WORD-boxes on the same line, so each caption
+    # line becomes one continuous covered strip instead of separate glyph/word
+    # islands. If a word is faint or barely detected, the strip still covers its
+    # position → no edge fragments left (this is exactly the "sco…nter" relic).
+    # Kernel width ≈ the median text height bridges normal inter-word gaps;
+    # vertical stays small (3px) so separate lines don't merge. The erased
+    # spaces inpaint to background — visually free.
+    if boxes and full.any():
+        med_h = int(np.median([max(1, h) for (_, _, _, h) in boxes]))
+        kw = max(3, int(med_h * GLYPH_LINE_BRIDGE))
+        full = cv2.morphologyEx(full, cv2.MORPH_CLOSE, np.ones((3, kw), np.uint8))
     return full
 
 
