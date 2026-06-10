@@ -4,6 +4,51 @@
 
 ---
 
+## 0. STANDING RULES — READ THIS FIRST AND OBEY EVERY SESSION
+
+**These rules are permanent and self-perpetuating. Future sessions inherit
+them automatically by reading this file. The user should NEVER have to
+re-state them; the model enforces them on itself.**
+
+### R1. Document EVERY meaningful action in this file (the handover), live.
+
+The instant you start a meaningful piece of work — a new feature, a fix,
+a refactor, a design exploration, a real-world test, anything beyond a
+trivial 1-line edit — you MUST add an entry to this handover file
+describing what you're about to do, WITHOUT WAITING FOR THE USER TO ASK.
+
+- Add it BEFORE or DURING the work (not as an afterthought 10 commits later).
+- Update it AGAIN when the work finishes — what was actually shipped, the
+  commit SHA(s), what was confirmed and what's still open / risky.
+- Use the latest session number (e.g. `## S5.x — short title`); create the
+  session header on your first edit of a fresh conversation.
+- Write the entry as if a different model will read it cold — name files,
+  commits, decisions, gotchas. No "see chat above"; the chat is gone for
+  the next session.
+- Mirror to root: after any update to `docs/session-handover.md`, run
+  `cp docs/session-handover.md SESSION-HANDOVER.md`. (Both files must
+  stay in sync — the root is the visible copy.)
+- Commit message for handover updates uses `docs(scope): …`.
+
+The user has made this a hard requirement: silent work that doesn't
+update this file is a process bug. If a session ends without entries
+describing what happened, the next session starts blind.
+
+### R2. R1 itself is permanent.
+
+This standing-rules section MUST be preserved verbatim in every future
+version of this file. If you reorganize the file, R1 stays exactly here
+at the top. Do NOT remove it, water it down, or move it below the
+session entries. Future-you reads this and obeys it the same way today-you
+does.
+
+### R3. Anything else marked "Standing rules" by the user gets added below.
+
+When the user says "add this as a rule" / "from now on…", append the new
+rule here as R4, R5, … with the same permanence as R1.
+
+---
+
 ## 0. Who/what/where
 
 - **User:** vlado, Windows + WSL2 setup
