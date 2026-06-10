@@ -1035,4 +1035,152 @@ segment's mask (as in S4.3 diagnostics) to see WHICH cause it is.
 
 ---
 
+# ════════════════════════════════════════════════════════════════════════
+# SESSION 5 — 2026-06-10 (anti-relic: transcript checklist + coverage audit)
+# ════════════════════════════════════════════════════════════════════════
+
+> Branch still `claude/parallel-processing`. Goal: kill the remaining
+> eraser relics (the S4.5 "91.mp4" class of leaks) while KEEPING the tight
+> per-word masks the user likes.
+
+## S5.0 — User request + accepted suggestion
+User: relics still appear from old captions; wants (1) zero relics,
+(2) detection as good as possible, (3) erase area as SMALL as possible
+(likes the per-word tight mask). User's suggestion (ACCEPTED — it closes
+the main hole): whisper's transcript is in the video's ORIGINAL language
+(already true — cleaning/translation happens later); use its word-level
+timestamps as a CHECKLIST — tick every spoken word off against the OCR'd
+displays, so we KNOW every caption word was seen and erased. An unticked
+word = OCR never saw that caption → guaranteed future relic → cover it.
+
+## S5.1 — Design (implementing now)
+Root causes from S4.5 mapped to fixes:
+ a. (display misses words) `detect_caption_displays` Pass 3 now builds each
+    display's mask from FIRST + BEST + LAST sample frames (each frame's own
+    boxes), OR-ed together — covers word-by-word "growing" captions where
+    the best frame lacks early/late words. Was: single best frame.
+ b. (checklist needs text) each display segment now carries `ocr_text`
+    (token union across its samples).
+ c. (band clips ascenders/descenders) `auto_locate_caption_band` vertical
+    pad is now proportional to the median detection height, not fixed 10px.
+ d. NEW `services/caption_audit.py::audit_caption_coverage()`:
+    - tick transcript words (diacritics-stripped fuzzy match) against
+      displays overlapping the word's time ±0.75s;
+    - unticked word OVER a display → display marked SUSPECT → its mask's
+      line-strips get expanded to full band WIDTH (height stays tight);
+    - unticked word with NO display → presence-gated fallback BAND segment
+      (plain rect, no mask — inpaint rasterizes rects natively);
+    - presence gate = edge-density in the band, calibrated against the
+      density measured during CONFIRMED displays, so a video with no
+      caption at that moment doesn't get a spurious erase;
+    - strong presence with no display also emits a fallback (catches
+      non-speech captions, e.g. sound-effect text).
+ e. `_stage_erase` wiring: new `transcript_words` param fed by
+    `_transcript_words_from_tx(tx_result)` from BOTH pipelines; audit runs
+    after detect, expands suspect masks, appends fallback segments.
+
+## S5.2 — Implementation status (live)
+All of S5.1 is implemented (not yet committed at the time of this entry):
+- `server/services/caption_audit.py` (NEW, ~250 lines) — `_norm()` strips
+  diacritics/punct (EN-model OCR mangles RO diacritics; whisper emits
+  them); `_ticked()` fuzzy containment or SequenceMatcher ≥ 0.72;
+  `_scan_band_density()` 10fps grab/retrieve Canny edge-density;
+  `_widen_suspect_mask()` row-projection → fill rows across band width;
+  `audit_caption_coverage()` orchestrates. Presence thresholds are
+  CALIBRATED: conf_dens = median density during confirmed displays,
+  idle = p20 of uncovered samples; thr_word = idle+0.35×(conf−idle);
+  thr_strong = max(thr_word, 0.85×conf). Fallback segs are plain rects
+  (no mask) — inpaint's `_build_segment_state` rasterizes rects natively.
+  Overlaps between fallback and display segs are safe: `_find_active_segment`
+  picks the first (earlier-start) seg; either way the area is covered.
+- `caption_detector.py`: Pass 3 builds per-display mask from FIRST+BEST+
+  LAST sample frames OR-ed (was best only); output segs carry `ocr_text`
+  (token union across samples); `auto_locate_caption_band` vertical pad
+  now max(10, 0.45×median_text_height).
+- `remix_pipeline.py`: `_transcript_words_from_tx()` helper; `_stage_erase`
+  gains `transcript_words=`; audit call after detect (tight path only),
+  wrapped in try/except (audit failure never kills the job). Both
+  call sites (remix + parallel) pass the words.
+- `server/scripts/test_s5_eraser.py` (NEW harness): full chain on a real
+  clip + baseline compare vs an old erase output. Found the user's 91.mp4
+  source at `data/media/906d89d5639f/video.mp4` (24.7s) with its old
+  `video_erased.mp4` for the baseline.
+- NOTE: utility-page eraser (`handle_erase`) does NOT get the audit (no
+  transcript there) — pipeline-only by design.
+
+## S5.3 — Standalone real test on the 91.mp4 source (user asked: no pipeline)
+Run 1 (results, then caveats): src=`data/media/906d89d5639f/video.mp4`
+(24.7s, EN). medium/cuda transcribe 12s → 68 words; auto-band
+{166,1415,747,181}; 28 displays; audit: 0 suspects, 0 fallbacks (OCR saw
+every word — checklist clean); inpaint 59s; re-OCR of band: **NEW = 0
+leaks, OLD baseline = 0 leaks too**.
+- Baseline 0 means the user's 91.mp4 relics are NOT OCR-detectable in this
+  band of the old erase → they're either outside the band, faint ghosts
+  that pass OCR, or in the other project (5f626d60c353). Run 2 adds a
+  FULL-FRAME scan of old+new and eyeball frame dumps to find them.
+- GOTCHA (cost me the run): writing test output to /tmp in WSL — the
+  distro auto-shuts down between wsl.exe invocations and /tmp is WIPED.
+  Write test artifacts to /mnt/f (now `data/temp/s5_test/`).
+- Run 1's log had h264 "Invalid NAL unit size" decode errors during the
+  verify scan — couldn't re-check the file (wiped). Run 2 counts decoded
+  frames src vs out to prove encode integrity.
+
+Run 2 (artifacts in `data/temp/s5_test/`): encode integrity PROVEN
+(src=740 out=740 frames — the NAL stderr noise is just ffmpeg/OpenCV
+decoder chatter, file is fine). Band re-OCR: old=0, new=0 leaks. The
+full-frame "leaks" at t=13.2–14.0s are a THERMOMETER PROP in the scene
+("TEMPERATURE 212°F") — legit scene text in BOTH old and new, correctly
+NOT erased (eyeballed `leak_new_full_000396.png`). Midpoint eyeball frames
+are visually clean (no ghost outlines).
+
+Remaining hypothesis for the user's relics: the 5fps verify scan can MISS
+relics that flash 2–3 frames at display transitions. Launched
+`server/scripts/s5_scan_every_frame.py` (NEW) — OCR of the band on EVERY
+frame (740/video) over: new erased, old erased (906d89d5639f), old erased
+(5f626d60c353). Results pending below.
+
+## S5.4 — ROOT CAUSE FOUND (every-frame scan) + the real fix
+The every-frame scan nailed it: **21 leaks (new) vs 22 (old)** — all
+2–4-frame FLASHES at display TRANSITIONS ('SCO' f9-11, 'into …' f302-305,
+'which muobed it' f359, 'er' f542-545, …). The S4 "0 leaks" was an
+artifact of verifying at 5fps — the flashes live BETWEEN the samples.
+
+Mechanism (proven): Step E extended display i forward to display i+1's
+start and i+1 backward to i's end → the extensions OVERLAP in the gap, and
+`_find_active_segment` picks the FIRST (= i) → the frames right after a
+text switch get erased with the OLD text's mask while the NEW text is
+already on screen → flash relic. The S4.5 candidate (d) was the right one.
+
+Fixes implemented (caption_detector.py + caption_audit.py):
+ 1. **Bridge segments** (`_bridge_segment`): displays keep their sampled
+    bounds; each inter-display gap ≤ max(0.45s, 2.2×sample_period) gets a
+    bridge whose mask = band-WIDE strip over BOTH neighbours' text rows
+    (+30% row dilation for pop-in animations). Whichever text is on screen
+    during the uncertain frames — covered. Clip head: first display starts
+    1.5 sample periods earlier; tail similar. Large gaps get a NON-
+    overlapping ±0.30s expansion (capped at gap/2).
+ 2. **OCR probes in the audit**: uncovered windows (complement of all
+    display+bridge windows) get 1–3 direct OCR probes each (band crop, one
+    shared decode pass with the density scan). Any readable text → fallback
+    band segment around the hit. Replaces threshold-guessing with direct
+    evidence; the 10fps presence runs still catch flashes between probes
+    (word-hit OR strong-density gated, as before).
+
+## S5.5 — FINAL RESULT: 0 leaks on EVERY frame (proven)
+Run 3 on the 91.mp4 source (`data/temp/s5_test/run3.log`, `everyframe3.log`):
+- 28 displays + **27 bridges = 55 segments**; audit: 0 suspects, 0 fallbacks
+  (checklist + probes clean — detection itself was complete this time).
+- inpaint 74s (was 59s — bridges add ~25%); encode integrity 740/740.
+- **EVERY-FRAME re-OCR of the band: 740 frames, 0 leaks** (was 21 new / 22
+  old before the bridge fix). Eyeballed the previously-leaking frames
+  (f9/f303/f359/f543) — visually spotless, no ghosts.
+- Full-frame hits = only the THERMOMETER prop ("TEMPERATURE 212°F"),
+  legit scene text correctly preserved.
+- 12/12 smoke tests pass after the changes.
+Verification protocol for the future: ALWAYS verify with the every-frame
+scan (`server/scripts/s5_scan_every_frame.py X Y W H VIDEO`) — the 5fps
+scan hides transition flashes (that's how S4 wrongly concluded "0 leaks").
+
+---
+
 End of handover.
