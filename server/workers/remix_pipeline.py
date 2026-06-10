@@ -241,6 +241,23 @@ def _speech_intervals_from_tx(tx_result: Dict[str, Any]) -> List[tuple]:
     return out
 
 
+def _transcript_words_from_tx(tx_result: Dict[str, Any]) -> List[dict]:
+    """Word-level timestamps (original language) from a transcribe result —
+    the eraser's coverage audit ticks each spoken word off against the OCR'd
+    caption displays. Empty list if whisper produced no word timing."""
+    out: List[dict] = []
+    for seg in (tx_result.get("segments") or []):
+        for w in (seg.get("words") or []):
+            word = (w.get("word") or "").strip()
+            try:
+                s = float(w.get("start")); e = float(w.get("end"))
+            except (TypeError, ValueError):
+                continue
+            if word and e >= s:
+                out.append({"word": word, "start": s, "end": e})
+    return out
+
+
 async def _stage_transcribe(video_path: Path, slc: _Sliced) -> Dict[str, Any]:
     from services.transcriber import transcribe
 
@@ -279,6 +296,7 @@ async def _stage_erase(
     is_cancelled: Optional[Callable[[], bool]] = None,
     coverage: str = "tight",   # tight | band | thorough (T20)
     speech_intervals: Optional[List[tuple]] = None,  # (start,end) s — for auto-localize
+    transcript_words: Optional[List[dict]] = None,   # whisper word timing — audit checklist
 ) -> Path:
     """Run the eraser on a single rect or auto-detected time-varying segments.
 
@@ -419,6 +437,26 @@ async def _stage_erase(
             )
             detected_segments = None
         else:
+            # Anti-relic coverage audit: tick every transcript word off against
+            # the OCR'd displays; widen suspect masks + add presence-gated
+            # fallback band segments for anything OCR never saw.
+            if coverage == "tight":
+                try:
+                    from services.caption_audit import audit_caption_coverage
+                    extra = await loop.run_in_executor(
+                        None,
+                        lambda: audit_caption_coverage(
+                            str(video_path), roi=roi, segments=detected_segments,
+                            transcript_words=transcript_words,
+                            on_progress=_det_progress,
+                        ),
+                    )
+                    if extra:
+                        detected_segments.extend(extra)
+                        detected_segments.sort(key=lambda s: s["start_t"])
+                        logger.info(f"coverage audit added {len(extra)} fallback segment(s)")
+                except Exception:
+                    logger.exception("coverage audit failed; using detected segments as-is")
             await slc.update(
                 0.40,
                 f"Detected {len(detected_segments)} caption segment(s) — inpainting…",
@@ -897,6 +935,7 @@ async def handle_remix_pipeline(
             is_cancelled=(lambda: queue.is_cancelled(job_id)),
             coverage=cfg.get("erase_coverage", "tight"),
             speech_intervals=speech_intervals,
+            transcript_words=_transcript_words_from_tx(tx_result),
         )
     )
     audio_task = asyncio.create_task(

@@ -541,15 +541,20 @@ def detect_caption_displays(
     logger.info(f"detect_caption_displays: {len(samples)} text samples → "
                 f"{len(displays)} displays")
 
-    # Pass 3: build each display's tight mask from its BEST frame. We decode
-    # the video SEQUENTIALLY (not cap.set(POS_FRAMES) — index seeking lands on
-    # the nearest keyframe on long-GOP mp4, so the mask would be built from the
-    # WRONG frame's text and leak). Build the mask the moment we reach the
-    # needed frame, then discard it (low memory).
-    need: dict = {}   # best frame_idx → display
-    for disp in displays:
-        need.setdefault(disp["best"]["fidx"], disp)
-    built: dict = {}  # frame_idx → (mask, bbox)
+    # Pass 3: build each display's tight mask. We decode the video
+    # SEQUENTIALLY (not cap.set(POS_FRAMES) — index seeking lands on the
+    # nearest keyframe on long-GOP mp4, so the mask would be built from the
+    # WRONG frame's text and leak). Each display's mask is the OR of masks
+    # built at its FIRST, BEST and LAST sampled frames (each frame's own
+    # boxes) — word-by-word captions GROW during a display window, and the
+    # best frame alone can miss the early/late words (an S4.5 relic cause).
+    need: dict = {}   # frame_idx → list of (display_idx, sample)
+    for di, disp in enumerate(displays):
+        reps = {s["fidx"]: s
+                for s in (disp["samples"][0], disp["best"], disp["samples"][-1])}
+        for fidx, s in reps.items():
+            need.setdefault(fidx, []).append((di, s))
+    acc: dict = {}    # display_idx → accumulated mask
     cap = cv2.VideoCapture(video_path)
     fpos = 0
     remaining = set(need.keys())
@@ -558,48 +563,108 @@ def detect_caption_displays(
         if not ret:
             break
         if fpos in remaining:
-            disp = need[fpos]
-            boxes = [(d.x, d.y, d.w, d.h) for d in disp["best"]["dets"]]
-            mask = _glyph_or_box_mask(frame, boxes, vw, vh)
-            ys, xs = np.where(mask > 0)
-            if xs.size:
-                built[fpos] = (mask, (int(xs.min()), int(ys.min()),
-                                      int(xs.max()), int(ys.max())))
+            for di, s in need[fpos]:
+                boxes = [(d.x, d.y, d.w, d.h) for d in s["dets"]]
+                mask = _glyph_or_box_mask(frame, boxes, vw, vh)
+                acc[di] = np.maximum(acc[di], mask) if di in acc else mask
             remaining.discard(fpos)
         fpos += 1
     cap.release()
 
     out: List[dict] = []
-    for disp in displays:
-        fidx = disp["best"]["fidx"]
-        if fidx not in built:
+    for di, disp in enumerate(displays):
+        mask = acc.get(di)
+        if mask is None or not mask.any():
             continue
-        mask, (x0, y0, x1, y1) = built[fidx]
+        ys, xs = np.where(mask > 0)
+        x0, y0, x1, y1 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+        # Token union across the display's samples — the coverage audit
+        # (services/caption_audit.py) ticks transcript words off against this.
+        toks: List[str] = []
+        seen: set = set()
+        for s in disp["samples"]:
+            for tk in s["text"].split():
+                k = tk.lower()
+                if k not in seen:
+                    seen.add(k)
+                    toks.append(tk)
         out.append({
             "start_t": max(0.0, disp["samples"][0]["t"]),
             "end_t": disp["samples"][-1]["t"],
             "x": x0, "y": y0, "w": max(1, x1 - x0 + 1), "h": max(1, y1 - y0 + 1),
             "mask": mask,
             "mask_kind": "tight",
+            "ocr_text": " ".join(toks),
         })
     out.sort(key=lambda s: s["start_t"])
 
-    # T20 Step E — fade/boundary completeness. Extend each display's time
-    # bounds outward by BOUND_EXPAND_S so the (reused) tight mask also covers
-    # fade-in/out frames. Clamp into the GAP to the neighbouring display so two
-    # adjacent displays (different masks) never overlap in time — in the
-    # overlap zone _find_active_segment would pick one mask and the other text
-    # would leak.
+    # Step E (S5 rewrite) — boundary completeness via BRIDGE segments.
+    # The old approach extended each display ±BOUND_EXPAND_S clamped to its
+    # neighbours, but the extensions overlapped in the inter-display gap and
+    # _find_active_segment picks the FIRST (= previous) display — so the few
+    # frames after a text switch were erased with the OLD text's mask while
+    # the NEW text flashed as a relic (proven by an every-frame re-OCR scan:
+    # 2–4-frame flashes exactly at display transitions). Now displays keep
+    # their sampled bounds and each small inter-display gap gets a BRIDGE
+    # whose mask is a band-wide strip over BOTH neighbours' text rows —
+    # whichever text is on screen during the uncertain frames, it's covered.
+    # Large gaps (a real caption pause) keep a modest non-overlapping
+    # expansion; the coverage audit OCR-probes their middles.
+    sample_period = step / fps
+    bridge_max_gap = max(0.45, 2.2 * sample_period)
+    bridges: List[dict] = []
     for i, seg in enumerate(out):
-        prev_end = out[i - 1]["end_t"] if i > 0 else -1e9
-        next_start = out[i + 1]["start_t"] if i + 1 < len(out) else 1e9
-        new_start = max(seg["start_t"] - BOUND_EXPAND_S, prev_end)
-        new_end = min(seg["end_t"] + BOUND_EXPAND_S, next_start)
-        seg["start_t"] = max(0.0, min(new_start, seg["start_t"]))
-        seg["end_t"] = max(seg["end_t"], new_end)
+        if i == 0:
+            # Text can pop in a few frames before the first sample that saw it.
+            seg["start_t"] = max(0.0, seg["start_t"] - max(BOUND_EXPAND_S, 1.5 * sample_period))
+        if i + 1 < len(out):
+            nxt = out[i + 1]
+            gap = nxt["start_t"] - seg["end_t"]
+            if 0 < gap <= bridge_max_gap:
+                br = _bridge_segment(seg, nxt, rx, rx2, vw, vh)
+                if br:
+                    bridges.append(br)
+            elif gap > bridge_max_gap:
+                pad = min(BOUND_EXPAND_S, gap / 2)
+                seg["end_t"] += pad
+                nxt["start_t"] = max(0.0, nxt["start_t"] - pad)
+        else:
+            seg["end_t"] += max(BOUND_EXPAND_S, 1.5 * sample_period)
+    out.extend(bridges)
+    out.sort(key=lambda s: s["start_t"])
 
-    logger.info(f"detect_caption_displays: produced {len(out)} tight-mask segments")
+    logger.info(f"detect_caption_displays: produced {len(out)} segments "
+                f"({len(bridges)} bridges)")
     return out
+
+
+def _bridge_segment(
+    a: dict, b: dict, rx: int, rx2: int, vw: int, vh: int
+) -> Optional[dict]:
+    """Mask for the uncertainty window between displays `a` and `b`: a
+    band-wide strip spanning both displays' text rows (dilated ~30% for
+    pop-in/scale animations). Height stays tight; the strip inpaints to
+    background — visually free for the 1–6 frames it lives."""
+    rows = None
+    for seg in (a, b):
+        m = seg.get("mask")
+        if m is None:
+            continue
+        r = m.any(axis=1)
+        rows = r if rows is None else (rows | r)
+    if rows is None or not rows.any():
+        return None
+    ys = np.where(rows)[0]
+    span = int(ys.max() - ys.min() + 1)
+    y0 = max(0, int(ys.min()) - int(0.3 * span) - 4)
+    y1 = min(vh, int(ys.max()) + int(0.3 * span) + 4)
+    full = np.zeros((vh, vw), dtype=np.uint8)
+    full[y0:y1, rx:rx2] = 255
+    return {
+        "start_t": a["end_t"], "end_t": b["start_t"],
+        "x": rx, "y": y0, "w": max(1, rx2 - rx), "h": max(1, y1 - y0),
+        "mask": full, "mask_kind": "bridge",
+    }
 
 
 # ── T20 Step D — auto-localize the caption band (no manual box) ──────────────
@@ -742,11 +807,16 @@ def auto_locate_caption_band(
     xs1 = np.array([d.x + d.w for d in best_lane.detections], dtype=np.float32)
     ys0 = np.array([d.y for d in best_lane.detections], dtype=np.float32)
     ys1 = np.array([d.y + d.h for d in best_lane.detections], dtype=np.float32)
-    pad = 10
-    x0 = max(0, int(np.percentile(xs0, 5)) - pad)
-    y0 = max(0, int(np.percentile(ys0, 5)) - pad)
-    x1 = min(vw, int(np.percentile(xs1, 95)) + pad)
-    y1 = min(vh, int(np.percentile(ys1, 95)) + pad)
+    # Vertical pad scales with the text height — a fixed 10px clipped
+    # ascenders/descenders/outlines on large caption fonts, and the clipped
+    # edge survived the erase as a thin readable relic (an S4.5 cause).
+    med_h = float(np.median(ys1 - ys0))
+    pad_x = 10
+    pad_y = max(10, int(round(med_h * 0.45)))
+    x0 = max(0, int(np.percentile(xs0, 5)) - pad_x)
+    y0 = max(0, int(np.percentile(ys0, 5)) - pad_y)
+    x1 = min(vw, int(np.percentile(xs1, 95)) + pad_x)
+    y1 = min(vh, int(np.percentile(ys1, 95)) + pad_y)
     roi = {"x": x0, "y": y0, "w": max(1, x1 - x0), "h": max(1, y1 - y0)}
     logger.info(f"auto_locate_caption_band: lane at {roi} (score={best_score:.1f})")
     return roi
