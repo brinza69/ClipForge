@@ -1242,6 +1242,17 @@ have the user paste a JSON.stringify one-liner in the Console — got
 naturalWidth (image loaded), clientWidth 0 (layout collapsed), computed
 aspect-ratio (style applied) in one shot.
 
+CRITICAL GENERALIZATION of the S3.7 lesson: **Turbopack dev (WSL) does
+NOT see frontend file edits made from the Windows side** — inotify is
+dead on /mnt/f, same as uvicorn --reload. HMR never fires and the dev
+server keeps serving the previous compilation. EVERY frontend edit in
+this setup needs `./dev.sh stop && rm -rf .next && ./dev.sh start` (or at
+minimum a frontend restart) + a tab reload to become visible. This cost
+two rounds of "tot asa apare" with the user before being spotted.
+Also seen in the user's console: `fdprocessedid` attributes injected by a
+browser extension (IDM-style form filler) → React hydration warnings on
+localhost; harmless for this bug but worth disabling for localhost.
+
 ## S5.8 — TikTok auto-posting (DESIGN ONLY — user rules)
 User wants the LAST automation mile: after parts are produced → schedule
 to TikTok at user-preset daily hours. TWO HARD RULES from the user:
