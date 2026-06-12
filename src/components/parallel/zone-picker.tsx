@@ -174,14 +174,24 @@ export function ZonePicker({
 
       <div className="relative mx-auto" style={{ maxWidth: "400px" }}>
         {preview.thumbnail_url && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            ref={imgRef}
-            src={preview.thumbnail_url}
-            alt="thumb"
-            className="block w-full rounded-md bg-black"
-            onLoad={draw}
-          />
+          // The thumbnail's aspect can differ from the video's (YouTube
+          // Shorts thumbs are 16:9 with the 9:16 video pillarboxed between
+          // blurred bars; TikTok thumbs are full 9:16). Force the box to the
+          // VIDEO's aspect and cover-crop the image so the preview always
+          // fills the picker like the video will.
+          <div
+            className="relative w-full overflow-hidden rounded-md bg-black"
+            style={{ aspectRatio: `${preview.width || 9} / ${preview.height || 16}` }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              ref={imgRef}
+              src={preview.thumbnail_url}
+              alt="thumb"
+              className="absolute inset-0 h-full w-full object-cover"
+              onLoad={draw}
+            />
+          </div>
         )}
         <canvas
           ref={canvasRef}

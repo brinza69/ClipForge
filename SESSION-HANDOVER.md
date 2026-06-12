@@ -1219,6 +1219,35 @@ unmerged delta vs main: the S4+S5 eraser overhaul AND the late-S3
 hardening tail (T8+ — SSE, smoke tests, secret storage, captioner split…)
 because PR #21 was merged on 2026-06-07 BEFORE those were pushed.
 
+## S5.7 — Zone-picker preview fix (YouTube Shorts thumbs)
+User reported the picker preview "isn't fullscreen anymore". NOT a code
+regression — first time a YOUTUBE Shorts URL was used: YouTube thumbs are
+16:9 with the 9:16 video pillarboxed between blurred bars (TikTok thumbs
+are full 9:16, which is all we'd used before). Fix in BOTH pickers
+(`components/parallel/zone-picker.tsx` + the duplicated one in
+`app/remix/page.tsx`): wrap the img in a box forced to the VIDEO's aspect
+(`aspectRatio: width/height` from the preview meta) with
+`object-fit: cover` — crops the blur bars, fills the picker; no-op for
+TikTok. Rect mapping unchanged (getRenderedRect now sees a matching
+aspect → full-area render). tsc clean. NOTE: frontend tsc must run in WSL
+(`node_modules` is Linux-installed): `wsl … node_modules/.bin/tsc --noEmit`.
+
+## S5.8 — TikTok auto-posting (DESIGN ONLY — user rules)
+User wants the LAST automation mile: after parts are produced → schedule
+to TikTok at user-preset daily hours. TWO HARD RULES from the user:
+(1) implement NOTHING until they explicitly confirm; (2) the account must
+NOT be flagged as a bot. Options laid out (in chat):
+ 1. Official Content Posting API + internal ClipForge scheduler — zero
+    bot risk; needs TikTok developer app + audit (unaudited = posts go
+    PRIVATE/Only-Me only); days-weeks of bureaucracy.
+ 2. Browser automation of the user's REAL Chrome session that only
+    UPLOADS+SCHEDULES via TikTok's native web scheduler (≤10 days ahead),
+    one human-paced session/day — small but NON-zero detection risk.
+ 3. Semi-auto "Posting queue" page (ClipForge preps everything, user
+    drags + pastes ~2 min/day) — zero risk, one day of work.
+Recommended 3 now + apply for 1 in parallel; 2 only as plan B. AWAITING
+the user's choice — do not build any of it without their explicit OK.
+
 ---
 
 End of handover.
