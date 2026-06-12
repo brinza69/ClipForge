@@ -815,7 +815,10 @@ export default function RemixPage() {
               </Button>
             </div>
           </div>
-          <div className="relative mx-auto" style={{ maxWidth: "400px" }}>
+          {/* w-full is load-bearing: with only mx-auto the div shrinks to fit
+              its content, and the aspect-ratio box below derives its width
+              FROM this div — circular → 0px. */}
+          <div className="relative mx-auto w-full" style={{ maxWidth: "400px" }}>
             {preview.thumbnail_url && (
               // The thumbnail's aspect can differ from the video's (YouTube
               // Shorts thumbs are 16:9 with the 9:16 video pillarboxed
