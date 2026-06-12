@@ -1232,6 +1232,16 @@ TikTok. Rect mapping unchanged (getRenderedRect now sees a matching
 aspect → full-area render). tsc clean. NOTE: frontend tsc must run in WSL
 (`node_modules` is Linux-installed): `wsl … node_modules/.bin/tsc --noEmit`.
 
+FOLLOW-UP BUG (caught live with the user via a console one-liner): after
+the fix the picker rendered 0×0 — the wrapper div had only `mx-auto` +
+max-width, which inside the Card's flex column shrinks to fit content;
+the aspect-ratio box derives its width FROM the wrapper → circular → 0px.
+The old <img> had an intrinsic width that masked this. Fix: `w-full` on
+the wrapper (both pickers), commit 6d6479a. Debug protocol that worked:
+have the user paste a JSON.stringify one-liner in the Console — got
+naturalWidth (image loaded), clientWidth 0 (layout collapsed), computed
+aspect-ratio (style applied) in one shot.
+
 ## S5.8 — TikTok auto-posting (DESIGN ONLY — user rules)
 User wants the LAST automation mile: after parts are produced → schedule
 to TikTok at user-preset daily hours. TWO HARD RULES from the user:
