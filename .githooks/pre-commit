@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# ClipForge pre-commit hook — blocks commits that break the TypeScript build.
+#
+# Activated by `git config core.hooksPath .githooks` (the package.json
+# "prepare" script does this on `npm install`; you can also run it manually).
+#
+# Skips when there are no staged .ts/.tsx changes, so backend-only commits
+# aren't slowed down. Bypass in an emergency with `git commit --no-verify`.
+
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# Any staged TypeScript files?
+staged_ts="$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx)$' || true)"
+if [ -z "$staged_ts" ]; then
+  exit 0
+fi
+
+TSC="node_modules/typescript/bin/tsc"
+if [ ! -f "$TSC" ]; then
+  echo "pre-commit: typescript not installed (node_modules/typescript missing) — skipping check"
+  exit 0
+fi
+
+echo "pre-commit: running tsc --noEmit on the project…"
+if ! node "$TSC" --noEmit; then
+  echo ""
+  echo "✗ pre-commit: TypeScript errors above. Fix them, or bypass with 'git commit --no-verify'."
+  exit 1
+fi
+echo "✓ pre-commit: TypeScript clean."
+exit 0

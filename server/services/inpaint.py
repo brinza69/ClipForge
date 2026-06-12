@@ -34,6 +34,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Literal, Optional
@@ -63,6 +64,37 @@ _LAMA_BATCH_ENV = os.environ.get("CLIPFORGE_LAMA_BATCH")
 _LAMA_BATCH = max(1, int(_LAMA_BATCH_ENV)) if _LAMA_BATCH_ENV else 16
 
 _NVENC_CACHE: dict[str, bool] = {}
+
+# ── Degenerate-patch repair (S5) ─────────────────────────────────────────────
+# On bright high-dynamic scenes (fire), LaMa occasionally hallucinates a small
+# dark garbage block inside the masked area instead of continuing the
+# background (seen as 2 black squares where "the salt" was erased). Detector:
+# a connected blob of masked pixels that is MUCH darker than the ring of
+# unmasked pixels around the mask. Repair: redo that frame's mask with
+# diffusion inpaint (telea), which cannot hallucinate. Runs per LaMa output
+# frame (~1ms on a caption ROI); legit dark fills next to dark surroundings
+# never trigger (the ring is dark too).
+_REPAIR_DARK_DELTA = 75   # blob must be this much darker than the ring mean
+_REPAIR_MIN_AREA = 64     # ignore specks below this many pixels
+
+
+def _patch_degenerate(patch_bgr: np.ndarray, mask_roi: np.ndarray) -> bool:
+    """True when a LaMa output patch contains a dark garbage blob inside the
+    mask, judged against the brightness just outside the mask."""
+    m = mask_roi > 0
+    if not m.any():
+        return False
+    gray = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2GRAY)
+    ring = (cv2.dilate(mask_roi, np.ones((15, 15), np.uint8)) > 0) & ~m
+    if not ring.any():
+        return False
+    ring_mean = float(gray[ring].mean())
+    dark = ((gray < ring_mean - _REPAIR_DARK_DELTA) & m).astype(np.uint8)
+    if int(dark.sum()) < _REPAIR_MIN_AREA:
+        return False
+    n, _lbl, stats, _c = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    return any(int(stats[k, cv2.CC_STAT_AREA]) >= _REPAIR_MIN_AREA
+               for k in range(1, n))
 
 
 def _resolve_ffmpeg() -> str:
@@ -219,8 +251,23 @@ def _build_segment_state(
     roi_h = ry2 - ry
     roi_w = rx2 - rx
 
+    # T20: a segment may carry an arbitrary full-frame `mask` (tight per-glyph
+    # or box mask). When present, crop it to this ROI instead of filling the
+    # whole rectangle — that's what makes the erase minimal/clear. Falls back
+    # to the filled rectangle (legacy behaviour) when no mask is given.
+    seg_mask = seg.get("mask")
     mask_roi = np.zeros((roi_h, roi_w), dtype=np.uint8)
-    mask_roi[my - ry : my - ry + mh, mx - rx : mx - rx + mw] = 255
+    used_arbitrary = False
+    if seg_mask is not None:
+        try:
+            sub = np.asarray(seg_mask)[ry:ry2, rx:rx2]
+            if sub.shape[:2] == (roi_h, roi_w) and sub.any():
+                mask_roi = (sub > 0).astype(np.uint8) * 255
+                used_arbitrary = True
+        except Exception:
+            used_arbitrary = False
+    if not used_arbitrary:
+        mask_roi[my - ry : my - ry + mh, mx - rx : mx - rx + mw] = 255
     if dilate_px > 0:
         k = np.ones((dilate_px, dilate_px), np.uint8)
         mask_roi = cv2.dilate(mask_roi, k, iterations=1)
@@ -264,11 +311,17 @@ async def inpaint_region(
     dilate_px: int = 6,
     inpaint_radius: int = 5,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> str:
     """
     Seamlessly remove one or more rectangular regions from a video.
 
     Audio from the original is muxed back into the output.
+
+    `is_cancelled`, if provided, is polled each frame; when it returns True the
+    ffmpeg decode/encode subprocesses are killed and JobCancelledError is
+    raised so the pipeline stops promptly (asyncio task.cancel() alone can't
+    interrupt this run_in_executor thread).
     """
 
     def _run() -> str:
@@ -413,6 +466,7 @@ async def inpaint_region(
         batch_seg: Optional[_SegState] = None
         frame_buf: list[np.ndarray] = []
         roi_rgb_buf: list[np.ndarray] = []
+        repair_count = [0]  # frames whose LaMa patch was redone with telea
 
         def _flush_lama_batch() -> bool:
             """Flush the current LaMa batch (same segment). Returns False on pipe error."""
@@ -433,7 +487,15 @@ async def inpaint_region(
             out = (out * 255.0).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
             out = out[:, :seg.roi_h, :seg.roi_w, ::-1]  # crop padding + RGB->BGR
             for i, f in enumerate(frame_buf):
-                f[seg.ry:seg.ry2, seg.rx:seg.rx2] = out[i]
+                patch = out[i]
+                if _patch_degenerate(patch, seg.mask_roi):
+                    # LaMa hallucinated a dark garbage block — redo this
+                    # frame's mask with diffusion inpaint instead.
+                    orig_roi = f[seg.ry:seg.ry2, seg.rx:seg.rx2]
+                    patch = cv2.inpaint(orig_roi, seg.mask_roi,
+                                        inpaint_radius, cv2.INPAINT_TELEA)
+                    repair_count[0] += 1
+                f[seg.ry:seg.ry2, seg.rx:seg.rx2] = patch
                 try:
                     enc.stdin.write(f.tobytes())
                 except (BrokenPipeError, OSError) as e:
@@ -450,9 +512,37 @@ async def inpaint_region(
                     return s
             return None
 
+        # Wall-clock safety cap for the whole decode→inpaint→encode stream.
+        # Popen has no `timeout=`, so without this a wedged ffmpeg would hang
+        # the job forever. 1h is a huge margin: a 3-min clip inpaints in ~5min
+        # on GPU; only a genuine deadlock hits this.
+        _INPAINT_MAX_S = 3600.0
+        _inpaint_start = time.time()
+
         frame_idx = 0
         try:
             while True:
+                if time.time() - _inpaint_start > _INPAINT_MAX_S:
+                    try:
+                        dec.kill(); enc.kill()
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"Inpaint exceeded {int(_INPAINT_MAX_S)}s wall clock "
+                        f"({frame_idx}/{total} frames) — aborting."
+                    )
+                # Poll for user cancellation between frames so a cancel takes
+                # effect within a frame or two instead of after the whole
+                # (potentially minutes-long) inpaint finishes.
+                if is_cancelled is not None and is_cancelled():
+                    try:
+                        dec.kill(); enc.kill()
+                    except Exception:
+                        pass
+                    from job_queue import JobCancelledError
+                    raise JobCancelledError(
+                        f"Inpaint cancelled by user at {frame_idx}/{total} frames"
+                    )
                 buf = dec.stdout.read(frame_nbytes)
                 if not buf or len(buf) < frame_nbytes:
                     # Final flush before exit
@@ -519,8 +609,15 @@ async def inpaint_region(
             except Exception:
                 pass
 
-        dec_rc = dec.wait()
-        enc_rc = enc.wait()
+        # Bounded waits so a wedged ffmpeg at EOF can't hang the worker.
+        try:
+            dec_rc = dec.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            dec.kill(); dec_rc = dec.wait()
+        try:
+            enc_rc = enc.wait(timeout=300)
+        except subprocess.TimeoutExpired:
+            enc.kill(); enc_rc = enc.wait()
         dec_drainer.join(timeout=10)
         enc_drainer.join(timeout=10)
         dec_err = b"".join(dec_stderr_buf).decode("utf-8", errors="replace")
@@ -538,7 +635,12 @@ async def inpaint_region(
             tail = "\n".join(enc_err.strip().splitlines()[-8:])
             raise RuntimeError(f"inpaint output missing/too small. ffmpeg:\n{tail}")
 
-        logger.info(f"Inpaint done: {frame_idx} frames, {out.stat().st_size // 1024} KB")
+        repaired = repair_count[0]
+        logger.info(
+            f"Inpaint done: {frame_idx} frames, {out.stat().st_size // 1024} KB"
+            + (f", {repaired} degenerate LaMa patches repaired with telea"
+               if repaired else "")
+        )
         return str(out)
 
     loop = asyncio.get_event_loop()

@@ -48,6 +48,8 @@ from workers.remix_pipeline import (
     _stage_erase,
     _stage_match_and_caption,
     _stage_transcribe,
+    _speech_intervals_from_tx,
+    _transcript_words_from_tx,
     synth_voice_from_text,
 )
 
@@ -116,7 +118,7 @@ def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") ->
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(dst),
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=600)
         if r.returncode == 0 and dst.exists():
             out.append({
                 "part": k + 1, "of": total, "path": str(dst), "filename": dst.name,
@@ -222,6 +224,10 @@ async def handle_parallel_pipeline(
         mode=cfg.get("erase_mode", "inpaint"),
         algorithm=cfg.get("erase_algorithm", "telea"),
         auto_detect=bool(cfg.get("erase_auto_detect", False)),
+        is_cancelled=(lambda: queue.is_cancelled(job_id)),
+        coverage=cfg.get("erase_coverage", "tight"),
+        speech_intervals=_speech_intervals_from_tx(tx_result),
+        transcript_words=_transcript_words_from_tx(tx_result),
     )
 
     # ── Shared stage 4 — clean transcript ONCE (0.40–0.48) ─────────────────

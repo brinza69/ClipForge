@@ -1,5 +1,17 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## ClipForge
+
+Local AI video clipping studio. Frontend (Next.js, port 3000) + backend
+(FastAPI, port 8420). Run both with `./dev.sh start`.
+
+- **API reference:** [docs/api.md](docs/api.md) — `/auto`, `/sheets`,
+  `/drive-auth`, `/transcript/device`, jobs, presets, pipelines. FastAPI also
+  auto-generates interactive docs at `http://localhost:8420/docs` when the
+  backend is running.
+- **Session history / architecture:** [docs/session-handover.md](docs/session-handover.md)
+- **Roadmap / open improvements:** [docs/improvement-plan.md](docs/improvement-plan.md)
+
 ## Getting Started
 
 First, run the development server:

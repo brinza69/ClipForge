@@ -65,6 +65,7 @@ def probe_duration(path: str) -> float:
             str(path),
         ],
         capture_output=True, text=True, creationflags=_creationflags(),
+        timeout=60,
     )
     if r.returncode != 0 or not r.stdout.strip():
         raise RuntimeError(f"ffprobe duration failed for {path}: {r.stderr[-300:]}")
@@ -120,6 +121,7 @@ def compute_speed_plan(video_path: str, voice_path: str) -> dict:
              "-show_entries", "stream=avg_frame_rate",
              "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
             capture_output=True, text=True, creationflags=_creationflags(),
+            timeout=60,
         ).stdout.strip()
         num, den = fps_str.split("/", 1) if "/" in fps_str else (fps_str, "1")
         src_fps = (float(num) / max(1.0, float(den))) if den else 30.0

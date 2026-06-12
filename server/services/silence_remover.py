@@ -202,6 +202,7 @@ def _extract_audio_for_detection(video_path: str, temp_wav: str) -> None:
          "-vn", "-ac", "1", "-ar", "16000", temp_wav],
         capture_output=True, text=True,
         creationflags=_creationflags(),
+        timeout=300,
     )
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg audio-extract failed: {r.stderr[-500:]}")
@@ -268,6 +269,7 @@ def _remove_silence_video(
     ]
     r = subprocess.run(
         cmd, capture_output=True, text=True, creationflags=_creationflags(),
+        timeout=1800,
     )
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg cut failed: {r.stderr[-800:]}")

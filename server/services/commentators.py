@@ -148,6 +148,7 @@ def _probe_duration(path: str) -> float:
         [ffprobe, "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
         capture_output=True, text=True, creationflags=_creationflags(),
+        timeout=60,
     )
     return float(r.stdout.strip() or "0")
 
@@ -162,7 +163,7 @@ def _make_thumb(video_path: Path, thumb_path: Path, time_s: float = 0.5) -> None
         "-q:v", "3",
         str(thumb_path),
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=60)
     if r.returncode != 0:
         logger.warning(f"thumb generation failed: {r.stderr[-300:]}")
 

@@ -118,6 +118,10 @@ class JobQueue:
             await session.commit()
         self._running_jobs.pop(job_id, None)
         logger.error(f"Job {job_id} failed: {error}")
+        # Reclaim the failed job's scratch files (downloaded source, erased
+        # video, per-variant dirs). Best-effort — never let cleanup mask the
+        # original failure.
+        await self._cleanup_workspace(job_id)
 
     async def cancel_job(self, job_id: str):
         """Cancel a running or queued job."""
@@ -155,47 +159,97 @@ class JobQueue:
 
             await session.commit()
         logger.info(f"Job {job_id} cancelled")
+        # Reclaim scratch files for the cancelled job.
+        await self._cleanup_workspace(job_id)
+
+    async def _cleanup_workspace(self, job_id: str):
+        """Best-effort disk cleanup for a cancelled/failed job's project dir.
+        Runs the blocking rmtree in a thread so we don't stall the loop."""
+        try:
+            async with async_session() as session:
+                job = await session.get(JobModel, job_id)
+            project_id = job.project_id if job else None
+            if not project_id:
+                return
+            from services.cleanup import cleanup_job_workspace
+            loop = asyncio.get_event_loop()
+            stats = await loop.run_in_executor(
+                None, lambda: cleanup_job_workspace(project_id)
+            )
+            if stats.get("freed_bytes"):
+                logger.info(
+                    f"Job {job_id}: freed {stats['freed_bytes'] // (1024*1024)} MB "
+                    f"of scratch files"
+                )
+        except Exception:
+            logger.exception(f"workspace cleanup for {job_id} failed")
 
     def is_cancelled(self, job_id: str) -> bool:
         return job_id in self._cancelled_jobs
 
     async def recover_stuck_jobs(self):
         """
-        On startup, recover jobs that were left in `running` state due to crashes/hard kills.
-        This prevents silent hangs after server restarts.
+        On startup, recover EVERY job left in `running` state. A job in
+        `running` when the process starts can only mean the previous process
+        died mid-job (crash, hard kill, or — common in dev — a restart). The
+        old 30-minute threshold left fresh jobs showing "running" for half an
+        hour after every restart; with `--reload` off and manual restarts
+        that's a constant annoyance. We requeue them all instead.
         """
         from models import ProjectStatus
 
-        stuck_threshold = timedelta(minutes=30)
         now = datetime.utcnow()
 
         async with async_session() as session:
             result = await session.execute(
-                select(JobModel).where(
-                    JobModel.status == JobStatus.running.value,
-                    JobModel.updated_at < now - stuck_threshold,
-                )
+                select(JobModel).where(JobModel.status == JobStatus.running.value)
             )
             stuck_jobs = result.scalars().all()
             if not stuck_jobs:
                 return
 
-            for job in stuck_jobs:
+            # Sanity cap: if the table somehow has a flood of orphans, don't
+            # requeue them all (that could thrash on a corrupt DB). Mark the
+            # overflow failed and log loudly.
+            MAX_RECOVER = 50
+            if len(stuck_jobs) > MAX_RECOVER:
+                logger.warning(
+                    f"{len(stuck_jobs)} jobs stuck in running — only requeueing the "
+                    f"first {MAX_RECOVER}, failing the rest."
+                )
+
+            requeued = 0
+            failed = 0
+            for i, job in enumerate(stuck_jobs):
                 project = await session.get(ProjectModel, job.project_id)
-                if project and project.status in (ProjectStatus.cancelled.value, ProjectStatus.failed.value):
+                terminal = project and project.status in (
+                    ProjectStatus.cancelled.value, ProjectStatus.failed.value,
+                )
+                if terminal or i >= MAX_RECOVER:
                     job.status = JobStatus.failed.value
-                    job.error = "Recovered from stuck running state; project is terminal."
-                    job.progress_message = "Recovered: project terminal state."
+                    job.error = (
+                        "Recovered from stuck running state; "
+                        + ("project is terminal." if terminal else "recovery cap exceeded.")
+                    )
+                    job.progress_message = "Recovered: not requeued."
+                    failed += 1
                     continue
 
                 job.status = JobStatus.queued.value
                 job.progress = min(job.progress or 0.0, 0.05)
-                job.progress_message = "Recovered from stuck running state."
+                job.progress_message = (
+                    f"Recovered from backend restart at "
+                    f"{now.strftime('%H:%M:%S')} — requeued."
+                )
                 job.error = None
                 job.updated_at = datetime.utcnow()
+                requeued += 1
 
             await session.commit()
-            logger.warning(f"Recovered {len(stuck_jobs)} stuck jobs on startup.")
+            logger.warning(
+                f"Stuck-job recovery: requeued {requeued}, failed {failed} "
+                f"(of {len(stuck_jobs)} running on startup)."
+            )
 
     async def _process_next(self):
         """Pick up the next queued job and execute it."""
@@ -278,10 +332,44 @@ class JobQueue:
             await asyncio.sleep(1)
 
     async def stop(self):
-        """Stop the job processor."""
+        """Stop the job processor gracefully.
+
+        Marks in-flight jobs as interrupted (so the UI shows clearly what
+        happened and the next startup's recovery requeues them cleanly),
+        then cancels their tasks with a short grace period to let them flush
+        DB writes before the event loop tears down.
+        """
         self._stop_event.set()
-        for job_id, task in self._running_jobs.items():
-            task.cancel()
+
+        running = list(self._running_jobs.items())
+        if running:
+            # 1) Annotate in-flight jobs before cancelling.
+            try:
+                async with async_session() as session:
+                    for job_id, _task in running:
+                        await session.execute(
+                            update(JobModel)
+                            .where(JobModel.id == job_id)
+                            .values(
+                                progress_message="Interrupted by backend shutdown.",
+                                updated_at=datetime.utcnow(),
+                            )
+                        )
+                    await session.commit()
+            except Exception:
+                logger.exception("could not annotate jobs on shutdown")
+
+            # 2) Cancel and give them up to 5s to wind down.
+            for _job_id, task in running:
+                task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(t for _, t in running), return_exceptions=True),
+                    timeout=5,
+                )
+            except (asyncio.TimeoutError, Exception):
+                pass
+
         self._running_jobs.clear()
         logger.info("Job queue processor stopped")
 

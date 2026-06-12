@@ -1,0 +1,5 @@
+# Dev/test-only dependencies. Install into the same venv:
+#   server/.venv/bin/pip install -r server/requirements-dev.txt
+pytest>=8
+pytest-asyncio>=0.23
+httpx>=0.25

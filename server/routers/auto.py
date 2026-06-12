@@ -89,6 +89,7 @@ class AutoRequest(BaseModel):
     from_sheets: bool = False
     auto_detect_zones: bool = True
     erase_method: str = "lama"          # "lama" | "ns" | "blur"
+    erase_coverage: str = "tight"       # tight | band | thorough (T20)
     transcript_engine: str = "ollama"
     transcript_target_lang: Optional[str] = None
     erase_zone: Optional[Zone] = None
@@ -208,6 +209,7 @@ async def auto_run(req: AutoRequest):
         "erase_mode": "blur" if req.erase_method == "blur" else "inpaint",
         "erase_algorithm": "ns" if req.erase_method == "ns" else "telea",
         "erase_auto_detect": bool(req.auto_detect_zones),
+        "erase_coverage": req.erase_coverage,
         "transcript_engine": req.transcript_engine,
         "transcript_target_lang": req.transcript_target_lang,
         "variants": [_preset_to_variant(p) for p in presets],

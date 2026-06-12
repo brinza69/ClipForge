@@ -36,7 +36,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import settings
 from database import async_session
@@ -226,6 +226,38 @@ async def _stage_download(meta: Dict, slc: _Sliced, queue, job_id: str, project_
     return Path(video_path)
 
 
+def _speech_intervals_from_tx(tx_result: Dict[str, Any]) -> List[tuple]:
+    """Extract (start_s, end_s) speech intervals from a transcribe result, for
+    auto-localizing the caption band (captions track the voice). Empty list if
+    the result has no usable segment timing."""
+    out: List[tuple] = []
+    for seg in (tx_result.get("segments") or []):
+        try:
+            s = float(seg.get("start")); e = float(seg.get("end"))
+            if e > s:
+                out.append((s, e))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _transcript_words_from_tx(tx_result: Dict[str, Any]) -> List[dict]:
+    """Word-level timestamps (original language) from a transcribe result —
+    the eraser's coverage audit ticks each spoken word off against the OCR'd
+    caption displays. Empty list if whisper produced no word timing."""
+    out: List[dict] = []
+    for seg in (tx_result.get("segments") or []):
+        for w in (seg.get("words") or []):
+            word = (w.get("word") or "").strip()
+            try:
+                s = float(w.get("start")); e = float(w.get("end"))
+            except (TypeError, ValueError):
+                continue
+            if word and e >= s:
+                out.append({"word": word, "start": s, "end": e})
+    return out
+
+
 async def _stage_transcribe(video_path: Path, slc: _Sliced) -> Dict[str, Any]:
     from services.transcriber import transcribe
 
@@ -261,6 +293,10 @@ async def _stage_erase(
     mode: str = "inpaint",
     algorithm: str = "telea",
     auto_detect: bool = False,
+    is_cancelled: Optional[Callable[[], bool]] = None,
+    coverage: str = "tight",   # tight | band | thorough (T20)
+    speech_intervals: Optional[List[tuple]] = None,  # (start,end) s — for auto-localize
+    transcript_words: Optional[List[dict]] = None,   # whisper word timing — audit checklist
 ) -> Path:
     """Run the eraser on a single rect or auto-detected time-varying segments.
 
@@ -307,7 +343,7 @@ async def _stage_erase(
             str(output_path),
         ]
         def _run_blur() -> int:
-            r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+            r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=1800)
             if r.returncode != 0:
                 tail = "\n".join((r.stderr or "").strip().splitlines()[-8:])
                 raise RuntimeError(f"blur ffmpeg failed: {tail}")
@@ -321,34 +357,106 @@ async def _stage_erase(
         algorithm = "telea"
     from services.inpaint import inpaint_region
 
+    # T20 Thorough — guaranteed-no-leak fallback: inpaint the whole ROI band
+    # for the whole clip (no detection). Slower but bulletproof.
+    if coverage == "thorough":
+        await slc.update(0.0, "Erasing whole band (thorough)…")
+
+        def _thorough_progress(frame_idx: int, total: int):
+            if total > 0:
+                p = max(0.0, min(1.0, frame_idx / total))
+                asyncio.run_coroutine_threadsafe(
+                    slc.update(p, f"Erasing {frame_idx}/{total} (thorough)"), loop
+                )
+
+        await inpaint_region(
+            str(video_path), str(output_path),
+            x=x, y=y, w=w, h=h,
+            algorithm=algorithm,
+            on_progress=_thorough_progress,
+            is_cancelled=is_cancelled,
+        )
+        if not output_path.exists():
+            raise RuntimeError("Inpaint produced no output (thorough)")
+        try:
+            from services.gpu_utils import unload_inpaint_model
+            unload_inpaint_model()
+        except Exception:
+            pass
+        await slc.update(1.0, "Erase complete (thorough)")
+        return output_path
+
     detected_segments = None
     if auto_detect:
-        # Auto-detect: OCR-scan the video to find time-varying caption boxes.
-        # Solves both "OCR zone is too large" (per-segment tight bboxes with
-        # drift split) and "fragments not erased" (higher sample rate +
-        # lower confidence threshold) compared to the old defaults.
-        from services.caption_detector import detect_caption_segments
-
         await slc.update(0.0, "Scanning for captions (OCR)…")
 
         def _det_progress(p: float, msg: str):
             mapped = max(0.0, min(0.4, p * 0.4))  # OCR uses 0-40% of erase slice
             asyncio.run_coroutine_threadsafe(slc.update(mapped, msg), loop)
 
-        # Constrain detection to the user's drawn erase rect — on busy/animated
-        # frames OCR sees text everywhere; we must only erase inside the band
-        # the user marked as the caption area.
+        # Constrain detection to the erase rect — on busy/animated frames OCR
+        # sees text everywhere; only erase inside the marked caption band.
         roi = {"x": x, "y": y, "w": w, "h": h}
-        detected_segments = await loop.run_in_executor(
-            None,
-            lambda: detect_caption_segments(str(video_path), roi=roi, on_progress=_det_progress),
-        )
+
+        # T20-D: auto-localize the caption band so no manual box is needed.
+        # Refines `roi` to the real caption lane (held-still + speech-correlated).
+        # Falls back to the passed rect if it can't find a convincing lane.
+        try:
+            from services.caption_detector import auto_locate_caption_band
+            located = await loop.run_in_executor(
+                None,
+                lambda: auto_locate_caption_band(
+                    str(video_path), speech_intervals=speech_intervals,
+                    on_progress=_det_progress,
+                ),
+            )
+            if located:
+                roi = located
+                logger.info(f"auto-localized caption band: {roi}")
+        except Exception:
+            logger.exception("auto-localize failed; using passed erase rect")
+
+        if coverage == "tight":
+            # T20: per-display tight glyph/box masks — erase the least.
+            from services.caption_detector import detect_caption_displays
+            detected_segments = await loop.run_in_executor(
+                None,
+                lambda: detect_caption_displays(str(video_path), roi=roi, on_progress=_det_progress),
+            )
+        else:
+            # "band": legacy per-segment rectangle zones.
+            from services.caption_detector import detect_caption_segments
+            detected_segments = await loop.run_in_executor(
+                None,
+                lambda: detect_caption_segments(str(video_path), roi=roi, on_progress=_det_progress),
+            )
+
         if not detected_segments:
             logger.warning(
                 "auto-detect found no captions; falling back to user-drawn rect"
             )
             detected_segments = None
         else:
+            # Anti-relic coverage audit: tick every transcript word off against
+            # the OCR'd displays; widen suspect masks + add presence-gated
+            # fallback band segments for anything OCR never saw.
+            if coverage == "tight":
+                try:
+                    from services.caption_audit import audit_caption_coverage
+                    extra = await loop.run_in_executor(
+                        None,
+                        lambda: audit_caption_coverage(
+                            str(video_path), roi=roi, segments=detected_segments,
+                            transcript_words=transcript_words,
+                            on_progress=_det_progress,
+                        ),
+                    )
+                    if extra:
+                        detected_segments.extend(extra)
+                        detected_segments.sort(key=lambda s: s["start_t"])
+                        logger.info(f"coverage audit added {len(extra)} fallback segment(s)")
+                except Exception:
+                    logger.exception("coverage audit failed; using detected segments as-is")
             await slc.update(
                 0.40,
                 f"Detected {len(detected_segments)} caption segment(s) — inpainting…",
@@ -371,6 +479,7 @@ async def _stage_erase(
             segments=detected_segments,
             algorithm=algorithm,
             on_progress=_progress_cb,
+            is_cancelled=is_cancelled,
         )
     else:
         await inpaint_region(
@@ -378,9 +487,18 @@ async def _stage_erase(
             x=x, y=y, w=w, h=h,
             algorithm=algorithm,
             on_progress=_progress_cb,
+            is_cancelled=is_cancelled,
         )
     if not output_path.exists():
         raise RuntimeError("Inpaint produced no output")
+    # Reclaim LaMa's ~2-3GB of VRAM now that erase is done — the rest of the
+    # pipeline (caption burn, mux, commentator) is ffmpeg-only. On 8GB cards
+    # this frees headroom for large-v3 Whisper on the next run. No-op on CPU.
+    try:
+        from services.gpu_utils import unload_inpaint_model
+        unload_inpaint_model()
+    except Exception:
+        pass
     await slc.update(1.0, "Erase complete")
     return output_path
 
@@ -469,7 +587,7 @@ async def synth_voice_from_text(
     ]
     polish_loop = asyncio.get_event_loop()
     def _polish() -> None:
-        r = subprocess.run(polish_cmd, capture_output=True, text=True, creationflags=_creationflags())
+        r = subprocess.run(polish_cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=600)
         if r.returncode != 0:
             # Don't fail the whole pipeline if loudnorm trips — just keep the raw.
             tail = "\n".join((r.stderr or "").strip().splitlines()[-5:])
@@ -715,7 +833,7 @@ async def _stage_match_and_caption(
     loop = asyncio.get_event_loop()
 
     def _run() -> int:
-        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags())
+        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_creationflags(), timeout=1800)
         if r.returncode != 0:
             tail = "\n".join((r.stderr or "").strip().splitlines()[-8:])
             raise RuntimeError(f"speed-match + caption burn failed: {tail}")
@@ -804,6 +922,9 @@ async def handle_remix_pipeline(
     slc_erase = _Sliced(queue, job_id, 0.20, 0.65)
     slc_audio = _Sliced(queue, job_id, 0.20, 0.55)
 
+    # Speech timing → helps auto-localize the caption band (captions track speech).
+    speech_intervals = _speech_intervals_from_tx(tx_result)
+
     erase_task = asyncio.create_task(
         _stage_erase(
             video_path, erased_path, cfg["erase_zone"],
@@ -811,6 +932,10 @@ async def handle_remix_pipeline(
             mode=cfg.get("erase_mode", "inpaint"),
             algorithm=cfg.get("erase_algorithm", "telea"),
             auto_detect=bool(cfg.get("erase_auto_detect", False)),
+            is_cancelled=(lambda: queue.is_cancelled(job_id)),
+            coverage=cfg.get("erase_coverage", "tight"),
+            speech_intervals=speech_intervals,
+            transcript_words=_transcript_words_from_tx(tx_result),
         )
     )
     audio_task = asyncio.create_task(

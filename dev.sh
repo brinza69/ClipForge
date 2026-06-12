@@ -32,6 +32,15 @@ FRONTEND_PORT="${CLIPFORGE_FRONTEND_PORT:-3000}"
 : "${CLIPFORGE_WHISPER_MODEL:=medium}"
 export CLIPFORGE_WHISPER_MODEL
 
+# Hot-reload: OFF by default. The project lives on /mnt/f (a Windows drive
+# mounted in WSL2) where inotify file-watching does NOT work — uvicorn's
+# --reload reloader hangs/fails during startup on the 9p mount, which is why
+# the backend silently failed to bind after --reload was naively added.
+# Opt in with CLIPFORGE_RELOAD=1 ONLY if your project lives on the native
+# Linux filesystem (e.g. ~/ClipForge inside WSL, not /mnt/f). When enabled
+# we force watchfiles into polling mode so it works even on 9p (at a CPU cost).
+: "${CLIPFORGE_RELOAD:=0}"
+
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
 c_red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -62,6 +71,24 @@ wait_for_port() {
 }
 
 read_pid() { [ -f "$1" ] && cat "$1" 2>/dev/null || true; }
+
+# Detach strategy: prefer `setsid` (clean process group → kill_group can take
+# down the whole tree). Fall back to `nohup` when setsid is missing — some
+# minimal WSL/Linux installs don't ship util-linux's setsid. In the fallback
+# case kill_group degrades to killing just the leader, but stop_one's
+# port-kill fallback (fuser/lsof) catches any stragglers.
+#
+# NOTE: we do NOT wrap this in a function that returns the PID via command
+# substitution `$(...)` — backgrounding a job inside a $() subshell is
+# unreliable (the subshell can exit before the job is fully detached, and
+# `$!` semantics across the subshell boundary are surprising). Each launcher
+# backgrounds DIRECTLY and reads `$!` in the same shell. The launchers use the
+# `_detach` prefix variable below.
+if command -v setsid >/dev/null 2>&1; then
+  _DETACH_CMD="setsid"
+else
+  _DETACH_CMD="nohup"
+fi
 
 # Kill a whole process group given a leader PID, escalating SIGTERM→SIGKILL.
 kill_group() {
@@ -110,28 +137,37 @@ start_backend() {
   # Append (not truncate) so a restart doesn't wipe history — needed for
   # cross-run comparisons (e.g. GPU inpaint timing). A separator marks each start.
   { echo; echo "===== backend start $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG_DIR/backend.log"
-  # setsid puts the child in a fresh process group so we can kill the whole tree.
-  # --reload: hot-reload on .py changes. We exclude .venv and __pycache__
-  # explicitly — uvicorn's default exclude `.*` only filters basenames, not
-  # nested paths, so without these it would try to register inotify watches
-  # for the 50k+ files in .venv and either thrash CPU or hit ENOSPC.
-  setsid bash -c "
+  # Build the uvicorn reload flags only when explicitly enabled (see
+  # CLIPFORGE_RELOAD note above — OFF by default because it breaks on /mnt/f).
+  # When ON we force watchfiles polling so it works on the 9p mount, and
+  # exclude .venv/__pycache__/logs (uvicorn's default `.*` exclude only
+  # matches basenames, not nested paths, so without these it would watch
+  # the 50k+ files in .venv).
+  local reload_args="" reload_env=""
+  if [ "$CLIPFORGE_RELOAD" = "1" ]; then
+    reload_args="--reload --reload-exclude '**/.venv/**' --reload-exclude '**/__pycache__/**' --reload-exclude '**/*.log'"
+    reload_env="export WATCHFILES_FORCE_POLLING=true;"
+  fi
+
+  # Detach via setsid (clean process group) or nohup fallback. Background
+  # DIRECTLY here and capture $! in the same shell — see the note on
+  # _DETACH_CMD above for why we avoid command substitution.
+  "$_DETACH_CMD" bash -c "
     cd '$ROOT/server'
+    $reload_env
     NV='$VENV/lib/python3.12/site-packages/nvidia'
     export LD_LIBRARY_PATH=\"\$NV/cublas/lib:\$NV/cudnn/lib:\$NV/cuda_runtime/lib:\$NV/cufft/lib:\$NV/curand/lib:\$NV/cusolver/lib:\$NV/cusparse/lib:\$NV/nccl/lib:\$NV/nvjitlink/lib:\${LD_LIBRARY_PATH:-}\"
-    exec '$VENV/bin/uvicorn' main:app \
-      --host 0.0.0.0 --port '$BACKEND_PORT' \
-      --reload \
-      --reload-exclude '**/.venv/**' \
-      --reload-exclude '**/__pycache__/**' \
-      --reload-exclude '**/*.log'
+    exec '$VENV/bin/uvicorn' main:app --host 0.0.0.0 --port '$BACKEND_PORT' $reload_args
   " >>"$LOG_DIR/backend.log" 2>&1 < /dev/null &
   echo $! > "$pidfile"
 
-  if wait_for_port "$BACKEND_PORT" 20; then
+  # 45s, not 20s: the backend imports torch + faster_whisper + onnxruntime at
+  # startup, which can take 30s+ on a cold cache. A false "failed to bind" at
+  # 20s sent the user chasing a non-bug while uvicorn was still importing.
+  if wait_for_port "$BACKEND_PORT" 45; then
     c_green "backend up   (pid $(cat "$pidfile"))  http://localhost:$BACKEND_PORT"
   else
-    c_red "backend failed to bind :$BACKEND_PORT within 20s — see $LOG_DIR/backend.log"
+    c_red "backend failed to bind :$BACKEND_PORT within 45s — see $LOG_DIR/backend.log"
     return 1
   fi
 }
@@ -156,7 +192,7 @@ start_frontend() {
 
   echo "starting frontend on :$FRONTEND_PORT..."
   { echo; echo "===== frontend start $(date '+%Y-%m-%d %H:%M:%S') ====="; } >> "$LOG_DIR/frontend.log"
-  setsid bash -c "
+  "$_DETACH_CMD" bash -c "
     cd '$ROOT'
     exec npm run dev -- --port '$FRONTEND_PORT'
   " >>"$LOG_DIR/frontend.log" 2>&1 < /dev/null &

@@ -4,6 +4,51 @@
 
 ---
 
+## 0. STANDING RULES — READ THIS FIRST AND OBEY EVERY SESSION
+
+**These rules are permanent and self-perpetuating. Future sessions inherit
+them automatically by reading this file. The user should NEVER have to
+re-state them; the model enforces them on itself.**
+
+### R1. Document EVERY meaningful action in this file (the handover), live.
+
+The instant you start a meaningful piece of work — a new feature, a fix,
+a refactor, a design exploration, a real-world test, anything beyond a
+trivial 1-line edit — you MUST add an entry to this handover file
+describing what you're about to do, WITHOUT WAITING FOR THE USER TO ASK.
+
+- Add it BEFORE or DURING the work (not as an afterthought 10 commits later).
+- Update it AGAIN when the work finishes — what was actually shipped, the
+  commit SHA(s), what was confirmed and what's still open / risky.
+- Use the latest session number (e.g. `## S5.x — short title`); create the
+  session header on your first edit of a fresh conversation.
+- Write the entry as if a different model will read it cold — name files,
+  commits, decisions, gotchas. No "see chat above"; the chat is gone for
+  the next session.
+- Mirror to root: after any update to `docs/session-handover.md`, run
+  `cp docs/session-handover.md SESSION-HANDOVER.md`. (Both files must
+  stay in sync — the root is the visible copy.)
+- Commit message for handover updates uses `docs(scope): …`.
+
+The user has made this a hard requirement: silent work that doesn't
+update this file is a process bug. If a session ends without entries
+describing what happened, the next session starts blind.
+
+### R2. R1 itself is permanent.
+
+This standing-rules section MUST be preserved verbatim in every future
+version of this file. If you reorganize the file, R1 stays exactly here
+at the top. Do NOT remove it, water it down, or move it below the
+session entries. Future-you reads this and obeys it the same way today-you
+does.
+
+### R3. Anything else marked "Standing rules" by the user gets added below.
+
+When the user says "add this as a rule" / "from now on…", append the new
+rule here as R4, R5, … with the same permanence as R1.
+
+---
+
 ## 0. Who/what/where
 
 - **User:** vlado, Windows + WSL2 setup
@@ -611,6 +656,568 @@ nav reorg + eraser ROI fix + split). Not yet pushed / no PR for this branch
 (session-1 PRs #15/#16/#17 are merged; #18 was the earlier parallel PR).
 `docs/session-handover.md` is mirrored to `SESSION-HANDOVER.md` at the repo root
 for visibility.
+
+---
+
+# ════════════════════════════════════════════════════════════════════════
+# SESSION 3 — 2026-06-07 (Sheets automation + Settings + GPU + stability)
+# ════════════════════════════════════════════════════════════════════════
+
+> Branch: still `claude/parallel-processing`. This session pushed it and
+> opened **PR #21** (vs main). All work below is on top of PR #21. The
+> branch now has ~15 extra commits beyond S2.
+
+## S3.0 — Three user-requested features, then an audit + fixes
+
+The session went: (1) custom ElevenLabs voice ID, (2) "Parallel from
+Sheets" automation, (3) Settings page for keys + Drive, then a codebase
+audit producing `docs/improvement-plan.md` (19 tasks T1–T19), then
+executing the P0 batch (T1–T4). A long detour fixing `dev.sh` (the
+backend wouldn't start) is documented in S3.7 — read it, it'll save you.
+
+## S3.1 — Custom ElevenLabs voice ID (commit 9bd04d1)
+The Voice dropdown only listed voices in the user's EL account
+(`/v1/voices`). The public **Voice Library** (thousands of shared voices)
+wasn't reachable. Added a "Custom voice ID" text field (visible only when
+engine = elevenlabs) on BOTH `/parallel` (per-variant card) and `/remix`
+(single voice). Paste a voice_id from elevenlabs.io and it's used directly
+at TTS time (backend never validated voice_id — it just POSTs to
+`/v1/text-to-speech/{id}`). The dropdown shows "Custom: XXXX…" when the
+current id isn't in the account list; engine-change auto-pick preserves a
+15+ alphanumeric custom id instead of clobbering it.
+- Files: `src/components/parallel/variant-card.tsx`, `src/app/remix/page.tsx`.
+
+## S3.2 — Parallel from Sheets (the big feature, commit 8b172eb)
+New page `/parallel-sheets` — drives the SAME parallel pipeline but pulls
+the source URL + a number from a Google Sheet, and writes the AI-generated
+description back into the row when done.
+
+**User decisions (locked in):**
+  - Single-part filename → `<num>.mp4`; split → `<num>_p1.mp4`, `_p2.mp4`…
+  - Description written = the **AI-generated** one (not source-translated)
+  - At N variants, **only variant #0** writes to Sheets
+  - If the row already has a description → **overwrite**
+
+**Backend:**
+  - `services/sheets.py` — Google Sheets API wrapper (read/write/batch +
+    friendly errors; `SheetsScopeMissing` → 401 reconnect hint).
+  - `services/sheets_config.py` — persists config + `next_row` in
+    `data/sheets_config.json`. ONE config per install (columns constant).
+  - `routers/sheets.py` — `/api/sheets/{config,pull-next,commit,skip-row}`.
+    `pull-next` reads the next row but does NOT advance; `commit` writes the
+    description and advances `next_row`.
+  - `services/drive_oauth.py` — `SCOPES` gained
+    `https://www.googleapis.com/auth/spreadsheets`. **The user had to
+    re-consent** (Cloud Console → Google Auth Platform → Data Access → add
+    the `spreadsheets` scope, then Disconnect+Connect Drive in the app).
+  - `routers/parallel.py` — `StartRequest` accepts `sheets_row` +
+    `sheets_number`; `/result` surfaces `sheets_commit`.
+  - `workers/parallel_pipeline.py` — filename override when `sheets_number`
+    set; after descriptions stage, auto-writes variant #0's AI description
+    to the row + advances `next_row`. Failure is logged in
+    `sheets_commit.status` but never fails the job.
+
+**Frontend refactor (to stay under the 500-line rule):**
+  - `components/parallel/parallel-processor.tsx` (NEW, 458 lines) — the body
+    of `/parallel` extracted, reusable via `topContent` / `startPayloadExtras`
+    / `onJobDone` props.
+  - `components/parallel/drive-card.tsx` (NEW) — Drive connect card extracted.
+  - `app/parallel/page.tsx` — now a thin 28-line wrapper.
+  - `app/parallel-sheets/page.tsx` (NEW) — Sheets config form + Pull next /
+    Skip buttons + "Row N · #num" badge + (added in C3) a persistent
+    last-commit status indicator with a Retry button.
+  - Sidebar: new "Parallel from Sheets" entry; fixed a prefix-match bug so
+    `/parallel` doesn't light up while on `/parallel-sheets`.
+
+**Headless API (commit 0f87d31, plan task F1):** `POST /api/auto`
+(`routers/auto.py`) runs the whole parallel pipeline from one POST — either
+an explicit `url` + `variant_preset_ids`, or `from_sheets: true` to pull the
+next row. Default erase/caption zones from yt-dlp dims, auto-detect on.
+Reuses `variant_presets.load_preset()` (new helper). The pipeline's
+`len(variants) < 2` guard was relaxed to `< 1` so /auto can run a single
+variant (the UI still enforces 2+ via its schema). This is the building
+block for full Sheets→ClipForge→post automation.
+
+## S3.3 — Settings page rewrite (commit 56f8935)
+`/settings` was read-only system info. Now it manages everything needed to
+run the app:
+  - `components/settings/api-keys-card.tsx` — ElevenLabs / OpenAI /
+    Anthropic key inputs (show/hide, Save & Verify → round-trips the
+    provider, Clear, configured/not badges; EL shows tier + usage).
+  - `components/settings/drive-setup-card.tsx` — two-step Drive setup:
+    upload OAuth client JSON (`POST /api/drive-auth/client`, validates it's
+    a Desktop client, 50KB cap) then Connect (popup OAuth, reminds the
+    consent must include the Sheets scope). Reset wipes both files.
+  - `components/settings/whisper-card.tsx` — see S3.4.
+  - `routers/drive_auth.py` — new `POST/DELETE /api/drive-auth/client`.
+
+## S3.4 — Whisper device/model UI + silent-CPU-fallback fix (commit ff2369a)
+Whisper runs in a spawned SUBPROCESS (killable), whose logger never reached
+backend.log — so nobody could tell if faster-whisper actually used CUDA or
+had silently fallen back to CPU. Added:
+  - `services/transcriber.py`: `_model_info` snapshot (configured vs actual
+    device/model, `fell_back_to_cpu` flag), `get_model_info()`,
+    `unload_model()`, and `data/whisper_config.json` overrides (layered on
+    top of `CLIPFORGE_WHISPER_*` env vars). `_get_model()` records what it
+    actually loaded.
+  - `routers/transcript.py`: `GET /api/transcript/device` (with
+    `?verify=true` it force-loads to confirm), `POST /api/transcript/device`
+    (saves model+device, drops the cached model).
+  - `components/settings/whisper-card.tsx`: configured-vs-actual side by
+    side, model picker (tiny→large-v3), device picker (auto/cuda/cpu),
+    Apply + "Verify GPU".
+**CONFIRMED on the user's box:** RTX 2080 Super runs **large-v3 on cuda**
+(actual device = cuda, ~3GB VRAM, ready). User switched to large-v3 for
+best RO accuracy. First load was ~62s (model download); cached after.
+NOTE: Whisper (~3GB) isn't unloaded before the erase stage's LaMa (~2-3GB)
+— both resident is still <8GB so it's fine, but plan task T12 (free VRAM
+between stages) would add headroom if an OOM ever shows up.
+
+## S3.5 — Priority fixes from the first audit (commit da36cdb)
+Seven items found by reviewing the codebase, all verified:
+  - **A1**: `/remix` had an orphan `setCommentatorChroma("")` (setter removed
+    in S2.9) → replaced with `setChromaColor(null)`. Caught by tsc.
+  - **A2**: `Slider` (`components/ui/slider.tsx`) was missing a `disabled`
+    prop that 7 call sites passed → added it properly (both range inputs +
+    dimmed container). Fixed the last 8 pre-existing TS errors → repo is now
+    **0 TypeScript errors**.
+  - **A3**: `services/sheets.py` scope check read `creds.scopes` which
+    google-auth echoes from the constructor arg (always "present") → now
+    reads the real granted scopes from `drive_oauth_token.json`.
+  - **C3**: Sheets commit failures were silent (token expired mid-run →
+    `sheets_commit.status=failed` but nothing told the user). Now a
+    destructive toast + a persistent indicator on the Sheets card + a Retry
+    button (re-commits the cached description without re-running the
+    pipeline).
+  - **E1**: `POST /api/drive-auth/client` capped at 50KB (real OAuth client
+    JSONs are <2KB).
+
+## S3.6 — Codebase cleanup + remix split (commits 72abefc, 9cd27f3)
+  - **A4**: pruned dead legacy-flow code. `src/lib/api.ts` 210→25 lines,
+    `src/types/index.ts` 209→17, deleted `src/lib/stores/project-store.ts`
+    (zero imports). ~454 lines of dead code gone. `api.system` now goes
+    through `/worker-api/` (was the last `localhost:8420` bypass).
+  - **B (partial)**: `/remix/page.tsx` 1864→1477 by extracting
+    `components/remix/past-runs.tsx` (100) + `components/remix/commentator-picker.tsx`
+    (425). Still over 500 — plan task T14 lists the remaining extracts
+    (voice card, caption card, zone picker).
+
+## S3.7 — dev.sh saga (CRITICAL — read before touching dev.sh)
+The backend wouldn't start via `./dev.sh start` and it took several
+iterations to find why. THREE stacked bugs:
+  1. **`setsid` is missing on this WSL.** dev.sh launched the backend with
+     `setsid bash -c ...` which failed ("setsid: command not found"), wrote
+     the start marker, but never ran uvicorn. The backend that "worked"
+     earlier was always one the user started manually. Fix: a
+     `$_DETACH_CMD` that uses `setsid` if present else `nohup`, backgrounding
+     DIRECTLY (NOT via a `$()` subshell — that was an intermediate broken
+     attempt; backgrounding inside command-substitution doesn't detach
+     reliably). Commits 78600be, 1e53be2.
+  3. **`--reload` breaks on /mnt/f.** The project lives on `/mnt/f` (a
+     Windows drive in WSL2) where inotify file-watching doesn't work on the
+     9p mount, so uvicorn's `--reload` reloader hung at startup and the port
+     never bound. Reload is now **OPT-IN via `CLIPFORGE_RELOAD=1`** (default
+     OFF), and when on it forces `WATCHFILES_FORCE_POLLING=true`. The
+     bind-wait timeout was bumped 20s→45s (torch/whisper imports are slow on
+     a cold cache). Commit 4eda229.
+**Consequence:** with reload OFF, backend changes do NOT hot-reload — run
+`./dev.sh restart backend` after editing `.py`. Don't "fix" this by adding
+`--reload` back unless the project moves to native Linux fs (`~/ClipForge`).
+Also note `setsid` missing means `kill_group` degrades to killing just the
+leader; `stop_one`'s `fuser -k <port>/tcp` fallback (added in D1) catches
+stragglers.
+
+## S3.8 — Improvement plan + P0 execution (commits 817e0f5, c2f567f, 77697cf, 26cd37e)
+Wrote `docs/improvement-plan.md` — 19 self-contained tasks (T1–T19) graded
+P0/P1/P2, each with goal/files/steps/code-snippets/acceptance/commit-msg,
+specified so a weaker model can execute them. A status board at the bottom
+tracks progress. Then executed the **P0 batch**:
+  - **T1** (817e0f5): `timeout=` on every `subprocess.run` across 13 files
+    (60s probes / 120s previews / 300–600s extracts / 1800s encodes), plus
+    a 1h wall-clock cap + bounded `.wait()` on the inpaint Popen pair. An
+    AST scan confirmed zero un-timed calls remain.
+  - **T2** (c2f567f): `services/retry.py` — `with_retry()` exponential
+    backoff. Wrapped ElevenLabs synth+voices and OpenAI/Anthropic/Ollama
+    chat calls. 4xx never retried; 5xx/429/conn-errors retried (4 attempts,
+    Ollama 2). Error-message formats preserved for the routers.
+  - **T3** (77697cf): `services/cleanup.py::cleanup_job_workspace` removes
+    `data/media/<project_id>` on cancel + fail (wired into `cancel_job` /
+    `fail_job`). `complete_job` does NOT clean (keeps the finished video).
+  - **T4** (26cd37e): `inpaint_region` polls an `is_cancelled` callback each
+    frame, kills ffmpeg + raises `JobCancelledError` on cancel. Threaded
+    through `_stage_erase` in both pipelines. The erase stage is the long
+    one (5–40 min) so that's where mid-run cancel matters; the shorter
+    encode passes stay timeout-bounded (Popen+drain there risks a deadlock
+    for little gain).
+
+## S3.9 — P1 + P2 execution (the rest of the plan, one sitting)
+Continued straight through the plan. 17 of 19 tasks executed; T6 deferred,
+T15 moot. Commits:
+  - **T5 + T7** (77ffcd1): `recover_stuck_jobs` now requeues ALL running
+    jobs on startup (no 30-min threshold; 50-job sanity cap, terminal-project
+    jobs still failed). `JobQueue.stop()` annotates in-flight jobs
+    "Interrupted by backend shutdown" then cancels with a 5s grace wait.
+  - **T8** (5f20900): `routers/jobs.py` `list_jobs` gains a `status` filter
+    (comma list ok). New `components/layout/running-jobs-badge.tsx` polls
+    `/api/jobs?status=queued,running` every 3s and shows a sidebar badge from
+    any page, links by job type.
+  - **T9** (084a714): `/api/remix/recent` gains `offset` + `total`; new
+    `DELETE /api/remix/{job_id}` removes media + DB row. Past-runs panel
+    paginates (10/page) + per-run delete with confirm.
+  - **T10** (a0b82fa): drive-setup-card Connect uses ONE polling loop (was
+    two racing intervals).
+  - **T12** (a0b82fa): `services/gpu_utils.py` (free_gpu_memory +
+    unload_inpaint_model). `_stage_erase` drops LaMa (~2-3GB) after inpaint.
+    Whisper needs no cleanup — it's in a spawned subprocess (OS frees on exit).
+  - **T11** (552aa05): `lib/toast-helpers.ts` (errorToast.api / okToast).
+    Adopted in parallel-sheets; rest left for incremental adoption (no mass
+    rewrite — pure cosmetic churn).
+  - **T13** (2e06638): new SSE `GET /api/jobs/{id}/stream`. parallel-processor
+    uses EventSource with a polling fallback. /remix still polls (1477-line
+    page not worth touching this pass).
+  - **T16** (f2ab862): `services/secret_storage.py` — XOR-obfuscate API keys
+    at rest (machine-tied, "enc:" prefix). NOT real crypto; documented.
+    Wired into EL/OpenAI/Anthropic get/set + a one-shot startup migration.
+    **VERIFIED LIVE:** both keys encrypted on disk after restart, and they
+    still decrypt + authenticate (EL configured=True, OpenAI ready=True).
+  - **T17** (be6e522): `server/tests/` — 12 httpx-ASGITransport smoke tests +
+    `requirements-dev.txt` + `pytest.ini` + `scripts/run-tests.sh`. Run them
+    in WSL: `./scripts/run-tests.sh` (pytest is a Linux binary — can't run
+    from a Windows git-bash).
+  - **T18** (9e5837b): `.githooks/pre-commit` runs `tsc --noEmit` on staged
+    .ts/.tsx (dependency-free, no husky). Activated via `core.hooksPath`
+    (package.json `prepare` sets it). Already fired on the T13 commit.
+  - **T19** (cf5d0db): `docs/api.md` — integrator reference for /auto,
+    /sheets, /drive-auth, /transcript/device, presets, jobs (incl. SSE),
+    remix. README links it.
+  - **T14** (7d46034): split `captioner.py` 877 → `captioner.py` (334) +
+    `captioner_presets.py` (177, data + hex_to_ass_color) +
+    `captioner_events.py` (416, ASS builders). Re-exports keep
+    `from services.captioner import DEFAULT_PRESETS/hex_to_ass_color`
+    working. Zero dangling refs (verified both directions).
+
+### Deferred / not done (be honest with the next session)
+  - **T6** (unify TTS/Transcript jobs under JobQueue): NOT executed. It
+    rewires two WORKING features (TTS Studio, Transcript Studio), removes
+    their `_jobs` dicts, changes how the routers enqueue. Modest value
+    (short standalone jobs surviving restart) vs high risk of breaking
+    working features done blind. Left for a session that can exercise both
+    studios end-to-end.
+  - **T15**: moot — /remix has no Drive UI (single-output, no Drive upload).
+  - **T14 remainder**: `remix_pipeline.py` (886) + the frontend tts/captions/
+    remix pages stay over 500. Splitting live pipeline/render code blind
+    (no runtime test here) wasn't worth the risk; documented in the plan.
+
+### Live test results (S3.9 verification, backend restarted with new code)
+Tested via curl against the running backend (couldn't run pytest from
+Windows git-bash — Linux venv):
+  - T8 status filter: `?status=done` → 89 jobs, all status=done. ✓
+  - T9 pagination: total=29, offset/limit correct. ✓
+  - T13 SSE: emits `data:{…done}` then closes. ✓
+  - T16: both keys `enc:`-prefixed on disk; migration logged
+    ("encrypted 1 plaintext key in tts_config.json" + transcript_config);
+    EL configured=True + OpenAI ready=True (decrypt+auth still works). ✓
+  - F1 /auto: missing url → 400, bad preset → 404. ✓
+  - T7: "Job queue processor stopped" in shutdown log. ✓
+  - Static: 0 TS errors, all Python compiles, zero un-timed subprocess.run,
+    zero dangling captioner refs, pre-commit hook fired.
+  NOT runtime-tested (need a heavy/forced run): T1 timeout trigger, T2
+  retry trigger, T3/T4 cancel cleanup+propagation (need a real ~10-min
+  pipeline + Cancel mid-erase), T5 (no stuck jobs existed at restart).
+
+## S3 — Branch / PR state at session end
+`claude/parallel-processing`, **PR #21 open vs main**. P0 (T1–T4) + most of
+P1/P2 done + pushed; plan status board current. **Only T6 deferred** (see
+above). Repo is at 0 TypeScript errors; backend verified live after restart.
+The user's working combo: large-v3/cuda Whisper + ElevenLabs (scoped key,
+`/v1/user` 401 is expected/harmless) + Ollama qwen2.5:7b + Inter Black
+Italic + Povestitor commentator + Sheets automation live.
+
+## S3 — Conventions reminder (unchanged, still apply)
+- Romanian replies, short + concrete. `/worker-api/` proxy in frontend.
+  Slider as `value={[x]}` + `onValueChange={([v])=>…}`. Files ≤500 lines.
+- Backend changes need `./dev.sh restart backend` (no hot-reload on /mnt/f).
+- After non-trivial frontend edits, if Turbopack serves a stale bundle:
+  `./dev.sh stop && rm -rf .next && ./dev.sh start`, then close+reopen the
+  tab (a ChunkLoadError on /settings was exactly this).
+- Commits: `feat/fix/refactor/perf/chore/docs(scope): description`.
+
+---
+
+# ════════════════════════════════════════════════════════════════════════
+# SESSION 4 — 2026-06-08 (T20 eraser: tight masks + auto-localize, REAL-TESTED)
+# ════════════════════════════════════════════════════════════════════════
+
+> Branch still `claude/parallel-processing`, PR #21. This session designed
+> AND implemented AND real-tested the caption-eraser rewrite (plan §11 / T20).
+
+## S4.0 — Key unlock: I CAN run the Linux venv from the Windows agent
+`wsl.exe -e bash -c "cd /mnt/f/ClipForge && server/.venv/bin/python ..."`
+works from the agent's git-bash. So I can run cv2/easyocr/pytest/the real
+pipeline pieces — not just static checks. This is how T20 got real-tested.
+The running backend is also reachable on localhost:8420 for curl tests.
+GOTCHA: EasyOCR + LaMa both want the 8GB GPU; to run a heavy test, stop the
+backend first (`./dev.sh stop`) to free the GPU, then `./dev.sh start` after.
+
+## S4.1 — T20 eraser, the design (plan §11, fully written there)
+The user wanted the eraser to: (1) erase MINIMALLY (per-glyph, not a band
+rectangle — clarity), (2) need NO manual box (full automation), (3) leave
+NO caption frames after erase. Design:
+- **Tight per-display masks**: one segment per "display" (held-still text,
+  split at text changes via difflib similarity). One tight mask per display,
+  reused across its hold → tight AND complete at once.
+- **Glyph vs box** (§11.3d): box style (solid bg behind text) → mask the
+  whole box; else mask the glyphs. Box detected when the interior is uniform
+  AND differs from the video just outside the bbox.
+- **Auto-localize** (no box): held-still filter (captions hold, scene text
+  moves) + Y-lane clustering + transcript-speech correlation (ClipForge has
+  the speech timing — a generic eraser can't use this).
+- **inpaint change**: `_build_segment_state` rasterizes an arbitrary
+  `seg["mask"]` instead of filling a rectangle.
+
+## S4.2 — T20 implementation (commits)
+- 75a10fa — Step A: `erase_coverage` field (tight|band|thorough) on
+  remix/parallel/auto; `_stage_erase` Thorough mode = full-band inpaint
+  (guaranteed-no-leak fallback).
+- f99574a — Step B: inpaint accepts arbitrary per-segment `mask`.
+- 8492627 — Step C: `detect_caption_displays()` — per-display tight
+  glyph/box masks.
+- 63ef50a — Step D: `auto_locate_caption_band()` — no manual box; threads
+  `speech_intervals` from the transcribe result via `_speech_intervals_from_tx`.
+- 60e7844 — Step E + F: fade-boundary expansion + `scripts/verify_eraser.py`
+  (re-OCRs the OUTPUT band; any text = a leak).
+- b4302c0 — fix: box-vs-glyph must compare interior to the SURROUNDING video
+  (caught by a synthetic unit test — glyph on uniform bg was wrongly called a
+  box and over-erased). Also fixed the jobs status-filter smoke test (307).
+
+## S4.3 — REAL end-to-end test caught + fixed 2 leak bugs (commit 6660682)
+Ran the full chain on a 20s TikTok clip (auto-localize → tight detect →
+LaMa inpaint → re-OCR the output). Harness reported **45 leaks** first. Two
+real bugs, both fixed, then **45 → 0 caption leaks**:
+1. **Index-seek grabbed the wrong frame.** `cap.set(POS_FRAMES, idx)` on
+   long-GOP mp4 lands on the nearest keyframe → the mask was built from the
+   wrong text. Fix: Pass 3 decodes the video ONCE sequentially and builds the
+   mask the moment it reaches the exact best frame.
+2. **Otsu left the outline as a ghost.** Captions are bright FILL + dark
+   OUTLINE; Otsu masks one polarity, so inpaint erased the white fill and
+   left a readable dark outline ("teacher" still legible). Fix:
+   **local-contrast mask** = `|gray - heavy_blur(gray)| > thr`, high for BOTH
+   fill and outline, low for smooth background → covers the whole glyph+
+   outline, tight, on any background. Verified visually (mask hugs fill+
+   outline). Coverage ~24% of the band (vs 100% for a rectangle) — still
+   minimal. The one remaining OCR hit was the character's SHIRT LOGO (scene
+   text), correctly NOT erased.
+
+## S4.4 — Verified facts about the test
+- `auto_locate_caption_band` found the band with NO box: {268,1374,547,139}.
+- 62 displays on the 20s clip (word-by-word caption).
+- 12/12 smoke tests pass via `wsl … pytest tests/`.
+- Cost: detect ~30s + inpaint ~32s for 20s of 1080×1920 on the 2080 Super
+  (GPU, backend stopped). Word-by-word makes many displays → many sequential
+  decodes in Pass 3 (works; a future opt could cache frames).
+
+## S4.5 — KNOWN open issue at session end (the user's "91.mp4")
+The user reports that on a specific clip (`91.mp4`) there are STILL
+un-erased fragments ("relics"). T20's 0-leak was proven on ONE 20s clip;
+91.mp4 is a different/harder case. The likely culprits to investigate (in
+order): (a) word-by-word DISPLAY boundaries — if a word appears between the
+5fps OCR samples its display window may miss it; (b) the local-contrast
+threshold (GLYPH_LOCAL_THR=28) under-segmenting thin/anti-aliased outlines;
+(c) auto-localized band too tight vertically, clipping ascenders/descenders;
+(d) the BOUND_EXPAND_S clamp leaving a sub-frame gap between adjacent
+displays at fast word changes. Use `scripts/verify_eraser.py` on the 91.mp4
+output to locate the exact leak frames, then dump those frames + the active
+segment's mask (as in S4.3 diagnostics) to see WHICH cause it is.
+
+## S4 — Conventions reminder (unchanged)
+- Run heavy Python tests via `wsl.exe -e bash -c "… server/.venv/bin/python …"`;
+  stop the backend first to free the GPU. Romanian replies, short + concrete.
+
+---
+
+# ════════════════════════════════════════════════════════════════════════
+# SESSION 5 — 2026-06-10 (anti-relic: transcript checklist + coverage audit)
+# ════════════════════════════════════════════════════════════════════════
+
+> Branch still `claude/parallel-processing`. Goal: kill the remaining
+> eraser relics (the S4.5 "91.mp4" class of leaks) while KEEPING the tight
+> per-word masks the user likes.
+
+## S5.0 — User request + accepted suggestion
+User: relics still appear from old captions; wants (1) zero relics,
+(2) detection as good as possible, (3) erase area as SMALL as possible
+(likes the per-word tight mask). User's suggestion (ACCEPTED — it closes
+the main hole): whisper's transcript is in the video's ORIGINAL language
+(already true — cleaning/translation happens later); use its word-level
+timestamps as a CHECKLIST — tick every spoken word off against the OCR'd
+displays, so we KNOW every caption word was seen and erased. An unticked
+word = OCR never saw that caption → guaranteed future relic → cover it.
+
+## S5.1 — Design (implementing now)
+Root causes from S4.5 mapped to fixes:
+ a. (display misses words) `detect_caption_displays` Pass 3 now builds each
+    display's mask from FIRST + BEST + LAST sample frames (each frame's own
+    boxes), OR-ed together — covers word-by-word "growing" captions where
+    the best frame lacks early/late words. Was: single best frame.
+ b. (checklist needs text) each display segment now carries `ocr_text`
+    (token union across its samples).
+ c. (band clips ascenders/descenders) `auto_locate_caption_band` vertical
+    pad is now proportional to the median detection height, not fixed 10px.
+ d. NEW `services/caption_audit.py::audit_caption_coverage()`:
+    - tick transcript words (diacritics-stripped fuzzy match) against
+      displays overlapping the word's time ±0.75s;
+    - unticked word OVER a display → display marked SUSPECT → its mask's
+      line-strips get expanded to full band WIDTH (height stays tight);
+    - unticked word with NO display → presence-gated fallback BAND segment
+      (plain rect, no mask — inpaint rasterizes rects natively);
+    - presence gate = edge-density in the band, calibrated against the
+      density measured during CONFIRMED displays, so a video with no
+      caption at that moment doesn't get a spurious erase;
+    - strong presence with no display also emits a fallback (catches
+      non-speech captions, e.g. sound-effect text).
+ e. `_stage_erase` wiring: new `transcript_words` param fed by
+    `_transcript_words_from_tx(tx_result)` from BOTH pipelines; audit runs
+    after detect, expands suspect masks, appends fallback segments.
+
+## S5.2 — Implementation status (live)
+All of S5.1 is implemented (not yet committed at the time of this entry):
+- `server/services/caption_audit.py` (NEW, ~250 lines) — `_norm()` strips
+  diacritics/punct (EN-model OCR mangles RO diacritics; whisper emits
+  them); `_ticked()` fuzzy containment or SequenceMatcher ≥ 0.72;
+  `_scan_band_density()` 10fps grab/retrieve Canny edge-density;
+  `_widen_suspect_mask()` row-projection → fill rows across band width;
+  `audit_caption_coverage()` orchestrates. Presence thresholds are
+  CALIBRATED: conf_dens = median density during confirmed displays,
+  idle = p20 of uncovered samples; thr_word = idle+0.35×(conf−idle);
+  thr_strong = max(thr_word, 0.85×conf). Fallback segs are plain rects
+  (no mask) — inpaint's `_build_segment_state` rasterizes rects natively.
+  Overlaps between fallback and display segs are safe: `_find_active_segment`
+  picks the first (earlier-start) seg; either way the area is covered.
+- `caption_detector.py`: Pass 3 builds per-display mask from FIRST+BEST+
+  LAST sample frames OR-ed (was best only); output segs carry `ocr_text`
+  (token union across samples); `auto_locate_caption_band` vertical pad
+  now max(10, 0.45×median_text_height).
+- `remix_pipeline.py`: `_transcript_words_from_tx()` helper; `_stage_erase`
+  gains `transcript_words=`; audit call after detect (tight path only),
+  wrapped in try/except (audit failure never kills the job). Both
+  call sites (remix + parallel) pass the words.
+- `server/scripts/test_s5_eraser.py` (NEW harness): full chain on a real
+  clip + baseline compare vs an old erase output. Found the user's 91.mp4
+  source at `data/media/906d89d5639f/video.mp4` (24.7s) with its old
+  `video_erased.mp4` for the baseline.
+- NOTE: utility-page eraser (`handle_erase`) does NOT get the audit (no
+  transcript there) — pipeline-only by design.
+
+## S5.3 — Standalone real test on the 91.mp4 source (user asked: no pipeline)
+Run 1 (results, then caveats): src=`data/media/906d89d5639f/video.mp4`
+(24.7s, EN). medium/cuda transcribe 12s → 68 words; auto-band
+{166,1415,747,181}; 28 displays; audit: 0 suspects, 0 fallbacks (OCR saw
+every word — checklist clean); inpaint 59s; re-OCR of band: **NEW = 0
+leaks, OLD baseline = 0 leaks too**.
+- Baseline 0 means the user's 91.mp4 relics are NOT OCR-detectable in this
+  band of the old erase → they're either outside the band, faint ghosts
+  that pass OCR, or in the other project (5f626d60c353). Run 2 adds a
+  FULL-FRAME scan of old+new and eyeball frame dumps to find them.
+- GOTCHA (cost me the run): writing test output to /tmp in WSL — the
+  distro auto-shuts down between wsl.exe invocations and /tmp is WIPED.
+  Write test artifacts to /mnt/f (now `data/temp/s5_test/`).
+- Run 1's log had h264 "Invalid NAL unit size" decode errors during the
+  verify scan — couldn't re-check the file (wiped). Run 2 counts decoded
+  frames src vs out to prove encode integrity.
+
+Run 2 (artifacts in `data/temp/s5_test/`): encode integrity PROVEN
+(src=740 out=740 frames — the NAL stderr noise is just ffmpeg/OpenCV
+decoder chatter, file is fine). Band re-OCR: old=0, new=0 leaks. The
+full-frame "leaks" at t=13.2–14.0s are a THERMOMETER PROP in the scene
+("TEMPERATURE 212°F") — legit scene text in BOTH old and new, correctly
+NOT erased (eyeballed `leak_new_full_000396.png`). Midpoint eyeball frames
+are visually clean (no ghost outlines).
+
+Remaining hypothesis for the user's relics: the 5fps verify scan can MISS
+relics that flash 2–3 frames at display transitions. Launched
+`server/scripts/s5_scan_every_frame.py` (NEW) — OCR of the band on EVERY
+frame (740/video) over: new erased, old erased (906d89d5639f), old erased
+(5f626d60c353). Results pending below.
+
+## S5.4 — ROOT CAUSE FOUND (every-frame scan) + the real fix
+The every-frame scan nailed it: **21 leaks (new) vs 22 (old)** — all
+2–4-frame FLASHES at display TRANSITIONS ('SCO' f9-11, 'into …' f302-305,
+'which muobed it' f359, 'er' f542-545, …). The S4 "0 leaks" was an
+artifact of verifying at 5fps — the flashes live BETWEEN the samples.
+
+Mechanism (proven): Step E extended display i forward to display i+1's
+start and i+1 backward to i's end → the extensions OVERLAP in the gap, and
+`_find_active_segment` picks the FIRST (= i) → the frames right after a
+text switch get erased with the OLD text's mask while the NEW text is
+already on screen → flash relic. The S4.5 candidate (d) was the right one.
+
+Fixes implemented (caption_detector.py + caption_audit.py):
+ 1. **Bridge segments** (`_bridge_segment`): displays keep their sampled
+    bounds; each inter-display gap ≤ max(0.45s, 2.2×sample_period) gets a
+    bridge whose mask = band-WIDE strip over BOTH neighbours' text rows
+    (+30% row dilation for pop-in animations). Whichever text is on screen
+    during the uncertain frames — covered. Clip head: first display starts
+    1.5 sample periods earlier; tail similar. Large gaps get a NON-
+    overlapping ±0.30s expansion (capped at gap/2).
+ 2. **OCR probes in the audit**: uncovered windows (complement of all
+    display+bridge windows) get 1–3 direct OCR probes each (band crop, one
+    shared decode pass with the density scan). Any readable text → fallback
+    band segment around the hit. Replaces threshold-guessing with direct
+    evidence; the 10fps presence runs still catch flashes between probes
+    (word-hit OR strong-density gated, as before).
+
+## S5.5 — FINAL RESULT: 0 leaks on EVERY frame (proven)
+Run 3 on the 91.mp4 source (`data/temp/s5_test/run3.log`, `everyframe3.log`):
+- 28 displays + **27 bridges = 55 segments**; audit: 0 suspects, 0 fallbacks
+  (checklist + probes clean — detection itself was complete this time).
+- inpaint 74s (was 59s — bridges add ~25%); encode integrity 740/740.
+- **EVERY-FRAME re-OCR of the band: 740 frames, 0 leaks** (was 21 new / 22
+  old before the bridge fix). Eyeballed the previously-leaking frames
+  (f9/f303/f359/f543) — visually spotless, no ghosts.
+- Full-frame hits = only the THERMOMETER prop ("TEMPERATURE 212°F"),
+  legit scene text correctly preserved.
+- 12/12 smoke tests pass after the changes.
+Verification protocol for the future: ALWAYS verify with the every-frame
+scan (`server/scripts/s5_scan_every_frame.py X Y W H VIDEO`) — the 5fps
+scan hides transition flashes (that's how S4 wrongly concluded "0 leaks").
+
+## S5.6 — LaMa degenerate-patch repair (user-reported black squares)
+User spotted two small BLACK SQUARES at ~t=6.7s in the erased output
+(dome-over-fire scene). Diagnosed (read-only, frames dumped to
+`data/temp/s5_test/dome_*`): source frame had caption "the salt"; the text
+IS fully erased — the squares are LaMa HALLUCINATION artifacts inside the
+masked word areas, on the bright/saturated fire background. Neighbouring
+frames (f195/f210, same mask+model) are clean → per-frame instability.
+NOT an fp16 issue — fp16 is opt-in (`CLIPFORGE_LAMA_FP16`, default off);
+I initially mis-attributed it and corrected myself to the user. This also
+explains run 2's phantom 'IIDI' OCR leak at f250 (OCR read the squares).
+
+Fix (user picked option 1, `services/inpaint.py`):
+- `_patch_degenerate(patch, mask_roi)` — a connected blob ≥64px inside the
+  mask that is ≥75 gray-levels DARKER than the ring of unmasked pixels
+  around the mask = hallucinated garbage. Dark fills next to dark
+  surroundings never trigger (ring is dark too).
+- Hook in `_flush_lama_batch`: degenerate patch → redo that frame's mask
+  with `cv2.inpaint` telea (diffusion — cannot hallucinate), counted and
+  logged at "Inpaint done". ~1ms/frame check on caption ROIs.
+PR #21 turned out MERGED (before S4!) — the whole T20/S4+S5 eraser batch
+is only on `claude/parallel-processing`. Plan: push branch + open a NEW
+PR with all eraser commits.
+
+Validation run 4 (WITH repair): **143 degenerate LaMa patches repaired**
+(the fire scene triggered LaMa's failure mode on many frames, not just
+the 2 the user saw); every-frame re-OCR still **740 frames / 0 leaks**;
+encode 740/740; eyeballed f200 — black squares GONE, fire continues
+naturally (telea smear invisible); f180 clean. 12/12 smoke tests pass.
+143/~445 inpainted frames repaired = the detector is deliberately eager;
+the cost is telea (smooth diffusion) instead of LaMa on those frames —
+safe trade, hallucination is worse than smear.
+
+Committed 0f81e4f, pushed, and opened **PR #23**
+(https://github.com/brinza69/ClipForge/pull/23) — contains the WHOLE
+unmerged delta vs main: the S4+S5 eraser overhaul AND the late-S3
+hardening tail (T8+ — SSE, smoke tests, secret storage, captioner split…)
+because PR #21 was merged on 2026-06-07 BEFORE those were pushed.
 
 ---
 
