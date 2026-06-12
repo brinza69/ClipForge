@@ -1213,6 +1213,12 @@ naturally (telea smear invisible); f180 clean. 12/12 smoke tests pass.
 the cost is telea (smooth diffusion) instead of LaMa on those frames —
 safe trade, hallucination is worse than smear.
 
+Committed 0f81e4f, pushed, and opened **PR #23**
+(https://github.com/brinza69/ClipForge/pull/23) — contains the WHOLE
+unmerged delta vs main: the S4+S5 eraser overhaul AND the late-S3
+hardening tail (T8+ — SSE, smoke tests, secret storage, captioner split…)
+because PR #21 was merged on 2026-06-07 BEFORE those were pushed.
+
 ---
 
 End of handover.
