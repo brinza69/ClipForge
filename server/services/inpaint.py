@@ -65,6 +65,37 @@ _LAMA_BATCH = max(1, int(_LAMA_BATCH_ENV)) if _LAMA_BATCH_ENV else 16
 
 _NVENC_CACHE: dict[str, bool] = {}
 
+# ── Degenerate-patch repair (S5) ─────────────────────────────────────────────
+# On bright high-dynamic scenes (fire), LaMa occasionally hallucinates a small
+# dark garbage block inside the masked area instead of continuing the
+# background (seen as 2 black squares where "the salt" was erased). Detector:
+# a connected blob of masked pixels that is MUCH darker than the ring of
+# unmasked pixels around the mask. Repair: redo that frame's mask with
+# diffusion inpaint (telea), which cannot hallucinate. Runs per LaMa output
+# frame (~1ms on a caption ROI); legit dark fills next to dark surroundings
+# never trigger (the ring is dark too).
+_REPAIR_DARK_DELTA = 75   # blob must be this much darker than the ring mean
+_REPAIR_MIN_AREA = 64     # ignore specks below this many pixels
+
+
+def _patch_degenerate(patch_bgr: np.ndarray, mask_roi: np.ndarray) -> bool:
+    """True when a LaMa output patch contains a dark garbage blob inside the
+    mask, judged against the brightness just outside the mask."""
+    m = mask_roi > 0
+    if not m.any():
+        return False
+    gray = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2GRAY)
+    ring = (cv2.dilate(mask_roi, np.ones((15, 15), np.uint8)) > 0) & ~m
+    if not ring.any():
+        return False
+    ring_mean = float(gray[ring].mean())
+    dark = ((gray < ring_mean - _REPAIR_DARK_DELTA) & m).astype(np.uint8)
+    if int(dark.sum()) < _REPAIR_MIN_AREA:
+        return False
+    n, _lbl, stats, _c = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    return any(int(stats[k, cv2.CC_STAT_AREA]) >= _REPAIR_MIN_AREA
+               for k in range(1, n))
+
 
 def _resolve_ffmpeg() -> str:
     from config import settings
@@ -435,6 +466,7 @@ async def inpaint_region(
         batch_seg: Optional[_SegState] = None
         frame_buf: list[np.ndarray] = []
         roi_rgb_buf: list[np.ndarray] = []
+        repair_count = [0]  # frames whose LaMa patch was redone with telea
 
         def _flush_lama_batch() -> bool:
             """Flush the current LaMa batch (same segment). Returns False on pipe error."""
@@ -455,7 +487,15 @@ async def inpaint_region(
             out = (out * 255.0).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
             out = out[:, :seg.roi_h, :seg.roi_w, ::-1]  # crop padding + RGB->BGR
             for i, f in enumerate(frame_buf):
-                f[seg.ry:seg.ry2, seg.rx:seg.rx2] = out[i]
+                patch = out[i]
+                if _patch_degenerate(patch, seg.mask_roi):
+                    # LaMa hallucinated a dark garbage block — redo this
+                    # frame's mask with diffusion inpaint instead.
+                    orig_roi = f[seg.ry:seg.ry2, seg.rx:seg.rx2]
+                    patch = cv2.inpaint(orig_roi, seg.mask_roi,
+                                        inpaint_radius, cv2.INPAINT_TELEA)
+                    repair_count[0] += 1
+                f[seg.ry:seg.ry2, seg.rx:seg.rx2] = patch
                 try:
                     enc.stdin.write(f.tobytes())
                 except (BrokenPipeError, OSError) as e:
@@ -595,7 +635,12 @@ async def inpaint_region(
             tail = "\n".join(enc_err.strip().splitlines()[-8:])
             raise RuntimeError(f"inpaint output missing/too small. ffmpeg:\n{tail}")
 
-        logger.info(f"Inpaint done: {frame_idx} frames, {out.stat().st_size // 1024} KB")
+        repaired = repair_count[0]
+        logger.info(
+            f"Inpaint done: {frame_idx} frames, {out.stat().st_size // 1024} KB"
+            + (f", {repaired} degenerate LaMa patches repaired with telea"
+               if repaired else "")
+        )
         return str(out)
 
     loop = asyncio.get_event_loop()

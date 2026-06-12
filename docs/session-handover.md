@@ -1181,6 +1181,38 @@ Verification protocol for the future: ALWAYS verify with the every-frame
 scan (`server/scripts/s5_scan_every_frame.py X Y W H VIDEO`) — the 5fps
 scan hides transition flashes (that's how S4 wrongly concluded "0 leaks").
 
+## S5.6 — LaMa degenerate-patch repair (user-reported black squares)
+User spotted two small BLACK SQUARES at ~t=6.7s in the erased output
+(dome-over-fire scene). Diagnosed (read-only, frames dumped to
+`data/temp/s5_test/dome_*`): source frame had caption "the salt"; the text
+IS fully erased — the squares are LaMa HALLUCINATION artifacts inside the
+masked word areas, on the bright/saturated fire background. Neighbouring
+frames (f195/f210, same mask+model) are clean → per-frame instability.
+NOT an fp16 issue — fp16 is opt-in (`CLIPFORGE_LAMA_FP16`, default off);
+I initially mis-attributed it and corrected myself to the user. This also
+explains run 2's phantom 'IIDI' OCR leak at f250 (OCR read the squares).
+
+Fix (user picked option 1, `services/inpaint.py`):
+- `_patch_degenerate(patch, mask_roi)` — a connected blob ≥64px inside the
+  mask that is ≥75 gray-levels DARKER than the ring of unmasked pixels
+  around the mask = hallucinated garbage. Dark fills next to dark
+  surroundings never trigger (ring is dark too).
+- Hook in `_flush_lama_batch`: degenerate patch → redo that frame's mask
+  with `cv2.inpaint` telea (diffusion — cannot hallucinate), counted and
+  logged at "Inpaint done". ~1ms/frame check on caption ROIs.
+PR #21 turned out MERGED (before S4!) — the whole T20/S4+S5 eraser batch
+is only on `claude/parallel-processing`. Plan: push branch + open a NEW
+PR with all eraser commits.
+
+Validation run 4 (WITH repair): **143 degenerate LaMa patches repaired**
+(the fire scene triggered LaMa's failure mode on many frames, not just
+the 2 the user saw); every-frame re-OCR still **740 frames / 0 leaks**;
+encode 740/740; eyeballed f200 — black squares GONE, fire continues
+naturally (telea smear invisible); f180 clean. 12/12 smoke tests pass.
+143/~445 inpainted frames repaired = the detector is deliberately eager;
+the cost is telea (smooth diffusion) instead of LaMa on those frames —
+safe trade, hallucination is worse than smear.
+
 ---
 
 End of handover.

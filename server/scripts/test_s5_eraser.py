@@ -14,9 +14,12 @@ Exit 0 = zero leaks in the new output.
 
 import asyncio
 import json
+import logging
 import sys
 import time
 from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
 _SERVER = Path(__file__).resolve().parent.parent
 if str(_SERVER) not in sys.path:
