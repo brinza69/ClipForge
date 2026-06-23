@@ -127,7 +127,9 @@ def compute_speed_plan(video_path: str, voice_path: str) -> dict:
         src_fps = (float(num) / max(1.0, float(den))) if den else 30.0
     except Exception:
         src_fps = 30.0
-    target_fps = src_fps if 0 < src_fps <= 60 else 30.0
+    # Force 60 fps output: native-60 sources pass through, 30 fps sources are
+    # lifted to 60 (duplicated below, or motion-interpolated on big slow-downs).
+    target_fps = 60.0
 
     # setpts stretches/compresses playback time; ffmpeg fills new fps slots by
     # duplicating frames (choppy on slow-downs). For stretch >1.15 we run
@@ -135,6 +137,10 @@ def compute_speed_plan(video_path: str, voice_path: str) -> dict:
     vfilter = f"setpts=PTS*{factor:.6f}"
     if factor > 1.15:
         vfilter += f",minterpolate=fps={target_fps:.3f}:mi_mode=blend"
+    else:
+        # No big stretch → just (re)sample to the 60 fps target (duplicates
+        # frames on 30 fps sources; a no-op when the source is already 60).
+        vfilter += f",fps={int(target_fps)}"
     if overhang > 0.01:
         vfilter += f",tpad=stop_mode=clone:stop_duration={overhang:.3f}"
     # Cap to voice duration in case float rounding pushes slightly over.
