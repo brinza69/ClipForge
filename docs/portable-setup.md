@@ -53,4 +53,8 @@ translate to RO → GPU erase (autodetect) → for each role: RO voice + big RO
 captions + avatar, split into 1-min parts → upload to that role's Drive folder →
 write the AI description back to the sheet → advance → repeat.
 
+For **continuous** processing that never stops — it drains the sheet, then waits
+and picks up any new rows you add later — run `.\scripts\watch-sheet.ps1`
+instead (Ctrl+C to stop).
+
 Watch progress live at **http://localhost:8420/exports/live.html**.

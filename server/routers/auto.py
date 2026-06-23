@@ -109,7 +109,9 @@ def _default_zones(width: int, height: int) -> tuple[dict, dict]:
         "src_w": w, "src_h": h,
     }
     caption = {
-        "x": round(w * 0.05), "y": round(h * 0.78),
+        # y lifted from 0.78 → 0.73 so auto captions sit a little higher
+        # (clear of the very bottom + any corner avatar).
+        "x": round(w * 0.05), "y": round(h * 0.73),
         "w": round(w * 0.90), "h": round(h * 0.14),
         "src_w": w, "src_h": h,
     }
