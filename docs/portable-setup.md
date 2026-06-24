@@ -58,3 +58,21 @@ and picks up any new rows you add later — run `.\scripts\watch-sheet.ps1`
 instead (Ctrl+C to stop).
 
 Watch progress live at **http://localhost:8420/exports/live.html**.
+
+## 5. Dual-GPU (optional — 2 rows at once)
+
+With two NVIDIA cards you can process two rows in parallel (one per GPU).
+Needs a second config dir `data_b/` (copy `tts_config.json`,
+`transcript_config.json`, `drive_oauth_*.json`, `sheets_config.json`,
+`variant_presets/`, `commentators/` into it; the runtime subdirs are created
+on boot). Then:
+
+```powershell
+.\scripts\start-dual-gpu.ps1
+```
+
+It auto-detects both GPUs and starts backend A (stronger card, `:8420`,
+`data/`), backend B (`:8421`, `data_b/`), the dispatcher (`dual_dispatch.py`,
+sends one row to each free backend and writes the description back) and the
+live status-writer. The live page then shows both GPUs side by side. Each
+backend auto-tunes its LaMa batch to its own VRAM.
