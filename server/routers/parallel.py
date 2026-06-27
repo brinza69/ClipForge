@@ -211,6 +211,8 @@ async def parallel_result(job_id: str):
         "sheets_commit": meta.get("sheets_commit"),
         "sheets_row": meta.get("sheets_row"),
         "sheets_number": meta.get("sheets_number"),
+        "cleaned_text": meta.get("cleaned_text") or "",
+        "transcript_text": meta.get("transcript_text") or "",
     }
 
 

@@ -19,6 +19,22 @@ TAB = _cfg.get("tab", "Sheet1")
 MIN_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MIN_ROW", "126"))
 BACKENDS = {"A(3060)": "http://127.0.0.1:8420", "B(1660)": "http://127.0.0.1:8421"}
 PRESETS = ["narator", "comentator", "povestitor"]
+# When a row completes the dispatcher writes, in PRESETS order:
+#   C = cleaned transcript   D = RO description (caption)
+#   F/G/H = the 3 variants' fetchable video links   I = posting status flag
+#   ("ready" so the n8n poster picks the row up). E = FRENCH description column
+#   (written by victoria_dispatch.py) — never touched here.
+TRANSCRIPT_COL = "C"
+VARIANT_LINK_COLS = ["F", "G", "H"]   # index 0/1/2 -> narator/comentator/povestitor
+STATUS_COL = "I"
+
+
+def variant_links(variant):
+    """Newline-joined fetchable URLs for one variant's uploaded Drive file(s).
+    Split videos produce several parts -> several links, in order."""
+    files = ((variant or {}).get("drive") or {}).get("files") or []
+    urls = [(f.get("download_url") or f.get("link") or "").strip() for f in files]
+    return "\n".join(u for u in urls if u)
 
 
 def http(url, data=None, timeout=60):
@@ -34,7 +50,9 @@ def read_pending():
     for i, r in enumerate(vals, start=1):
         b = (r[1].strip() if len(r) > 1 and r[1] else "")
         d = (r[3].strip() if len(r) > 3 and r[3] else "")
-        if i >= MIN_ROW and b.startswith("http") and not d:
+        # Skip @herytstory rows — those are French content handled by
+        # victoria_dispatch.py (French desc -> col E), not Romanian.
+        if i >= MIN_ROW and b.startswith("http") and not d and "herytstory" not in b.lower():
             out.append((i, b))
     return out
 
@@ -80,12 +98,28 @@ def main(dry=False):
             if st == "done":
                 try:
                     r = http(backend + f"/api/parallel/{jid}/result", timeout=20)
+                    # Links first (E/F/G by variant index), then the description
+                    # (D), then the "ready" flag (H) — so the poster never sees
+                    # a ready row whose video links aren't written yet.
+                    wrote = 0
+                    for v in (r.get("variants") or []):
+                        idx = v.get("index")
+                        if isinstance(idx, int) and 0 <= idx < len(VARIANT_LINK_COLS):
+                            links = variant_links(v)
+                            if links:
+                                write_cell(SID, TAB, VARIANT_LINK_COLS[idx], row, links)
+                                wrote += 1
+                    tx = (r.get("cleaned_text") or r.get("transcript_text") or "").strip()
+                    if tx:
+                        write_cell(SID, TAB, TRANSCRIPT_COL, row, tx)
                     desc = ((r.get("descriptions") or {}).get("ai_generated") or "").strip()
                     if desc:
                         write_cell(SID, TAB, "D", row, desc)
-                    print(f"[{name}] row {row} DONE -> Drive + desc", flush=True)
+                    if wrote:
+                        write_cell(SID, TAB, STATUS_COL, row, "ready")
+                    print(f"[{name}] row {row} DONE -> Drive + desc + {wrote} links", flush=True)
                 except Exception as e:
-                    print(f"[{name}] row {row} desc-write fail: {str(e)[:80]}", flush=True)
+                    print(f"[{name}] row {row} writeback fail: {str(e)[:80]}", flush=True)
                 done.add(row); inflight[name] = None
             elif st in ("failed", "error", "cancelled"):
                 print(f"[{name}] row {row} {st}: {(j.get('error') or '')[:90]}", flush=True)

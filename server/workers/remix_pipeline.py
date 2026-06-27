@@ -621,9 +621,16 @@ async def _run_tts(text: str, cfg: Dict, output_path: str, slc: _Sliced) -> str:
 
     if engine == "elevenlabs":
         from services.elevenlabs import synthesize as el_synth
-        # ElevenLabs accepts 0.7-1.2; service clamps.
+        # ElevenLabs accepts 0.7-1.2; service clamps. Optional per-variant
+        # voice settings (stability / similarity) ride through when present.
+        el_kwargs: Dict = {}
+        if cfg.get("tts_stability") is not None:
+            el_kwargs["stability"] = float(cfg["tts_stability"])
+        if cfg.get("tts_similarity") is not None:
+            el_kwargs["similarity_boost"] = float(cfg["tts_similarity"])
         await el_synth(
             text=text, voice_id=voice_id, output_path=output_path, speed=speed,
+            **el_kwargs,
         )
         return output_path
 

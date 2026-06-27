@@ -139,6 +139,7 @@ def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") ->
 _VARIANT_KEYS = (
     "name",
     "tts_engine", "tts_voice_id", "tts_language", "tts_speed",
+    "tts_stability", "tts_similarity",
     "caption_template_id", "caption_font_family", "caption_scale",
     "caption_text_color", "caption_outline_color", "caption_outline_width",
     "caption_uppercase", "caption_italic", "caption_words_per_chunk",

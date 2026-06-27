@@ -1,0 +1,148 @@
+{
+  "name": "ClipForge → TikTok (Upload-Post)",
+  "meta": {
+    "templateId": "clipforge-tiktok-poster",
+    "description": "Polls the ClipForge Google Sheet for rows where status=ready, fans each row's 3 role-variants (narator/comentator/povestitor) out to the mapped TikTok accounts via the Upload-Post API, then marks each row posted/error. TikTok-only v1. Edit ACCOUNT_MAP in the 'Build post jobs' node. Sheet headers: NR | LINK | TRANSCRIPT | DESCRIERE | narator_url | comentator_url | povestitor_url | status. Rows are matched on NR."
+  },
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [ { "field": "minutes", "minutesInterval": 15 } ] } },
+      "id": "trigger",
+      "name": "Every 15 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ -700, 280 ]
+    },
+    {
+      "parameters": {
+        "documentId": { "__rl": true, "value": "1QESHMIoCgnaS7fOU5ynQ7wBQ-rmqP6gGnwPG7Zll0wM", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Sheet1", "mode": "name" },
+        "options": {}
+      },
+      "id": "readsheet",
+      "name": "Read Sheet1",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [ -500, 280 ],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_GOOGLE_CRED_ID", "name": "Google Sheets account" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            { "leftValue": "={{ ($json.status || '').toString().trim().toLowerCase() }}", "rightValue": "ready", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "filterready",
+      "name": "Only status = ready",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [ -300, 280 ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "__rl": true, "value": "1QESHMIoCgnaS7fOU5ynQ7wBQ-rmqP6gGnwPG7Zll0wM", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Sheet1", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": { "NR": "={{ $json.NR }}", "status": "posting" },
+          "matchingColumns": [ "NR" ]
+        },
+        "options": {}
+      },
+      "id": "claimrows",
+      "name": "Claim rows (posting)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [ -100, 280 ],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_GOOGLE_CRED_ID", "name": "Google Sheets account" } }
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// ===== EDIT THIS: role -> the TikTok accounts (Upload-Post profiles) =====\n// user           = the Upload-Post profile name for that connected TikTok account\n// country        = label only (geo is fixed when you CONNECT the account from\n//                  that country's IP - not set here)\n// caption_suffix = appended to the caption for THIS account so the same video\n//                  isn't posted with an identical caption across many accounts\n//                  (a spam-cluster signal). Use unique hashtags.\nconst ACCOUNT_MAP = {\n  narator: [\n    { user: 'ro_narator_01', country: 'RO', caption_suffix: '' },\n    // { user: 'de_narator_01', country: 'DE', caption_suffix: ' #fyp #deutschland' },\n  ],\n  comentator: [\n    { user: 'ro_comentator_01', country: 'RO', caption_suffix: '' },\n  ],\n  povestitor: [\n    { user: 'ro_povestitor_01', country: 'RO', caption_suffix: '' },\n  ],\n};\n\nconst ROLE_FIELDS = { narator: 'narator_url', comentator: 'comentator_url', povestitor: 'povestitor_url' };\n\n// Read the FULL ready rows from the filter node (the claim node's output is thin).\nconst rows = $('Only status = ready').all();\nconst out = [];\nfor (const item of rows) {\n  const row = item.json;\n  const caption = (row.DESCRIERE || '').toString().trim();\n  const nr = row.NR;\n  for (const role of Object.keys(ROLE_FIELDS)) {\n    const cell = (row[ROLE_FIELDS[role]] || '').toString().trim();\n    if (!cell) continue;\n    const urls = cell.split(/\\r?\\n/).map(s => s.trim()).filter(Boolean); // split parts -> several\n    const accounts = ACCOUNT_MAP[role] || [];\n    urls.forEach((video_url, partIdx) => {\n      for (const acct of accounts) {\n        out.push({ json: {\n          NR: nr, role, part: partIdx + 1,\n          user: acct.user, country: acct.country || '',\n          video_url,\n          title: (caption + (acct.caption_suffix || '')).slice(0, 2200),\n        } });\n      }\n    });\n  }\n}\nreturn out;\n"
+      },
+      "id": "buildjobs",
+      "name": "Build post jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 100, 280 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.upload-post.com/api/upload",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "user", "value": "={{ $json.user }}" },
+            { "name": "platform[]", "value": "tiktok" },
+            { "name": "video", "value": "={{ $json.video_url }}" },
+            { "name": "title", "value": "={{ $json.title }}" },
+            { "name": "post_mode", "value": "DIRECT_POST" },
+            { "name": "privacy_level", "value": "PUBLIC_TO_EVERYONE" },
+            { "name": "is_aigc", "value": "true" }
+          ]
+        },
+        "options": {
+          "batching": { "batch": { "batchSize": 1, "batchInterval": 90000 } },
+          "response": { "response": { "fullResponse": true, "neverError": true } }
+        }
+      },
+      "id": "uploadpost",
+      "name": "Upload-Post → TikTok",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 300, 280 ],
+      "credentials": { "httpHeaderAuth": { "id": "REPLACE_UPLOADPOST_CRED_ID", "name": "Upload-Post Apikey header" } }
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Zip each job with its HTTP response (same order), group by NR, decide status.\nconst jobs = $('Build post jobs').all();\nconst resps = $input.all();\nconst byRow = {};\nfor (let i = 0; i < jobs.length; i++) {\n  const j = jobs[i].json;\n  const r = (resps[i] && resps[i].json) ? resps[i].json : {};\n  let body = (r.body !== undefined) ? r.body : r; // fullResponse -> {statusCode, body}\n  let ok = false, msg = '';\n  try {\n    const b = (typeof body === 'string') ? JSON.parse(body) : body;\n    ok = !!(b && (b.success === true || (b.results && b.results.tiktok && b.results.tiktok.success === true)));\n    msg = (b && b.message) ? b.message : (ok ? '' : 'failed');\n  } catch (e) { msg = 'unparseable response'; }\n  const nr = j.NR;\n  if (!byRow[nr]) byRow[nr] = { NR: nr, total: 0, ok: 0, errs: [] };\n  byRow[nr].total++;\n  if (ok) byRow[nr].ok++; else byRow[nr].errs.push((j.role || '') + '/' + (j.user || '') + ': ' + msg);\n}\nreturn Object.values(byRow).map(r => ({ json: {\n  NR: r.NR,\n  status: (r.total > 0 && r.ok === r.total) ? 'posted' : ('error: ' + r.errs.join(' | ')).slice(0, 250),\n} }));\n"
+      },
+      "id": "reconcile",
+      "name": "Reconcile per row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 500, 280 ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "__rl": true, "value": "1QESHMIoCgnaS7fOU5ynQ7wBQ-rmqP6gGnwPG7Zll0wM", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Sheet1", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": { "NR": "={{ $json.NR }}", "status": "={{ $json.status }}" },
+          "matchingColumns": [ "NR" ]
+        },
+        "options": {}
+      },
+      "id": "markstatus",
+      "name": "Mark row posted/error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [ 700, 280 ],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_GOOGLE_CRED_ID", "name": "Google Sheets account" } }
+    }
+  ],
+  "connections": {
+    "Every 15 min": { "main": [ [ { "node": "Read Sheet1", "type": "main", "index": 0 } ] ] },
+    "Read Sheet1": { "main": [ [ { "node": "Only status = ready", "type": "main", "index": 0 } ] ] },
+    "Only status = ready": { "main": [ [ { "node": "Claim rows (posting)", "type": "main", "index": 0 } ] ] },
+    "Claim rows (posting)": { "main": [ [ { "node": "Build post jobs", "type": "main", "index": 0 } ] ] },
+    "Build post jobs": { "main": [ [ { "node": "Upload-Post → TikTok", "type": "main", "index": 0 } ] ] },
+    "Upload-Post → TikTok": { "main": [ [ { "node": "Reconcile per row", "type": "main", "index": 0 } ] ] },
+    "Reconcile per row": { "main": [ [ { "node": "Mark row posted/error", "type": "main", "index": 0 } ] ] }
+  }
+}

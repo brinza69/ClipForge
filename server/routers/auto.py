@@ -65,6 +65,7 @@ router = APIRouter(prefix="/api/auto", tags=["auto"])
 _PRESET_VARIANT_FIELDS = (
     "name",
     "tts_engine", "tts_voice_id", "tts_language", "tts_speed",
+    "tts_stability", "tts_similarity",
     "caption_template_id", "caption_font_family", "caption_scale",
     "caption_text_color", "caption_uppercase", "caption_italic",
     "caption_words_per_chunk", "caption_strip_punct",
@@ -85,6 +86,7 @@ class Zone(BaseModel):
 
 class AutoRequest(BaseModel):
     url: Optional[str] = None
+    number: Optional[str] = None         # names the output <number>.mp4 (explicit-url flows)
     variant_preset_ids: List[str] = Field(min_length=1, max_length=4)
     from_sheets: bool = False
     auto_detect_zones: bool = True
@@ -157,6 +159,7 @@ async def auto_run(req: AutoRequest):
         if not req.url or not req.url.strip():
             raise HTTPException(400, "url is required when from_sheets=false")
         url = req.url.strip()
+        sheets_number = (req.number or "").strip() or None
 
     # ── 2. Resolve presets → list of full variant dicts ──────────────────
     presets: List[dict] = []

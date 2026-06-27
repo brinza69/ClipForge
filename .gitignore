@@ -41,10 +41,14 @@ yarn-error.log*
 next-env.d.ts
 
 data/
+data_b/
 
 # Runtime artifacts from dev.sh
 logs/
 .run/
+
+# n8n runtime logs (the workflow JSON + README are tracked)
+n8n/*.log
 
 server/.venv/
 
