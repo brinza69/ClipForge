@@ -139,14 +139,14 @@ def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") ->
 _VARIANT_KEYS = (
     "name",
     "tts_engine", "tts_voice_id", "tts_language", "tts_speed",
-    "tts_stability", "tts_similarity",
+    "tts_stability", "tts_similarity", "voice_target_sec",
     "caption_template_id", "caption_font_family", "caption_scale",
     "caption_text_color", "caption_outline_color", "caption_outline_width",
     "caption_uppercase", "caption_italic", "caption_words_per_chunk",
     "caption_strip_punct",
     "commentator_preset_id", "commentator_chroma_color",
     "commentator_chroma_similarity", "commentator_chroma_blend",
-    "drive_folder", "split_into_parts",
+    "drive_folder", "split_into_parts", "match_to_source_duration",
 )
 
 
@@ -247,6 +247,17 @@ async def handle_parallel_pipeline(
     await slc_clean.update(1.0, "Transcript ready (shared)")
 
     # ── Per-variant fork (0.48–0.97) ───────────────────────────────────────
+    # Probe the source (erased) video duration ONCE — erase preserves length,
+    # so this is the ORIGINAL video length. Variants with match_to_source_duration
+    # fit their voice to it (atempo) so the final video keeps the original
+    # duration instead of being stretched to the voice length.
+    source_dur = 0.0
+    try:
+        from services.speed_match import probe_duration as _probe_src
+        source_dur = float(_probe_src(str(erased_path)))
+        logger.info(f"parallel_pipeline {job_id}: source duration {source_dur:.2f}s")
+    except Exception as _e:
+        logger.warning(f"parallel_pipeline {job_id}: could not probe source duration: {_e}")
     n = len(variants)
     var_lo, var_hi = 0.48, 0.97
     var_span = (var_hi - var_lo) / n
@@ -254,6 +265,11 @@ async def handle_parallel_pipeline(
 
     for i, variant in enumerate(variants):
         vcfg = _variant_cfg(cfg, variant)
+        # Match the output to the ORIGINAL video length: fit this variant's
+        # voice to the source duration so speed_match leaves the video
+        # ~unstretched (factor ~ 1) and voice + video end together.
+        if vcfg.get("match_to_source_duration") and source_dur > 0:
+            vcfg["voice_target_sec"] = source_dur
         vdir = project_dir / f"v{i}"
         vdir.mkdir(parents=True, exist_ok=True)
         v_base = var_lo + i * var_span

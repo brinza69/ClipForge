@@ -66,6 +66,10 @@ class VariantConfig(BaseModel):
     # Split the finished video into equal parts for multi-part posting.
     split_into_parts: bool = False
 
+    # Fit the voice to the SOURCE video duration (atempo) so the output keeps
+    # the original length instead of time-stretching the video to the voice.
+    match_to_source_duration: bool = False
+
 
 class StartRequest(BaseModel):
     url: str

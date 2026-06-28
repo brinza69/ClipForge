@@ -34,6 +34,8 @@ _FIELDS = (
     "commentator_preset_id",
     "drive_folder",
     "split_into_parts",
+    "voice_target_sec",
+    "match_to_source_duration",
 )
 
 

@@ -595,6 +595,34 @@ async def synth_voice_from_text(
             shutil.copy(desilenced_raw, desilenced)
     await polish_loop.run_in_executor(None, _polish)
 
+    # Optional: fit the voice to a target duration so the final video — which
+    # speed_match stretches to the voice length — lands at ~target_sec, WITHOUT
+    # splitting into parts. atempo changes speaking speed but preserves pitch.
+    target = cfg.get("voice_target_sec")
+    try:
+        target = float(target) if target else 0.0
+    except Exception:
+        target = 0.0
+    if target > 0:
+        cur = max(0.1, _probe_audio_dur(str(desilenced)))
+        factor = max(0.5, min(2.0, cur / target))   # >1 speeds up (shortens)
+        if abs(factor - 1.0) > 0.02:
+            fitted = project_dir / f"{out_stem}_fit.wav"
+            fit_cmd = [
+                _ffmpeg_bin(), "-y", "-loglevel", "error",
+                "-i", str(desilenced), "-filter:a", f"atempo={factor:.4f}",
+                "-ar", "44100", str(fitted),
+            ]
+            def _fit() -> None:
+                r = subprocess.run(fit_cmd, capture_output=True, text=True,
+                                   creationflags=_creationflags(), timeout=600)
+                if r.returncode == 0 and fitted.exists():
+                    shutil.copy(str(fitted), str(desilenced))
+                    logger.info(f"voice fitted to ~{target:.0f}s (atempo={factor:.3f}, was {cur:.1f}s)")
+                else:
+                    logger.warning(f"voice fit-to-{target:.0f}s failed, keeping natural length: {(r.stderr or '')[-200:]}")
+            await asyncio.get_event_loop().run_in_executor(None, _fit)
+
     await slc.update(1.0, "Voice ready")
     return desilenced
 
