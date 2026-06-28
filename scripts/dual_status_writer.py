@@ -1,10 +1,31 @@
 """Poll both backends (3060 :8420, 1660 :8421) and write a combined status file
 that the live page reads same-origin (no CORS). Runs forever."""
-import json, time, re, urllib.request
+import json, time, re, os, subprocess, urllib.request
 
 OUT = r"D:\clipforge\data\exports\dual_status.json"
 DISPATCH_LOG = r"D:\clipforge\data\dispatch.log"
-BACKENDS = [("RTX 3060", "http://127.0.0.1:8420"), ("GTX 1660 SUPER", "http://127.0.0.1:8421")]
+_CF = 0x08000000 if os.name == "nt" else 0
+
+
+def detect_backends():
+    """One (gpu_name, url) per detected GPU — GPU 0 -> :8420, GPU 1 -> :8421.
+    A single-GPU PC gets a single backend (no phantom 2nd card on the dashboard)."""
+    names = []
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10, creationflags=_CF,
+        ).stdout
+        names = [n.strip() for n in out.splitlines() if n.strip()]
+    except Exception:
+        pass
+    if not names:
+        names = ["GPU 0"]
+    ports = [8420, 8421]
+    return [(names[i], f"http://127.0.0.1:{ports[i]}") for i in range(min(len(ports), len(names)))]
+
+
+BACKENDS = detect_backends()
 
 
 def job_row_map():

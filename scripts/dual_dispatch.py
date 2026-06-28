@@ -17,7 +17,10 @@ SID = _cfg.get("spreadsheet_id", "")
 TAB = _cfg.get("tab", "Sheet1")
 # Only process rows from here on (skip older, intentionally-unprocessed rows).
 MIN_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MIN_ROW", "126"))
-BACKENDS = {"A(3060)": "http://127.0.0.1:8420", "B(1660)": "http://127.0.0.1:8421"}
+# A -> :8420 (GPU 0), B -> :8421 (GPU 1). On a single-GPU PC only A is reachable;
+# B is auto-skipped at assign time (see backend_up). Labels are by index, not card
+# model, so the rig is portable to any machine.
+BACKENDS = {"A(:8420)": "http://127.0.0.1:8420", "B(:8421)": "http://127.0.0.1:8421"}
 PRESETS = ["narator", "comentator", "povestitor"]
 # When a row completes the dispatcher writes, in PRESETS order:
 #   C = cleaned transcript   D = RO description (caption)
@@ -41,6 +44,16 @@ def http(url, data=None, timeout=60):
     body = json.dumps(data).encode() if data is not None else None
     hdr = {"Content-Type": "application/json"} if data is not None else {}
     return json.load(urllib.request.urlopen(urllib.request.Request(url, data=body, headers=hdr), timeout=timeout))
+
+
+def backend_up(base):
+    """True if the backend answers /api/health. Lets the rig run on a single-GPU
+    PC: a missing 2nd backend (:8421) is simply skipped, no error spam."""
+    try:
+        http(base + "/api/health", timeout=4)
+        return True
+    except Exception:
+        return False
 
 
 def read_pending():
@@ -75,9 +88,10 @@ def main(dry=False):
     while True:
         busy_rows = {v[0] for v in inflight.values() if v} | done
         pending = [p for p in read_pending() if p[0] not in busy_rows]
-        # assign to free backends
+        # assign to free backends (skip any backend that isn't up — e.g. the
+        # 2nd GPU's backend on a single-GPU PC)
         for name, backend in BACKENDS.items():
-            if inflight[name] is None and pending:
+            if inflight[name] is None and pending and backend_up(backend):
                 row, url = pending.pop(0)
                 try:
                     jid = enqueue(backend, url)

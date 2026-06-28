@@ -41,15 +41,27 @@ Set-Content -Path $lock -Value $PID -Encoding ascii -Force
 
 # hang counters: consecutive ticks a backend was bound-but-unhealthy
 $script:hang = @{ 8420 = 0; 8421 = 0 }
+# last (re)start time per port — give a fresh backend time to import torch +
+# bind its port (60-90s on this box) before spawning ANOTHER. Without this the
+# 30s tick starts duplicate backends that each load torch and caused the
+# OOM / orphaned-whisper-worker pile-up.
+$script:started = @{ 8420 = (Get-Date).AddSeconds(-999); 8421 = (Get-Date).AddSeconds(-999) }
 
 function Log($msg) {
     $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
     try { Add-Content -Path $log -Value $line -ErrorAction Stop } catch {}
 }
 
-function Get-Uuid($pattern) {
-    $line = (& nvidia-smi -L) | Select-String $pattern | Select-Object -First 1
-    if ($line) { ($line.ToString() -replace '.*UUID:\s*(GPU-[0-9a-fA-F-]+)\).*', '$1') } else { "" }
+function Get-GpuUuids {
+    # All NVIDIA GPU UUIDs in index order (GPU 0, GPU 1, ...). Model-agnostic so
+    # the rig works on ANY NVIDIA box — a single card or the dual-GPU rig. (The
+    # old version matched hardcoded model names "3060"/"1660" and started ZERO
+    # backends on any other machine.)
+    $uuids = @()
+    foreach ($line in (& nvidia-smi -L)) {
+        if ($line -match 'UUID:\s*(GPU-[0-9a-fA-F-]+)') { $uuids += $Matches[1] }
+    }
+    return ,$uuids
 }
 
 function Test-Health($port) {
@@ -107,6 +119,11 @@ function Ensure-Backend($port, $uuid, $dataDir, $name) {
     }
     $script:hang[$port] = 0
     if (-not $uuid) { Log "ERROR: no GPU UUID for $name — cannot start"; return }
+    if (((Get-Date) - $script:started[$port]).TotalSeconds -lt 90) {
+        Log "backend $name (:$port) still booting (<90s since last start) — not respawning"
+        return
+    }
+    $script:started[$port] = Get-Date
     Start-Backend $port $uuid $dataDir $name
 }
 
@@ -135,22 +152,34 @@ function Ensure-Proc($pattern, $scriptPath, $outLog, $errLog, $name) {
 Log "watchdog online (pid=$PID)"
 $tick = 0
 while ($true) {
-    $u3060 = Get-Uuid "3060"
-    $u1660 = Get-Uuid "1660"
-    Ensure-Backend 8420 $u3060 "$root\data"   "A(3060)"
-    Ensure-Backend 8421 $u1660 "$root\data_b" "B(1660)"
+    # Detect GPUs each tick (a card can drop/return). GPU 0 -> backend A
+    # (:8420, data/); GPU 1 -> backend B (:8421, data_b/). A single-GPU PC runs
+    # ONLY backend A; capped at 2 backends.
+    $gpus = @(Get-GpuUuids)
+    $nb = [Math]::Min(2, $gpus.Count)
+    if ($nb -lt 1) {
+        if ($tick % 20 -eq 0) { Log "no NVIDIA GPU detected by nvidia-smi — cannot start backends" }
+        $tick++; Start-Sleep -Seconds 30; continue
+    }
+    $oks = @()
+    for ($i = 0; $i -lt $nb; $i++) {
+        $port = 8420 + $i
+        $data = if ($i -eq 0) { "$root\data" } else { "$root\data_b" }
+        $nm   = [string][char](65 + $i)   # A, B
+        Ensure-Backend $port $gpus[$i] $data $nm
+        $oks += [bool](Test-Health $port)
+    }
 
-    $aOk = Test-Health 8420
-    $bOk = Test-Health 8421
-    if ($aOk -and $bOk) {
+    # Start dispatcher + status writer once ALL detected backends are healthy.
+    if (($oks.Count -gt 0) -and (-not ($oks -contains $false))) {
         # dispatcher stdout MUST be dispatch.log — the status writer parses it for row numbers
-        Ensure-Proc 'dual_dispatch\.py'      "$root\scripts\dual_dispatch.py"      "$root\data\dispatch.log"    "$root\data\dispatch.err.log" "dispatcher"
-        Ensure-Proc 'dual_status_writer\.py' "$root\scripts\dual_status_writer.py" "$root\data\status.out.log"  "$root\data\status.err.log"   "status-writer"
+        Ensure-Proc 'dual_dispatch\.py'      "$root\scripts\dual_dispatch.py"      "$root\data\dispatch.log"   "$root\data\dispatch.err.log" "dispatcher"
+        Ensure-Proc 'dual_status_writer\.py' "$root\scripts\dual_status_writer.py" "$root\data\status.out.log" "$root\data\status.err.log"   "status-writer"
     }
 
     if ($tick % 20 -eq 0) {
-        Log ("heartbeat  A={0} B={1} dispatch={2} status={3}" -f `
-            $aOk, $bOk, (Test-ProcRunning 'dual_dispatch\.py'), (Test-ProcRunning 'dual_status_writer\.py'))
+        Log ("heartbeat  gpus={0} backendsOk=[{1}] dispatch={2} status={3}" -f `
+            $gpus.Count, ($oks -join ','), (Test-ProcRunning 'dual_dispatch\.py'), (Test-ProcRunning 'dual_status_writer\.py'))
     }
     $tick++
     Start-Sleep -Seconds 30
