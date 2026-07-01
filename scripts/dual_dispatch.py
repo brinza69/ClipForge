@@ -23,11 +23,11 @@ MIN_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MIN_ROW", "126"))
 BACKENDS = {"A(:8420)": "http://127.0.0.1:8420", "B(:8421)": "http://127.0.0.1:8421"}
 PRESETS = ["narator", "comentator", "povestitor"]
 # When a row completes the dispatcher writes, in PRESETS order:
-#   C = cleaned transcript   D = RO description (caption)
-#   F/G/H = the 3 variants' fetchable video links   I = posting status flag
-#   ("ready" so the n8n poster picks the row up). E = FRENCH description column
-#   (written by victoria_dispatch.py) — never touched here.
-TRANSCRIPT_COL = "C"
+#   D = RO description (caption)   F/G/H = the 3 variants' fetchable video links
+#   I = posting status flag ("ready" so the n8n poster picks the row up).
+# Column C (transcript) is intentionally NOT written (user only wants the video
+# + description + links). E = FRENCH description column (written by
+# victoria_dispatch.py) — never touched here.
 VARIANT_LINK_COLS = ["F", "G", "H"]   # index 0/1/2 -> narator/comentator/povestitor
 STATUS_COL = "I"
 
@@ -123,9 +123,6 @@ def main(dry=False):
                             if links:
                                 write_cell(SID, TAB, VARIANT_LINK_COLS[idx], row, links)
                                 wrote += 1
-                    tx = (r.get("cleaned_text") or r.get("transcript_text") or "").strip()
-                    if tx:
-                        write_cell(SID, TAB, TRANSCRIPT_COL, row, tx)
                     desc = ((r.get("descriptions") or {}).get("ai_generated") or "").strip()
                     if desc:
                         write_cell(SID, TAB, "D", row, desc)
