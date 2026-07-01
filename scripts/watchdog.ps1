@@ -90,21 +90,11 @@ function Start-Backend($port, $uuid, $dataDir, $name) {
     Log "started backend $name (:$port  $dataDir  gpu=$uuid)"
 }
 
-function Cleanup-DupBackend($port) {
-    # Kill any uvicorn for this port that ISN'T the process holding the socket
-    # (failed-to-bind duplicates left from a double cold-start).
-    $owner = (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
-    if (-not $owner) { return }
-    Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match "--port[ ,]+$port" -and $_.ProcessId -ne $owner } |
-        ForEach-Object {
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-            Log "killed DUPLICATE backend pid=$($_.ProcessId) (:$port owner=$owner)"
-        }
-}
-
 function Ensure-Backend($port, $uuid, $dataDir, $name) {
-    if (Test-Health $port) { $script:hang[$port] = 0; Cleanup-DupBackend $port; return }
+    # Healthy = the real backend is bound on this port. The venv launcher's
+    # second python.exe is harmless (it does not bind the port); do NOT hunt it
+    # down — killing it takes the real backend with it.
+    if (Test-Health $port) { $script:hang[$port] = 0; return }
     if (Test-PortListening $port) {
         # bound but not answering health — wedged or still booting
         $script:hang[$port] = $script:hang[$port] + 1
@@ -128,22 +118,12 @@ function Ensure-Backend($port, $uuid, $dataDir, $name) {
 }
 
 function Ensure-Proc($pattern, $scriptPath, $outLog, $errLog, $name) {
-    $procs = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-               Where-Object { $_.CommandLine -match $pattern })
-    if ($procs.Count -gt 1) {
-        # Duplicate-spawn cleanup: keep the OLDEST, kill the rest. This is the
-        # self-correcting net for the "2 dispatchers double-process every row"
-        # bug — converges to exactly one no matter how it got duplicated.
-        $keep = ($procs | Sort-Object CreationDate)[0]
-        foreach ($p in $procs) {
-            if ($p.ProcessId -ne $keep.ProcessId) {
-                Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-                Log "killed DUPLICATE $name pid=$($p.ProcessId) (kept $($keep.ProcessId))"
-            }
-        }
-        return
-    }
-    if ($procs.Count -eq 1) { return }
+    # NOTE: the venv python.exe is a LAUNCHER that spawns a real child, so ONE
+    # logical process (dispatcher / status writer / backend) shows up as TWO
+    # python.exe. Do NOT "dedupe" by killing the extra — that kills the launcher
+    # and takes the real process down with it, which caused the restart churn +
+    # OOM earlier. Just make sure at least one is running.
+    if (Test-ProcRunning $pattern) { return }
     Start-Process -WindowStyle Hidden -FilePath $py -ArgumentList $scriptPath `
         -WorkingDirectory $root -RedirectStandardOutput $outLog -RedirectStandardError $errLog
     Log "started $name"
