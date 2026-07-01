@@ -65,7 +65,9 @@ function Get-GpuUuids {
 }
 
 function Test-Health($port) {
-    try { Invoke-RestMethod "http://127.0.0.1:$port/api/health" -TimeoutSec 3 | Out-Null; $true }
+    # 10s (not 3s): under a heavy job the CPU is pinned at 100% and uvicorn's
+    # event loop is slow to answer, but it IS alive — give it room to reply.
+    try { Invoke-RestMethod "http://127.0.0.1:$port/api/health" -TimeoutSec 10 | Out-Null; $true }
     catch { $false }
 }
 
@@ -96,14 +98,18 @@ function Ensure-Backend($port, $uuid, $dataDir, $name) {
     # down — killing it takes the real backend with it.
     if (Test-Health $port) { $script:hang[$port] = 0; return }
     if (Test-PortListening $port) {
-        # bound but not answering health — wedged or still booting
+        # Bound but not answering health. Could be WEDGED — or just BUSY: a heavy
+        # job (whisper alignment + FFmpeg encode of 3 variants) pins this slow CPU
+        # at 100%, starving uvicorn's event loop so /api/health times out even
+        # though the job is progressing fine. Tolerate 30 ticks (~15 min) before a
+        # kill so we NEVER interrupt a legitimately-busy backend mid-job.
         $script:hang[$port] = $script:hang[$port] + 1
-        if ($script:hang[$port] -ge 6) {
+        if ($script:hang[$port] -ge 30) {
             $owner = (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
             if ($owner) { Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue; Log "killed wedged backend $name pid=$owner (:$port)" }
             $script:hang[$port] = 0
         } else {
-            Log "backend $name (:$port) bound but unhealthy ($($script:hang[$port])/6) — waiting"
+            Log "backend $name (:$port) bound but unhealthy ($($script:hang[$port])/30) — waiting"
         }
         return
     }
