@@ -11,6 +11,7 @@ import {
   Wand2,
   Layers,
   FileSpreadsheet,
+  PenTool,
 } from "lucide-react";
 import { RunningJobsBadge } from "@/components/layout/running-jobs-badge";
 
@@ -18,6 +19,7 @@ const navItems = [
   { label: "Remix Pipeline", href: "/remix",  icon: Wand2 },
   { label: "Parallel Processing", href: "/parallel", icon: Layers },
   { label: "Parallel from Sheets", href: "/parallel-sheets", icon: FileSpreadsheet },
+  { label: "Auto Story Doodle", href: "/doodle", icon: PenTool },
   { label: "Utilities",  href: "/utilities",  icon: Wrench },
   { label: "Settings",   href: "/settings",   icon: Settings },
 ];

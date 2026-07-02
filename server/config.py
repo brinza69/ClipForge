@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     def knowledge_dir(self) -> Path:
         return self.data_dir / "knowledge"
 
+    @property
+    def doodle_dir(self) -> Path:
+        return self.data_dir / "doodle"
+
     def ensure_dirs(self) -> None:
         for d in [
             self.data_dir,
@@ -91,6 +95,7 @@ class Settings(BaseSettings):
             self.temp_dir,
             self.cache_dir,
             self.knowledge_dir,
+            self.doodle_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
 

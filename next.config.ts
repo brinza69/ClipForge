@@ -27,6 +27,10 @@ const nextConfig: NextConfig = {
         source: "/worker-thumbnails/:path*",
         destination: `${workerBase}/thumbnails/:path*`,
       },
+      {
+        source: "/worker-doodle/:path*",
+        destination: `${workerBase}/doodle-files/:path*`,
+      },
     ];
   },
 };
