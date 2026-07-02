@@ -1271,4 +1271,23 @@ the user's choice — do not build any of it without their explicit OK.
 
 ---
 
+## S5.9 — Merged main into the branch (60fps + eraser combined)
+`main` had diverged 87 commits on a DIFFERENT line: feat "auto story doodle
+video" (`e132894`), forced-60fps export, AND a whole TikTok-posting build
+already done by a parallel session (`n8n/clipforge-tiktok-poster.json`,
+`RESEARCH-antiban-posting-2026-06-25.md`, `scripts/dual_dispatch.py`,
+`HANDOVER-2026-06-25.md` — DID NOT touch it). The S3 hardening + S4/S5
+eraser work was only on `claude/parallel-processing`.
+User: combine both, MUST keep 60fps.
+- Backup first: tag `backup-parallel-20260702_2329` + zip
+  `F:\ClipForge-backups\clipforge_parallel_20260702_2329.zip` + origin branch.
+- `git merge main` → CLEAN, zero conflicts (merge `e604bba`). speed_match.py
+  resolved to main's `target_fps = 60.0` (60fps kept ✓); eraser S5 survived
+  (inpaint `_patch_degenerate`, `caption_audit.py`, transcript_words wiring
+  x6 remix / x2 parallel) ✓; main's new features present ✓.
+- Verified `py_compile` OK + `tsc --noEmit` OK; pushed; dev server restarted
+  (`rm -rf .next`) to serve merged code.
+- The export diff the user spotted = 60fps: main lifts 30fps sources to 60
+  (fps= or minterpolate); old branch kept src fps. Now unified on 60fps.
+
 End of handover.
