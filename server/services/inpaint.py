@@ -176,8 +176,12 @@ def _try_load_lama():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    # Auto-raise the batch on cards with VRAM to spare. Only when the user did
-    # NOT pin CLIPFORGE_LAMA_BATCH. 8GB cards keep 16 (unchanged); >=12GB → 24.
+    # Auto-size the batch to the card so it runs on ANY GPU without manual
+    # tuning. Only when the user did NOT pin CLIPFORGE_LAMA_BATCH.
+    #   >=12GB (RTX 3060/4070…) → 24   |   >=8GB (RTX 2080 Super…) → 16
+    #   >=6GB  (GTX 1660 Super…) → 8    |   <6GB                    → 4
+    # Bigger batches thrash VRAM on the FFC layers, so smaller cards must use a
+    # smaller batch or the erase stage OOMs.
     global _LAMA_BATCH
     if not _LAMA_BATCH_ENV:
         try:
@@ -185,7 +189,13 @@ def _try_load_lama():
                 vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
                 if vram_gb >= 11.5:
                     _LAMA_BATCH = 24
-                    logger.info(f"VRAM {vram_gb:.0f}GB ≥ 12GB → LaMa batch auto-raised to {_LAMA_BATCH}")
+                elif vram_gb >= 7.5:
+                    _LAMA_BATCH = 16
+                elif vram_gb >= 5.5:
+                    _LAMA_BATCH = 8
+                else:
+                    _LAMA_BATCH = 4
+                logger.info(f"VRAM {vram_gb:.1f}GB → LaMa batch auto-set to {_LAMA_BATCH}")
         except Exception as e:
             logger.warning(f"VRAM probe failed, keeping LaMa batch={_LAMA_BATCH}: {e}")
     try:

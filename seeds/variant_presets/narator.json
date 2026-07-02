@@ -1,0 +1,17 @@
+{
+  "name": "Narator",
+  "tts_engine": "elevenlabs",
+  "tts_voice_id": "8nBBDfYxYXmDNaqTCxPH",
+  "tts_language": "ro",
+  "tts_speed": 1.1,
+  "caption_template_id": "bold_impact",
+  "caption_font_family": "",
+  "caption_scale": 2.0,
+  "caption_text_color": "",
+  "caption_uppercase": false,
+  "caption_italic": null,
+  "caption_words_per_chunk": 1,
+  "caption_strip_punct": true,
+  "commentator_preset_id": "narator",
+  "split_into_parts": true
+}

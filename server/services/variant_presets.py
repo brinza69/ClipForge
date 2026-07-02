@@ -27,12 +27,15 @@ _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 _FIELDS = (
     "name",
     "tts_engine", "tts_voice_id", "tts_language", "tts_speed",
+    "tts_stability", "tts_similarity",
     "caption_template_id", "caption_font_family", "caption_scale",
     "caption_text_color", "caption_uppercase", "caption_italic",
     "caption_words_per_chunk", "caption_strip_punct",
     "commentator_preset_id",
     "drive_folder",
     "split_into_parts",
+    "voice_target_sec",
+    "match_to_source_duration",
 )
 
 

@@ -336,9 +336,12 @@ def _ensure_audio_track(video_path: Path, url: str) -> Path:
 
     donor_opts = {
         "outtmpl": donor_tmpl,
-        # Prefer muxed H.264 (avc1) — that's the variant that reliably carries
-        # audio on TikTok. Fall back to any format that yt-dlp thinks has audio.
-        "format": "best[vcodec*=avc1]/best[acodec!=none]/best",
+        # The donor is used ONLY for its audio stream (muxed below). TikTok's
+        # HEVC (bytevc1/h265) variants advertise aac in metadata but download
+        # SILENT, while the H.264 variants carry real audio. yt-dlp reports that
+        # codec as "h264" (not "avc1"), so prefer h264 first, then any
+        # audio-bearing format, before the silent HEVC fallback.
+        "format": "best[vcodec*=h264]/bestaudio/best[acodec!=none]/best",
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,

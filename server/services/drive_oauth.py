@@ -33,7 +33,10 @@ SCOPES = [
     # 403 with a "reconnect" hint until the user re-consents.
     "https://www.googleapis.com/auth/spreadsheets",
 ]
-_LOOPBACK_PORT = 8421
+# NOTE: must NOT collide with a backend port. In the dual-GPU rig backend B
+# binds 8421, so the OAuth loopback (which runs inside a backend process) failed
+# to bind 8421 with WinError 10013. Use a dedicated free port instead.
+_LOOPBACK_PORT = 8765
 
 
 def _client_path() -> Path:

@@ -88,7 +88,8 @@ def _resolve_credentials():
 def upload_files(folder_link: str, files: List[Path]) -> dict:
     """Upload the given files to the Drive folder. Returns a status dict:
 
-        {"status": "uploaded",  "folder_id": ..., "via": "oauth", "uploaded": [names]}
+        {"status": "uploaded",  "folder_id": ..., "via": "oauth", "uploaded": [names],
+         "files": [{"id","name","link","download_url"}, ...]}
         {"status": "no_files",  "folder_id": ...}
         {"status": "blocked_missing_credentials", "folder_id": ..., "reason": ...}
         {"status": "failed",    "folder_id": ..., "reason": ...}
@@ -111,16 +112,41 @@ def upload_files(folder_link: str, files: List[Path]) -> dict:
         from googleapiclient.http import MediaFileUpload  # type: ignore
 
         service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        # When set (default on), each uploaded file is made readable by anyone
+        # with the link so downstream posting tools (n8n + the social poster)
+        # can pull the MP4 by URL. Set CLIPFORGE_DRIVE_PUBLIC=0 to keep files
+        # private (n8n must then download them via the Google Drive node/OAuth).
+        make_public = os.environ.get("CLIPFORGE_DRIVE_PUBLIC", "1") != "0"
         uploaded: List[str] = []
+        files: List[dict] = []
         for fp in existing:
             meta = {"name": fp.name, "parents": [folder_id]}
             media = MediaFileUpload(str(fp), mimetype="video/mp4", resumable=True)
             created = service.files().create(
-                body=meta, media_body=media, fields="id,name", supportsAllDrives=True
+                body=meta, media_body=media,
+                fields="id,name,webViewLink", supportsAllDrives=True,
             ).execute()
-            uploaded.append(created.get("name", fp.name))
-            logger.info(f"Uploaded {fp.name} to Drive folder {folder_id} (via {kind})")
-        return {"status": "uploaded", "folder_id": folder_id, "via": kind, "uploaded": uploaded}
+            fid = created.get("id", "")
+            name = created.get("name", fp.name)
+            uploaded.append(name)
+            if fid and make_public:
+                try:
+                    service.permissions().create(
+                        fileId=fid, body={"role": "reader", "type": "anyone"},
+                        supportsAllDrives=True,
+                    ).execute()
+                except Exception as pe:
+                    logger.warning(f"anyone-with-link grant failed for {name}: {str(pe)[:120]}")
+            files.append({
+                "id": fid,
+                "name": name,
+                "link": created.get("webViewLink") or (f"https://drive.google.com/file/d/{fid}/view" if fid else ""),
+                # Direct-download URL — what a poster pulls the bytes from.
+                "download_url": f"https://drive.google.com/uc?export=download&id={fid}" if fid else "",
+            })
+            logger.info(f"Uploaded {name} to Drive folder {folder_id} (via {kind})")
+        return {"status": "uploaded", "folder_id": folder_id, "via": kind,
+                "uploaded": uploaded, "files": files}
     except Exception as e:
         logger.error(f"Drive upload failed: {e}")
         return {"status": "failed", "folder_id": folder_id, "reason": f"Drive API call failed: {str(e)[:300]}"}

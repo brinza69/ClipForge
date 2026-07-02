@@ -1,0 +1,17 @@
+{
+  "name": "Comentator",
+  "tts_engine": "elevenlabs",
+  "tts_voice_id": "0okaJWIq26j9LWMEOE8N",
+  "tts_language": "ro",
+  "tts_speed": 1.15,
+  "caption_template_id": "bold_impact",
+  "caption_font_family": null,
+  "caption_scale": 2.0,
+  "caption_text_color": null,
+  "caption_uppercase": false,
+  "caption_italic": null,
+  "caption_words_per_chunk": 1,
+  "caption_strip_punct": true,
+  "commentator_preset_id": "comentator",
+  "split_into_parts": true
+}
