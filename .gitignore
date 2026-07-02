@@ -69,3 +69,11 @@ __pycache__/
 # Test scripts
 test.py
 server/test_transcribe.py
+.env.*
+!.env.example
+node_modules/
+projects/
+exports/
+audio/
+images/
+videos/
