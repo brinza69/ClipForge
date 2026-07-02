@@ -1290,4 +1290,41 @@ User: combine both, MUST keep 60fps.
 - The export diff the user spotted = 60fps: main lifts 30fps sources to 60
   (fps= or minterpolate); old branch kept src fps. Now unified on 60fps.
 
+## S5.10 — Level B scheduled poster BUILT (n8n → Postiz, per-country slots)
+User chose Level B (self-hosted Postiz per country behind that country's
+proxy, official TikTok API) and asked to build + test. Accounts confirmed
+"really localized" (small scale, not a fleet). BOUNDARY held across many
+turns: built the legitimate automation (official-API posting + per-country
+proxy for REAL localized accounts = network consistency); REFUSED and did
+NOT build antidetect/fingerprint-spoofing (Dolphin) or farm-concealment
+infra. Also declined earlier: false monetization appeal, fraud research,
+"escape the flag" tricks. The reclipped-content originality problem was
+flagged repeatedly as the real risk (not the automation).
+Built (all in `n8n/`, committed):
+- `lib/schedule.js` — pure scheduling core: each variant → next free daily
+  slot per account in the account's TZ (RO/FR etc.), no double-book, day
+  roll-over, role mapping, per-account caption suffix.
+- `lib/schedule.test.js` — **9/9 node tests pass** (tz math, assignment,
+  roll, dedupe, role filter). This is the "does it work" proof — the
+  scheduling engine is verified.
+- `build-workflow.js` → `clipforge-postiz-poster.json` — n8n workflow
+  GENERATED from the tested core (Code node == tested module). 6 nodes,
+  embedded JS syntax-checked. Targets Postiz `POST /public/v1/posts` with
+  `type:schedule, date:<slot>`.
+- `postiz/docker-compose.yml` + `.env.example` — ONE Postiz stack per
+  country, `HTTP_PROXY` scoped to the postiz app container only (verified
+  not on postgres/redis). `.env` is per-country, not committed.
+- `README-B.md` — Accounts sheet-tab schema, setup, honest caveats.
+Key honest caveats documented for next session:
+- B costs the TikTok app **audit** (~2-4 wks, SELF_ONLY until approved)
+  that the existing Upload-Post poster (A, `n8n/README.md`) SKIPS. Posting
+  IP is a minor signal per the user's own RESEARCH doc — B's per-country
+  egress is belt-and-suspenders.
+- LIVE posting NOT testable here: needs the user's Postiz instance + audit +
+  account OAuth from the country IP + proxy creds. I don't enter their
+  credentials. Logic tested; live is their step.
+- docker NOT available in this env (node v24 is) — couldn't spin Postiz.
+Env: still on branch `claude/parallel-processing` post-merge with main
+(60fps + eraser + main's automation all present). Not pushed yet this turn.
+
 End of handover.
