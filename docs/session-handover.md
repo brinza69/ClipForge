@@ -1371,4 +1371,32 @@ all rows" → it should process next_row onward, commit each description, advanc
 and stop at the first empty row. Watch for: the terminal-effect double-firing
 (guarded by autoHandledJobRef) and the skip-on-fail not looping.
 
+## S5.11 — LIVE-tested the pipeline with XTTS + found/fixed the FR-bloat bug
+Live end-to-end test of the per-variant-language path with XTTS (bypassing
+Sheets, so the user's real production sheet at next_row=168 was untouched):
+job `9109324011d0`, test Grinch URL, 2 variants EN + FR, erase_mode=blur.
+- RESULT: done in 15 min, 0 errors. Log confirmed `Cleaning transcript (en)…`
+  then separately `Cleaning transcript (fr)…` → **per-variant language works**
+  (each variant's clean/translate is in ITS tts_language). Both videos +
+  descriptions produced.
+- BUG the test caught: FR cleaned text = **3376 chars (2.3× the EN 1458)** →
+  FR raw voice 185s vs EN 85s → FR final video 150s vs source 75s. Isolated
+  repro (`server/scripts/repro_fr_clean.py`, EN/FR/DE × ollama/openai on a
+  synthetic sample) showed BOTH engines are normally 1.0–1.2× — so it's a
+  STOCHASTIC bloat spike of qwen2.5:7b on a particular input, NOT systematic,
+  and NOT caught by `_META_HEADERS` (EN/RO phrases only, no FR/DE/…).
+- FIX (commit 64b47b0): `transcript_cleaner.clean_transcript` now caps every
+  chunk at **MAX_LEN_RATIO = 1.2 × source** (`_is_bloated` / `_trim_to_ratio`
+  / `_clean_one_chunk`): on bloat → retry once → else hard-trim at a sentence
+  boundary so output NEVER exceeds 1.2×. Language- + engine-agnostic. Normal
+  output passes untouched. Tested 9/9 (`server/scripts/test_bloat_guard.py`,
+  incl. forced-bloat retry+trim + normal pass-through). Backend restarted to
+  load it. This is the safety net that lets unattended multi-country auto-run
+  never waste TTS/GPU on a bloated clip.
+- GOTCHA re-confirmed: the Windows-side git-bash `curl` intermittently can't
+  reach :8420 (WSL relay recycled → backend looked "down" mid-test but had
+  finished cleanly). Run curls against the backend from `wsl.exe -e bash`
+  instead; `/tmp` inside those one-shot WSL calls is ephemeral (write probe
+  files under `data/` on /mnt/f).
+
 End of handover.
