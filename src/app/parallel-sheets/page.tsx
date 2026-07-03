@@ -248,6 +248,28 @@ export default function ParallelSheetsPage() {
     return { sheets_row: pulled.row, sheets_number: pulled.number };
   }, [pulled]);
 
+  // Auto-run controls handed to the processor: pull the next row (null when the
+  // sheet is exhausted) and skip a failed row so the loop doesn't re-pull it.
+  const autoPullNext = useCallback(async (): Promise<{ url: string; extras: Record<string, unknown> } | null> => {
+    const r = await fetch(`/worker-api/sheets/pull-next`, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || `Pull failed (${r.status})`);
+    if (j.empty || !j.url) return null;   // no URL in the row → end of data
+    const number = String(j.number || "");
+    setPulled({ row: j.row, number, url: j.url });
+    setUrl(j.url);
+    return { url: j.url, extras: { sheets_row: j.row, sheets_number: number } };
+  }, []);
+
+  const autoSkip = useCallback(async () => {
+    try {
+      await fetch(`/worker-api/sheets/skip-row`, { method: "POST" });
+      await loadConfig();
+    } catch { /* non-fatal — the loop continues */ }
+  }, [loadConfig]);
+
+  const autoControls = { pullNext: autoPullNext, skipRow: autoSkip };
+
   // Sheets card rendered at the top of the processor body
   const topContent = (
     <Card className="p-4 space-y-3 border-emerald-500/30 bg-emerald-500/[0.03]">
@@ -441,6 +463,7 @@ export default function ParallelSheetsPage() {
             ? "Configure Sheets first (top of page)"
             : "Pull a row from Sheets before running"
         }
+        autoControls={config.configured ? autoControls : undefined}
       />
     </div>
   );

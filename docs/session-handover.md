@@ -1344,11 +1344,31 @@ cleaning shortens). Raises a clear RuntimeError before erase. Unit-tested:
 140-remaining/694-needed (today's exact case) → BLOCKED; enough → PASS.
 Remix pipeline preflight = TODO (single-variant, deferred; user uses Sheets).
 
-Remaining:
-- Part 3 (per-variant transcript clean keyed on variant `tts_language`,
-  cache by language; replaces the shared clean-once at parallel_pipeline.py
-  ~239). Decision taken: text lang = voice lang (`tts_language`), no new field.
-- Parts 1+2 (frontend Auto-run loop on /parallel-sheets: capture zones+variants
-  once → pull-next → start → await done → repeat until pull-next end or Stop).
+Part 3 DONE + tested (`parallel_pipeline.py`): clean once per DISTINCT variant
+language (cache), keyed on `tts_language` (fallback shared → keep-original).
+Voice AND burned captions now in each variant's language. RO,FR,RO → 2 cleans.
+Description/result use variant #0's language. Commit 53c823f.
+
+Parts 1+2 DONE (frontend, tsc clean — NOT live-tested, see below):
+- `ParallelProcessor` gains optional `autoControls` prop; when set (Sheets page
+  only), an "Auto-run all rows" button appears. `start()` refactored to
+  `startWith(urlOverride, extrasOverride)` so the loop reuses the SAME captured
+  zones + variants for each pulled url. A terminal-status effect advances the
+  loop: on done → count + pull next; on failed → skipRow (so a stuck row isn't
+  re-pulled forever — failed rows don't advance next_row) + pull next; ends when
+  pullNext returns null (sheet exhausted) or Stop pressed. Zones captured once on
+  the first preview; backend re-scales to each video's real dims.
+- `parallel-sheets/page.tsx`: `autoPullNext` (returns {url,extras} or null on
+  empty row) + `autoSkip`, passed as `autoControls`.
+- The manual single-run path is untouched (auto only via the new prop).
+
+VERIFIED: tsc clean, py_compile clean, preflight + lang-dedupe unit tests pass.
+NOT live-tested (needs real ~10-min jobs AND ElevenLabs quota is currently
+exhausted — that's what surfaced this whole request): the full multi-row loop
+end-to-end. Test path when quota/XTTS available: configure Sheets, Preview one
+video → pick zones + set variants (with per-country tts_language) → "Auto-run
+all rows" → it should process next_row onward, commit each description, advance,
+and stop at the first empty row. Watch for: the terminal-effect double-firing
+(guarded by autoHandledJobRef) and the skip-on-fail not looping.
 
 End of handover.
