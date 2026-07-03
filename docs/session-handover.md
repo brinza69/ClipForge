@@ -1219,6 +1219,112 @@ unmerged delta vs main: the S4+S5 eraser overhaul AND the late-S3
 hardening tail (T8+ — SSE, smoke tests, secret storage, captioner split…)
 because PR #21 was merged on 2026-06-07 BEFORE those were pushed.
 
+## S5.7 — Zone-picker preview fix (YouTube Shorts thumbs)
+User reported the picker preview "isn't fullscreen anymore". NOT a code
+regression — first time a YOUTUBE Shorts URL was used: YouTube thumbs are
+16:9 with the 9:16 video pillarboxed between blurred bars (TikTok thumbs
+are full 9:16, which is all we'd used before). Fix in BOTH pickers
+(`components/parallel/zone-picker.tsx` + the duplicated one in
+`app/remix/page.tsx`): wrap the img in a box forced to the VIDEO's aspect
+(`aspectRatio: width/height` from the preview meta) with
+`object-fit: cover` — crops the blur bars, fills the picker; no-op for
+TikTok. Rect mapping unchanged (getRenderedRect now sees a matching
+aspect → full-area render). tsc clean. NOTE: frontend tsc must run in WSL
+(`node_modules` is Linux-installed): `wsl … node_modules/.bin/tsc --noEmit`.
+
+FOLLOW-UP BUG (caught live with the user via a console one-liner): after
+the fix the picker rendered 0×0 — the wrapper div had only `mx-auto` +
+max-width, which inside the Card's flex column shrinks to fit content;
+the aspect-ratio box derives its width FROM the wrapper → circular → 0px.
+The old <img> had an intrinsic width that masked this. Fix: `w-full` on
+the wrapper (both pickers), commit 6d6479a. Debug protocol that worked:
+have the user paste a JSON.stringify one-liner in the Console — got
+naturalWidth (image loaded), clientWidth 0 (layout collapsed), computed
+aspect-ratio (style applied) in one shot.
+
+CRITICAL GENERALIZATION of the S3.7 lesson: **Turbopack dev (WSL) does
+NOT see frontend file edits made from the Windows side** — inotify is
+dead on /mnt/f, same as uvicorn --reload. HMR never fires and the dev
+server keeps serving the previous compilation. EVERY frontend edit in
+this setup needs `./dev.sh stop && rm -rf .next && ./dev.sh start` (or at
+minimum a frontend restart) + a tab reload to become visible. This cost
+two rounds of "tot asa apare" with the user before being spotted.
+Also seen in the user's console: `fdprocessedid` attributes injected by a
+browser extension (IDM-style form filler) → React hydration warnings on
+localhost; harmless for this bug but worth disabling for localhost.
+
+## S5.8 — TikTok auto-posting (DESIGN ONLY — user rules)
+User wants the LAST automation mile: after parts are produced → schedule
+to TikTok at user-preset daily hours. TWO HARD RULES from the user:
+(1) implement NOTHING until they explicitly confirm; (2) the account must
+NOT be flagged as a bot. Options laid out (in chat):
+ 1. Official Content Posting API + internal ClipForge scheduler — zero
+    bot risk; needs TikTok developer app + audit (unaudited = posts go
+    PRIVATE/Only-Me only); days-weeks of bureaucracy.
+ 2. Browser automation of the user's REAL Chrome session that only
+    UPLOADS+SCHEDULES via TikTok's native web scheduler (≤10 days ahead),
+    one human-paced session/day — small but NON-zero detection risk.
+ 3. Semi-auto "Posting queue" page (ClipForge preps everything, user
+    drags + pastes ~2 min/day) — zero risk, one day of work.
+Recommended 3 now + apply for 1 in parallel; 2 only as plan B. AWAITING
+the user's choice — do not build any of it without their explicit OK.
+
 ---
+
+## S5.9 — Merged main into the branch (60fps + eraser combined)
+`main` had diverged 87 commits on a DIFFERENT line: feat "auto story doodle
+video" (`e132894`), forced-60fps export, AND a whole TikTok-posting build
+already done by a parallel session (`n8n/clipforge-tiktok-poster.json`,
+`RESEARCH-antiban-posting-2026-06-25.md`, `scripts/dual_dispatch.py`,
+`HANDOVER-2026-06-25.md` — DID NOT touch it). The S3 hardening + S4/S5
+eraser work was only on `claude/parallel-processing`.
+User: combine both, MUST keep 60fps.
+- Backup first: tag `backup-parallel-20260702_2329` + zip
+  `F:\ClipForge-backups\clipforge_parallel_20260702_2329.zip` + origin branch.
+- `git merge main` → CLEAN, zero conflicts (merge `e604bba`). speed_match.py
+  resolved to main's `target_fps = 60.0` (60fps kept ✓); eraser S5 survived
+  (inpaint `_patch_degenerate`, `caption_audit.py`, transcript_words wiring
+  x6 remix / x2 parallel) ✓; main's new features present ✓.
+- Verified `py_compile` OK + `tsc --noEmit` OK; pushed; dev server restarted
+  (`rm -rf .next`) to serve merged code.
+- The export diff the user spotted = 60fps: main lifts 30fps sources to 60
+  (fps= or minterpolate); old branch kept src fps. Now unified on 60fps.
+
+## S5.10 — Level B scheduled poster BUILT (n8n → Postiz, per-country slots)
+User chose Level B (self-hosted Postiz per country behind that country's
+proxy, official TikTok API) and asked to build + test. Accounts confirmed
+"really localized" (small scale, not a fleet). BOUNDARY held across many
+turns: built the legitimate automation (official-API posting + per-country
+proxy for REAL localized accounts = network consistency); REFUSED and did
+NOT build antidetect/fingerprint-spoofing (Dolphin) or farm-concealment
+infra. Also declined earlier: false monetization appeal, fraud research,
+"escape the flag" tricks. The reclipped-content originality problem was
+flagged repeatedly as the real risk (not the automation).
+Built (all in `n8n/`, committed):
+- `lib/schedule.js` — pure scheduling core: each variant → next free daily
+  slot per account in the account's TZ (RO/FR etc.), no double-book, day
+  roll-over, role mapping, per-account caption suffix.
+- `lib/schedule.test.js` — **9/9 node tests pass** (tz math, assignment,
+  roll, dedupe, role filter). This is the "does it work" proof — the
+  scheduling engine is verified.
+- `build-workflow.js` → `clipforge-postiz-poster.json` — n8n workflow
+  GENERATED from the tested core (Code node == tested module). 6 nodes,
+  embedded JS syntax-checked. Targets Postiz `POST /public/v1/posts` with
+  `type:schedule, date:<slot>`.
+- `postiz/docker-compose.yml` + `.env.example` — ONE Postiz stack per
+  country, `HTTP_PROXY` scoped to the postiz app container only (verified
+  not on postgres/redis). `.env` is per-country, not committed.
+- `README-B.md` — Accounts sheet-tab schema, setup, honest caveats.
+Key honest caveats documented for next session:
+- B costs the TikTok app **audit** (~2-4 wks, SELF_ONLY until approved)
+  that the existing Upload-Post poster (A, `n8n/README.md`) SKIPS. Posting
+  IP is a minor signal per the user's own RESEARCH doc — B's per-country
+  egress is belt-and-suspenders.
+- LIVE posting NOT testable here: needs the user's Postiz instance + audit +
+  account OAuth from the country IP + proxy creds. I don't enter their
+  credentials. Logic tested; live is their step.
+- docker NOT available in this env (node v24 is) — couldn't spin Postiz.
+Env: still on branch `claude/parallel-processing` post-merge with main
+(60fps + eraser + main's automation all present). Not pushed yet this turn.
 
 End of handover.
