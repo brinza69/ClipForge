@@ -1327,4 +1327,28 @@ Key honest caveats documented for next session:
 Env: still on branch `claude/parallel-processing` post-merge with main
 (60fps + eraser + main's automation all present). Not pushed yet this turn.
 
+## S5.11 — Sheets full automation (in progress, 4 parts)
+User request: automate Parallel-from-Sheets — pick erase/caption zones ONCE
+at start (same for every row), loop rows until Stop or sheet exhausted;
+transcript language per COMMENTATOR PRESET (its `tts_language`), not the
+shared default (for foreign-country accounts); and after transcribe, verify
+all keys/quota BEFORE the expensive erase (no wasted resources — a row died
+today at 48% on ElevenLabs `quota_exceeded` AFTER a full erase).
+
+Part 4 DONE + tested (`services/preflight.py`, wired in
+`parallel_pipeline.py` between transcribe and erase): checks transcript
+engine key (openai/anthropic) or Ollama reachability, ElevenLabs key
+presence, and ElevenLabs quota (`get_user_info` → limit−count) vs estimate
+(raw transcript chars × #EL variants, raw len = safe upper bound since
+cleaning shortens). Raises a clear RuntimeError before erase. Unit-tested:
+140-remaining/694-needed (today's exact case) → BLOCKED; enough → PASS.
+Remix pipeline preflight = TODO (single-variant, deferred; user uses Sheets).
+
+Remaining:
+- Part 3 (per-variant transcript clean keyed on variant `tts_language`,
+  cache by language; replaces the shared clean-once at parallel_pipeline.py
+  ~239). Decision taken: text lang = voice lang (`tts_language`), no new field.
+- Parts 1+2 (frontend Auto-run loop on /parallel-sheets: capture zones+variants
+  once → pull-next → start → await done → repeat until pull-next end or Stop).
+
 End of handover.

@@ -214,6 +214,13 @@ async def handle_parallel_pipeline(
     if not raw_transcript_text.strip():
         raise RuntimeError("Transcription produced no text — cannot continue.")
 
+    # Pre-flight: now that we know the transcript length, verify every key/quota
+    # the rest of the run needs BEFORE the expensive erase. Fails a doomed row
+    # in seconds (e.g. ElevenLabs quota_exceeded) instead of after minutes of
+    # GPU inpainting — so a batch loop skips it without wasting resources.
+    from services.preflight import preflight_check
+    await preflight_check(cfg, variants, raw_transcript_text)
+
     from services.caption_overlays import probe_video_dims
     src_w, src_h = probe_video_dims(str(video_path))
 
