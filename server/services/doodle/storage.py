@@ -37,7 +37,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "resolution": "1920x1080",
     "voice": "am_michael",
     "voice_speed": 0.95,
-    "subtitle_style": "youtube_clean",
+    # Subtitle mode: "none" (default) | "minimal_bottom" | "youtube_clean" |
+    # "tiktok_big". "none" still writes captions.srt but burns nothing.
+    "subtitle_style": "none",
     "burn_subtitles": True,
     "motion_style": "subtle",
     "motion_intensity": 0.5,

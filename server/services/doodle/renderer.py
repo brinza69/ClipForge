@@ -23,7 +23,12 @@ import shutil
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional
 
-from .subtitles import build_srt, subtitle_style_args
+from .subtitles import (
+    OUTPUT_NAMES,
+    build_srt,
+    normalize_subtitle_mode,
+    subtitle_style_args,
+)
 from .renderer_ffmpeg import (
     FPS,
     ffmpeg_bin,
@@ -49,9 +54,21 @@ RESOLUTIONS = {
 }
 
 
-async def render_video(project_dir: Path, storyboard: dict, progress_cb: ProgressCB = None) -> Path:
+async def render_video(
+    project_dir: Path,
+    storyboard: dict,
+    progress_cb: ProgressCB = None,
+    subtitle_mode: Optional[str] = None,
+    output_name: Optional[str] = None,
+) -> Path:
     """
-    Assembles exports/final_video.mp4 from the storyboard's scenes.
+    Assembles exports/<per-mode name>.mp4 from the storyboard's scenes.
+
+    subtitle_mode: "none" | "minimal_bottom" | "youtube_clean" | "tiktok_big".
+    Overrides the project's stored subtitle settings for THIS render only.
+    When omitted, the project settings decide (burn_subtitles=False => none).
+    Each mode writes its own output file (OUTPUT_NAMES) so re-rendering one
+    style never overwrites another.
 
     Raises RuntimeError (with ffmpeg stderr tail where applicable) on any
     failure: missing images without allow_placeholders, missing audio
@@ -70,15 +87,25 @@ async def render_video(project_dir: Path, storyboard: dict, progress_cb: Progres
     allow_placeholders = bool(settings_dict.get("allow_placeholders", False))
     motion_style = settings_dict.get("motion_style", "subtle")
     motion_intensity = float(settings_dict.get("motion_intensity", 0.5) or 0.5)
-    subtitle_style = settings_dict.get("subtitle_style", "youtube_clean")
-    burn_subtitles = bool(settings_dict.get("burn_subtitles", True))
     render_quality = settings_dict.get("render_quality", "high")
     use_gpu = bool(settings_dict.get("use_gpu", True))
+
+    # Effective subtitle mode: explicit per-render override wins; otherwise
+    # derive from project settings (legacy burn_subtitles=False => none).
+    if subtitle_mode:
+        mode = normalize_subtitle_mode(subtitle_mode)
+    elif not settings_dict.get("burn_subtitles", True):
+        mode = "none"
+    else:
+        mode = normalize_subtitle_mode(settings_dict.get("subtitle_style"))
+    burn_subtitles = mode != "none"
 
     audio_dir = project_dir / "audio"
     captions_dir = project_dir / "captions"
     exports_dir = project_dir / "exports"
-    work_dir = project_dir / "_render_tmp"
+    # Per-mode work dir so concurrent renders of different styles never
+    # stomp on each other's temp segments.
+    work_dir = project_dir / f"_render_tmp_{mode}"
     for d in (captions_dir, exports_dir, work_dir):
         d.mkdir(parents=True, exist_ok=True)
 
@@ -191,11 +218,11 @@ async def render_video(project_dir: Path, storyboard: dict, progress_cb: Progres
 
     # --- Final mux + optional subtitle burn --------------------------------
     await _report(0.9, "Muxing audio + finalizing...")
-    export_path = exports_dir / "final_video.mp4"
+    export_path = exports_dir / (output_name or OUTPUT_NAMES.get(mode, "final_video.mp4"))
 
     vf_parts = [f"scale={width}:{height}"]
     if burn_subtitles:
-        style_str = subtitle_style_args(subtitle_style, (width, height))
+        style_str = subtitle_style_args(mode, (width, height))
         escaped_srt = escape_filter_path(srt_path)
         vf_parts.append(f"subtitles=filename='{escaped_srt}':force_style='{style_str}'")
     vf = ",".join(vf_parts)

@@ -61,6 +61,9 @@ class NewProjectRequest(BaseModel):
 
 class RenderRequest(BaseModel):
     allow_placeholders: Optional[bool] = False
+    # "none" | "minimal_bottom" | "youtube_clean" | "tiktok_big" — overrides
+    # the project's stored subtitle settings for this render only.
+    subtitle_mode: Optional[str] = None
 
 
 class VoiceoverRequest(BaseModel):
@@ -300,12 +303,22 @@ async def start_render(project_id: str, req: RenderRequest):
         sb.setdefault("settings", {})["allow_placeholders"] = True
         storage.save_storyboard(project_id, sb)
 
+    from services.doodle.subtitles import normalize_subtitle_mode  # lazy
+    if req.subtitle_mode:
+        mode = normalize_subtitle_mode(req.subtitle_mode)
+    elif not (sb.get("settings") or {}).get("burn_subtitles", True):
+        mode = "none"
+    else:
+        mode = normalize_subtitle_mode((sb.get("settings") or {}).get("subtitle_style"))
+
     job_id = await _enqueue(project_id, JobType.doodle_render.value, {
         "allow_placeholders": allow_placeholders,
+        "subtitle_mode": mode,
     })
     sb["status"] = "rendering"
+    sb.setdefault("renders", {})[mode] = {"status": "rendering", "path": None, "error": None}
     storage.save_storyboard(project_id, sb)
-    return {"job_id": job_id}
+    return {"job_id": job_id, "subtitle_mode": mode}
 
 
 @router.post("/projects/{project_id}/backup-images")

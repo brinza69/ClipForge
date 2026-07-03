@@ -39,11 +39,21 @@ export const ASPECT_RATIOS: { value: string; label: string }[] = [
   { value: "1:1", label: "1:1 — Square" },
 ];
 
+// Subtitle modes. "none" is the default; "minimal_bottom" is the recommended
+// option when you do want burned-in captions. TikTok big is opt-in only.
 export const SUBTITLE_STYLES: { value: string; label: string }[] = [
-  { value: "youtube_clean", label: "YouTube clean (default)" },
-  { value: "tiktok_bold", label: "TikTok bold" },
-  { value: "minimal", label: "Minimal" },
+  { value: "none", label: "None (default)" },
+  { value: "minimal_bottom", label: "Minimal bottom (recommended)" },
+  { value: "youtube_clean", label: "YouTube clean" },
+  { value: "tiktok_big", label: "TikTok big" },
 ];
+
+export const SUBTITLE_MODE_LABELS: Record<string, string> = {
+  none: "No Subtitles",
+  minimal_bottom: "Minimal Subtitles",
+  youtube_clean: "YouTube Clean",
+  tiktok_big: "TikTok Big",
+};
 
 export const MOTION_STYLES: { value: string; label: string }[] = [
   { value: "subtle", label: "Subtle (default)" },

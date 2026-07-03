@@ -166,8 +166,15 @@ async def handle_doodle_render(
     metadata: Dict[str, Any],
     queue,
 ):
-    """Assemble the final MP4 with FFmpeg (images + voiceover + subtitles + motion)."""
+    """Assemble the final MP4 with FFmpeg (images + voiceover + subtitles + motion).
+
+    Each subtitle mode ("none" / "minimal_bottom" / "youtube_clean" /
+    "tiktok_big") renders to its own output file and tracks its own status in
+    storyboard["renders"][mode] — one failed style never marks the whole
+    project failed.
+    """
     from services.doodle.renderer import render_video  # lazy
+    from services.doodle.subtitles import normalize_subtitle_mode  # lazy
 
     sb = storage.load_storyboard(project_id)
 
@@ -195,7 +202,19 @@ async def handle_doodle_render(
         storage.save_storyboard(project_id, sb)
         raise RuntimeError(msg)
 
+    # Effective mode for this render: explicit override from the request,
+    # else the project's stored subtitle settings.
+    if metadata.get("subtitle_mode"):
+        mode = normalize_subtitle_mode(metadata["subtitle_mode"])
+    elif not (sb.get("settings") or {}).get("burn_subtitles", True):
+        mode = "none"
+    else:
+        mode = normalize_subtitle_mode((sb.get("settings") or {}).get("subtitle_style"))
+
+    prev_status = sb.get("status")
     sb["status"] = "rendering"
+    renders = sb.setdefault("renders", {})
+    renders[mode] = {"status": "rendering", "path": None, "error": None}
     storage.save_storyboard(project_id, sb)
 
     async def _progress(fraction: float, message: str) -> None:
@@ -206,23 +225,34 @@ async def handle_doodle_render(
     try:
         export_path: Path = await render_video(
             storage.project_dir(project_id), sb, progress_cb=_progress,
+            subtitle_mode=mode,
         )
     except JobCancelledError:
         raise
     except Exception as e:
         sb = storage.load_storyboard(project_id)
-        sb["status"] = "failed"
-        sb["error"] = str(e)
+        renders = sb.setdefault("renders", {})
+        renders[mode] = {"status": "failed", "path": None, "error": str(e)}
+        # Only THIS render style failed — never mark the whole project failed.
+        any_done = any((r or {}).get("status") == "done" for r in renders.values())
+        if any_done:
+            sb["status"] = "done"
+        else:
+            sb["status"] = prev_status if prev_status not in ("rendering", "failed") else "voice_ready"
+        sb["error"] = f"[render:{mode}] {e}"
         storage.save_storyboard(project_id, sb)
         raise
 
+    rel_path = str(Path(export_path).relative_to(storage.project_dir(project_id)))
     sb = storage.load_storyboard(project_id)
-    sb["export_path"] = str(Path(export_path).relative_to(storage.project_dir(project_id)))
+    renders = sb.setdefault("renders", {})
+    renders[mode] = {"status": "done", "path": rel_path, "error": None}
+    sb["export_path"] = rel_path  # most recent successful render
     sb["status"] = "done"
     sb["error"] = None
     storage.save_storyboard(project_id, sb)
 
-    logger.info(f"doodle_render {job_id}: project {project_id} -> {export_path}")
+    logger.info(f"doodle_render {job_id}: project {project_id} [{mode}] -> {export_path}")
 
 
 def register_doodle_handlers(queue) -> None:

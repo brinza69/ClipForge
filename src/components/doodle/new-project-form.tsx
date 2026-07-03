@@ -42,8 +42,9 @@ export function NewProjectForm({ onCreated }: Props) {
   const [voices, setVoices] = useState<DoodleVoicesResponse | null>(null);
   const [voice, setVoice] = useState("am_michael");
 
-  const [subtitleStyle, setSubtitleStyle] = useState("youtube_clean");
-  const [burnSubtitles, setBurnSubtitles] = useState(true);
+  // Default: no subtitles. SRT captions are still exported; burning is
+  // derived from the mode (anything other than "none").
+  const [subtitleStyle, setSubtitleStyle] = useState("none");
   const [motionStyle, setMotionStyle] = useState("subtle");
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -88,7 +89,7 @@ export function NewProjectForm({ onCreated }: Props) {
       voice,
       voice_speed: voiceSpeed,
       subtitle_style: subtitleStyle as DoodleCreateProjectPayload["subtitle_style"],
-      burn_subtitles: burnSubtitles,
+      burn_subtitles: subtitleStyle !== "none",
       motion_style: motionStyle as DoodleCreateProjectPayload["motion_style"],
       motion_intensity: motionIntensity,
       openai_model: openaiModel.trim() || null,
@@ -242,7 +243,7 @@ export function NewProjectForm({ onCreated }: Props) {
           )}
         </div>
         <div>
-          <Label className="text-[11px] text-muted-foreground mb-1">Subtitle style</Label>
+          <Label className="text-[11px] text-muted-foreground mb-1">Subtitle mode</Label>
           <select
             value={subtitleStyle}
             onChange={(e) => setSubtitleStyle(e.target.value)}
@@ -250,12 +251,11 @@ export function NewProjectForm({ onCreated }: Props) {
           >
             {SUBTITLE_STYLES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
-        </div>
-        <div className="flex items-end">
-          <label className="flex items-center gap-2 text-xs h-8">
-            <input type="checkbox" checked={burnSubtitles} onChange={(e) => setBurnSubtitles(e.target.checked)} />
-            Burn in subtitles
-          </label>
+          <p className="text-[10px] text-muted-foreground mt-1">
+            {subtitleStyle === "none"
+              ? "captions.srt is still exported — nothing is burned into the video."
+              : "Burned into the MP4. You can re-render any style later."}
+          </p>
         </div>
         <div>
           <Label className="text-[11px] text-muted-foreground mb-1">Motion style</Label>

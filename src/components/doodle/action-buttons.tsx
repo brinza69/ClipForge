@@ -8,10 +8,14 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, RefreshCw, Copy, FileDown, FileJson, Mic, Clapperboard, Archive } from "lucide-react";
+import { Loader2, RefreshCw, Copy, FileDown, FileJson, Mic, Clapperboard, Archive, Captions } from "lucide-react";
 import { toast } from "sonner";
 import { readApiError, errorDescription } from "@/lib/api-error";
+import { SUBTITLE_MODE_LABELS } from "@/components/doodle/constants";
 import type { DoodleStoryboard } from "@/types/doodle";
+
+// Per-style render buttons, in display order.
+const RENDER_MODES = ["none", "minimal_bottom", "youtube_clean", "tiktok_big"] as const;
 
 interface Props {
   projectId: string;
@@ -24,6 +28,8 @@ export function ActionButtons({ projectId, storyboard, onJobStarted, busy }: Pro
   const [placeholderDialogOpen, setPlaceholderDialogOpen] = useState(false);
   const [missingCount, setMissingCount] = useState(0);
   const [loading, setLoading] = useState<string | null>(null);
+  // Subtitle mode of the render awaiting the placeholder-frames dialog.
+  const [pendingMode, setPendingMode] = useState<string | undefined>(undefined);
 
   const generateScript = async () => {
     setLoading("script");
@@ -102,13 +108,13 @@ export function ActionButtons({ projectId, storyboard, onJobStarted, busy }: Pro
     }
   };
 
-  const render = async (allowPlaceholders: boolean) => {
-    setLoading("render");
+  const render = async (allowPlaceholders: boolean, mode?: string) => {
+    setLoading(mode ? `render:${mode}` : "render");
     try {
       const r = await fetch(`/worker-api/doodle/projects/${projectId}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allow_placeholders: allowPlaceholders }),
+        body: JSON.stringify({ allow_placeholders: allowPlaceholders, subtitle_mode: mode }),
       });
       if (r.status === 409) {
         const j = await r.json().catch(() => ({}));
@@ -124,6 +130,7 @@ export function ActionButtons({ projectId, storyboard, onJobStarted, busy }: Pro
             ? detail.missing_scenes.length
             : (storyboard.missing_images?.length ?? 0);
           setMissingCount(missing);
+          setPendingMode(mode);
           setPlaceholderDialogOpen(true);
           return;
         }
@@ -136,7 +143,8 @@ export function ActionButtons({ projectId, storyboard, onJobStarted, busy }: Pro
       }
       const j = await r.json();
       onJobStarted(j.job_id);
-      toast.success("Render started");
+      const label = SUBTITLE_MODE_LABELS[j.subtitle_mode || mode || ""] || "";
+      toast.success(label ? `Render started — ${label}` : "Render started");
       setPlaceholderDialogOpen(false);
     } catch (e: any) {
       toast.error("Failed to start render", { description: e.message });
@@ -193,7 +201,35 @@ export function ActionButtons({ projectId, storyboard, onJobStarted, busy }: Pro
       >
         {loading === "render" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
         {allVoiced && storyboard.status === "voice_ready" ? "Continue Render" : "Render Video"}
+        <span className="text-[10px] opacity-70 ml-1">
+          ({SUBTITLE_MODE_LABELS[storyboard.settings.subtitle_style] || "No Subtitles"})
+        </span>
       </Button>
+
+      {/* Per-style renders — each writes its own exports/<name>.mp4 */}
+      <div className="w-full flex flex-wrap items-center gap-2 pt-1">
+        <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+          <Captions className="h-3.5 w-3.5" /> Render as:
+        </span>
+        {RENDER_MODES.map((m) => {
+          const info = storyboard.renders?.[m];
+          return (
+            <Button
+              key={m}
+              variant="outline"
+              size="sm"
+              onClick={() => render(false, m)}
+              disabled={anyLoading || total === 0 || !allVoiced}
+              title={!allVoiced ? "Generate the voiceover first." : `exports/${m === "none" ? "final_video_no_subtitles.mp4" : `final_video_${m === "minimal_bottom" ? "minimal_subtitles" : m}.mp4`}`}
+            >
+              {loading === `render:${m}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Render {SUBTITLE_MODE_LABELS[m]}
+              {info?.status === "done" && <span className="text-emerald-400 ml-0.5">✓</span>}
+              {info?.status === "failed" && <span className="text-destructive ml-0.5">✗</span>}
+            </Button>
+          );
+        })}
+      </div>
 
       <Dialog open={placeholderDialogOpen} onOpenChange={setPlaceholderDialogOpen}>
         <DialogContent>
@@ -207,8 +243,8 @@ export function ActionButtons({ projectId, storyboard, onJobStarted, busy }: Pro
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPlaceholderDialogOpen(false)}>Cancel</Button>
-            <Button onClick={() => render(true)} disabled={anyLoading}>
-              {loading === "render" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            <Button onClick={() => render(true, pendingMode)} disabled={anyLoading}>
+              {loading !== null && loading.startsWith("render") ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Use placeholder frames
             </Button>
           </DialogFooter>

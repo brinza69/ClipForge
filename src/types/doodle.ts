@@ -31,7 +31,15 @@ export type DoodleFrameInterval = 2 | 3 | 4 | "auto";
 
 export type DoodleAspectRatio = "16:9" | "9:16" | "1:1";
 
-export type DoodleSubtitleStyle = "youtube_clean" | "tiktok_bold" | "minimal";
+// "none" is the default — SRT captions are still exported, nothing is burned.
+// Legacy values "minimal" / "tiktok_bold" are normalized server-side.
+export type DoodleSubtitleStyle = "none" | "minimal_bottom" | "youtube_clean" | "tiktok_big";
+
+export interface DoodleRenderInfo {
+  status: "rendering" | "done" | "failed";
+  path: string | null;
+  error: string | null;
+}
 
 export type DoodleMotionStyle = "subtle" | "zoom_in" | "zoom_out" | "pan" | "none";
 
@@ -81,6 +89,9 @@ export interface DoodleStoryboard {
   final_voiceover_path: string | null;
   total_audio_duration: number | null;
   export_path: string | null;
+  // Per-subtitle-mode render outputs (keyed by mode) — each style has its
+  // own status/path so one failed style never fails the project.
+  renders?: Record<string, DoodleRenderInfo>;
   created_at: string;
   updated_at: string;
   // Computed server-side on GET /projects/{id}.
