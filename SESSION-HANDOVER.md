@@ -1399,4 +1399,30 @@ job `9109324011d0`, test Grinch URL, 2 variants EN + FR, erase_mode=blur.
   instead; `/tmp` inside those one-shot WSL calls is ephemeral (write probe
   files under `data/` on /mnt/f).
 
+## S5.12 — Download/output quality audit + force 1080p output
+User asked exactly what quality the pipeline downloads + outputs. Findings
+(measured on the S5.11 test files):
+- DOWNLOAD: `downloader.py` format `bestvideo[ext=mp4]+bestaudio[ext=m4a]/
+  best[ext=mp4]/best` — NO resolution cap, grabs the max the source offers.
+  Test source came as 1080×1920 HEVC, 30fps, **1.64 Mbps** (TikTok already
+  compressed it hard — can't recover detail that isn't there).
+- 60fps: user wanted 60fps "at download" — IMPOSSIBLE, `yt-dlp -F` shows the
+  source has ONLY 30fps variants (540p/720p/1080p, all 30fps). But the
+  pipeline ALREADY outputs 60fps via minterpolate (main's speed_match
+  target_fps=60) — confirmed source 30fps → both final variants 60fps. So
+  "60fps output" is already delivered (interpolated, not native).
+- OUTPUT bitrate: crf16 encode → **11–13 Mbps** (7× the source). Quality is
+  NOT lost in the pipeline — it's over-preserved; the cost is huge files
+  (105 MB / 71s, 245 MB / 150s). Real lever for smaller files = raise crf16
+  → 20–22 (TikTok re-compresses on upload anyway). NOT changed yet (user
+  didn't ask to).
+- RESOLUTION always-1080p (commit d426a50): output previously = source dims,
+  so a 720p source → 720p output. Now `_force_output_size_vf()` in
+  `remix_pipeline.py` scales every final clip to 1080×1920 (letterbox-pad,
+  no distort; '' / skip when already 1080p) in the fused encode, BEFORE the
+  subtitles filter so libass renders captions crisp at 1080p (ASS PlayRes
+  stays source dims, libass scales up). Verified: a synthetic 720p input →
+  1080×1920 output, source-PlayRes caption rendered sharp + centred. Env
+  override CLIPFORGE_OUTPUT_W/H. Covers both pipelines. Backend restarted.
+
 End of handover.
