@@ -81,6 +81,9 @@ class JobType(str, enum.Enum):
     remix_pipeline = "remix_pipeline"
     parallel_pipeline = "parallel_pipeline"
     commentator_bg_remove = "commentator_bg_remove"
+    doodle_script = "doodle_script"
+    doodle_tts = "doodle_tts"
+    doodle_render = "doodle_render"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────

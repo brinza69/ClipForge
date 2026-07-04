@@ -28,3 +28,18 @@ audioop-lts>=0.2; python_version >= "3.13"
 # simple-lama-inpainting. Those are NOT here because the CUDA wheels come from
 # the PyTorch index (not PyPI). Install them with scripts/setup-gpu.(ps1|sh).
 # Without them the eraser still works on CPU via OpenCV (telea), just slower.
+#
+# Auto Story Doodle Video — local Kokoro TTS voiceover (server/services/doodle/kokoro_service.py).
+# Uses the torch already installed above (CUDA build) — do NOT let this pull a
+# different torch wheel. kokoro pulls transformers/tokenizers/huggingface-hub;
+# on this venv we pinned transformers==4.49.0 + tokenizers>=0.21,<0.22 +
+# huggingface-hub>=0.26,<1.0 for compatibility (faster-whisper tolerates both).
+# misaki[en] (kokoro's English G2P) additionally needs spacy + phonemizer +
+# their transitive deps (segments, csvw, ...) — installed alongside.
+kokoro>=0.7.16
+soundfile>=0.14.0
+# Bundles a portable espeak-ng library/data so misaki's espeak fallback works
+# without a system-wide espeak-ng MSI install. If phonemizer still fails to
+# init at runtime, install the espeak-ng MSI from
+# https://github.com/espeak-ng/espeak-ng/releases as a fallback.
+espeakng-loader>=0.2.4
