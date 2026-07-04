@@ -1,0 +1,18 @@
+{
+  "id": "classic_white",
+  "builtin": true,
+  "name": "Classic White",
+  "font_family": "Segoe UI",
+  "font_size": 62,
+  "font_weight": "Bold",
+  "text_color": "#FFFFFF",
+  "highlight_color": "#FFFFFF",
+  "outline_color": "#000000",
+  "outline_width": 4,
+  "shadow_offset": 2,
+  "shadow_color": "#000000A0",
+  "position": "bottom",
+  "uppercase": false,
+  "animation": "phrase",
+  "max_words_per_line": 4
+}

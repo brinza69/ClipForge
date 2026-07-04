@@ -1,0 +1,11 @@
+{
+  "id": "povestitor_cel_verde",
+  "name": "Povestitor (cel verde)",
+  "default_position": "bottom-left",
+  "default_scale": 0.3,
+  "chroma_key": "#AAD714",
+  "chroma_similarity": 0.1,
+  "chroma_blend": 0.05,
+  "duration": 71.666667,
+  "filename": "povestitor.mp4"
+}

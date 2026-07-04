@@ -1,0 +1,18 @@
+{
+  "id": "neon_pop",
+  "builtin": true,
+  "name": "Neon Pop",
+  "font_family": "Arial Black",
+  "font_size": 74,
+  "font_weight": "Black",
+  "text_color": "#FFFFFF",
+  "highlight_color": "#FF3366",
+  "outline_color": "#1A0033",
+  "outline_width": 5,
+  "shadow_offset": 3,
+  "shadow_color": "#FF336650",
+  "position": "center",
+  "uppercase": true,
+  "animation": "word",
+  "max_words_per_line": 2
+}
