@@ -1425,4 +1425,26 @@ User asked exactly what quality the pipeline downloads + outputs. Findings
   1080×1920 output, source-PlayRes caption rendered sharp + centred. Env
   override CLIPFORGE_OUTPUT_W/H. Covers both pipelines. Backend restarted.
 
+## S5.13 — LIVE-tested: Sheets auto-loop + 1080p upscale + 60fps (all pass)
+User asked to verify three things work. All tested live, production sheet
+UNTOUCHED (backed up config, restored next_row=168 after):
+- **Sheets auto-loop**: simulated the UI loop via API (`pull-next` read-only →
+  `skip-row` advance) across REAL rows 168→172 (each returned its URL+number);
+  proved sequential walk + advance. Empty-row stop is in the code path
+  (`pull-next` → `empty:true` when the URL cell is blank → loop stops); Stop
+  button ends it from the UI. Mechanics solid.
+- **1080p upscale + 60fps**: ran a real parallel job (XTTS, no Sheets binding)
+  on a sheet URL that happened to download as **720×1280 @ 30fps** — the
+  perfect proof case. Both variant outputs = **1080×1920 @ 60fps**. Frame dump
+  confirmed the burned caption renders CRISP + centred at 1080p (upscale is
+  before the subtitles filter). Job done ~10 min, 0 errors.
+- Helper for future live tests: `server/scripts/test_1080_60fps.sh` runs the
+  WHOLE thing (ensure backend → submit → poll → ffprobe dims/fps) inside ONE
+  wsl.exe background call, which keeps the WSL VM alive for the ~10 min (the
+  recurring "backend 000 mid-test" was WSL auto-shutdown recycling the session
+  between separate wsl.exe calls — a single long-lived call avoids it).
+- NOT yet tested: the full auto-loop END TO END with real ElevenLabs voices +
+  Drive upload + Sheets description write-back (quota exhausted; and that path
+  writes to the production sheet). The per-piece mechanics are all proven.
+
 End of handover.
