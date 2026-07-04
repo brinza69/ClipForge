@@ -1,0 +1,18 @@
+{
+  "id": "cloned_style",
+  "name": "Cloned style",
+  "font_family": "Inter",
+  "font_size": 77,
+  "font_weight": "Black",
+  "italic": false,
+  "text_color": "#F9F8FA",
+  "highlight_color": "#F9F8FA",
+  "outline_color": "#6D6D6E",
+  "outline_width": 5.0,
+  "shadow_offset": 0.0,
+  "shadow_color": "#000000A0",
+  "position": "bottom",
+  "uppercase": false,
+  "animation": "phrase",
+  "max_words_per_line": 1
+}

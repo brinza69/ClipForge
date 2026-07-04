@@ -40,7 +40,12 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-data/
+# Ignore everything under data/ (API keys, tokens, media, voices, DB) …
+data/*
+# … EXCEPT the user's commentator presets + caption templates, which are
+# real content worth versioning so they survive a fresh clone.
+!data/commentators/
+!data/caption_templates/
 data_b/
 
 # Runtime artifacts from dev.sh

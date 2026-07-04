@@ -1,0 +1,18 @@
+{
+  "id": "viral_gradient",
+  "builtin": true,
+  "name": "Viral Gradient",
+  "font_family": "Impact",
+  "font_size": 76,
+  "font_weight": "Bold",
+  "text_color": "#FFFFFF",
+  "highlight_color": "#FF6B35",
+  "outline_color": "#000000",
+  "outline_width": 5,
+  "shadow_offset": 3,
+  "shadow_color": "#FF6B3540",
+  "position": "bottom",
+  "uppercase": true,
+  "animation": "word",
+  "max_words_per_line": 2
+}

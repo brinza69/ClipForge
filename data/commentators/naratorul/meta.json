@@ -1,0 +1,12 @@
+{
+  "id": "naratorul",
+  "name": "naratorul",
+  "default_position": "fullscreen",
+  "default_scale": 1.0,
+  "has_native_alpha": false,
+  "chroma_key": "#00FF00",
+  "chroma_similarity": 0.15,
+  "chroma_blend": 0.05,
+  "duration": 25.002667,
+  "filename": "naratorul.mp4"
+}

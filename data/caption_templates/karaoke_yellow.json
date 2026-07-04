@@ -1,0 +1,19 @@
+{
+  "id": "karaoke_yellow",
+  "builtin": true,
+  "name": "Karaoke Yellow",
+  "font_family": "Arial Black",
+  "font_size": 68,
+  "font_weight": "Bold",
+  "text_color": "#FFFFFF",
+  "highlight_color": "#FFE600",
+  "highlight_bg_color": "#FFE600",
+  "outline_color": "#000000",
+  "outline_width": 4,
+  "shadow_offset": 2,
+  "shadow_color": "#000000A0",
+  "position": "bottom",
+  "uppercase": true,
+  "animation": "word",
+  "max_words_per_line": 3
+}

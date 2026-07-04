@@ -1,0 +1,18 @@
+{
+  "id": "inter_blk_italic",
+  "name": "Inter Black Italic",
+  "font_family": "Inter Black",
+  "font_size": 72,
+  "font_weight": "Black",
+  "italic": true,
+  "text_color": "#FFFFFF",
+  "outline_color": "#000000",
+  "outline_width": 0,
+  "shadow_offset": 0,
+  "shadow_color": "#00000000",
+  "position": "bottom",
+  "uppercase": false,
+  "animation": "word",
+  "max_words_per_line": 1,
+  "borderstyle": 1
+}

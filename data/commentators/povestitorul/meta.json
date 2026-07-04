@@ -1,0 +1,12 @@
+{
+  "id": "povestitorul",
+  "name": "povestitorul",
+  "default_position": "fullscreen",
+  "default_scale": 1.0,
+  "has_native_alpha": false,
+  "chroma_key": "#AAD714",
+  "chroma_similarity": 0.05,
+  "chroma_blend": 0.05,
+  "duration": 78.333333,
+  "filename": "video povestitorul.mp4"
+}
