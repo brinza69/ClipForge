@@ -42,10 +42,14 @@ next-env.d.ts
 
 # Ignore everything under data/ (API keys, tokens, media, voices, DB) …
 data/*
-# … EXCEPT the user's commentator presets + caption templates, which are
-# real content worth versioning so they survive a fresh clone.
+# … EXCEPT the user's commentator presets + caption templates + fonts, which
+# are real content worth versioning so they survive a fresh clone.
 !data/commentators/
 !data/caption_templates/
+!data/fonts/
+# comicbd.ttf = Comic Sans MS Bold — proprietary Microsoft font, NOT
+# redistributable. Keep it local-only. (Inter + Bebas Neue are OFL — fine.)
+data/fonts/comicbd.ttf
 data_b/
 
 # Runtime artifacts from dev.sh
