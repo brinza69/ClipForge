@@ -214,6 +214,13 @@ async def handle_parallel_pipeline(
     if not raw_transcript_text.strip():
         raise RuntimeError("Transcription produced no text — cannot continue.")
 
+    # Pre-flight: now that we know the transcript length, verify every key/quota
+    # the rest of the run needs BEFORE the expensive erase. Fails a doomed row
+    # in seconds (e.g. ElevenLabs quota_exceeded) instead of after minutes of
+    # GPU inpainting — so a batch loop skips it without wasting resources.
+    from services.preflight import preflight_check
+    await preflight_check(cfg, variants, raw_transcript_text)
+
     from services.caption_overlays import probe_video_dims
     src_w, src_h = probe_video_dims(str(video_path))
 
@@ -231,20 +238,47 @@ async def handle_parallel_pipeline(
         transcript_words=_transcript_words_from_tx(tx_result),
     )
 
-    # ── Shared stage 4 — clean transcript ONCE (0.40–0.48) ─────────────────
+    # ── Stage 4 — clean transcript PER LANGUAGE (0.40–0.48) ────────────────
+    # Each variant carries its own `tts_language` (its country's language), so
+    # the cleaned text + burned captions must be IN that language — the voice
+    # and the on-screen text have to match. We clean once per DISTINCT language
+    # (cache), not once per variant: two RO variants share one clean, a FR one
+    # gets its own. Falls back to the shared `transcript_target_lang` (then
+    # "keep original") when a variant has no tts_language.
     from services.transcript_cleaner import clean_transcript
 
+    default_lang = (cfg.get("transcript_target_lang") or "").strip() or None
+
+    def _lang_key(v: Dict[str, Any]) -> str:
+        lang = (v.get("tts_language") or "").strip() or default_lang
+        return lang or "__original__"
+
+    langs: List[str] = []
+    for v in variants:
+        k = _lang_key(v)
+        if k not in langs:
+            langs.append(k)
+
     slc_clean = _Sliced(queue, job_id, 0.40, 0.48)
-    await slc_clean.update(0.0, "Cleaning transcript (shared)…")
-    cleaned_text = await clean_transcript(
-        raw_transcript_text,
-        engine=cfg["transcript_engine"],
-        target_language=cfg.get("transcript_target_lang") or None,
-        progress_cb=lambda i, total: None,
-    )
-    if not cleaned_text.strip():
-        raise RuntimeError("Transcript cleaning produced empty text.")
-    await slc_clean.update(1.0, "Transcript ready (shared)")
+    cleaned_by_lang: Dict[str, str] = {}
+    for idx, key in enumerate(langs):
+        lang = None if key == "__original__" else key
+        label = key if key != "__original__" else "original"
+        await slc_clean.update(idx / max(1, len(langs)), f"Cleaning transcript ({label})…")
+        txt = await clean_transcript(
+            raw_transcript_text,
+            engine=cfg["transcript_engine"],
+            target_language=lang,
+            progress_cb=lambda i, total: None,
+        )
+        if not txt.strip():
+            raise RuntimeError(f"Transcript cleaning produced empty text for language '{label}'.")
+        cleaned_by_lang[key] = txt
+    await slc_clean.update(1.0, f"Transcript(s) ready ({len(langs)} lang)")
+
+    # Representative text for the shared description stage + result metadata:
+    # variant #0's language (the one written back to Sheets).
+    cleaned_text = cleaned_by_lang[_lang_key(variants[0])]
 
     # ── Per-variant fork (0.48–0.97) ───────────────────────────────────────
     # Probe the source (erased) video duration ONCE — erase preserves length,
@@ -279,11 +313,14 @@ async def handle_parallel_pipeline(
         com_id = variant.get("commentator_preset_id") or None
         label = vname or com_id or f"variant {i + 1}"
 
+        # This variant's cleaned text is in ITS language (voice + captions).
+        v_cleaned = cleaned_by_lang[_lang_key(variant)]
+
         await v_slc.update(0.0, f"[{i + 1}/{n}] {label}: voice…")
 
         # 1) voice (0–40% of this variant's slice)
         voice_path = await synth_voice_from_text(
-            cleaned_text, vdir, vcfg, v_slc.sub(0.0, 0.40), out_stem="voice",
+            v_cleaned, vdir, vcfg, v_slc.sub(0.0, 0.40), out_stem="voice",
         )
 
         # 2+3) FUSED speed-match + caption burn (one encode) on the shared
@@ -293,7 +330,7 @@ async def handle_parallel_pipeline(
         cap_hi = 0.80 if has_com else 1.0
         captioned_path = vdir / ("video_captioned.mp4" if has_com else "video_final.mp4")
         sm_stats = await _stage_match_and_caption(
-            erased_path, voice_path, cleaned_text, vcfg, captioned_path,
+            erased_path, voice_path, v_cleaned, vcfg, captioned_path,
             v_slc.sub(0.40, cap_hi),
         )
 

@@ -1327,4 +1327,124 @@ Key honest caveats documented for next session:
 Env: still on branch `claude/parallel-processing` post-merge with main
 (60fps + eraser + main's automation all present). Not pushed yet this turn.
 
+## S5.11 — Sheets full automation (in progress, 4 parts)
+User request: automate Parallel-from-Sheets — pick erase/caption zones ONCE
+at start (same for every row), loop rows until Stop or sheet exhausted;
+transcript language per COMMENTATOR PRESET (its `tts_language`), not the
+shared default (for foreign-country accounts); and after transcribe, verify
+all keys/quota BEFORE the expensive erase (no wasted resources — a row died
+today at 48% on ElevenLabs `quota_exceeded` AFTER a full erase).
+
+Part 4 DONE + tested (`services/preflight.py`, wired in
+`parallel_pipeline.py` between transcribe and erase): checks transcript
+engine key (openai/anthropic) or Ollama reachability, ElevenLabs key
+presence, and ElevenLabs quota (`get_user_info` → limit−count) vs estimate
+(raw transcript chars × #EL variants, raw len = safe upper bound since
+cleaning shortens). Raises a clear RuntimeError before erase. Unit-tested:
+140-remaining/694-needed (today's exact case) → BLOCKED; enough → PASS.
+Remix pipeline preflight = TODO (single-variant, deferred; user uses Sheets).
+
+Part 3 DONE + tested (`parallel_pipeline.py`): clean once per DISTINCT variant
+language (cache), keyed on `tts_language` (fallback shared → keep-original).
+Voice AND burned captions now in each variant's language. RO,FR,RO → 2 cleans.
+Description/result use variant #0's language. Commit 53c823f.
+
+Parts 1+2 DONE (frontend, tsc clean — NOT live-tested, see below):
+- `ParallelProcessor` gains optional `autoControls` prop; when set (Sheets page
+  only), an "Auto-run all rows" button appears. `start()` refactored to
+  `startWith(urlOverride, extrasOverride)` so the loop reuses the SAME captured
+  zones + variants for each pulled url. A terminal-status effect advances the
+  loop: on done → count + pull next; on failed → skipRow (so a stuck row isn't
+  re-pulled forever — failed rows don't advance next_row) + pull next; ends when
+  pullNext returns null (sheet exhausted) or Stop pressed. Zones captured once on
+  the first preview; backend re-scales to each video's real dims.
+- `parallel-sheets/page.tsx`: `autoPullNext` (returns {url,extras} or null on
+  empty row) + `autoSkip`, passed as `autoControls`.
+- The manual single-run path is untouched (auto only via the new prop).
+
+VERIFIED: tsc clean, py_compile clean, preflight + lang-dedupe unit tests pass.
+NOT live-tested (needs real ~10-min jobs AND ElevenLabs quota is currently
+exhausted — that's what surfaced this whole request): the full multi-row loop
+end-to-end. Test path when quota/XTTS available: configure Sheets, Preview one
+video → pick zones + set variants (with per-country tts_language) → "Auto-run
+all rows" → it should process next_row onward, commit each description, advance,
+and stop at the first empty row. Watch for: the terminal-effect double-firing
+(guarded by autoHandledJobRef) and the skip-on-fail not looping.
+
+## S5.11 — LIVE-tested the pipeline with XTTS + found/fixed the FR-bloat bug
+Live end-to-end test of the per-variant-language path with XTTS (bypassing
+Sheets, so the user's real production sheet at next_row=168 was untouched):
+job `9109324011d0`, test Grinch URL, 2 variants EN + FR, erase_mode=blur.
+- RESULT: done in 15 min, 0 errors. Log confirmed `Cleaning transcript (en)…`
+  then separately `Cleaning transcript (fr)…` → **per-variant language works**
+  (each variant's clean/translate is in ITS tts_language). Both videos +
+  descriptions produced.
+- BUG the test caught: FR cleaned text = **3376 chars (2.3× the EN 1458)** →
+  FR raw voice 185s vs EN 85s → FR final video 150s vs source 75s. Isolated
+  repro (`server/scripts/repro_fr_clean.py`, EN/FR/DE × ollama/openai on a
+  synthetic sample) showed BOTH engines are normally 1.0–1.2× — so it's a
+  STOCHASTIC bloat spike of qwen2.5:7b on a particular input, NOT systematic,
+  and NOT caught by `_META_HEADERS` (EN/RO phrases only, no FR/DE/…).
+- FIX (commit 64b47b0): `transcript_cleaner.clean_transcript` now caps every
+  chunk at **MAX_LEN_RATIO = 1.2 × source** (`_is_bloated` / `_trim_to_ratio`
+  / `_clean_one_chunk`): on bloat → retry once → else hard-trim at a sentence
+  boundary so output NEVER exceeds 1.2×. Language- + engine-agnostic. Normal
+  output passes untouched. Tested 9/9 (`server/scripts/test_bloat_guard.py`,
+  incl. forced-bloat retry+trim + normal pass-through). Backend restarted to
+  load it. This is the safety net that lets unattended multi-country auto-run
+  never waste TTS/GPU on a bloated clip.
+- GOTCHA re-confirmed: the Windows-side git-bash `curl` intermittently can't
+  reach :8420 (WSL relay recycled → backend looked "down" mid-test but had
+  finished cleanly). Run curls against the backend from `wsl.exe -e bash`
+  instead; `/tmp` inside those one-shot WSL calls is ephemeral (write probe
+  files under `data/` on /mnt/f).
+
+## S5.12 — Download/output quality audit + force 1080p output
+User asked exactly what quality the pipeline downloads + outputs. Findings
+(measured on the S5.11 test files):
+- DOWNLOAD: `downloader.py` format `bestvideo[ext=mp4]+bestaudio[ext=m4a]/
+  best[ext=mp4]/best` — NO resolution cap, grabs the max the source offers.
+  Test source came as 1080×1920 HEVC, 30fps, **1.64 Mbps** (TikTok already
+  compressed it hard — can't recover detail that isn't there).
+- 60fps: user wanted 60fps "at download" — IMPOSSIBLE, `yt-dlp -F` shows the
+  source has ONLY 30fps variants (540p/720p/1080p, all 30fps). But the
+  pipeline ALREADY outputs 60fps via minterpolate (main's speed_match
+  target_fps=60) — confirmed source 30fps → both final variants 60fps. So
+  "60fps output" is already delivered (interpolated, not native).
+- OUTPUT bitrate: crf16 encode → **11–13 Mbps** (7× the source). Quality is
+  NOT lost in the pipeline — it's over-preserved; the cost is huge files
+  (105 MB / 71s, 245 MB / 150s). Real lever for smaller files = raise crf16
+  → 20–22 (TikTok re-compresses on upload anyway). NOT changed yet (user
+  didn't ask to).
+- RESOLUTION always-1080p (commit d426a50): output previously = source dims,
+  so a 720p source → 720p output. Now `_force_output_size_vf()` in
+  `remix_pipeline.py` scales every final clip to 1080×1920 (letterbox-pad,
+  no distort; '' / skip when already 1080p) in the fused encode, BEFORE the
+  subtitles filter so libass renders captions crisp at 1080p (ASS PlayRes
+  stays source dims, libass scales up). Verified: a synthetic 720p input →
+  1080×1920 output, source-PlayRes caption rendered sharp + centred. Env
+  override CLIPFORGE_OUTPUT_W/H. Covers both pipelines. Backend restarted.
+
+## S5.13 — LIVE-tested: Sheets auto-loop + 1080p upscale + 60fps (all pass)
+User asked to verify three things work. All tested live, production sheet
+UNTOUCHED (backed up config, restored next_row=168 after):
+- **Sheets auto-loop**: simulated the UI loop via API (`pull-next` read-only →
+  `skip-row` advance) across REAL rows 168→172 (each returned its URL+number);
+  proved sequential walk + advance. Empty-row stop is in the code path
+  (`pull-next` → `empty:true` when the URL cell is blank → loop stops); Stop
+  button ends it from the UI. Mechanics solid.
+- **1080p upscale + 60fps**: ran a real parallel job (XTTS, no Sheets binding)
+  on a sheet URL that happened to download as **720×1280 @ 30fps** — the
+  perfect proof case. Both variant outputs = **1080×1920 @ 60fps**. Frame dump
+  confirmed the burned caption renders CRISP + centred at 1080p (upscale is
+  before the subtitles filter). Job done ~10 min, 0 errors.
+- Helper for future live tests: `server/scripts/test_1080_60fps.sh` runs the
+  WHOLE thing (ensure backend → submit → poll → ffprobe dims/fps) inside ONE
+  wsl.exe background call, which keeps the WSL VM alive for the ~10 min (the
+  recurring "backend 000 mid-test" was WSL auto-shutdown recycling the session
+  between separate wsl.exe calls — a single long-lived call avoids it).
+- NOT yet tested: the full auto-loop END TO END with real ElevenLabs voices +
+  Drive upload + Sheets description write-back (quota exhausted; and that path
+  writes to the production sheet). The per-piece mechanics are all proven.
+
 End of handover.

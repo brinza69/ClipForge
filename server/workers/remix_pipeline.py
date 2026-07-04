@@ -720,6 +720,29 @@ async def _stage_commentator(
     return stats
 
 
+# Final output resolution — every rendered clip is forced to exactly this so
+# lower-res sources (e.g. a 720p TikTok variant) still post as 1080p. TikTok
+# gives 1080p uploads a higher quality ceiling / less re-compression, so
+# up-scaling here is a real platform win even though it adds no true detail.
+# Override with CLIPFORGE_OUTPUT_W/H if a different target is ever needed.
+OUTPUT_W = int(os.environ.get("CLIPFORGE_OUTPUT_W", "1080"))
+OUTPUT_H = int(os.environ.get("CLIPFORGE_OUTPUT_H", "1920"))
+
+
+def _force_output_size_vf(w: int, h: int) -> str:
+    """ffmpeg filter that fits any source into OUTPUT_W×OUTPUT_H (letterbox-pad
+    to keep aspect, never distort). Empty when the source is already exactly
+    that size — avoids a needless resample on native-1080p sources. Placed
+    BEFORE the subtitles filter so libass renders captions crisp at 1080p
+    (the ASS PlayRes stays the source dims and libass scales them up)."""
+    if w == OUTPUT_W and h == OUTPUT_H:
+        return ""
+    return (
+        f"scale={OUTPUT_W}:{OUTPUT_H}:force_original_aspect_ratio=decrease,"
+        f"pad={OUTPUT_W}:{OUTPUT_H}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+    )
+
+
 async def _stage_match_and_caption(
     erased_video: Path,
     voice_path: Path,
@@ -845,11 +868,14 @@ async def _stage_match_and_caption(
     fdir = str(fonts_dir()).replace("\\", "/").replace(":", "\\:")
     subtitles_vf = f"subtitles=filename='{ass_arg}':fontsdir='{fdir}'"
 
-    # FUSED filtergraph: stretch the video to the voice length, then burn the
-    # captions — all in this single encode. The voice (input 1) is muxed as the
-    # audio track. crf=16 + preset=slow: this is the ONLY real quality pass now
-    # (the erased intermediate is near-lossless), so we spend bits here.
-    fused_vf = f"{speed_vfilter},{subtitles_vf}"
+    # FUSED filtergraph: stretch the video to the voice length, up-scale to the
+    # forced 1080p output size, then burn the captions — all in this single
+    # encode. The voice (input 1) is muxed as the audio track. crf=16 +
+    # preset=slow: this is the ONLY real quality pass now (the erased
+    # intermediate is near-lossless), so we spend bits here. The scale is placed
+    # before subtitles so captions render crisp at the final resolution.
+    scale_vf = _force_output_size_vf(w, h)
+    fused_vf = ",".join(p for p in (speed_vfilter, scale_vf, subtitles_vf) if p)
 
     ffmpeg = _ffmpeg_bin()
     cmd = [

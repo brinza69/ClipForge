@@ -14,7 +14,7 @@
  *   - react to job completion (`onJobDone`)
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -69,6 +69,17 @@ interface Props {
   runDisabled?: boolean;
   /** Tooltip shown when runDisabled is true. */
   runDisabledReason?: string;
+  /**
+   * When provided, an "Auto-run" button appears: it pulls rows one by one and
+   * processes each with the SAME zones + variants until the sheet is exhausted
+   * (pullNext → null) or the user hits Stop. `pullNext` returns the next row's
+   * url + start-payload extras, or null when there's nothing left. `skipRow`
+   * advances past a row that failed (so the loop doesn't re-pull it forever).
+   */
+  autoControls?: {
+    pullNext: () => Promise<{ url: string; extras: Record<string, unknown> } | null>;
+    skipRow: () => Promise<void>;
+  };
 }
 
 function driveLabel(d: VariantResult["drive"]): { text: string; cls: string } | null {
@@ -86,6 +97,7 @@ function driveLabel(d: VariantResult["drive"]): { text: string; cls: string } | 
 export function ParallelProcessor({
   url, setUrl,
   topContent, startPayloadExtras, onJobDone, runDisabled, runDisabledReason,
+  autoControls,
 }: Props) {
   const [preview, setPreview] = useState<PreviewMeta | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -118,6 +130,16 @@ export function ParallelProcessor({
   const [errorMsg, setErrorMsg] = useState("");
   const [results, setResults] = useState<VariantResult[] | null>(null);
   const [descriptions, setDescriptions] = useState<{ original_translated: string; ai_generated: string } | null>(null);
+
+  // ── Auto-run batch loop (Sheets) ────────────────────────────────────────
+  // Process rows one after another with the SAME zones + variants until the
+  // sheet is exhausted or the user stops.
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [autoDone, setAutoDone] = useState(0);         // rows completed this run
+  const [autoFailed, setAutoFailed] = useState(0);     // rows that errored + were skipped
+  const autoStopRef = useRef(false);                   // set true by Stop
+  const autoRunningRef = useRef(false);                // mirror for use inside effects
+  const autoHandledJobRef = useRef<string | null>(null); // last terminal job we advanced from
 
   useEffect(() => {
     (async () => {
@@ -160,17 +182,27 @@ export function ParallelProcessor({
   const removeVariant = (i: number) => setVariants((vs) => vs.length > 2 ? vs.filter((_, idx) => idx !== i) : vs);
   const updateVariant = (i: number, v: VariantState) => setVariants((vs) => vs.map((old, idx) => idx === i ? v : old));
 
-  const start = async () => {
-    if (!preview) { toast.error("Get preview first"); return; }
+  // Start one job. In the manual flow, url + extras come from state / the
+  // Sheets pull button. In the auto loop, they're passed in so the SAME zones
+  // + variants are reused for the pulled url. Returns true on successful submit.
+  const startWith = async (
+    urlOverride?: string,
+    extrasOverride?: Record<string, unknown>,
+  ): Promise<boolean> => {
+    if (!preview) { toast.error("Get preview first"); return false; }
     for (const [i, v] of variants.entries()) {
-      if (!v.tts_voice_id) { toast.error(`Variant #${i + 1}: pick a voice`); return; }
+      if (!v.tts_voice_id) { toast.error(`Variant #${i + 1}: pick a voice`); return false; }
     }
+    const useUrl = (urlOverride ?? url).trim();
+    if (!useUrl) { toast.error("No URL to process"); return false; }
     setErrorMsg(""); setResults(null); setDescriptions(null);
     setProgress(0); setProgressMsg("Submitting…"); setJobStatus("queued");
 
     const payload: Record<string, unknown> = {
-      url: url.trim(),
+      url: useUrl,
       title: preview.title || undefined,
+      // Zones are captured ONCE (on the first preview) and reused for every
+      // row — the backend re-scales them to each video's real dimensions.
       erase_zone: { ...eraseRect, src_w: preview.width, src_h: preview.height },
       caption_zone: { ...captionRect, src_w: preview.width, src_h: preview.height },
       erase_mode: eraseMethod === "blur" ? "blur" : "inpaint",
@@ -196,7 +228,7 @@ export function ParallelProcessor({
         drive_folder: v.drive_folder || null,
         split_into_parts: v.split_into_parts,
       })),
-      ...(startPayloadExtras ? startPayloadExtras() : {}),
+      ...(extrasOverride ?? (startPayloadExtras ? startPayloadExtras() : {})),
     };
 
     try {
@@ -206,9 +238,49 @@ export function ParallelProcessor({
       if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || `Start failed (${r.status})`); }
       const j = await r.json();
       setJobId(j.job_id);
+      return true;
     } catch (e: any) {
       setErrorMsg(e.message); setJobStatus(""); toast.error("Start failed", { description: e.message });
+      return false;
     }
+  };
+
+  const start = () => startWith();
+
+  // Pull the next row and start it; end the loop when the sheet is exhausted.
+  const pumpAuto = async () => {
+    if (autoStopRef.current || !autoControls) { finishAuto(); return; }
+    let row: { url: string; extras: Record<string, unknown> } | null = null;
+    try {
+      row = await autoControls.pullNext();
+    } catch (e: any) {
+      toast.error("Auto-run: pull failed — stopping", { description: e.message });
+      finishAuto(); return;
+    }
+    if (!row) { toast.success("Auto-run finished — no more rows"); finishAuto(); return; }
+    setUrl(row.url);
+    const ok = await startWith(row.url, row.extras);
+    if (!ok) { finishAuto(); }   // couldn't even submit → stop
+  };
+
+  const finishAuto = () => {
+    autoRunningRef.current = false;
+    setAutoRunning(false);
+  };
+
+  const startAuto = async () => {
+    if (!preview) { toast.error("Preview a video first to pick the zones"); return; }
+    autoStopRef.current = false;
+    autoRunningRef.current = true;
+    autoHandledJobRef.current = null;
+    setAutoRunning(true);
+    setAutoDone(0); setAutoFailed(0);
+    await pumpAuto();
+  };
+
+  const stopAuto = () => {
+    autoStopRef.current = true;
+    toast.info("Auto-run will stop after the current video finishes");
   };
 
   useEffect(() => {
@@ -284,6 +356,30 @@ export function ParallelProcessor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
+
+  // Auto-run advance: when a job reaches a terminal state during an auto loop,
+  // count it (skip failed rows so the loop can't re-pull them) and pull+start
+  // the next one — until the sheet is exhausted or Stop was pressed.
+  useEffect(() => {
+    if (!autoRunningRef.current || !jobId) return;
+    const terminal = jobStatus === "done" || jobStatus === "failed" || jobStatus === "cancelled";
+    if (!terminal) return;
+    if (autoHandledJobRef.current === jobId) return;  // already advanced from this job
+    autoHandledJobRef.current = jobId;
+    (async () => {
+      if (jobStatus === "done") {
+        setAutoDone((n) => n + 1);
+      } else {
+        setAutoFailed((n) => n + 1);
+        // A failed row never wrote its description → next_row did NOT advance.
+        // Skip it so the next pull doesn't return the same failing row forever.
+        try { await autoControls?.skipRow(); } catch {}
+      }
+      if (autoStopRef.current) { finishAuto(); return; }
+      await pumpAuto();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobStatus, jobId]);
 
   const stages = useMemo(() => {
     const ranges = [
@@ -362,7 +458,7 @@ export function ParallelProcessor({
               </select>
             </div>
           </div>
-          <p className="text-[11px] text-muted-foreground">The cleaned transcript is generated once with these settings and reused for every variant&apos;s voice.</p>
+          <p className="text-[11px] text-muted-foreground">Target language here is the <span className="text-foreground">fallback</span>. Each variant is cleaned in <span className="text-foreground">its own voice language</span> when set (so foreign-country variants get their transcript + captions in that language); same-language variants share one clean.</p>
         </Card>
       )}
 
@@ -391,12 +487,32 @@ export function ParallelProcessor({
       {preview && (
         <Card className="p-4 space-y-3 border-border/40">
           <div className="flex items-center justify-between">
-            <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">5. Run</div>
-            {!isRunning && (
-              <Button onClick={start} disabled={runDisabled} title={runDisabled ? runDisabledReason : undefined}>
-                <Layers className="h-4 w-4 mr-1" /> Process {variants.length} videos
-              </Button>
-            )}
+            <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
+              5. Run{autoControls && autoRunning ? ` — auto (${autoDone} done${autoFailed ? `, ${autoFailed} skipped` : ""})` : ""}
+            </div>
+            <div className="flex gap-2">
+              {/* Auto-run: only offered on the Sheets page (autoControls set). */}
+              {autoControls && !autoRunning && !isRunning && (
+                <Button
+                  variant="secondary"
+                  onClick={startAuto}
+                  disabled={!preview}
+                  title="Process rows from the sheet one by one with these same zones + variants, until the sheet ends or you stop"
+                >
+                  <Layers className="h-4 w-4 mr-1" /> Auto-run all rows
+                </Button>
+              )}
+              {autoControls && autoRunning && (
+                <Button variant="destructive" onClick={stopAuto} disabled={autoStopRef.current}>
+                  {autoStopRef.current ? "Stopping…" : "Stop after this one"}
+                </Button>
+              )}
+              {!isRunning && !autoRunning && (
+                <Button onClick={start} disabled={runDisabled} title={runDisabled ? runDisabledReason : undefined}>
+                  <Layers className="h-4 w-4 mr-1" /> Process {variants.length} videos
+                </Button>
+              )}
+            </div>
           </div>
 
           {(isRunning || progress > 0) && (

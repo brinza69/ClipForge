@@ -492,6 +492,63 @@ DEFAULT_OPENAI_MODEL = os.environ.get("CLIPFORGE_OPENAI_MODEL", "gpt-4o-mini")
 DEFAULT_ANTHROPIC_MODEL = os.environ.get("CLIPFORGE_ANTHROPIC_MODEL", "claude-haiku-4-5")
 
 
+# Length guard (anti-bloat). Small LLMs occasionally "elaborate", duplicate,
+# or ramble when cleaning/translating, producing a cleaned text far longer than
+# the source → a grotesquely long TTS voice and an unusable clip. This is
+# stochastic and language-agnostic (seen worst on non-EN/RO translations that
+# the meta-header filter can't catch). We cap the cleaned length at
+# MAX_LEN_RATIO × the source chunk: retry once (a fresh sample is usually
+# normal), then hard-trim at a sentence boundary so the result NEVER exceeds
+# the cap. Prevents wasting TTS+GPU on a bloated clip in unattended runs.
+MAX_LEN_RATIO = 1.2
+
+_SENT_END_RE = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _is_bloated(source: str, out: str) -> bool:
+    """True when the cleaned output exceeds MAX_LEN_RATIO × the source length."""
+    src = len(source.strip())
+    return src > 0 and len(out.strip()) > MAX_LEN_RATIO * src
+
+
+def _trim_to_ratio(out: str, source: str) -> str:
+    """Trim `out` to at most MAX_LEN_RATIO × source chars, cutting only at a
+    sentence boundary so we never end mid-word. Keeps the leading (real)
+    content and drops the trailing bloat/duplication."""
+    cap = int(MAX_LEN_RATIO * len(source.strip()))
+    out = out.strip()
+    if len(out) <= cap:
+        return out
+    sentences = _SENT_END_RE.split(out)
+    kept: List[str] = []
+    total = 0
+    for s in sentences:
+        add = len(s) + 1
+        if total + add > cap and kept:
+            break
+        kept.append(s)
+        total += add
+    result = " ".join(kept).strip()
+    # If even the first sentence blew the cap, hard-cut at the last space.
+    if not result:
+        cut = out[:cap]
+        sp = cut.rfind(" ")
+        result = (cut[:sp] if sp > 0 else cut).strip()
+    return result
+
+
+async def _clean_one_chunk(
+    engine: str, chunk: str, target_language: Optional[str], model: Optional[str],
+) -> str:
+    if engine == "ollama":
+        return await _call_ollama(chunk, target_language, model or DEFAULT_OLLAMA_MODEL)
+    if engine == "openai":
+        return await _call_openai(chunk, target_language, model or DEFAULT_OPENAI_MODEL)
+    if engine == "anthropic":
+        return await _call_anthropic(chunk, target_language, model or DEFAULT_ANTHROPIC_MODEL)
+    raise RuntimeError(f"Unknown engine: {engine}")
+
+
 async def clean_transcript(
     raw_text: str,
     engine: str,
@@ -513,14 +570,24 @@ async def clean_transcript(
     for i, chunk in enumerate(chunks):
         if progress_cb:
             progress_cb(i, len(chunks))
-        if engine == "ollama":
-            piece = await _call_ollama(chunk, target_language, model or DEFAULT_OLLAMA_MODEL)
-        elif engine == "openai":
-            piece = await _call_openai(chunk, target_language, model or DEFAULT_OPENAI_MODEL)
-        elif engine == "anthropic":
-            piece = await _call_anthropic(chunk, target_language, model or DEFAULT_ANTHROPIC_MODEL)
-        else:
-            raise RuntimeError(f"Unknown engine: {engine}")
+        piece = await _clean_one_chunk(engine, chunk, target_language, model)
+        # Anti-bloat guard: cap at MAX_LEN_RATIO × source. Retry once on bloat
+        # (stochastic — a fresh generation is usually normal), then hard-trim.
+        if _is_bloated(chunk, piece):
+            logger.warning(
+                f"transcript_cleaner: chunk {i} bloated "
+                f"({len(piece)} chars vs {len(chunk)} source, "
+                f"ratio {len(piece)/max(1,len(chunk)):.2f} > {MAX_LEN_RATIO}) — retrying once"
+            )
+            retry = await _clean_one_chunk(engine, chunk, target_language, model)
+            piece = retry if not _is_bloated(chunk, retry) or len(retry) < len(piece) else piece
+            if _is_bloated(chunk, piece):
+                before = len(piece)
+                piece = _trim_to_ratio(piece, chunk)
+                logger.warning(
+                    f"transcript_cleaner: chunk {i} still bloated after retry — "
+                    f"hard-trimmed {before} → {len(piece)} chars (cap {MAX_LEN_RATIO}×)"
+                )
         out_parts.append(piece)
 
     if progress_cb:
