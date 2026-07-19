@@ -1,0 +1,12 @@
+{
+  "id": "narator",
+  "name": "Narator",
+  "default_position": "bottom-right",
+  "default_scale": 0.35,
+  "has_native_alpha": false,
+  "chroma_key": "#00FF01",
+  "chroma_similarity": 0.2,
+  "chroma_blend": 0.08,
+  "duration": 25.002667,
+  "filename": "naratorul (1).mp4"
+}

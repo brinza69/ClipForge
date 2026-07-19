@@ -139,6 +139,13 @@ app.include_router(sheets_router)
 app.include_router(auto_router)
 app.include_router(doodle_router)
 
+# Ensure every StaticFiles mount dir exists — a fresh/second data dir (e.g.
+# data_b/) may be missing one (doodle/), which otherwise crashes uvicorn on
+# startup with "Directory '...' does not exist" and the backend never binds.
+import os as _os
+for _d in (settings.media_dir, settings.exports_dir, settings.thumbnails_dir, settings.doodle_dir):
+    _os.makedirs(_d, exist_ok=True)
+
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 app.mount("/exports", StaticFiles(directory=settings.exports_dir), name="exports")
 app.mount("/thumbnails", StaticFiles(directory=settings.thumbnails_dir), name="thumbnails")

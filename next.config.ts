@@ -8,6 +8,10 @@ const nextConfig: NextConfig = {
   // "socket hang up" before the response could arrive.
   experimental: {
     proxyTimeout: 5 * 60 * 1000,  // 5 minutes
+    // Bulk doodle image uploads (ZIP of ~30 scene PNGs ≈ 80MB) go through
+    // the /worker-api proxy — the 10MB default truncated the body and reset
+    // the socket ("Request body exceeded 10MB ... socket hang up").
+    proxyClientMaxBodySize: "200mb",
   },
   images: {
     remotePatterns: [

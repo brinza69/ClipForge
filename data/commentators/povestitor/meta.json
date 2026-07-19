@@ -1,0 +1,12 @@
+{
+  "id": "povestitor",
+  "name": "Povestitor",
+  "default_position": "bottom-right",
+  "default_scale": 0.35,
+  "has_native_alpha": false,
+  "chroma_key": "#ABD815",
+  "chroma_similarity": 0.05,
+  "chroma_blend": 0.04,
+  "duration": 78.333333,
+  "filename": "video povestitorul.mp4"
+}

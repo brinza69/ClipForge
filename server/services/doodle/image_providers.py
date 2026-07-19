@@ -1,10 +1,12 @@
 """
 ClipForge — Auto Story Doodle: image provider registry.
 
-NO automatic image generation API calls anywhere in this module. Manual Flow
-Mode ("manual_flow") and Manual Upload ("manual_upload") are the only enabled
-providers — the user generates images themselves in Google Flow (or any tool)
-and drags them into scene slots via the /images upload routes. Every paid
+NO paid/automatic image generation API calls anywhere in this module. Manual
+Flow Mode ("manual_flow") and Manual Upload ("manual_upload") let the user
+generate images themselves (Google Flow or any tool) and drag them into scene
+slots via the /images upload routes. "comfyui_local" is also enabled — it's
+free, local generation on the user's own GPUs (see comfy_provider.py for the
+actual generation logic; this module only describes/labels it). Every other
 provider below is a disabled placeholder stub that raises immediately.
 """
 
@@ -21,7 +23,7 @@ PROVIDERS: list[dict[str, Any]] = [
     {"id": "openai_images", "label": "OpenAI Images", "enabled": False},
     {"id": "deepai", "label": "DeepAI", "enabled": False},
     {"id": "higgsfield", "label": "Higgsfield", "enabled": False},
-    {"id": "comfyui_local", "label": "ComfyUI (local)", "enabled": False},
+    {"id": "comfyui_local", "label": "Local ComfyUI (free)", "enabled": True},
 ]
 
 _PROVIDERS_BY_ID = {p["id"]: p for p in PROVIDERS}
@@ -78,6 +80,31 @@ class ManualUploadProvider(ImageProvider):
         raise RuntimeError("Manual Upload has no automatic generation — upload an image file.")
 
 
+class ComfyUILocalProvider(ImageProvider):
+    """Free local generation via ComfyUI on the user's own GPU(s). The actual
+    HTTP/graph logic lives in comfy_client.py / comfy_provider.py — this class
+    only exists so the provider shows up correctly in this registry; routes
+    call comfy_provider.generate_project_images_parallel directly."""
+
+    id = "comfyui_local"
+    label = "Local ComfyUI (free)"
+    enabled = True
+
+    async def generate(self, prompt: str, out_path: Path) -> Path:
+        from services.doodle import comfy_client, comfy_workflows
+
+        status_urls = comfy_client.DEFAULT_GPU_URLS
+        for url in status_urls:
+            status = await comfy_client.check_comfy_status(url)
+            if status["alive"]:
+                return await comfy_client.generate_image_on_comfy(
+                    url, prompt, out_path, aspect_ratio="16:9"
+                )
+        raise RuntimeError(
+            "No ComfyUI GPU is reachable. Start ComfyUI first using scripts/start_comfy_all.bat"
+        )
+
+
 def get_provider(provider_id: str) -> ImageProvider:
     """Factory: returns the provider instance for a given id. Disabled/unknown
     providers resolve to a stub that raises DISABLED_MESSAGE on generate()."""
@@ -88,6 +115,8 @@ def get_provider(provider_id: str) -> ImageProvider:
         return ManualFlowProvider()
     if provider_id == "manual_upload":
         return ManualUploadProvider()
+    if provider_id == "comfyui_local":
+        return ComfyUILocalProvider()
     return _DisabledProvider(meta["id"], meta["label"])
 
 

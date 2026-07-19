@@ -21,12 +21,24 @@ logger = logging.getLogger("clipforge.queue")
 class JobCancelledError(Exception):
     pass
 
+# Doodle jobs run in their OWN concurrency lane. They are light on this
+# process (OpenAI/ComfyUI HTTP calls, Kokoro CPU TTS, one FFmpeg render) —
+# unlike parallel_pipeline which monopolizes the GPU. Without the separate
+# lane, the video factory keeps the single job slot busy ~forever and every
+# doodle job starves in `queued` (the UI looks frozen at 0/N images).
+DOODLE_LANE_TYPES = frozenset(
+    {"doodle_script", "doodle_tts", "doodle_render", "doodle_images"}
+)
+DOODLE_LANE_LIMIT = 2
+
+
 class JobQueue:
     """Manages background processing jobs with SQLite persistence."""
 
     def __init__(self):
         self._handlers: Dict[str, Callable] = {}
         self._running_jobs: Dict[str, asyncio.Task] = {}
+        self._running_types: Dict[str, str] = {}   # job_id -> job type (lane bookkeeping)
         self._cancelled_jobs = set()
         self._processor_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
@@ -92,6 +104,7 @@ class JobQueue:
             )
             await session.commit()
         self._running_jobs.pop(job_id, None)
+        self._running_types.pop(job_id, None)
         logger.info(f"Job {job_id} completed")
 
     async def fail_job(self, job_id: str, error: str):
@@ -117,6 +130,7 @@ class JobQueue:
 
             await session.commit()
         self._running_jobs.pop(job_id, None)
+        self._running_types.pop(job_id, None)
         logger.error(f"Job {job_id} failed: {error}")
         # Reclaim the failed job's scratch files (downloaded source, erased
         # video, per-variant dirs). Best-effort — never let cleanup mask the
@@ -129,6 +143,7 @@ class JobQueue:
         if job_id in self._running_jobs:
             self._running_jobs[job_id].cancel()
             self._running_jobs.pop(job_id, None)
+            self._running_types.pop(job_id, None)
 
         async with async_session() as session:
             from models import ProjectStatus, ClipModel, ClipStatus
@@ -252,20 +267,41 @@ class JobQueue:
             )
 
     async def _process_next(self):
-        """Pick up the next queued job and execute it."""
+        """Pick up the next queued job and execute it. Two lanes: heavy media
+        jobs respect max_concurrent_jobs; doodle jobs have their own small
+        lane so the video factory can never starve them (see DOODLE_LANE_TYPES)."""
         from config import settings
 
-        if len(self._running_jobs) >= settings.max_concurrent_jobs:
+        running_doodle = sum(
+            1 for t in self._running_types.values() if t in DOODLE_LANE_TYPES
+        )
+        running_heavy = len(self._running_jobs) - running_doodle
+
+        want_heavy = running_heavy < settings.max_concurrent_jobs
+        want_doodle = running_doodle < DOODLE_LANE_LIMIT
+        if not want_heavy and not want_doodle:
             return
 
         async with async_session() as session:
-            result = await session.execute(
-                select(JobModel)
-                .where(JobModel.status == JobStatus.queued.value)
-                .order_by(JobModel.created_at)
-                .limit(1)
-            )
-            job = result.scalar_one_or_none()
+            job = None
+            if want_heavy:
+                result = await session.execute(
+                    select(JobModel)
+                    .where(JobModel.status == JobStatus.queued.value)
+                    .where(JobModel.type.notin_(DOODLE_LANE_TYPES))
+                    .order_by(JobModel.created_at)
+                    .limit(1)
+                )
+                job = result.scalar_one_or_none()
+            if job is None and want_doodle:
+                result = await session.execute(
+                    select(JobModel)
+                    .where(JobModel.status == JobStatus.queued.value)
+                    .where(JobModel.type.in_(DOODLE_LANE_TYPES))
+                    .order_by(JobModel.created_at)
+                    .limit(1)
+                )
+                job = result.scalar_one_or_none()
 
             if not job:
                 return
@@ -312,6 +348,7 @@ class JobQueue:
 
         task = asyncio.create_task(_run())
         self._running_jobs[job_id] = task
+        self._running_types[job_id] = job_type
         logger.info(f"Started job {job_id} [{job_type}]")
 
     async def start(self):
@@ -371,6 +408,7 @@ class JobQueue:
                 pass
 
         self._running_jobs.clear()
+        self._running_types.clear()
         logger.info("Job queue processor stopped")
 
 

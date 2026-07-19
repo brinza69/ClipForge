@@ -68,6 +68,13 @@ export const RENDER_QUALITIES: { value: string; label: string }[] = [
   { value: "medium", label: "Medium" },
 ];
 
+// Image generation provider mode — Manual Flow (default, free, external) vs
+// Local ComfyUI (free, runs on the user's own dual-GPU rig).
+export const IMAGE_PROVIDER_LABELS: Record<string, string> = {
+  manual_flow: "Manual Flow Mode",
+  comfyui_local: "Local ComfyUI (free)",
+};
+
 export function estimatedFrameCount(durationSeconds: number, frameInterval: string): number {
   const interval = frameInterval === "auto" ? 3 : Number(frameInterval) || 3;
   if (!durationSeconds || durationSeconds <= 0) return 0;

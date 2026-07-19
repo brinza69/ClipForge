@@ -16,19 +16,25 @@ _cfg = _scfg.load() or {}
 SID = _cfg.get("spreadsheet_id", "")
 TAB = _cfg.get("tab", "Sheet1")
 # Only process rows from here on (skip older, intentionally-unprocessed rows).
-MIN_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MIN_ROW", "126"))
+MIN_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MIN_ROW", "187"))
 # A -> :8420 (GPU 0), B -> :8421 (GPU 1). On a single-GPU PC only A is reachable;
 # B is auto-skipped at assign time (see backend_up). Labels are by index, not card
 # model, so the rig is portable to any machine.
 BACKENDS = {"A(:8420)": "http://127.0.0.1:8420", "B(:8421)": "http://127.0.0.1:8421"}
-PRESETS = ["narator", "comentator", "povestitor"]
+PRESETS = ["narator", "comentator"]   # narator + comentator pass, split into parts
+# A row is "pending" when THIS column is empty. We key on the description column
+# (D): a row with no RO description is unprocessed, so we run it and write D.
+PENDING_COL = "D"       # description
+WRITE_DESC = True
 # When a row completes the dispatcher writes, in PRESETS order:
 #   D = RO description (caption)   F/G/H = the 3 variants' fetchable video links
 #   I = posting status flag ("ready" so the n8n poster picks the row up).
 # Column C (transcript) is intentionally NOT written (user only wants the video
 # + description + links). E = FRENCH description column (written by
 # victoria_dispatch.py) — never touched here.
-VARIANT_LINK_COLS = ["F", "G", "H"]   # index 0/1/2 -> narator/comentator/povestitor
+# Map each role to its video-link column (robust to any subset/order of PRESETS,
+# so a comentator-only run still writes to G, not F).
+ROLE_COLS = {"narator": "F", "comentator": "G", "povestitor": "H"}
 STATUS_COL = "I"
 
 
@@ -57,30 +63,34 @@ def backend_up(base):
 
 
 def read_pending():
+    pcol = ord(PENDING_COL) - ord("A")   # 'D'->3, 'F'->5
     svc = _service()
-    vals = svc.spreadsheets().values().get(spreadsheetId=SID, range=f"'{TAB}'!A1:D400").execute().get("values", [])
+    vals = svc.spreadsheets().values().get(spreadsheetId=SID, range=f"'{TAB}'!A1:I400").execute().get("values", [])
     out = []
     for i, r in enumerate(vals, start=1):
+        a = (r[0].strip() if len(r) > 0 and r[0] else "")   # NR (col A)
         b = (r[1].strip() if len(r) > 1 and r[1] else "")
-        d = (r[3].strip() if len(r) > 3 and r[3] else "")
+        pend = (r[pcol].strip() if len(r) > pcol and r[pcol] else "")
         # Skip @herytstory rows — those are French content handled by
         # victoria_dispatch.py (French desc -> col E), not Romanian.
-        if i >= MIN_ROW and b.startswith("http") and not d and "herytstory" not in b.lower():
-            out.append((i, b))
+        if i >= MIN_ROW and b.startswith("http") and not pend and "herytstory" not in b.lower():
+            out.append((i, b, a))   # a = NR -> names the output <NR>.mp4
     return out
 
 
-def enqueue(backend, url):
+def enqueue(backend, url, number=None):
     body = {"url": url, "variant_preset_ids": PRESETS, "from_sheets": False,
             "auto_detect_zones": True, "erase_method": "lama",
             "transcript_engine": "openai", "transcript_target_lang": "ro"}
+    if number:
+        body["number"] = str(number)   # names the output <number>.mp4
     return http(backend + "/api/auto", body)["job_id"]
 
 
 def main(dry=False):
     if dry:
         p = read_pending()
-        print("PENDING:", [r for r, _ in p])
+        print("PENDING:", [r for r, _, _ in p])
         return
     inflight = {k: None for k in BACKENDS}      # name -> (row, url, jid)
     done = set()
@@ -92,9 +102,9 @@ def main(dry=False):
         # 2nd GPU's backend on a single-GPU PC)
         for name, backend in BACKENDS.items():
             if inflight[name] is None and pending and backend_up(backend):
-                row, url = pending.pop(0)
+                row, url, nr = pending.pop(0)
                 try:
-                    jid = enqueue(backend, url)
+                    jid = enqueue(backend, url, nr)
                     inflight[name] = (row, url, jid)
                     print(f"[{name}] row {row} -> {jid}", flush=True)
                 except Exception as e:
@@ -118,13 +128,15 @@ def main(dry=False):
                     wrote = 0
                     for v in (r.get("variants") or []):
                         idx = v.get("index")
-                        if isinstance(idx, int) and 0 <= idx < len(VARIANT_LINK_COLS):
+                        role = PRESETS[idx] if isinstance(idx, int) and 0 <= idx < len(PRESETS) else None
+                        col = ROLE_COLS.get(role)
+                        if col:
                             links = variant_links(v)
                             if links:
-                                write_cell(SID, TAB, VARIANT_LINK_COLS[idx], row, links)
+                                write_cell(SID, TAB, col, row, links)
                                 wrote += 1
                     desc = ((r.get("descriptions") or {}).get("ai_generated") or "").strip()
-                    if desc:
+                    if WRITE_DESC and desc:
                         write_cell(SID, TAB, "D", row, desc)
                     if wrote:
                         write_cell(SID, TAB, STATUS_COL, row, "ready")

@@ -1,0 +1,12 @@
+{
+  "id": "victoria",
+  "name": "Victoria",
+  "default_position": "bottom-right",
+  "default_scale": 0.35,
+  "has_native_alpha": false,
+  "chroma_key": "#ABD815",
+  "chroma_similarity": 0.1,
+  "chroma_blend": 0.06,
+  "duration": 56.458333,
+  "filename": "victoria.mp4"
+}

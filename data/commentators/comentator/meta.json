@@ -1,0 +1,12 @@
+{
+  "id": "comentator",
+  "name": "Comentator",
+  "default_position": "bottom-right",
+  "default_scale": 0.35,
+  "has_native_alpha": false,
+  "chroma_key": "#ABD815",
+  "chroma_similarity": 0.1,
+  "chroma_blend": 0.06,
+  "duration": 71.666667,
+  "filename": "comentatorul.mp4"
+}

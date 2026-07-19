@@ -86,3 +86,6 @@ exports/
 audio/
 images/
 videos/
+
+# Local tool installs (ComfyUI etc.) — multi-GB, never commit
+tools/

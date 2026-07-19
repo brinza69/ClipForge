@@ -255,8 +255,82 @@ async def handle_doodle_render(
     logger.info(f"doodle_render {job_id}: project {project_id} [{mode}] -> {export_path}")
 
 
+async def handle_doodle_images(
+    job_id: str,
+    project_id: str,
+    clip_id: Optional[str],
+    metadata: Dict[str, Any],
+    queue,
+):
+    """Generate scene images via local ComfyUI across both GPUs in parallel.
+    Only scenes without an existing image are touched when only_missing is
+    true (default) — scenes that already have an image are NEVER regenerated
+    unless explicitly listed in scene_indexes."""
+    from datetime import datetime, timezone
+
+    from services.doodle.comfy_provider import generate_project_images_parallel  # lazy
+
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    sb = storage.load_storyboard(project_id)
+    image_gen = sb.setdefault("image_generation", {})
+    image_gen["status"] = "running"
+    image_gen["model"] = "sdxl_turbo"
+    image_gen["generated"] = 0
+    image_gen["failed"] = []
+    image_gen["updated_at"] = _now_iso()
+    storage.save_storyboard(project_id, sb)
+
+    async def _progress(fraction: float, message: str) -> None:
+        if queue.is_cancelled(job_id):
+            raise JobCancelledError()
+        await queue.update_progress(job_id, min(max(fraction, 0.0), 1.0), message)
+
+    try:
+        result = await generate_project_images_parallel(
+            project_id,
+            scene_indexes=metadata.get("scene_indexes"),
+            only_missing=metadata.get("only_missing", True),
+            progress_cb=_progress,
+        )
+    except JobCancelledError:
+        raise
+    except Exception as e:
+        sb = storage.load_storyboard(project_id)
+        image_gen = sb.setdefault("image_generation", {})
+        image_gen["status"] = "failed"
+        image_gen["updated_at"] = _now_iso()
+        sb["error"] = str(e)
+        storage.save_storyboard(project_id, sb)
+        raise
+
+    sb = storage.load_storyboard(project_id)
+    image_gen = sb.setdefault("image_generation", {})
+    image_gen["generated"] = result["generated"]
+    image_gen["failed"] = result["failed"]
+    image_gen["model"] = result["model"]
+    image_gen["updated_at"] = _now_iso()
+    # Only every image failing marks the batch failed — partial success
+    # (some scenes got images) is still "done" so the UI shows progress.
+    total_attempted = result["generated"] + len(result["failed"])
+    if total_attempted > 0 and result["generated"] == 0:
+        image_gen["status"] = "failed"
+        sb["error"] = "All image generations failed — see image_generation.failed for details."
+    else:
+        image_gen["status"] = "done"
+        sb["error"] = None
+    storage.save_storyboard(project_id, sb)
+
+    logger.info(
+        f"doodle_images {job_id}: project {project_id} -> "
+        f"{result['generated']} generated, {len(result['failed'])} failed"
+    )
+
+
 def register_doodle_handlers(queue) -> None:
     queue.register_handler(JobType.doodle_script.value, handle_doodle_script)
     queue.register_handler(JobType.doodle_tts.value, handle_doodle_tts)
     queue.register_handler(JobType.doodle_render.value, handle_doodle_render)
+    queue.register_handler(JobType.doodle_images.value, handle_doodle_images)
     logger.info("Doodle pipeline handlers registered")

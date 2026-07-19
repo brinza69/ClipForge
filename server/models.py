@@ -84,6 +84,7 @@ class JobType(str, enum.Enum):
     doodle_script = "doodle_script"
     doodle_tts = "doodle_tts"
     doodle_render = "doodle_render"
+    doodle_images = "doodle_images"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import { ArrowLeft, PenTool } from "lucide-react";
 import { toast } from "sonner";
 import { ManualFlowInstructionsCard } from "@/components/doodle/manual-flow-card";
 import { ProgressSteps } from "@/components/doodle/progress-steps";
+import { LocalImageGeneration } from "@/components/doodle/local-image-gen";
 import { ActionButtons } from "@/components/doodle/action-buttons";
 import { StoryboardTable } from "@/components/doodle/storyboard-table";
 import { BulkUploadZone } from "@/components/doodle/bulk-upload-zone";
@@ -177,6 +178,14 @@ export default function DoodleProjectPage() {
       />
 
       <ManualFlowInstructionsCard />
+
+      <LocalImageGeneration
+        projectId={projectId}
+        storyboard={storyboard}
+        onJobStarted={(id) => { setJobId(id); setJobProgress(0); }}
+        busy={busy}
+        onRefresh={loadStoryboard}
+      />
 
       <ActionButtons
         projectId={projectId}

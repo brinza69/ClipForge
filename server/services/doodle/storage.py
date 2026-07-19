@@ -47,6 +47,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "render_quality": "high",
     "use_gpu": True,
     "allow_placeholders": False,
+    # "manual_flow" (default, no cost) | "comfyui_local" (free, local dual-GPU)
+    "image_provider": "manual_flow",
 }
 
 _RESOLUTION_BY_RATIO = {

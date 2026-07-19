@@ -61,7 +61,8 @@ function Get-GpuUuids {
     foreach ($line in (& nvidia-smi -L)) {
         if ($line -match 'UUID:\s*(GPU-[0-9a-fA-F-]+)') { $uuids += $Matches[1] }
     }
-    return ,$uuids
+    return $uuids   # NOT ",$uuids" — the unary comma nests the array, making
+                    # $gpus.Count=1 on a 2-GPU rig, so only backend A ever started.
 }
 
 function Test-Health($port) {

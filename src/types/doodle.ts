@@ -45,6 +45,11 @@ export type DoodleMotionStyle = "subtle" | "zoom_in" | "zoom_out" | "pan" | "non
 
 export type DoodleRenderQuality = "high" | "medium";
 
+// "manual_flow" (default): user generates images in Google Flow and drags
+// them in. "comfyui_local": free local SDXL Turbo generation via ComfyUI
+// running on the user's own dual-GPU rig (see local-image-gen.tsx).
+export type DoodleImageProviderMode = "manual_flow" | "comfyui_local";
+
 export interface DoodleSettings {
   target_duration_seconds: number;
   frame_interval_seconds: DoodleFrameInterval;
@@ -60,6 +65,7 @@ export interface DoodleSettings {
   render_quality: DoodleRenderQuality;
   use_gpu: boolean;
   allow_placeholders: boolean;
+  image_provider?: DoodleImageProviderMode;
 }
 
 export interface DoodleScene {
@@ -96,6 +102,8 @@ export interface DoodleStoryboard {
   updated_at: string;
   // Computed server-side on GET /projects/{id}.
   missing_images?: number[];
+  // Local ComfyUI image-generation progress, written by the worker.
+  image_generation?: DoodleImageGeneration;
 }
 
 export interface DoodleProjectSummary {
@@ -163,4 +171,35 @@ export interface DoodleCreateProjectPayload {
 export interface DoodleBulkUploadResult {
   matched: number;
   unmatched: string[];
+}
+
+// --- Local ComfyUI image generation (free, dual-GPU) ---
+
+export interface DoodleImageGenerationFailure {
+  index: number;
+  error: string;
+}
+
+export interface DoodleImageGeneration {
+  status: "idle" | "running" | "done" | "failed";
+  model: string;
+  generated: number;
+  failed: DoodleImageGenerationFailure[];
+  updated_at: string;
+}
+
+export interface DoodleComfyGpuStatus {
+  index: number;
+  url: string;
+  alive: boolean;
+  queue_pending: number;
+  error: string | null;
+}
+
+export interface DoodleComfyStatus {
+  gpus: DoodleComfyGpuStatus[];
+  any_alive: boolean;
+  model: string | null;
+  model_file_found: boolean;
+  hint: string | null;
 }
