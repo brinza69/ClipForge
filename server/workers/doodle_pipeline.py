@@ -15,6 +15,7 @@ those files are momentarily missing or broken during parallel development.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -252,7 +253,40 @@ async def handle_doodle_render(
     sb["error"] = None
     storage.save_storyboard(project_id, sb)
 
+    _write_video_description(export_path, sb)
+
     logger.info(f"doodle_render {job_id}: project {project_id} [{mode}] -> {export_path}")
+
+
+def _write_video_description(export_path: Path, sb: Dict[str, Any]) -> None:
+    """Deliver the description WITH the video: <video>.description.txt next to
+    the MP4 (title + description + tags as hashtags), ready to paste when
+    posting. Best-effort — a write failure never fails the render."""
+    try:
+        lines: list[str] = []
+        title = (sb.get("title") or "").strip()
+        desc = (sb.get("description") or "").strip()
+        if title:
+            lines.append(title)
+        if desc:
+            if lines:
+                lines.append("")
+            lines.append(desc)
+        tags = [t.strip() for t in (sb.get("tags") or []) if t and str(t).strip()]
+        if tags:
+            hashtags = " ".join(
+                "#" + re.sub(r"[^\w]+", "", str(t).title()) for t in tags
+            )
+            if hashtags.strip("#"):
+                if lines:
+                    lines.append("")
+                lines.append(hashtags)
+        if lines:
+            out = Path(export_path).with_suffix(".description.txt")
+            out.write_text("\n".join(lines), encoding="utf-8")
+            logger.info(f"description written -> {out.name}")
+    except Exception:
+        logger.exception("description.txt write failed (video is fine)")
 
 
 async def handle_doodle_images(
