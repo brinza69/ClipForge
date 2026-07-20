@@ -253,12 +253,19 @@ def zoompan_filter(width: int, height: int, duration: float, motion_style: str,
     if motion_style == "subtle":
         effective_style = "zoom_in" if scene_index % 2 == 0 else "zoom_out"
 
+    # Linear ramp across the WHOLE scene, expressed on the output frame number
+    # `on` (deterministic — avoids zoompan's stateful-`zoom` pitfalls). The old
+    # expressions were broken in both directions: zoom_in stepped by
+    # max_zoom/frames from zoom=1.0 so it hit the cap in a fraction of a second
+    # (instant jump, then frozen), and zoom_out tried to step DOWN from 1.0
+    # (zoompan starts at 1.0, can't go below) so it never moved at all.
+    step = (max_zoom - 1.0) / frames
     if effective_style == "zoom_in":
-        z_expr = f"min(zoom+{max_zoom / frames:.6f},{max_zoom:.4f})"
+        z_expr = f"min(1.0+{step:.6f}*on,{max_zoom:.4f})"
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
     elif effective_style == "zoom_out":
-        z_expr = f"max(zoom-{max_zoom / frames:.6f},1.0)"
+        z_expr = f"max({max_zoom:.4f}-{step:.6f}*on,1.0)"
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
     elif effective_style == "pan":
