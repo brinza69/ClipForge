@@ -77,6 +77,7 @@ class JobType(str, enum.Enum):
     erase = "erase"
     erase_project = "erase_project"
     silence_remove = "silence_remove"
+    upscale = "upscale"
     caption_burn = "caption_burn"
     remix_pipeline = "remix_pipeline"
     parallel_pipeline = "parallel_pipeline"

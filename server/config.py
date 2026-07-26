@@ -110,6 +110,29 @@ class Settings(BaseSettings):
     # Optional: explicit path to ffmpeg binary directory (auto-detected if blank)
     ffmpeg_path: str = ""
 
+    # ── AI Upscaler (Real-ESRGAN ncnn-vulkan) ─────────────────────────────────
+    # Explicit path to realesrgan-ncnn-vulkan.exe. Blank → auto-detect at
+    # <repo>/tools/realesrgan/pkg/realesrgan-ncnn-vulkan.exe.
+    realesrgan_path: str = ""
+    # Vulkan GPU index for the upscaler. NOTE: the ncnn Vulkan device order is
+    # REVERSED vs nvidia-smi/CUDA on this rig — index 0 = RTX 3060 (fast),
+    # index 1 = GTX 1660 Super. Override via CLIPFORGE_REALESRGAN_GPU_ID.
+    realesrgan_gpu_id: int = 0
+
+    @property
+    def realesrgan_bin(self) -> str | None:
+        """Absolute path to the Real-ESRGAN binary, or None if not installed."""
+        from pathlib import Path as _Path
+        if self.realesrgan_path:
+            p = _Path(self.realesrgan_path)
+            return str(p) if p.exists() else None
+        exe = "realesrgan-ncnn-vulkan" + (".exe" if __import__("os").name == "nt" else "")
+        default = self.data_dir.parent / "tools" / "realesrgan" / "pkg" / exe
+        if default.exists():
+            return str(default)
+        import shutil
+        return shutil.which("realesrgan-ncnn-vulkan")
+
     @property
     def ffmpeg_location(self) -> str | None:
         """Return ffmpeg binary directory for yt-dlp, or None to let yt-dlp find it."""

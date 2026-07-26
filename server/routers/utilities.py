@@ -345,3 +345,157 @@ async def silence_remove_result(job_id: str):
         "output_filename": meta.get("output_filename"),
         "mode": meta.get("mode"),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Upscaler — reconstruct detail with Real-ESRGAN (services/upscaler.py).
+# Upload a video, pick a target resolution + model, get a genuinely higher-res
+# clip back (not a plain stretch). GPU-bound; runs in the heavy job lane.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+_UPSCALE_VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}
+
+
+def _upscale_workdir(job_id: str) -> Path:
+    return Path(settings.temp_dir) / "upscale" / job_id
+
+
+@router.post("/upscale")
+async def upscale_video_endpoint(
+    file: UploadFile = File(...),
+    model: str = Form("video"),      # "video" (fast, animevideov3) | "photo" (x4plus, max detail)
+    target_p: int = Form(1080),      # short-side target: 720 | 1080 | 1440
+    denoise: bool = Form(True),      # light pre-denoise (recommended for recompressed sources)
+):
+    """
+    Enqueue an AI-upscale job. Poll GET /api/jobs/{id} for progress, then
+    GET /api/utilities/upscale/{id}/download for the result.
+    """
+    if model not in {"video", "photo"}:
+        raise HTTPException(400, "model must be 'video' or 'photo'")
+    if target_p not in {720, 1080, 1440}:
+        raise HTTPException(400, "target_p must be 720, 1080 or 1440")
+    if settings.realesrgan_bin is None:
+        raise HTTPException(
+            503,
+            "AI upscaler is not installed on this server "
+            "(Real-ESRGAN binary not found).",
+        )
+
+    suffix = Path(file.filename or "video.mp4").suffix.lower()
+    if suffix not in _UPSCALE_VIDEO_EXTS:
+        raise HTTPException(
+            400,
+            f"Unsupported file type {suffix or '(none)'}. "
+            f"Video only: {sorted(_UPSCALE_VIDEO_EXTS)}",
+        )
+
+    content = await file.read()
+    if len(content) > 1024 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum 1 GB.")
+    if len(content) < 1000:
+        raise HTTPException(400, "File appears to be empty or invalid.")
+
+    job_id = uuid.uuid4().hex[:12]
+    workdir = _upscale_workdir(job_id)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    input_path = workdir / f"input{suffix}"
+    output_path = workdir / "output.mp4"
+    input_path.write_bytes(content)
+
+    stem = Path(file.filename or "video").stem
+    out_filename = _safe_filename(stem, suffix=f"_{target_p}p_AI.mp4")
+
+    metadata = {
+        "input_path": str(input_path),
+        "output_path": str(output_path),
+        "output_filename": out_filename,
+        "model": model,
+        "target_p": target_p,
+        "denoise": denoise,
+    }
+
+    async with async_session() as session:
+        row = JobModel(
+            id=job_id,
+            project_id=_ERASE_WORK_PROJECT_ID,
+            type=JobType.upscale.value,
+            status=JobStatus.queued.value,
+            metadata_json=json.dumps(metadata),
+        )
+        session.add(row)
+        await session.commit()
+
+    logger.info(
+        f"upscale {job_id} enqueued: model={model} target={target_p}p "
+        f"denoise={denoise} suffix={suffix} ({len(content)//1024} KB)"
+    )
+    return {"job_id": job_id, "status": "queued", "output_filename": out_filename}
+
+
+@router.get("/upscale/{job_id}/download")
+async def download_upscale_result(job_id: str):
+    """Stream the finished upscaled video."""
+    import asyncio as _asyncio
+
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.type != JobType.upscale.value:
+        raise HTTPException(400, "Not an upscale job")
+    if job.status != JobStatus.done.value:
+        raise HTTPException(409, f"Job is not done (status={job.status})")
+
+    meta = json.loads(job.metadata_json or "{}")
+    out = Path(meta.get("output_path", ""))
+    if not out.exists():
+        raise HTTPException(410, "Output file no longer available")
+
+    filename = meta.get("output_filename") or out.name
+
+    async def _delayed_cleanup():
+        await _asyncio.sleep(300)
+        try:
+            wd = _upscale_workdir(job_id)
+            for p in wd.rglob("*"):
+                if p.is_file():
+                    p.unlink(missing_ok=True)
+            for p in sorted(wd.rglob("*"), reverse=True):
+                if p.is_dir():
+                    p.rmdir()
+            wd.rmdir()
+        except Exception:
+            pass
+
+    _asyncio.create_task(_delayed_cleanup())
+
+    return FileResponse(
+        path=str(out),
+        media_type="video/mp4",
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/upscale/{job_id}/result")
+async def upscale_result(job_id: str):
+    """Return upscale stats (source/output dims, frame count) once done."""
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.type != JobType.upscale.value:
+        raise HTTPException(400, "Not an upscale job")
+    if job.status != JobStatus.done.value:
+        raise HTTPException(409, f"Job is not done (status={job.status})")
+    meta = json.loads(job.metadata_json or "{}")
+    return {
+        "job_id": job_id,
+        "stats": meta.get("stats") or {},
+        "output_filename": meta.get("output_filename"),
+        "model": meta.get("model"),
+        "target_p": meta.get("target_p"),
+    }
