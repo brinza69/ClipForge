@@ -182,18 +182,29 @@ def upscale_video(
         ]
         if models_dir.exists():
             up_cmd += ["-m", str(models_dir)]
-        proc = subprocess.Popen(
-            up_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            creationflags=_creationflags(),
-        )
-        UP_LO, UP_HI = 0.08, 0.85
-        while proc.poll() is None:
-            time.sleep(1.5)
-            done = len(list(up_dir.glob("*.png")))
-            frac = UP_LO + (UP_HI - UP_LO) * (done / total if total else 0)
-            _p(frac, f"AI upscaling frame {done}/{total}…")
-        stderr = proc.stderr.read().decode("utf-8", "replace") if proc.stderr else ""
+        # CRITICAL: realesrgan streams verbose per-tile progress to stderr. We
+        # track progress by counting output files, not by reading its pipes, so
+        # we must NOT use stderr=PIPE here — with no one draining it the 64 KB
+        # OS pipe buffer fills after a few big frames and the child blocks on
+        # write, deadlocking the whole upscale. Send stdout to the void and
+        # stderr to a file we only read on failure.
+        err_path = wd / "realesrgan_stderr.txt"
+        with open(err_path, "wb") as errf:
+            proc = subprocess.Popen(
+                up_cmd, stdout=subprocess.DEVNULL, stderr=errf,
+                creationflags=_creationflags(),
+            )
+            UP_LO, UP_HI = 0.08, 0.85
+            while proc.poll() is None:
+                time.sleep(1.5)
+                done = len(list(up_dir.glob("*.png")))
+                frac = UP_LO + (UP_HI - UP_LO) * (done / total if total else 0)
+                _p(frac, f"AI upscaling frame {done}/{total}…")
         if proc.returncode != 0:
+            try:
+                stderr = err_path.read_text("utf-8", "replace")
+            except Exception:
+                stderr = ""
             raise RuntimeError(f"Real-ESRGAN failed: {stderr[-400:]}")
         up_count = len(list(up_dir.glob("*.png")))
         if up_count < total:
