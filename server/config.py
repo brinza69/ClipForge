@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     def doodle_dir(self) -> Path:
         return self.data_dir / "doodle"
 
+    @property
+    def tiktok_dir(self) -> Path:
+        """Per-project workspace for the TikTok Transformation wizard."""
+        return self.data_dir / "tiktok"
+
     def ensure_dirs(self) -> None:
         for d in [
             self.data_dir,
@@ -96,6 +101,7 @@ class Settings(BaseSettings):
             self.cache_dir,
             self.knowledge_dir,
             self.doodle_dir,
+            self.tiktok_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
 

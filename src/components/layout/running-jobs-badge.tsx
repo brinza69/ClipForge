@@ -19,6 +19,10 @@ interface ActiveJob {
 }
 
 function hrefForType(type: string): string {
+  // Prefix match first — the doodle and TikTok wizards each have several job
+  // types that all belong to the same page.
+  if (type.startsWith("tiktok_")) return "/tiktok";
+  if (type.startsWith("doodle_")) return "/doodle";
   switch (type) {
     case "parallel_pipeline":
       return "/parallel-sheets";

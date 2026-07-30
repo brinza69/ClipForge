@@ -26,8 +26,17 @@ class JobCancelledError(Exception):
 # unlike parallel_pipeline which monopolizes the GPU. Without the separate
 # lane, the video factory keeps the single job slot busy ~forever and every
 # doodle job starves in `queued` (the UI looks frozen at 0/N images).
+#
+# The TikTok Transformation wizard's light steps join this lane for the same
+# reason: they are API calls / single-frame ffmpeg work, and without a lane the
+# video factory would starve the whole wizard. tiktok_render is deliberately
+# NOT here — it is a full 1080x1920 encode and belongs in the heavy lane.
 DOODLE_LANE_TYPES = frozenset(
-    {"doodle_script", "doodle_tts", "doodle_render", "doodle_images"}
+    {
+        "doodle_script", "doodle_tts", "doodle_render", "doodle_images",
+        "tiktok_import", "tiktok_frames", "tiktok_script", "tiktok_voice",
+        "tiktok_thumbnails", "tiktok_description",
+    }
 )
 DOODLE_LANE_LIMIT = 2
 

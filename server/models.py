@@ -86,6 +86,16 @@ class JobType(str, enum.Enum):
     doodle_tts = "doodle_tts"
     doodle_render = "doodle_render"
     doodle_images = "doodle_images"
+    # TikTok Transformation wizard (Video Transformare TikTok) — one job type
+    # per wizard step. Montage + subtitles + export are ONE job (tiktok_render)
+    # because they are a single fused ffmpeg encode, as in remix_pipeline.
+    tiktok_import = "tiktok_import"
+    tiktok_frames = "tiktok_frames"
+    tiktok_script = "tiktok_script"
+    tiktok_voice = "tiktok_voice"
+    tiktok_render = "tiktok_render"
+    tiktok_thumbnails = "tiktok_thumbnails"
+    tiktok_description = "tiktok_description"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
