@@ -10,9 +10,10 @@ each group — so it can only fix parts that sit in the queue at the same time.
 import sys
 from collections import defaultdict
 
+import targets
 from buffer_api import channel_by_name, default_org, gql
 
-CHANNEL_NAME = "povestitorul.ro"
+CHANNEL_NAME = targets.get("tiktok_channel_ro")
 
 POSTS = ("query P($i: PostsInput!, $f: Int) { posts(input: $i, first: $f) "
          "{ edges { node { id status dueAt text } } } }")

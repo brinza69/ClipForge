@@ -19,7 +19,9 @@ from services import sheets_config as _scfg
 from services.sheets import _service, write_cell
 
 _cfg = _scfg.load() or {}
-SID = _cfg.get("spreadsheet_id", "") or "1QESHMIoCgnaS7fOU5ynQ7wBQ-rmqP6gGnwPG7Zll0wM"
+SID = _cfg.get("spreadsheet_id", "")
+if not SID:
+    raise SystemExit("lipseste spreadsheet_id in data/sheets_config.json")
 TAB = _cfg.get("tab", "Sheet1")
 BACKENDS = ["http://127.0.0.1:8420", "http://127.0.0.1:8421"]
 SUBMITTED = r"D:\clipforge\data\victoria_submitted.json"

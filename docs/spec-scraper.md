@@ -45,7 +45,7 @@ SOURCES = [
 ]
 ```
 
-Sheet FR: `1cW00MxCZvX6eGj-3PZGCoZLnQes4q42KbTkjs0cwQ9c`, tab `Victoria`,
+Sheet FR: `<FR_SHEET_ID>`, tab `Victoria`,
 `A=NR B=LINK C=TRANSCRIPT D=DESCRIERE_FR E=VIDEO_URL F=STATUS`.
 Aceeași structură merge și pe sheet-ul mare RO (`A=NR B=LINK`), cu alt `SOURCES`.
 

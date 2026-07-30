@@ -36,11 +36,12 @@ from zoneinfo import ZoneInfo
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "server"))
 
+import targets  # noqa: E402
 from buffer_api import channel_by_name, default_org, gql  # noqa: E402
 from googleapiclient.discovery import build  # noqa: E402
 from services.drive_upload import _resolve_credentials  # noqa: E402
 
-DRIVE_ROOT = "1D40BGOzcrZyr6r2vCvoihq8SqwD3g8wN"
+DRIVE_ROOT = targets.get("povestitor_drive_folder")
 POSTED = "posted"
 SLOTS_LOCAL = [(8, 0), (13, 0), (20, 30)]
 TZ = ZoneInfo("Europe/Bucharest")   # zona reala: trecerea la ora de iarna nu muta sloturile
@@ -49,13 +50,13 @@ LEAD_MINUTES = 15
 
 PROFILES = {
     "tiktok": {
-        "channel": "povestitorul.ro",
+        "channel": targets.get("tiktok_channel_ro"),
         "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "drive",
         "metadata": None,
     },
     "facebook": {
-        "channel": "Povestitorul",
+        "channel": targets.get("facebook_channel"),
         "plan": _ROOT / "data" / "fb_post_list_povestitor.json",
         "record": "buffer",
         # vertical 1080x1920 -> Reel; `post` ar aparea ca video obisnuit in feed

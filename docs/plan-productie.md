@@ -137,9 +137,9 @@ D:\clipforge\server\.venv\Scripts\python.exe D:\clipforge\scripts\herstory_dispa
 
 | Fisier | Linie | Valoare |
 |---|---|---|
-| `scripts/herstory_dispatch.py` | 24-26 | `SID` = `1cW00MxCZvX6eGj-3PZGCoZLnQes4q42KbTkjs0cwQ9c`, `TAB` = `Victoria` |
+| `scripts/herstory_dispatch.py` | 24-26 | `SID` = `<FR_SHEET_ID>`, `TAB` = `Victoria` |
 | `scripts/herstory_dispatch.py` | 27 | `PRESET = "victoria"` |
-| `scripts/herstory_dispatch.py` | 28 | `DRIVE_FOLDER = "19cbqRJWO8R0fWQ7GLuwJMRFvVhqssWHU"` |
+| `scripts/herstory_dispatch.py` | 28 | `DRIVE_FOLDER = "<FR_DRIVE_FOLDER>"` |
 | `scripts/herstory_dispatch.py` | 34 | `LANG = "fr"` |
 
 Nu e nimic de editat — se porneste asa cum e. Se poate suprascrie sheet-ul/tab-ul cu

@@ -18,14 +18,15 @@ Run:  server/.venv/Scripts/python.exe scripts/herstory_dispatch.py [--dry]
 import sys, json, time, os, re, urllib.request, urllib.error
 
 sys.path.insert(0, r"D:\clipforge\server")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+import targets as _targets
 from services.sheets import write_cell, _service
 from services.drive_upload import list_folder_files
 
-SID = os.environ.get("CLIPFORGE_FR_SHEET",
-                     "1cW00MxCZvX6eGj-3PZGCoZLnQes4q42KbTkjs0cwQ9c")
-TAB = os.environ.get("CLIPFORGE_FR_TAB", "Victoria")
+SID = os.environ.get("CLIPFORGE_FR_SHEET") or _targets.get("fr_sheet_id")
+TAB = os.environ.get("CLIPFORGE_FR_TAB") or _targets.get("fr_tab", "Victoria")
 PRESET = "victoria"
-DRIVE_FOLDER = "19cbqRJWO8R0fWQ7GLuwJMRFvVhqssWHU"
+DRIVE_FOLDER = _targets.get("fr_drive_folder")
 BACKENDS = {"A(:8420)": "http://127.0.0.1:8420", "B(:8421)": "http://127.0.0.1:8421"}
 BACKEND_DBS = {"A(:8420)": r"D:\clipforge\data\db\clipforge.db",
                "B(:8421)": r"D:\clipforge\data_b\db\clipforge.db"}

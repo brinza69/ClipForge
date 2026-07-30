@@ -21,6 +21,7 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "server"))
 sys.path.insert(0, str(_ROOT / "scripts"))
 
+import targets  # noqa: E402
 from buffer_api import channels as buffer_channels, default_org, gql  # noqa: E402
 
 TZ = ZoneInfo("Europe/Bucharest")
@@ -120,13 +121,15 @@ def ramas(canal_nume, total):
     return max(0, total - daţi), daţi
 
 
-fb_ramas, fb_dati = ramas("Povestitorul", len(fb_list))
-tt_ramas, tt_dati = ramas("povestitorul.ro", len(tt_files))
+FB_CH = targets.get("facebook_channel")
+TT_CH = targets.get("tiktok_channel_ro")
+fb_ramas, fb_dati = ramas(FB_CH, len(fb_list))
+tt_ramas, tt_dati = ramas(TT_CH, len(tt_files))
 
 stoc = [
-    {"canal": "Facebook · Povestitorul", "total": len(fb_list), "date": fb_dati,
+    {"canal": f"Facebook · {FB_CH}", "total": len(fb_list), "date": fb_dati,
      "ramase": fb_ramas, "zile": round(fb_ramas / POSTS_PER_DAY, 1)},
-    {"canal": "TikTok · povestitorul.ro", "total": len(tt_files), "date": tt_dati,
+    {"canal": f"TikTok · {TT_CH}", "total": len(tt_files), "date": tt_dati,
      "ramase": tt_ramas, "zile": round(tt_ramas / POSTS_PER_DAY, 1)},
 ]
 
@@ -135,12 +138,11 @@ excluse = [{"fisier": r["name"], "motiv": ", ".join(r["excluded"]) or "identitat
 limbi = Counter(r["lang"] for r in inv)
 
 # ---------------------------------------------------------------- productie
-tracks = json.loads(pathlib.Path(
-    r"C:\Users\mihai\AppData\Local\Temp\claude\D--clipforge"
-    r"\97cd7b5b-7b5a-4edb-80e8-f54bd9b59573\scratchpad\tracks_state.json"
-).read_text(encoding="utf-8")) if pathlib.Path(
-    r"C:\Users\mihai\AppData\Local\Temp\claude\D--clipforge"
-    r"\97cd7b5b-7b5a-4edb-80e8-f54bd9b59573\scratchpad\tracks_state.json").exists() else {"main": [], "fr": []}
+# Starea celor 3 piste, colectata separat din sheet-uri in data/tracks_state.json
+# (gitignored). Lipsa ei nu trebuie sa strice pagina — secțiunile arata 0.
+TRACKS = _ROOT / "data" / "tracks_state.json"
+tracks = (json.loads(TRACKS.read_text(encoding="utf-8"))
+          if TRACKS.exists() else {"main": [], "fr": []})
 
 main_rows = [d for d in tracks.get("main", []) if d.get("link")]
 fr_rows = tracks.get("fr", [])
