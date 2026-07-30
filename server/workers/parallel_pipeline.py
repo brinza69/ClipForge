@@ -39,6 +39,7 @@ from models import JobModel, JobType
 # Reuse every stage from the remix pipeline — same building blocks, different
 # orchestration.
 from workers.remix_pipeline import (
+    OUTPUT_FPS,
     _Sliced,
     _creationflags,
     _ffmpeg_bin,
@@ -115,6 +116,7 @@ def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") ->
             ffmpeg, "-y", "-loglevel", "error",
             "-ss", f"{start:.3f}", "-i", str(final_path), "-t", f"{part_len:.3f}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-r", str(OUTPUT_FPS),   # parts keep the forced 60fps of the final
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(dst),
         ]

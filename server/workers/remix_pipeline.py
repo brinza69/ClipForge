@@ -727,6 +727,12 @@ async def _stage_commentator(
 # Override with CLIPFORGE_OUTPUT_W/H if a different target is ever needed.
 OUTPUT_W = int(os.environ.get("CLIPFORGE_OUTPUT_W", "1080"))
 OUTPUT_H = int(os.environ.get("CLIPFORGE_OUTPUT_H", "1920"))
+# Final output frame rate — forced the same way the size is, so every clip
+# posts as 1080p60 no matter what the source was. A 30fps source gets its
+# frames duplicated (no extra smoothness, but it hits the platforms' 60fps
+# quality tier); a 60fps source is kept at 60 instead of drifting to VFR.
+# Override with CLIPFORGE_OUTPUT_FPS.
+OUTPUT_FPS = int(os.environ.get("CLIPFORGE_OUTPUT_FPS", "60"))
 
 
 def _force_output_size_vf(w: int, h: int) -> str:
@@ -885,6 +891,7 @@ async def _stage_match_and_caption(
         "-map", "0:v:0", "-map", "1:a:0",
         "-filter:v", fused_vf,
         "-c:v", "libx264", "-preset", "slow", "-crf", "16",
+        "-r", str(OUTPUT_FPS),     # forced CFR — see OUTPUT_FPS
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
