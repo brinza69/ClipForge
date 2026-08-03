@@ -75,8 +75,9 @@ export function ClipperProjectCard({ project, onDelete }: Props) {
       <Link href={href} className="block">
         <div className="relative aspect-video w-full bg-muted/40">
           {project.thumbnail_url ? (
-            // eslint-disable-next-line @next/next/no-img-element -- remote VOD
-            // thumbnails from arbitrary hosts; next/image buys nothing here.
+            // Remote VOD thumbnails come from arbitrary hosts, so next/image's
+            // optimiser buys nothing and only adds a loader to configure.
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={project.thumbnail_url}
               alt=""

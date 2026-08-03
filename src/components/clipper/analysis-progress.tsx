@@ -37,17 +37,30 @@ export function AnalysisProgress({
   job: ClipperJob;
   onFinished: () => void;
 }) {
-  const [live, setLive] = useState<ClipperJob>(job);
-  const startedAt = useRef<number>(Date.now());
-  const [, tick] = useState(0);
+  // SSE frames are held separately from the `job` prop and reconciled during
+  // render, rather than copied into state by an effect. Copying a prop into
+  // state needs a second effect to resync when the prop changes, which is a
+  // cascading render and exactly what react-hooks/set-state-in-effect flags.
+  const [sse, setSse] = useState<Partial<ClipperJob> | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  // Merged at render, so the SSE handler never has to close over `job` — which
+  // would force `job` into the effect's deps and re-subscribe EventSource on
+  // every poll tick.
+  const live: ClipperJob = sse && sse.id === job.id ? { ...job, ...sse } : job;
+  const startedAt = useRef<number | null>(null);
 
-  // Keep the elapsed counter honest without re-fetching.
+  // Clock reads happen in effects, never during render: React's purity rule
+  // forbids Date.now() in the render path because it makes output depend on
+  // when a re-render happens to occur.
   useEffect(() => {
-    const id = setInterval(() => tick((n) => n + 1), 1000);
+    startedAt.current = Date.now();
+    const id = setInterval(() => {
+      if (startedAt.current !== null) {
+        setElapsed(Math.floor((Date.now() - startedAt.current) / 1000));
+      }
+    }, 1000);
     return () => clearInterval(id);
   }, []);
-
-  useEffect(() => setLive(job), [job]);
 
   useEffect(() => {
     let poll: ReturnType<typeof setInterval> | null = null;
@@ -61,8 +74,10 @@ export function AnalysisProgress({
       es = new EventSource(`/worker-api/jobs/${job.id}/stream`);
       es.onmessage = (evt) => {
         try {
-          const next = JSON.parse(evt.data) as ClipperJob;
-          setLive((prev) => ({ ...prev, ...next }));
+          const next = JSON.parse(evt.data) as Partial<ClipperJob>;
+          // In a callback from an external system — the sanctioned place to
+          // call setState from an effect.
+          setSse(next);
           if (["done", "failed", "cancelled"].includes(next.status)) onFinished();
         } catch {
           onFinished();
@@ -90,7 +105,6 @@ export function AnalysisProgress({
 
   const current = stageIndex(live.progress_message);
   const pct = Math.round((live.progress ?? 0) * 100);
-  const elapsed = Math.floor((Date.now() - startedAt.current) / 1000);
 
   return (
     <Card className="space-y-4 p-5">

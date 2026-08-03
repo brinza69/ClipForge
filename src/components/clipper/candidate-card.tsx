@@ -78,7 +78,8 @@ export function CandidateCard({
       </div>
 
       {previewUrl ? (
-        // eslint-disable-next-line jsx-a11y/media-has-caption -- captions are burned into the render
+        // No <track>: captions are burned into the rendered pixels, so a
+        // sidecar text track would duplicate them.
         <video src={previewUrl} controls className="aspect-[9/16] w-full rounded-lg bg-black" />
       ) : (
         <div className="flex aspect-[9/16] w-full items-center justify-center rounded-lg border border-dashed border-border/40 bg-muted/10">
