@@ -118,7 +118,7 @@ def list_folder_files(folder_link: str) -> dict:
         while True:
             resp = service.files().list(
                 q=f"'{folder_id}' in parents and trashed = false",
-                fields="nextPageToken, files(id,name,webViewLink)",
+                fields="nextPageToken, files(id,name,webViewLink,size)",
                 pageSize=1000, pageToken=page,
                 supportsAllDrives=True, includeItemsFromAllDrives=True,
             ).execute()
@@ -127,8 +127,15 @@ def list_folder_files(folder_link: str) -> dict:
                 out.append({
                     "id": fid,
                     "name": f.get("name", ""),
+                    "size": int(f.get("size") or 0),
                     "link": f.get("webViewLink") or (f"https://drive.google.com/file/d/{fid}/view" if fid else ""),
-                    "download_url": f"https://drive.google.com/uc?export=download&id={fid}" if fid else "",
+                    # CRITICAL: the drive.google.com/uc?export=download form serves
+                    # Google's virus-scan HTML page (Content-Type: text/html) for
+                    # files over ~100 MB, so anything fetching it unauthenticated —
+                    # Buffer, above all — gets HTML instead of video and the post
+                    # fails. This form returns real video/mp4 at every size.
+                    "download_url": (f"https://drive.usercontent.google.com/download"
+                                     f"?id={fid}&export=download&confirm=t") if fid else "",
                 })
             page = resp.get("nextPageToken")
             if not page:

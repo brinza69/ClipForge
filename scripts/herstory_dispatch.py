@@ -204,8 +204,17 @@ def main(dry=False):
     adopt_running(inflight, read_pending())
 
     while True:
-        busy = {v[0] for v in inflight.values() if v} | done
-        pending = [p for p in read_pending() if p[0] not in busy]
+        # Google pica din cand in cand cu timeout SSL, iar tokenul OAuth expira
+        # saptamanal. Fara asta, o pana de retea de 5 secunde omora dispecerul si
+        # placile stateau pana observa cineva.
+        try:
+            busy = {v[0] for v in inflight.values() if v} | done
+            pending = [p for p in read_pending() if p[0] not in busy]
+        except Exception as e:
+            print(f"citire sheet esuata ({type(e).__name__}: {str(e)[:60]}) "
+                  f"— reincerc in 30s", flush=True)
+            time.sleep(30)
+            continue
 
         for name, backend in BACKENDS.items():
             if inflight[name] is not None or not pending or not backend_up(backend):
@@ -303,4 +312,17 @@ def main(dry=False):
 
 
 if __name__ == "__main__":
-    main(dry=("--dry" in sys.argv))
+    if "--dry" in sys.argv:
+        main(dry=True)
+    else:
+        # Plasa de siguranta: orice exceptie neprinsa reporneste bucla in loc sa
+        # lase placile oprite. adopt_running() se reataseaza la joburile in curs.
+        while True:
+            try:
+                main()
+            except KeyboardInterrupt:
+                break
+            except Exception as e:  # noqa: BLE001
+                print(f"dispecer picat ({type(e).__name__}: {str(e)[:80]}) "
+                      f"— repornesc in 30s", flush=True)
+                time.sleep(30)

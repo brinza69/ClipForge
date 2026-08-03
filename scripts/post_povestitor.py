@@ -48,12 +48,25 @@ TZ = ZoneInfo("Europe/Bucharest")   # zona reala: trecerea la ora de iarna nu mu
 QUEUE_MAX = 10                      # Buffer Free: postari tinute in coada UNUI canal
 LEAD_MINUTES = 15
 
+def _sufix_ro(desc, part, total):
+    """`... (1/3)` la coada. Asa au fost publicate deja postarile romanesti —
+    schimbarea formei acum ar face seria inconsecventa la mijloc."""
+    return desc if total == 1 else f"{desc} ({part}/{total})"
+
+
+def _prefix_fr(desc, part, total):
+    """`Partie 1 : ...` in fata. Ceruta explicit pentru pista franceza, ca
+    spectatorul sa vada din prima ca e o serie, nu la sfarsitul captionului."""
+    return desc if total == 1 else f"Partie {part} : {desc}"
+
+
 PROFILES = {
     "tiktok": {
         "channel": targets.get("tiktok_channel_ro"),
         "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "drive",
         "metadata": None,
+        "caption": _sufix_ro,
     },
     "facebook": {
         "channel": targets.get("facebook_channel"),
@@ -61,6 +74,14 @@ PROFILES = {
         "record": "buffer",
         # vertical 1080x1920 -> Reel; `post` ar aparea ca video obisnuit in feed
         "metadata": {"facebook": {"type": "reel"}},
+        "caption": _sufix_ro,
+    },
+    "franceza": {
+        "channel": targets.get("tiktok_channel_fr"),
+        "plan": _ROOT / "data" / "fr_post_list.json",
+        "record": "buffer",
+        "metadata": None,
+        "caption": _prefix_fr,
     },
 }
 
@@ -73,7 +94,7 @@ mutation P($i: CreatePostInput!) {
 }
 """
 POSTS = ("query P($i: PostsInput!, $f: Int) { posts(input: $i, first: $f) "
-         "{ edges { node { id status dueAt assets { ... on VideoAsset "
+         "{ edges { node { id status dueAt text assets { ... on VideoAsset "
          "{ source thumbnail } } } } } }")
 DRIVE_ID_RE = re.compile(r"id[=%]3?D?([A-Za-z0-9_-]{25,44})")
 
@@ -114,19 +135,33 @@ def queue_state(org, channel_id):
     return len(r["posts"]["edges"]), taken
 
 
+def _norm(s):
+    return "".join((s or "").split()).lower()
+
+
 def done_from_buffer(org, channel_id):
-    """Id-urile de Drive deja date lui Buffer pe canalul asta. `error` nu intra —
-    o postare picata trebuie sa poata fi reincercata."""
-    ids = set()
+    """(id-uri de Drive, captions) deja pe canalul asta.
+
+    Id-ul de Drive prinde doar ce a trecut prin scriptul asta. Ce a fost postat
+    MANUAL a ajuns pe platforma direct, fara URL de Drive — dar Buffer importa
+    istoricul canalului la conectare, deci captionul lui exista. Fara potrivirea
+    pe text, patru videoclipuri franceze publicate de mana ar fi fost repostate.
+
+    `error` nu intra in niciuna: o postare picata trebuie sa poata fi reincercata.
+    """
+    ids, texts = set(), set()
     for st in ("scheduled", "sending", "sent", "draft"):
         r = gql(POSTS, {"i": {"organizationId": org,
                               "filter": {"channelIds": [channel_id], "status": [st]}},
                         "f": 100})
         for e in r["posts"]["edges"]:
+            t = _norm(e["node"].get("text"))
+            if t:
+                texts.add(t)
             for a in (e["node"].get("assets") or []):
                 blob = f"{a.get('source') or ''} {a.get('thumbnail') or ''}"
                 ids.update(DRIVE_ID_RE.findall(blob))
-    return ids
+    return ids, texts
 
 
 def free_slots(now, taken):
@@ -189,14 +224,22 @@ def main():
             done_names = {f["name"] for f in drive.files().list(
                 q=f"'{folder_id}' in parents and trashed = false",
                 fields="files(name)", pageSize=1000).execute().get("files", [])}
+        done_texts = set()
         print(f"deja in {POSTED}/: {len(done_names)}")
     else:
         folder_id, done_names = None, set()
-        done_ids = done_from_buffer(org, ch["id"])
-        print(f"deja date lui Buffer pe canalul asta: {len(done_ids)}")
+        done_ids, done_texts = done_from_buffer(org, ch["id"])
+        print(f"deja pe canal: {len(done_ids)} prin Drive, {len(done_texts)} captions "
+              f"(inclusiv istoricul importat, adica ce a fost postat manual)")
 
-    def is_done(f):
-        return f["name"] in done_names or f.get("id") in done_ids
+    def is_done(f, desc=""):
+        if f["name"] in done_names or f.get("id") in done_ids:
+            return True
+        # Postarile manuale nu au URL de Drive — se recunosc dupa caption.
+        # Descrierile au 180-300 de caractere, deci un prefix de 40 e destul de
+        # distinctiv incat sa nu dea fals pozitiv.
+        key = _norm(desc)[:40]
+        return bool(key) and any(x.startswith(key) for x in done_texts)
 
     slots = free_slots(datetime.now(timezone.utc), taken)
     sent = 0
@@ -206,7 +249,7 @@ def main():
         if not g["desc"]:
             print(f"  sarit {g['key']}: fara descriere (captionul ar fi gol)")
             continue
-        todo = [f for f in g["files"] if not is_done(f)]
+        todo = [f for f in g["files"] if not is_done(f, g["desc"])]
         if not todo:
             continue
         if len(todo) > n_max - sent:
@@ -216,11 +259,12 @@ def main():
         for f in todo:
             when = next(slots)
             total = f.get("parts", 1)
-            text = g["desc"] if total == 1 else f"{g['desc']} ({f['part']}/{total})"
+            text = prof["caption"](g["desc"], f.get("part", 1), total)
             label = f"{g['key']} {f['name']} ({f.get('mb', '?')}MB)"
             if dry:
+                marcaj = text[:34] + "…" if total > 1 else ""
                 print(f"  {when.strftime('%a %d %b %H:%M')} | {label}"
-                      + (f"  ({f['part']}/{total})" if total > 1 else ""))
+                      + (f"   caption: {marcaj}" if marcaj else ""))
                 sent += 1
                 continue
             inp = {"channelId": ch["id"], "text": text,
@@ -229,7 +273,18 @@ def main():
                    "assets": [{"video": {"url": f["url"]}}]}
             if prof["metadata"]:
                 inp["metadata"] = prof["metadata"]
-            res = (gql(CREATE, {"i": inp}) or {}).get("createPost") or {}
+            try:
+                res = (gql(CREATE, {"i": inp}) or {}).get("createPost") or {}
+            except RuntimeError as e:
+                # Buffer are DOUA plafoane: 100 cereri/15min si 250/24h. Pe cel
+                # de 15 minute se asteapta si se reia; ce s-a programat deja
+                # ramane programat, iar reluarea sare peste el.
+                if "429" in str(e):
+                    fereastra = "15 minute" if '"15m"' in str(e) else "24 de ore"
+                    print(f"  rate limit Buffer ({fereastra}) dupa {sent} postari "
+                          f"— reia dupa ce trece")
+                    break
+                raise
             if res.get("message"):
                 # oprire, nu continuare: un grup pe jumatate programat ar lasa
                 # partea 2 fara partea 1 si ar strica ordinea sloturilor
