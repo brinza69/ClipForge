@@ -233,12 +233,21 @@ def test_layout_filtergraph_is_used_verbatim(monkeypatch):
 
 
 def test_layout_chain_must_end_in_a_v_pad(monkeypatch):
-    import sys
-    import types
+    """A graph that does not end in [v] must fail loudly here.
 
-    stub = types.ModuleType("services.clipper.layout")
-    stub.build_filtergraph = lambda plan, w, h: "[0:v]scale=1080:1920[wrong]"
-    monkeypatch.setitem(sys.modules, "services.clipper.layout", stub)
+    render appends the subtitles filter to that pad, so a mislabelled output
+    would otherwise reach ffmpeg as a reference to a non-existent stream and
+    die with a cryptic filtergraph error halfway through an export.
+
+    Patch the function on the layout module itself: `_video_chain` does
+    `from services.clipper import layout`, which reads the attribute off the
+    already-imported package, so swapping sys.modules would not be seen.
+    """
+    from services.clipper import layout
+
+    monkeypatch.setattr(
+        layout, "build_filtergraph", lambda plan, w, h: "[0:v]scale=1080:1920[wrong]"
+    )
     with pytest.raises(ValueError):
         _cmd(plan={"layout": "pip"})
 

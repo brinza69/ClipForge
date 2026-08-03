@@ -2,6 +2,9 @@
 ClipForge Worker - Async SQLite database setup via SQLAlchemy 2.0
 """
 
+import logging
+
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -17,7 +20,45 @@ class Base(DeclarativeBase):
 
 
 _db_url = f"sqlite+aiosqlite:///{settings.db_path}"
-engine = create_async_engine(_db_url, echo=settings.debug)
+# timeout: how long a connection waits for the write lock before raising
+# "database is locked". The default is 5s, which a long pipeline write can
+# exceed while the UI is polling.
+engine = create_async_engine(_db_url, echo=settings.debug, connect_args={"timeout": 30})
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _sqlite_pragmas(dbapi_connection, _record) -> None:
+    """WAL + a real busy timeout on every connection.
+
+    In the default rollback-journal mode a single writer blocks every reader,
+    so a running pipeline made ordinary GETs fail with "database is locked" —
+    the job queue writes progress once a second while the review UI polls. WAL
+    lets readers run concurrently with the one writer, which is exactly this
+    app's shape: one worker process writing, several pollers reading.
+
+    NORMAL synchronous is the standard companion to WAL: durable across a
+    process crash, and only at risk from an OS-level crash — acceptable for a
+    local media scratch DB, and much cheaper than FULL on every progress tick.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        # busy_timeout first, and unconditionally: it is the one that saves us
+        # if the mode switch below cannot happen.
+        cursor.execute("PRAGMA busy_timeout=30000")
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            # Switching journal mode needs a brief exclusive lock, so it fails
+            # while another process still has the file open in the old mode
+            # (e.g. an older backend build during a rolling restart). Falling
+            # back to the previous mode is strictly better than refusing to
+            # open the connection at all.
+            logging.getLogger("clipforge.db").warning(
+                "could not enable WAL; continuing in the existing journal mode"
+            )
+    finally:
+        cursor.close()
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
