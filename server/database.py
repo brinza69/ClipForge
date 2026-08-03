@@ -124,6 +124,58 @@ async def init_db() -> None:
         except Exception:
             pass
 
+        # ── AI Stream Clipper ────────────────────────────────────────────────
+        # Additive only: every column is nullable and unread by existing code,
+        # so an older build keeps working against a migrated DB (see the
+        # rollback notes in docs/plans/ai-stream-clipper-repository-audit.md).
+        _clipper_project_migrations = [
+            ("clipper_settings", "TEXT"),
+            ("content_type", "VARCHAR(30)"),
+            ("content_type_confidence", "REAL"),
+            ("content_type_override", "VARCHAR(30)"),
+            ("analysis_version", "VARCHAR(20)"),
+            ("rights_confirmed", "BOOLEAN"),
+            ("source_kind", "VARCHAR(20)"),
+        ]
+        for col, col_type in _clipper_project_migrations:
+            try:
+                await conn.execute(text(f"ALTER TABLE projects ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass
+
+        _clipper_clip_migrations = [
+            ("overall_score", "REAL"),
+            ("sub_scores", "TEXT"),
+            ("score_reason", "TEXT"),
+            ("layout_plan", "TEXT"),
+            ("caption_plan", "TEXT"),
+            ("headline_text", "TEXT"),
+            ("content_type", "VARCHAR(30)"),
+            ("warnings", "TEXT"),
+            ("dedupe_group", "VARCHAR(12)"),
+            ("is_alternative", "BOOLEAN"),
+            ("rank_position", "INTEGER"),
+            ("feature_vector", "TEXT"),
+            ("ranker_version", "VARCHAR(20)"),
+            ("preview_path", "TEXT"),
+        ]
+        for col, col_type in _clipper_clip_migrations:
+            try:
+                await conn.execute(text(f"ALTER TABLE clips ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass
+
+        # Ranked review lists sort by (project_id, rank_position) constantly.
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_clips_project_rank ON clips(project_id, rank_position)",
+            "CREATE INDEX IF NOT EXISTS idx_clip_feedback_clip ON clip_feedback(clip_id)",
+            "CREATE INDEX IF NOT EXISTS idx_clip_feedback_event ON clip_feedback(event_type)",
+        ):
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass
+
         # Fix any projects stuck at 'downloaded' that already have scored clips
         try:
             await conn.execute(text("""

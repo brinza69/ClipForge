@@ -56,6 +56,11 @@ data_b/
 logs/
 .run/
 
+# Ad-hoc backend run logs (uvicorn started by hand into a file)
+server/_*.log
+server/_*.err
+server/_*.txt
+
 # n8n runtime logs (the workflow JSON + README are tracked)
 n8n/*.log
 

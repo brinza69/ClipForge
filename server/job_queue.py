@@ -31,11 +31,18 @@ class JobCancelledError(Exception):
 # reason: they are API calls / single-frame ffmpeg work, and without a lane the
 # video factory would starve the whole wizard. tiktok_render is deliberately
 # NOT here — it is a full 1080x1920 encode and belongs in the heavy lane.
+#
+# The AI Stream Clipper splits the same way. clipper_analyze/score/preview read
+# a 480p proxy and do CPU-light work, so they join this lane and the review UI
+# keeps responding while a render is going. clipper_ingest (yt-dlp + proxy
+# build), clipper_transcribe (whisper on the GPU) and clipper_export (full
+# 1080x1920 encode) stay heavy.
 DOODLE_LANE_TYPES = frozenset(
     {
         "doodle_script", "doodle_tts", "doodle_render", "doodle_images",
         "tiktok_import", "tiktok_frames", "tiktok_script", "tiktok_voice",
         "tiktok_thumbnails", "tiktok_description",
+        "clipper_analyze", "clipper_score", "clipper_preview",
     }
 )
 DOODLE_LANE_LIMIT = 2

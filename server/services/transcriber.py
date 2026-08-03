@@ -211,9 +211,19 @@ async def transcribe(
     is_cancelled: Callable[[], bool] = lambda: False,
     on_progress: Optional[Callable[[float, str], Awaitable[None]]] = None,
     language: Optional[str] = None,
+    keep_punctuation: bool = False,
 ) -> Dict[str, Any]:
     """
     Transcribe audio/video file to text with word-level timestamps.
+
+    `keep_punctuation=False` (the default, and what every caption caller wants)
+    runs the text through _clean_text: symbols stripped, lowercased. That is
+    deliberate — burned captions look better without stray punctuation.
+
+    `keep_punctuation=True` returns the text as whisper produced it. The AI
+    Stream Clipper needs this: sentence boundaries, question marks and clause
+    commas are the primary signal for semantic segmentation and hook detection,
+    and _clean_text destroys all three.
 
     Returns dict with:
         language: str
@@ -236,7 +246,10 @@ async def transcribe(
 
     worker = ctx.Process(
         target=_transcribe_worker,
-        args=(media_path, duration, cancel_event, progress_queue, result_queue, language),
+        args=(
+            media_path, duration, cancel_event, progress_queue, result_queue,
+            language, keep_punctuation,
+        ),
         daemon=True,
     )
     worker.start()
@@ -435,6 +448,7 @@ def _transcribe_worker(
     progress_queue,
     result_queue,
     language: Optional[str],
+    keep_punctuation: bool = False,
 ) -> None:
     """
     Killable sync transcription worker executed in a separate process.
@@ -451,6 +465,9 @@ def _transcribe_worker(
       - result_queue: {"ok":bool,"result":dict} OR {"ok":False,"error":str,"traceback":str}
     """
     tmp_chunks_dir: Optional[Path] = None
+    # One switch, applied at every text site below, so the two modes can never
+    # drift apart.
+    clean = (lambda t: (t or "").strip()) if keep_punctuation else _clean_text
     try:
         try:
             model = _get_model()
@@ -587,7 +604,7 @@ def _transcribe_worker(
                 words = []
                 if getattr(segment, "words", None):
                     for w in segment.words:
-                        word_text = _clean_text((w.word or "").strip())
+                        word_text = clean((w.word or "").strip())
                         if not word_text:
                             continue
                         words.append(
@@ -602,7 +619,7 @@ def _transcribe_worker(
                 seg_data = {
                     "start": round(seg_start, 3),
                     "end": round(seg_end, 3),
-                    "text": _clean_text((getattr(segment, "text", "") or "").strip()),
+                    "text": clean((getattr(segment, "text", "") or "").strip()),
                     "confidence": round(
                         (
                             sum(float(w.probability) for w in segment.words)

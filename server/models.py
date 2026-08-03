@@ -96,6 +96,36 @@ class JobType(str, enum.Enum):
     tiktok_render = "tiktok_render"
     tiktok_thumbnails = "tiktok_thumbnails"
     tiktok_description = "tiktok_description"
+    # AI Stream Clipper — one job type per pipeline stage. ingest/transcribe/
+    # export are GPU- or disk-heavy and stay in the heavy lane; analyze/score/
+    # preview are CPU-light work on a small proxy and join the light lane (see
+    # job_queue.DOODLE_LANE_TYPES) so a running render can never freeze the
+    # review UI.
+    clipper_ingest = "clipper_ingest"
+    clipper_transcribe = "clipper_transcribe"
+    clipper_analyze = "clipper_analyze"
+    clipper_score = "clipper_score"
+    clipper_export = "clipper_export"
+    clipper_preview = "clipper_preview"
+
+
+class ClipperEvent(str, enum.Enum):
+    """Append-only feedback events used to learn a better ranking over time."""
+    generated = "generated"
+    previewed = "previewed"
+    approved = "approved"
+    rejected = "rejected"
+    deleted = "deleted"
+    exported = "exported"
+    start_changed = "start_changed"
+    end_changed = "end_changed"
+    crop_changed = "crop_changed"
+    layout_changed = "layout_changed"
+    caption_changed = "caption_changed"
+    headline_changed = "headline_changed"
+    score_overridden = "score_overridden"
+    posted = "posted"
+    performance_recorded = "performance_recorded"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -143,6 +173,23 @@ class ProjectModel(Base):
     batch_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     erase_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     erased_video_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ── AI Stream Clipper ────────────────────────────────────────────────────
+    # The whole source-setup form (clip count, duration bounds, platform, fps,
+    # language, editing + layout preferences) lives in one JSON blob so adding
+    # a knob never needs a migration.
+    clipper_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Detected content type + how sure we are. `content_type_override` is the
+    # user's manual choice and ALWAYS wins over detection.
+    content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    content_type_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    content_type_override: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Bumped when the analysis pipeline changes shape; cached artifacts written
+    # by an older version are recomputed instead of trusted.
+    analysis_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # The user's affirmation that they own the content or have permission.
+    rights_confirmed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    source_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)  # url|upload|library
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -268,6 +315,53 @@ class ClipModel(Base):
     # Destination for rendered output uploads (e.g. Google Drive folder link)
     drive_folder_link: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # ── AI Stream Clipper ────────────────────────────────────────────────────
+    # `overall_score` (0-100) is the ranking number the dashboard sorts by;
+    # `sub_scores` holds the 16 components behind it and `score_reason` the
+    # sentence we show the user. Deliberately separate from the six legacy
+    # score columns above, which belong to the superseded editor.
+    overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    score_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Crop rectangles, layout mode, keyframes and warnings for the 9:16 render.
+    layout_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Word-grouped caption chunks + resolved style.
+    caption_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # The optional context hook. Distinct from `hook_text` (legacy editor).
+    headline_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    warnings: Mapped[list | dict | None] = mapped_column(JSON, nullable=True)
+    # Near-duplicates share a dedupe_group; the winner is shown and the rest
+    # are kept as retrievable alternatives rather than thrown away.
+    dedupe_group: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    is_alternative: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    rank_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Frozen at scoring time so the ranker trains on what the model actually
+    # saw, not on features recomputed by newer code.
+    feature_vector: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    ranker_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    preview_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class ClipFeedbackModel(Base):
+    """Append-only event log behind the learning loop.
+
+    Never updated or deleted in place — every user action on a candidate adds a
+    row. `training_rows()` folds these into (features, label) pairs for the
+    baseline ranker. No FK on clip_id/project_id, matching the rest of this
+    schema (JobModel.project_id has none either).
+    """
+
+    __tablename__ = "clip_feedback"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_uuid)
+    clip_id: Mapped[str] = mapped_column(String(12), index=True)
+    project_id: Mapped[str | None] = mapped_column(String(12), index=True, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(30), index=True)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

@@ -89,6 +89,13 @@ class Settings(BaseSettings):
         """Per-project workspace for the TikTok Transformation wizard."""
         return self.data_dir / "tiktok"
 
+    @property
+    def clipper_dir(self) -> Path:
+        """Per-project workspace for the AI Stream Clipper (proxies, signals,
+        sampled frames, previews, exports). Under data/, so .gitignore already
+        excludes it and deleting the dir reclaims everything."""
+        return self.data_dir / "clipper"
+
     def ensure_dirs(self) -> None:
         for d in [
             self.data_dir,
@@ -102,8 +109,63 @@ class Settings(BaseSettings):
             self.knowledge_dir,
             self.doodle_dir,
             self.tiktok_dir,
+            self.clipper_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
+
+    # ── AI Stream Clipper ─────────────────────────────────────────────────────
+    # Feature flag. False leaves the code in place but registers neither the
+    # router nor the job handlers — the documented rollback switch.
+    clipper_enabled: bool = True
+
+    # Ingestion limits. The cap keeps one bad paste from filling the disk; the
+    # free-space check runs before the download starts, not after.
+    # 12 h rather than 6: this is a *stream* clipper, and a full Twitch/YouTube
+    # live VOD routinely runs 6-10 hours. A 6-hour cap rejected ordinary input.
+    clipper_max_source_duration_s: float = 43200.0     # 12 hours
+    clipper_max_upload_bytes: int = 21_474_836_480     # 20 GB
+    clipper_min_free_bytes: int = 10_737_418_240       # 10 GB
+
+    # Analysis proxy. EVERY analysis pass reads this, never the original — a
+    # 480px/10fps proxy makes a multi-hour VOD tractable on CPU.
+    clipper_proxy_width: int = 480
+    clipper_proxy_fps: int = 10
+    # How many frames the vision passes may sample in total, regardless of
+    # source length. Bounds the OpenCV cost on a 6-hour stream.
+    clipper_max_sampled_frames: int = 400
+
+    # Output shape. 15-45s is the documented sweet spot for stream clips; we
+    # allow up to 90s for explanations that genuinely need it.
+    clipper_default_clip_count: int = 8
+    clipper_min_clip_s: float = 15.0
+    clipper_max_clip_s: float = 90.0
+    clipper_target_clip_s: float = 35.0
+
+    # Duplicate removal.
+    clipper_overlap_threshold: float = 0.4
+    clipper_text_similarity_threshold: float = 0.62
+
+    # Pass D (expensive multimodal review). Blank engine → the pass is skipped
+    # entirely and headlines fall back to deterministic extraction, so the
+    # pipeline never fails just because an optional provider is missing.
+    clipper_top_n_llm: int = 8
+    clipper_llm_engine: str = ""
+
+    # Export. crf 18 + slow is the single quality pass — crop, scale, stack and
+    # caption burn are fused into ONE encode (no second generation of loss).
+    clipper_export_crf: int = 18
+    clipper_export_preset: str = "slow"
+    clipper_export_fps: int = 30
+
+    # Gaming layout: default share of the 1080x1920 canvas given to the facecam.
+    clipper_face_pct: float = 0.35
+
+    # 0 = never auto-purge project artifacts.
+    clipper_retention_days: int = 0
+
+    # Use the learned ranker when it qualifies (enough labels AND it beats the
+    # heuristic on held-out NDCG@5). Otherwise heuristic weights stand.
+    clipper_ranker_enabled: bool = True
 
     # CORS: comma-separated list of allowed origins.
     # E.g. CLIPFORGE_ALLOWED_ORIGINS="https://myapp.vercel.app,http://localhost:3000"
