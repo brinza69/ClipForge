@@ -78,7 +78,10 @@ export function AnalysisProgress({
           // In a callback from an external system — the sanctioned place to
           // call setState from an effect.
           setSse(next);
-          if (["done", "failed", "cancelled"].includes(next.status)) onFinished();
+          // `next` is Partial: a malformed frame must not be read as terminal.
+          if (next.status && ["done", "failed", "cancelled"].includes(next.status)) {
+            onFinished();
+          }
         } catch {
           onFinished();
         }
