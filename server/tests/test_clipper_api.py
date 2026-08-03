@@ -169,6 +169,43 @@ async def test_project_round_trip(client, clipper_tmp):
     assert (await client.get(f"/api/clipper/projects/{pid}")).status_code == 404
 
 
+async def test_content_type_override_triggers_a_rescore_when_there_is_analysis(
+    client, clipper_tmp
+):
+    """The override picks the scoring profile AND the default layout, both of
+    which are frozen onto the clips at score time. Without a re-score the
+    control would visibly do nothing, so it must enqueue one — but only when
+    there are cached candidates to re-score."""
+    from services.clipper import storage
+
+    staged = clipper_tmp / "override.mp4"
+    staged.write_bytes(b"\x00" * 2048)
+    created = await client.post(
+        "/api/clipper/projects",
+        json={"source_kind": "upload", "upload_path": str(staged), "rights_confirmed": True},
+    )
+    pid = created.json()["id"]
+    try:
+        # No analysis yet -> nothing to re-score, so no job is queued.
+        first = await client.patch(
+            f"/api/clipper/projects/{pid}/settings",
+            json={"content_type_override": "gaming"},
+        )
+        assert first.status_code == 200
+        assert first.json()["rescore_job_id"] is None
+
+        # With cached candidates on disk the override must queue a re-score.
+        storage.write_artifact(pid, "candidates", [{"start": 0.0, "end": 20.0}])
+        second = await client.patch(
+            f"/api/clipper/projects/{pid}/settings",
+            json={"content_type_override": "podcast"},
+        )
+        assert second.status_code == 200
+        assert second.json()["rescore_job_id"], "an override with analysis must re-score"
+    finally:
+        await client.delete(f"/api/clipper/projects/{pid}")
+
+
 async def test_settings_are_clamped_not_trusted(client, clipper_tmp):
     """An out-of-range value from a hand-rolled API call must never reach the
     pipeline — a 10-hour max_clip_s would try to encode the whole VOD."""

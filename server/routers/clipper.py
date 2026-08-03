@@ -371,7 +371,36 @@ async def patch_settings(
     changed = apply_patch(project, body, PROJECT_PATCHABLE, PROJECT_PATCHABLE_JSON)
     if changed:
         await session.commit()
-    return {"project": project_to_dict(project), "changed": changed}
+
+    # Overriding the content type has to actually change something. The profile
+    # picks the scoring weights AND the default layout, both of which were
+    # frozen onto the existing clips at score time — so without this the UI
+    # offers a control that visibly does nothing. Re-scoring is cheap because it
+    # reuses the cached transcript, signals and candidates: seconds on a short
+    # source, a few minutes on a 6-hour one, and no re-download or re-transcribe.
+    rescored_job: str | None = None
+    if "content_type_override" in changed or "clipper_settings" in changed:
+        from services.clipper import storage
+
+        has_analysis = storage.artifact_exists(project_id, "candidates")
+        busy = await session.execute(
+            select(JobModel)
+            .where(JobModel.project_id == project_id)
+            .where(JobModel.status.in_([JobStatus.queued.value, JobStatus.running.value]))
+            .limit(1)
+        )
+        if has_analysis and busy.scalar_one_or_none() is None:
+            rescored_job = await job_queue.enqueue(
+                project_id=project_id,
+                job_type=JobType.clipper_score.value,
+                metadata={"stage": "rescore"},
+            )
+
+    return {
+        "project": project_to_dict(project),
+        "changed": changed,
+        "rescore_job_id": rescored_job,
+    }
 
 
 @router.delete("/projects/{project_id}")
