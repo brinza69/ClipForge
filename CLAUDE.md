@@ -3,7 +3,7 @@
 ## Project Context
 
 ClipForge is a local AI video clipping studio:
-- **Frontend**: Next.js 15 (Turbopack), TailwindCSS, shadcn/ui, React Query — `src/`
+- **Frontend**: Next.js 16 (Turbopack), TailwindCSS v4, shadcn/ui on Base UI, React Query — `src/`
 - **Backend**: FastAPI + SQLite (aiosqlite) + SQLAlchemy async — `server/`
 - **Pipelines** (the real render paths — there is no `services/exporter.py`):
   - `workers/remix_pipeline.py` — download → transcribe → erase → TTS → speed-match + caption-burn (one fused encode) → descriptions. Forces 1080×1920 @ 60 fps.
@@ -16,6 +16,10 @@ ClipForge is a local AI video clipping studio:
     `src/components/tiktok/`, `src/types/tiktok.ts`.** Two tests in
     `server/tests/test_tiktok_transform.py` fail with 404 because the router is not mounted, and
     the sidebar's "Video Transformare TikTok" item links to a page that does not exist.
+  - `workers/clipper_pipeline.py` + `clipper_build.py` + `clipper_render_jobs.py` — **AI Stream
+    Clipper**: long VOD → ranked vertical clips. ingest → transcribe → analyze → score → export.
+    Logic lives in `services/clipper/` (DB-free, unit-testable); see
+    `docs/ai-stream-clipper-runbook.md` and `docs/plans/ai-stream-clipper-architecture.md`.
   - `workers/utility_jobs.py` — standalone tools (erase, silence, upscale, caption burn).
 - **Dev server**: `npm run dev` on port 3000; backend: `cd server && uvicorn main:app --port 8420 --reload`
 - **DB migrations**: add new columns in `server/database.py` `init_db()` via `ALTER TABLE ... ADD COLUMN` (safe/idempotent)
@@ -126,4 +130,12 @@ clipforge/
 # CRITICAL: Next.js rewrites /api/* → backend. Don't call the backend directly from frontend; use api.ts helpers
 # CRITICAL: React Query keys: ["clip", clipId] and ["project", project_id] — invalidate both after mutations
 # CRITICAL: Turbopack active — no webpack config in next.config.ts
+# CRITICAL: SQLite runs in WAL mode (database.py sets it on connect). Do NOT revert to the
+#           default journal: start_all.ps1 runs a SECOND backend on 8421 against the same
+#           clipforge.db, and in rollback-journal mode one writer locks out every reader.
+# CRITICAL: the job queue has TWO lanes. With CLIPFORGE_MAX_CONCURRENT_JOBS=1 and any pipeline
+#           running, a new heavy job sits at queued/0% with an empty message. That is the lane
+#           working as designed, NOT a hang — check /api/jobs/?status=running,queued first.
+# CRITICAL: transcriber._clean_text strips ALL punctuation and lowercases. Pass
+#           keep_punctuation=True when you need sentence boundaries (the clipper does).
 ```

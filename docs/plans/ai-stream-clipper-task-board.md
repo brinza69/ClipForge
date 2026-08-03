@@ -82,21 +82,21 @@ Legend for dependencies: a task cannot start until everything in *Depends on* is
 
 | # | Task | Owner | Status | Depends on | Files | Validation |
 | --- | --- | --- | --- | --- | --- | --- |
-| 9.1 | Types | Frontend Editor | done | 6.1 | `src/types/clipper.ts` | `tsc --noEmit` |
+| 9.1 | Types | Frontend Editor | done | 6.1 | `src/types/clipper.ts` | `tsc --noEmit` clean |
 | 9.2 | Nav entry | Frontend Editor | done | — | `src/components/layout/sidebar.tsx` | Active-state matching |
-| 9.3 | Project list + source form | Frontend Editor | done | 9.1 | `src/app/ai-stream-clipper/page.tsx`, `components/clipper/source-form.tsx` | Metadata preview before analysis |
-| 9.4 | Progress screen (SSE + poll fallback) | Frontend Editor | done | 9.3 | `components/clipper/analysis-progress.tsx` | Survives reload |
-| 9.5 | Candidate dashboard: sort, filter, batch | Frontend Editor | done | 9.4 | `components/clipper/candidate-*.tsx` | All sorts/filters from brief §23 |
-| 9.6 | Clip editor: trim, captions, crop, headline | Frontend Editor | done | 9.5 | `components/clipper/clip-editor.tsx`, `crop-editor.tsx`, `caption-controls.tsx` | Edits persist; preview refreshes |
+| 9.3 | Project list + source form | Frontend Editor | done | 9.1 | `src/app/ai-stream-clipper/page.tsx`, `components/clipper/source-form.tsx` | Metadata preview before analysis; simplified to 3 above-the-fold decisions |
+| 9.4 | Progress screen (SSE + poll fallback) | Frontend Editor | done | 9.3 | `components/clipper/analysis-progress.tsx` | Stage list derived from the job message; survives reload |
+| 9.5 | Candidate dashboard: sort, filter, batch | Frontend Editor | done | 9.4 | `components/clipper/candidate-grid.tsx`, `candidate-card.tsx`, `score-breakdown.tsx` | Sort/filter/reveal-alternatives/bulk-approve |
+| 9.6 | Clip editor: trim, captions, crop, headline | Frontend Editor | **not built** | 9.5 | `clip-editor.tsx`, `crop-editor.tsx`, `caption-controls.tsx` | **Backend is complete and reachable** (`PATCH /clips/{id}`, `/regenerate`, `/preview-frame`); the UI for it is not written. Editing is currently API-only. |
 
 ## Phase 10 — Hardening & delivery
 
 | # | Task | Owner | Status | Depends on | Files | Validation |
 | --- | --- | --- | --- | --- | --- | --- |
-| 10.1 | Unit + integration tests | Test & Security | done | all | `server/tests/test_clipper_*.py` | Green |
+| 10.1 | Unit + integration tests | Test & Security | done | all | `server/tests/test_clipper_*.py` | 8 files; 208 passing incl. 15 API integration tests |
 | 10.2 | `.env.example` + runbook + CLAUDE.md update | Docs & Release | done | all | root + `docs/` | Every new env var documented |
-| 10.3 | Quality gates | Lead | done | 10.1 | — | pytest, tsc, eslint, next build |
-| 10.4 | Commit, push, draft PR | Lead | done | 10.3 | — | Git output quoted verbatim in the report |
+| 10.3 | Quality gates | Lead | partial | 10.1 | — | pytest green, `tsc --noEmit` clean. **`next build` and eslint not run yet.** |
+| 10.4 | Commit, push, draft PR | Lead | **not done** | 10.3 | — | Committed locally on `claude/ai-stream-clipper`; **not pushed** |
 
 ---
 
