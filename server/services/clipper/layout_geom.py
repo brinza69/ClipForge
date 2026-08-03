@@ -22,6 +22,7 @@ from services.captioner_presets import (
     SAFE_HOOK_MID_Y,
     SAFE_TOP,
 )
+from services.clipper.content_type import median_rect, rect_centre
 from services.clipper.ffmpeg_tools import even
 
 logger = logging.getLogger("clipforge.clipper.layout")

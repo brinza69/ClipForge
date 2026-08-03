@@ -1,0 +1,343 @@
+"""
+Unit tests for the analysis chain: candidates, scoring, dedupe, layout.
+
+Pure functions only — no ffmpeg, no cv2 image decoding, no DB, no network.
+Everything is driven from a synthetic transcript and a synthetic signals blob,
+which is exactly the shape `build_signals()` writes to analysis/signals.json.
+
+The most important test here is `test_features_cover_every_consumer`: scoring.py
+reads its features by name through a `.get(key, 0.0)` accessor, so a key that
+extract_features stops emitting does NOT raise — it silently reads 0.0 and every
+clip is mis-scored in the same direction. That failure is invisible in
+production, so it gets an explicit assertion.
+"""
+
+from __future__ import annotations
+
+import inspect
+import math
+import re
+
+import pytest
+
+from services.clipper import candidates, dedupe, layout, ranker, scoring, segmentation
+
+
+# ── fixtures ─────────────────────────────────────────────────────────────────
+
+
+def _transcript() -> dict:
+    """Eight punctuated sentences with word-level timings, ~60s of speech."""
+    sentences = [
+        "So this is the part where everything went wrong.",
+        "I had about two seconds to react, and I completely froze.",
+        "Why did nobody tell me the timer was already running?",
+        "Because it turns out the setting was inverted the whole time.",
+        "That is the most embarrassing thing I have done on stream.",
+        "Chat absolutely destroyed me for it, and honestly they were right.",
+        "Let me show you exactly how to avoid it happening to you.",
+        "First you open the settings menu, then you flip that one toggle.",
+    ]
+    segments, t = [], 2.0
+    for text in sentences:
+        toks = text.split()
+        words, wt = [], t
+        for tok in toks:
+            words.append(
+                {"word": tok, "start": round(wt, 3), "end": round(wt + 0.38, 3),
+                 "probability": 0.93}
+            )
+            wt += 0.42
+        dur = len(toks) * 0.42
+        segments.append(
+            {"start": round(t, 3), "end": round(t + dur, 3), "text": text,
+             "confidence": 0.93, "words": words}
+        )
+        t += dur + 1.1
+    return {"language": "en", "segments": segments, "_end": t}
+
+
+def _signals(duration: float) -> dict:
+    hop = 0.25
+    n = int(duration / hop) + 1
+    rms = [0.35 + 0.4 * ((i * 7) % 13) / 13.0 for i in range(n)]
+    motion = [0.3 + 0.2 * ((i * 5) % 7) / 7.0 for i in range(int(duration / 0.5) + 1)]
+    return {
+        "duration": duration,
+        "proxy_width": 480,
+        "proxy_height": 270,
+        "audio": {"hop_s": hop, "duration": duration, "rms": rms,
+                  "peaks": [12.0, 28.5, 41.0], "silence": [[0.0, 2.0]],
+                  "speech": [[2.0, max(2.5, duration - 3)]]},
+        "scenes": [15.0, 33.0],
+        "motion": {"hop_s": 0.5, "motion": motion},
+        "faces": [{"t": float(i * 10), "boxes": [[10, 10, 60, 60]]}
+                  for i in range(int(duration / 10) + 1)],
+        "peaks": [12.0, 28.5, 41.0],
+        "silence": [[0.0, 2.0]],
+        "speech": [[2.0, max(2.5, duration - 3)]],
+    }
+
+
+@pytest.fixture
+def chain():
+    tr = _transcript()
+    duration = tr.pop("_end") + 5
+    sig = _signals(duration)
+    windows = segmentation.semantic_windows(tr, sig, min_s=15, max_s=90)
+    cands = candidates.generate_candidates(windows, sig, min_s=15, max_s=90, target_s=30)
+    refined = [
+        candidates.refine_boundaries(c, tr, sig, min_s=15, max_s=90) for c in cands
+    ]
+    return {"transcript": tr, "signals": sig, "duration": duration,
+            "windows": windows, "candidates": refined}
+
+
+# ── segmentation + candidates ────────────────────────────────────────────────
+
+
+def test_windows_are_semantic_not_fixed_size(chain):
+    """Every window must record which signal closed it — a fixed-size chunker
+    could not populate this."""
+    assert chain["windows"], "no windows built from a normal transcript"
+    for win in chain["windows"]:
+        assert win["reasons"], "a window closed without recording why"
+        assert win["end"] > win["start"]
+
+
+def test_candidates_respect_duration_bounds(chain):
+    for cand in chain["candidates"]:
+        span = cand["end"] - cand["start"]
+        assert 15 - 1e-6 <= span <= 90 + 1e-6, f"{span}s is outside the requested bounds"
+
+
+def test_boundaries_never_land_mid_word(chain):
+    """Starting mid-word is the single most obvious way a clip looks broken."""
+    words = segmentation.word_list(chain["transcript"])
+    for cand in chain["candidates"]:
+        straddling = [
+            w for w in words
+            if w["start"] < cand["start"] - 1e-6 < w["end"]
+        ]
+        assert not straddling, f"clip starts inside the word {straddling[:1]}"
+
+
+def test_refine_does_not_mutate_its_input(chain):
+    cand = dict(chain["candidates"][0])
+    before = (cand["start"], cand["end"])
+    candidates.refine_boundaries(cand, chain["transcript"], chain["signals"],
+                                 min_s=15, max_s=90)
+    assert (cand["start"], cand["end"]) == before
+
+
+def test_payoff_is_inside_the_clip(chain):
+    for cand in chain["candidates"]:
+        if "payoff_t" in cand:
+            assert cand["start"] <= cand["payoff_t"] <= cand["end"] + 1e-6
+
+
+# ── the feature contract ─────────────────────────────────────────────────────
+
+
+def test_features_cover_every_consumer(chain):
+    """scoring.py and ranker.FEATURE_ORDER both read features BY NAME through a
+    defaulting accessor. A dropped key degrades silently instead of raising, so
+    the coverage is asserted here rather than discovered in a bad export."""
+    cand = chain["candidates"][0]
+    feats = candidates.extract_features(
+        cand, chain["transcript"], chain["signals"], chain["duration"]
+    )
+
+    scoring_keys = set(re.findall(r'g\("([a-z_]+)"\)', inspect.getsource(scoring)))
+    missing_scoring = scoring_keys - set(feats)
+    assert not missing_scoring, f"scoring.py reads features nobody emits: {sorted(missing_scoring)}"
+
+    missing_ranker = set(ranker.FEATURE_ORDER) - set(feats)
+    assert not missing_ranker, f"ranker reads features nobody emits: {sorted(missing_ranker)}"
+
+
+def test_features_are_all_finite(chain):
+    feats = candidates.extract_features(
+        chain["candidates"][0], chain["transcript"], chain["signals"], chain["duration"]
+    )
+    bad = {k: v for k, v in feats.items() if not isinstance(v, float) or not math.isfinite(v)}
+    assert not bad, f"non-finite features would poison the ranker: {bad}"
+
+
+def test_features_survive_empty_signals(chain):
+    """A degenerate source (silent, unreadable proxy) must degrade, not crash."""
+    feats = candidates.extract_features(
+        chain["candidates"][0], chain["transcript"], {}, chain["duration"]
+    )
+    assert all(math.isfinite(v) for v in feats.values())
+
+
+# ── scoring ──────────────────────────────────────────────────────────────────
+
+
+def test_every_profile_is_normalised():
+    for name, weights in scoring.PROFILES.items():
+        total = sum(weights.values())
+        assert abs(total - 1.0) < 1e-6, f"profile {name} weights sum to {total}, not 1"
+        assert set(weights) <= set(scoring.SUB_SCORES), f"profile {name} has unknown sub-scores"
+
+
+def test_scores_clamp_on_degenerate_input():
+    cand = {"start": 0.0, "end": 30.0, "text": ""}
+    for feats in ({}, dict.fromkeys(scoring.SUB_SCORES, 0.0), {"audio_rms_mean": 1e9}):
+        out = scoring.score_candidate(cand, feats, profile="gaming", platform="tiktok")
+        assert 0.0 <= out["overall"] <= 100.0
+        assert set(out["sub_scores"]) == set(scoring.SUB_SCORES)
+        for name, value in out["sub_scores"].items():
+            assert 0.0 <= value <= 100.0, f"{name} escaped the clamp with {value}"
+        assert isinstance(out["reason"], str) and out["reason"]
+
+
+def test_platform_fit_peaks_inside_the_band():
+    """TikTok's band is tighter than YouTube Shorts', so a 30s clip must not
+    score the same on both."""
+    tiktok_mid = scoring.platform_fit_score(30.0, "tiktok")
+    tiktok_long = scoring.platform_fit_score(120.0, "tiktok")
+    assert tiktok_mid > tiktok_long
+    assert scoring.platform_fit_score(55.0, "youtube_shorts") > scoring.platform_fit_score(
+        55.0, "tiktok"
+    )
+
+
+def test_unknown_profile_falls_back_rather_than_raising():
+    out = scoring.score_candidate(
+        {"start": 0.0, "end": 25.0}, {}, profile="not_a_profile", platform="tiktok"
+    )
+    assert 0.0 <= out["overall"] <= 100.0
+
+
+# ── dedupe ───────────────────────────────────────────────────────────────────
+
+
+def test_text_similarity_bounds():
+    a = "the round changed in one single second"
+    assert dedupe.text_similarity(a, a) == pytest.approx(1.0, abs=1e-6)
+    assert dedupe.text_similarity(a, "completely unrelated vocabulary here") < 0.35
+    assert dedupe.text_similarity("", "") == 0.0
+
+
+def test_overlapping_candidates_collapse_to_one_winner():
+    base = {"text": "he jumped and immediately fell off the edge again", "overall": 80.0}
+    cands = [
+        {**base, "start": 10.0, "end": 40.0, "overall": 80.0},
+        {**base, "start": 11.0, "end": 41.0, "overall": 60.0},   # ~97% overlap
+        {"text": "completely different topic about settings menus", "start": 200.0,
+         "end": 230.0, "overall": 70.0},
+    ]
+    out = dedupe.deduplicate(cands, overlap_threshold=0.4, text_threshold=0.62,
+                             target_count=5)
+    winners = [c for c in out if not c.get("is_alternative")]
+    alts = [c for c in out if c.get("is_alternative")]
+
+    assert len(out) == 3, "nothing may be silently dropped"
+    assert len(winners) == 2 and len(alts) == 1
+    assert alts[0]["overall"] == 60.0, "the weaker twin should be the alternative"
+    assert all(a["dedupe_group"] for a in alts), "an alternative must stay retrievable"
+
+
+def test_rank_positions_are_contiguous_from_one():
+    cands = [
+        {"text": f"distinct topic number {i} with its own words", "start": i * 100.0,
+         "end": i * 100.0 + 30.0, "overall": 90.0 - i}
+        for i in range(5)
+    ]
+    out = dedupe.deduplicate(cands, overlap_threshold=0.4, text_threshold=0.62,
+                             target_count=5)
+    ranks = sorted(c["rank_position"] for c in out if not c.get("is_alternative"))
+    assert ranks == list(range(1, len(ranks) + 1))
+
+
+# ── layout ───────────────────────────────────────────────────────────────────
+
+
+def _regions(webcam=None, conf=0.9):
+    return {
+        "webcam": webcam,
+        "gameplay": {"x": 0, "y": 0, "w": 480, "h": 270},
+        "chat": None,
+        "hud": [],
+        "confidence": {"webcam": conf, "gameplay": 0.9},
+        "frame_width": 480,
+        "frame_height": 270,
+    }
+
+
+def test_no_webcam_falls_back_and_never_leaves_an_empty_face_band():
+    plan = layout.plan_layout(
+        {"start": 0.0, "end": 30.0, "content_type": "gaming"},
+        _regions(webcam=None), [], 1920, 1080, mode="auto",
+    )
+    assert plan["layout"] in ("fullscreen_game", "fullscreen_crop")
+    assert plan["face_rect"] is None, "a fallback layout must not claim a face band"
+
+
+def test_tiny_facecam_warns_instead_of_shipping_mush():
+    # 40px wide in a 480px frame -> 160px in a 1920px source, under the 220 floor.
+    plan = layout.plan_layout(
+        {"start": 0.0, "end": 30.0, "content_type": "gaming"},
+        _regions(webcam={"x": 10, "y": 10, "w": 40, "h": 30}),
+        [{"t": 1.0, "boxes": [[15, 15, 25, 20]]}],
+        1920, 1080, mode="auto",
+    )
+    assert plan["warnings"], "a too-small facecam must be called out"
+
+
+def test_face_pct_is_clamped():
+    for requested, in ((0.01,), (9.0,)):
+        plan = layout.plan_layout(
+            {"start": 0.0, "end": 30.0}, _regions(), [], 1920, 1080,
+            mode="auto", face_pct=requested,
+        )
+        assert 0.15 - 1e-9 <= plan["face_pct"] <= 0.6 + 1e-9
+
+
+def test_emitted_rects_are_even_and_inside_the_source():
+    plan = layout.plan_layout(
+        {"start": 0.0, "end": 30.0, "content_type": "gaming"},
+        _regions(webcam={"x": 300, "y": 10, "w": 120, "h": 90}),
+        [{"t": 1.0, "boxes": [[310, 20, 90, 70]]}],
+        1920, 1080, mode="auto",
+    )
+    for key in ("face_rect", "game_rect"):
+        rect = plan.get(key)
+        if not rect:
+            continue
+        assert rect["w"] % 2 == 0 and rect["h"] % 2 == 0, f"{key} has odd dims — H.264 refuses them"
+        assert rect["w"] > 0 and rect["h"] > 0
+        assert rect["x"] >= 0 and rect["y"] >= 0
+        assert rect["x"] + rect["w"] <= 1920 and rect["y"] + rect["h"] <= 1080
+
+
+def test_filtergraph_is_a_single_pass_ending_in_a_labelled_pad():
+    plan = layout.plan_layout(
+        {"start": 0.0, "end": 30.0, "content_type": "gaming"},
+        _regions(webcam={"x": 300, "y": 10, "w": 120, "h": 90}),
+        [{"t": 1.0, "boxes": [[310, 20, 90, 70]]}],
+        1920, 1080, mode="auto",
+    )
+    graph = layout.build_filtergraph(plan)
+    assert graph.rstrip().endswith("[v]"), "render.py appends the subtitles filter to [v]"
+    assert graph.count("vstack") <= 1, "two stacks would mean two composition passes"
+
+
+def test_smoothing_reduces_jitter():
+    jitter = [
+        {"t": i * 0.5, "rect": {"x": 100 + (40 if i % 2 else -40), "y": 100,
+                                "w": 400, "h": 300}}
+        for i in range(12)
+    ]
+
+    def travel(kfs):
+        return sum(
+            abs(b["rect"]["x"] - a["rect"]["x"]) for a, b in zip(kfs, kfs[1:])
+        )
+
+    smoothed = layout.smooth_keyframes(
+        jitter, max_pan_px_per_s=60.0, max_zoom_per_s=0.15, ema=0.35
+    )
+    assert travel(smoothed) < travel(jitter), "smoothing must actually damp movement"
