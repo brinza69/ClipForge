@@ -152,6 +152,19 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         # keep the best one and let the score speak for itself.
         winners = held or winners[:1]
     winners = winners[:target_count]
+
+    # Everything dedupe kept but we did not select is an ALTERNATIVE, not a
+    # winner. Without this the board shows every surviving candidate: a 6-hour
+    # VOD produced 352 "winners" for a request of 8, because dedupe only marks
+    # near-duplicates and the truncation above lives in a Python list that
+    # _write_clips never sees. Re-flagging here keeps them retrievable behind
+    # "show near-duplicates" instead of dropping them.
+    chosen = {id(c) for c in winners}
+    for cand in ranked:
+        if id(cand) not in chosen:
+            cand["is_alternative"] = True
+            cand["rank_position"] = None
+
     _guard(queue, job_id)
 
     # ── Pass E (cheap half) + Pass D ────────────────────────────────────────
