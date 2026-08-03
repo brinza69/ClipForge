@@ -96,7 +96,10 @@ export function CandidateCard({
             {CONTENT_TYPE_LABELS[clip.content_type] ?? clip.content_type}
           </Badge>
         )}
-        {clip.layout_plan?.layout && (
+        {/* Skipped when it would just repeat the content-type badge — a
+            talking_head clip laid out as talking_head told the user nothing
+            twice. */}
+        {clip.layout_plan?.layout && clip.layout_plan.layout !== clip.content_type && (
           <Badge variant="secondary" className="text-[10px]">
             {LAYOUT_LABELS[clip.layout_plan.layout] ?? clip.layout_plan.layout}
           </Badge>
