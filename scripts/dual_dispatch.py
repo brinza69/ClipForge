@@ -33,7 +33,12 @@ BACKENDS = {"A(:8420)": "http://127.0.0.1:8420", "B(:8421)": "http://127.0.0.1:8
 # SQLite DB (there is no HTTP endpoint for a project).
 BACKEND_DBS = {"A(:8420)": r"D:\clipforge\data\db\clipforge.db",
                "B(:8421)": r"D:\clipforge\data_b\db\clipforge.db"}
-PRESETS = ["narator", "comentator"]   # povestitor dropped 2026-07-27, split into parts
+# Rolurile randate pentru fiecare rand. Suprascrie cu CLIPFORGE_PRESETS, separate
+# prin virgula — un lot mic poate cere toate cele 3 fara sa schimbi fisierul
+# pentru restanta de sute de randuri (fiecare rol in plus = inca un set de
+# credite ElevenLabs pe rand).
+PRESETS = [s.strip() for s in os.environ.get(
+    "CLIPFORGE_PRESETS", "narator,comentator").split(",") if s.strip()]
 # A row is "pending" when THIS column is empty. We key on the description column
 # (D): a row with no RO description is unprocessed, so we run it and write D.
 PENDING_COL = "D"       # description
