@@ -92,6 +92,36 @@ def _ass_alignment(_unused: str) -> int:
 
 MIN_HIGHLIGHT_MS = 60
 
+# Entry pop, measured frame by frame on `_LQ379ZhspI` (docs/dynamic-edit-recipe.md
+# §3): the card lands at 0.91x, overshoots to 1.05x at ~83ms and settles at 1.00x
+# by ~130ms. No fade, no slide. It is anchored at the text centre, which the \an5
+# already in the prefix gives us for free.
+POP_START_PCT = 91.0
+POP_PEAK_PCT = 105.0
+POP_PEAK_MS = 83
+POP_SETTLE_MS = 130
+
+
+def _pop_tags(base_pct: float) -> str:
+    """The measured entry overshoot as an ASS ``\\t`` chain around `base_pct`.
+
+    `base_pct` is whatever scale that run of text would otherwise hold — 100 for
+    ordinary words, `highlight_pop` for the active one — so the pop multiplies
+    the existing size instead of flattening it.
+
+    ``\\t`` times are relative to the start of the event carrying them, so this
+    only ever belongs on the event that puts the card on screen. On a later
+    word-highlight span it would replay the pop mid-card.
+    """
+    def at(pct: float) -> int:
+        return int(round(base_pct * pct / 100.0))
+
+    return (
+        f"\\fscx{at(POP_START_PCT)}\\fscy{at(POP_START_PCT)}"
+        f"\\t(0,{POP_PEAK_MS},\\fscx{at(POP_PEAK_PCT)}\\fscy{at(POP_PEAK_PCT)})"
+        f"\\t({POP_PEAK_MS},{POP_SETTLE_MS},\\fscx{at(100.0)}\\fscy{at(100.0)})"
+    )
+
 
 def _word_highlight_spans(
     safe_text: str,
@@ -134,6 +164,15 @@ def _word_highlight_spans(
     open_tag = "{" + f"\\c{active}\\fscx{pop}\\fscy{pop}" + "}"
     close_tag = "{" + f"\\c{base}\\fscx100\\fscy100" + "}"
 
+    # In the first span every token already sits under one of these inline tags,
+    # so a line-level \t would never be seen. The pop has to ride the tags
+    # themselves, each around its own resting scale.
+    if overlay.get("entry_pop"):
+        first_open = "{" + f"\\c{active}{_pop_tags(pop)}" + "}"
+        first_close = "{" + f"\\c{base}{_pop_tags(100.0)}" + "}"
+    else:
+        first_open, first_close = open_tag, close_tag
+
     spans: List[Tuple[int, int, str]] = []
     for i in range(len(words)):
         try:
@@ -150,9 +189,10 @@ def _word_highlight_spans(
         if span_end <= span_start:
             continue
 
+        o_tag, c_tag = (first_open, first_close) if i == 0 else (open_tag, close_tag)
         rebuilt: List[List[str]] = [[] for _ in lines]
         for idx, (line_idx, tok) in enumerate(tokens):
-            rebuilt[line_idx].append(open_tag + tok + close_tag if idx == i else tok)
+            rebuilt[line_idx].append(o_tag + tok + c_tag if idx == i else tok)
         spans.append((span_start, span_end,
                       "\\N".join(" ".join(bits) for bits in rebuilt)))
 
@@ -228,14 +268,6 @@ def build_overlays_ass(
         y_px = int(round(float(ovl.get("y_pct", 0.85)) * video_h))
         rot = float(ovl.get("rotation") or 0.0)
 
-        # Build the ASS text payload: \pos for placement, \frz for rotation,
-        # \q2 to prevent libass from wrapping the line at runtime (the user
-        # places a single block; line breaks are explicit \N).
-        prefix_bits = [f"\\an5", f"\\pos({x_px},{y_px})", "\\q2"]
-        if rot:
-            prefix_bits.append(f"\\frz{rot:.2f}")
-        prefix = "{" + "".join(prefix_bits) + "}"
-
         # Replace literal newlines with libass \N
         safe_text = text.replace("\r\n", "\n").replace("\n", "\\N")
 
@@ -245,6 +277,16 @@ def build_overlays_ass(
             end_ms = start_ms + 1000
 
         spans = _word_highlight_spans(safe_text, ovl, s, start_ms, end_ms)
+
+        # Build the ASS text payload: \pos for placement, \frz for rotation,
+        # \q2 to prevent libass from wrapping the line at runtime (the user
+        # places a single block; line breaks are explicit \N).
+        prefix_bits = [f"\\an5", f"\\pos({x_px},{y_px})", "\\q2"]
+        if rot:
+            prefix_bits.append(f"\\frz{rot:.2f}")
+        if ovl.get("entry_pop") and not spans:
+            prefix_bits.append(_pop_tags(100.0))
+        prefix = "{" + "".join(prefix_bits) + "}"
         if spans:
             for span_start, span_end, span_text in spans:
                 subs.events.append(pysubs2.SSAEvent(

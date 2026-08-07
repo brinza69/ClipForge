@@ -138,11 +138,13 @@ def analyse_window(proxy: Path, start: float, duration: float,
 
 
 def build_ass(cand: dict, out_dir: Path, stem: str, *, preset: str,
-              max_words: int, position: str, out_w: int, out_h: int) -> str | None:
+              max_words: int, position: str, out_w: int, out_h: int,
+              entry_pop: bool = False) -> str | None:
     """Word-highlight captions for the clip, or None when there is no speech."""
     plan = clip_captions.build_caption_plan(
         cand, {}, preset_id=preset, max_words=max_words, position=position,
-        layout={"safe_zones": {}, "out_w": out_w, "out_h": out_h})
+        layout={"safe_zones": {}, "out_w": out_w, "out_h": out_h},
+        entry_pop=entry_pop)
     overlays = clip_captions.caption_plan_to_overlays(plan)
     if not overlays:
         return None
@@ -162,6 +164,8 @@ def main() -> None:
     ap.add_argument("--max-words", type=int, default=2)
     ap.add_argument("--caption-pos", default="center",
                     help="bottom | center | hook — the references sit mid-frame")
+    ap.add_argument("--caption-pop", action="store_true",
+                    help="scale overshoot as each card lands (measured on _LQ379ZhspI)")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--style", default=None, help="JSON overrides for DEFAULT_STYLE")
     args = ap.parse_args()
@@ -231,7 +235,7 @@ def main() -> None:
 
         ass = build_ass(cand, out_dir, stem, preset=args.preset,
                         max_words=args.max_words, position=args.caption_pos,
-                        out_w=out_w, out_h=out_h)
+                        out_w=out_w, out_h=out_h, entry_pop=args.caption_pop)
 
         (out_dir / f"{stem}.plan.json").write_text(
             json.dumps(plan, indent=1), encoding="utf-8")

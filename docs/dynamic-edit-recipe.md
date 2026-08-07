@@ -128,9 +128,26 @@ strokes merge into one solid slab with the letters knocked out. Entry animation
 is a **scale pop with overshoot**: 0.91x → 1.05x peak at ~83ms → 1.00x by
 ~130ms, anchored at the text centre, no fade or slide.
 
-**We do not have that pop.** Our active word scales to 112% and holds. Adding
-the entry overshoot needs an ASS `\t` transform per event and is the single
-highest-value caption improvement left.
+**We have that pop**, behind `--caption-pop`. `caption_overlays._pop_tags`
+writes an ASS `\t` chain onto the event that lands the card — never onto the
+later word-highlight spans, whose `\t` clock restarts and would re-fire it on
+every word. Because the highlight already puts an inline `\fscx` on each token,
+the chain has to multiply each run's resting scale (100% for the line, 112% for
+the active word) rather than replace it.
+
+Measured back off the render, white glyph bbox per frame at 100fps over black:
+
+| | recipe | rendered |
+|---|---|---|
+| entry | 0.91x | **0.910x** |
+| peak | 1.05x @ ~83ms | **1.045x @ 80ms** |
+| settled | 1.00x by ~130ms | **1.000x by 130ms** |
+
+The 80ms/1.045x peak is the sampling grid, not a discrepancy: at 100fps no frame
+lands on 83ms. With the highlight on, the width steps in a single frame at each
+word boundary (804→791→802px) instead of ramping — that step is the highlight
+moving to a shorter or longer word, and it is what confirms the pop is not
+replaying mid-card.
 
 ## 4. Audio
 
@@ -218,8 +235,9 @@ python scripts/render_dynamic_clip.py <project> --top 3 \
   `ref-style-extraction` (the workflow script is saved under the session's
   `workflows/scripts/`) with `resumeFromRunId` — the two finished agents replay
   from cache for free.
-- **The caption entry pop** (0.91 → 1.05 → 1.00 over 130ms) is measured but not
-  implemented.
+- ~~The caption entry pop~~ — done, `--caption-pop`, verified against the
+  measurement on a synthetic render (§3). **Never checked on the VOD itself**,
+  because that machine had no `data/clipper/`.
 - **Speaker-keyed caption colour** needs diarisation; irrelevant for a
   one-speaker VOD, correct for anything with two people.
 - **Caption vertical position** is genuinely contested between the references

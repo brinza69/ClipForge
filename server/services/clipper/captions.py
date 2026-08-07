@@ -333,11 +333,15 @@ def build_caption_plan(
     max_words: int,
     position: str,
     layout: dict,
+    entry_pop: bool = False,
 ) -> dict:
     """Word-synced caption plan for one candidate.
 
     Chunk `start`/`end` are RELATIVE TO THE CLIP (cand["start"] subtracted), because
     the burn happens on the already-trimmed clip.
+
+    `entry_pop` asks the ASS writer for the reference scale overshoot as each card
+    lands. Off by default, like the active-word highlight.
     """
     preset_key = preset_id if preset_id in DEFAULT_PRESETS else DEFAULT_PRESET_ID
     style = dict(DEFAULT_PRESETS[preset_key])
@@ -382,6 +386,7 @@ def build_caption_plan(
         "y_pct": y_pct,
         "scale": 1.0,
         "preset_id": preset_key,
+        "entry_pop": bool(entry_pop),
     }
 
 
@@ -393,6 +398,7 @@ def caption_plan_to_overlays(plan: dict) -> list[dict]:
     x_pct = _f(plan.get("x_pct"), 0.5)
     y_pct = _f(plan.get("y_pct"), 0.75)
     scale = _f(plan.get("scale"), 1.0) or 1.0
+    entry_pop = bool(plan.get("entry_pop"))
 
     overlays: list[dict] = []
     for chunk in plan.get("chunks") or []:
@@ -412,6 +418,8 @@ def caption_plan_to_overlays(plan: dict) -> list[dict]:
             "scale": scale,
             "rotation": 0.0,
         }
+        if entry_pop:
+            overlay["entry_pop"] = True
         if chunk.get("words"):
             overlay["words"] = chunk["words"]
         overlays.append(overlay)

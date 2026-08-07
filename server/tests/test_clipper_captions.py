@@ -8,6 +8,7 @@ overlay shape, and all three are pure functions over dicts.
 
 import pytest
 
+from services import caption_overlays
 from services.captioner_presets import SAFE_CAPTION_BOTTOM, SAFE_TOP
 from services.clipper import captions, headline
 
@@ -173,6 +174,92 @@ def test_unknown_preset_falls_back_to_the_default():
     )
     assert plan["preset_id"] == captions.DEFAULT_PRESET_ID
     assert plan["style"]["font_family"]
+
+
+# --------------------------------------------------------------------------
+# Caption entry pop
+# --------------------------------------------------------------------------
+
+def _pop_overlay(**extra):
+    ovl = {"text": "HELLO THERE FRIEND", "start_t": 0.0, "end_t": 1.5,
+           "template_id": "bold_impact", "x_pct": 0.5, "y_pct": 0.4375}
+    ovl.update(extra)
+    return ovl
+
+
+_POP_WORDS = [{"word": "HELLO", "start": 0.0, "end": 0.4},
+              {"word": "THERE", "start": 0.5, "end": 0.9},
+              {"word": "FRIEND", "start": 1.0, "end": 1.5}]
+
+
+def _events(tmp_path, overlays):
+    out = tmp_path / "pop.ass"
+    caption_overlays.build_overlays_ass(overlays, 1080, 1920, str(out))
+    return [ln for ln in out.read_text(encoding="utf-8").splitlines()
+            if ln.startswith("Dialogue:")]
+
+
+def test_pop_tags_carry_the_measured_overshoot():
+    # 0.91x -> 1.05x at 83ms -> 1.00x by 130ms, straight off `_LQ379ZhspI`.
+    assert caption_overlays._pop_tags(100.0) == (
+        "\\fscx91\\fscy91"
+        "\\t(0,83,\\fscx105\\fscy105)"
+        "\\t(83,130,\\fscx100\\fscy100)"
+    )
+
+
+def test_pop_multiplies_the_resting_scale_rather_than_replacing_it():
+    # The active word rests at 112%, so its pop has to run 102 -> 118 -> 112,
+    # otherwise the highlight would be flattened for the first 130ms.
+    assert caption_overlays._pop_tags(112) == (
+        "\\fscx102\\fscy102"
+        "\\t(0,83,\\fscx118\\fscy118)"
+        "\\t(83,130,\\fscx112\\fscy112)"
+    )
+
+
+def test_captions_do_not_animate_unless_asked(tmp_path):
+    plain = _events(tmp_path, [_pop_overlay(words=_POP_WORDS)])
+    assert plain and not any("\\t(" in line for line in plain)
+
+
+def test_a_card_without_word_timings_pops_from_the_line_prefix(tmp_path):
+    lines = _events(tmp_path, [_pop_overlay(entry_pop=True)])
+    assert len(lines) == 1
+    assert "\\t(0,83,\\fscx105\\fscy105)" in lines[0]
+
+
+def test_only_the_card_landing_pops_not_every_word(tmp_path):
+    # \t is relative to its own event, so leaving it on the later highlight
+    # spans would re-fire the pop on every word instead of once per card.
+    lines = _events(tmp_path, [_pop_overlay(entry_pop=True, words=_POP_WORDS)])
+    assert len(lines) == 3
+    assert sum("\\t(" in line for line in lines) == 1
+    assert "\\t(" in lines[0]
+
+
+def test_the_popping_card_animates_the_highlight_and_the_rest_together(tmp_path):
+    # Every token in the first span sits under an inline tag, so both bases
+    # have to carry a chain or half the line would sit still.
+    first = _events(tmp_path, [_pop_overlay(entry_pop=True, words=_POP_WORDS)])[0]
+    assert "\\t(83,130,\\fscx112\\fscy112)" in first   # the active word
+    assert "\\t(83,130,\\fscx100\\fscy100)" in first   # everything after it
+
+
+def test_plan_carries_entry_pop_only_when_asked():
+    words = [("hello", 0.0, 0.4), ("there", 0.5, 0.9)]
+    off = captions.build_caption_plan(
+        _cand(0.0, 2.0), _transcript(words),
+        preset_id="bold_impact", max_words=2, position="center", layout={},
+    )
+    on = captions.build_caption_plan(
+        _cand(0.0, 2.0), _transcript(words),
+        preset_id="bold_impact", max_words=2, position="center", layout={},
+        entry_pop=True,
+    )
+    assert off["entry_pop"] is False and on["entry_pop"] is True
+    assert "entry_pop" not in captions.caption_plan_to_overlays(off)[0]
+    assert captions.caption_plan_to_overlays(on)[0]["entry_pop"] is True
 
 
 # --------------------------------------------------------------------------
