@@ -360,7 +360,17 @@ def build_caption_plan(
             continue
         start = round(max(group[0]["start"], 0.0), 3)
         end = round(max(group[-1]["end"], start + MIN_CHUNK_S), 3)
-        chunks.append({"text": text, "start": start, "end": end})
+        # Carry the word timings alongside the rendered text: the ASS writer
+        # uses them for the active-word highlight and silently ignores them if
+        # they stop lining up with the tokens it ends up drawing.
+        chunks.append({
+            "text": text,
+            "start": start,
+            "end": end,
+            "words": [{"word": w["word"],
+                       "start": round(max(w["start"], 0.0), 3),
+                       "end": round(max(w["end"], w["start"]), 3)} for w in group],
+        })
 
     if not chunks:
         logger.debug("caption plan: no words in candidate %s", (cand or {}).get("id"))
@@ -391,7 +401,7 @@ def caption_plan_to_overlays(plan: dict) -> list[dict]:
             continue
         start = _f(chunk.get("start"))
         end = _f(chunk.get("end"), start + MIN_CHUNK_S)
-        overlays.append({
+        overlay = {
             "text": text,
             "start_t": max(start, 0.0),
             "end_t": max(end, start + MIN_CHUNK_S),
@@ -401,5 +411,8 @@ def caption_plan_to_overlays(plan: dict) -> list[dict]:
             "y_pct": y_pct,
             "scale": scale,
             "rotation": 0.0,
-        })
+        }
+        if chunk.get("words"):
+            overlay["words"] = chunk["words"]
+        overlays.append(overlay)
     return overlays

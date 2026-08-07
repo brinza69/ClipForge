@@ -90,6 +90,75 @@ def _ass_alignment(_unused: str) -> int:
     return 5
 
 
+MIN_HIGHLIGHT_MS = 60
+
+
+def _word_highlight_spans(
+    safe_text: str,
+    overlay: Dict,
+    style: Dict,
+    start_ms: int,
+    end_ms: int,
+) -> List[Tuple[int, int, str]]:
+    """Split one overlay into per-word events with the active word recoloured.
+
+    Opt-in: an overlay without a `words` list renders exactly as it always has,
+    as a single event. With one, the caller gets the short-form "one word lights
+    up" look — the whole line stays on screen and only the word being spoken
+    changes colour and pops.
+
+    The spans TILE [start_ms, end_ms] with no gaps: each word holds the
+    highlight until the next one starts. Leaving real gaps makes libass drop the
+    line for a frame or two, which reads as a flicker rather than a beat.
+
+    Returns [] whenever the words cannot be trusted to line up with the rendered
+    text (a different count, or no timings), so the caller falls back to the
+    plain single event instead of mangling the line.
+    """
+    words = overlay.get("words")
+    if not isinstance(words, list) or len(words) < 2:
+        return []
+
+    lines = safe_text.split("\\N")
+    tokens: List[Tuple[int, str]] = [
+        (line_idx, tok)
+        for line_idx, line in enumerate(lines)
+        for tok in line.split()
+    ]
+    if len(tokens) != len(words):
+        return []
+
+    active = hex_to_ass_color(str(style.get("highlight_color") or "#FFD700"))
+    base = hex_to_ass_color(str(style.get("text_color") or "#FFFFFF"))
+    pop = int(float(overlay.get("highlight_pop") or 112))
+    open_tag = "{" + f"\\c{active}\\fscx{pop}\\fscy{pop}" + "}"
+    close_tag = "{" + f"\\c{base}\\fscx100\\fscy100" + "}"
+
+    spans: List[Tuple[int, int, str]] = []
+    for i in range(len(words)):
+        try:
+            w_start = int(float(words[i].get("start", 0.0)) * 1000)
+            w_next = (int(float(words[i + 1].get("start", 0.0)) * 1000)
+                      if i + 1 < len(words) else end_ms)
+        except (TypeError, ValueError, AttributeError):
+            return []
+
+        span_start = start_ms if i == 0 else max(start_ms, min(w_start, end_ms))
+        span_end = end_ms if i + 1 == len(words) else max(span_start, min(w_next, end_ms))
+        if span_end - span_start < MIN_HIGHLIGHT_MS and i + 1 < len(words):
+            span_end = min(end_ms, span_start + MIN_HIGHLIGHT_MS)
+        if span_end <= span_start:
+            continue
+
+        rebuilt: List[List[str]] = [[] for _ in lines]
+        for idx, (line_idx, tok) in enumerate(tokens):
+            rebuilt[line_idx].append(open_tag + tok + close_tag if idx == i else tok)
+        spans.append((span_start, span_end,
+                      "\\N".join(" ".join(bits) for bits in rebuilt)))
+
+    return spans
+
+
 def build_overlays_ass(
     overlays: List[Dict],
     video_w: int,
@@ -174,6 +243,17 @@ def build_overlays_ass(
         end_ms = int(float(ovl.get("end_t", 3.0)) * 1000)
         if end_ms <= start_ms:
             end_ms = start_ms + 1000
+
+        spans = _word_highlight_spans(safe_text, ovl, s, start_ms, end_ms)
+        if spans:
+            for span_start, span_end, span_text in spans:
+                subs.events.append(pysubs2.SSAEvent(
+                    start=span_start,
+                    end=span_end,
+                    style=style_name,
+                    text=prefix + span_text,
+                ))
+            continue
 
         evt = pysubs2.SSAEvent(
             start=start_ms,
