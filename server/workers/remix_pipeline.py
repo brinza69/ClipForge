@@ -122,17 +122,33 @@ class _Sliced:
 # in subtitrari — trebuie sa fie acelasi text in amandoua, fiindca alinierea pe
 # cuvinte potriveste audio-ul TTS cu exact acest sir. NU intra in descriere:
 # acolo ar polua captionul postarii.
-TTS_OUTRO = os.environ.get("CLIPFORGE_TTS_OUTRO", "").strip()
+def tts_outro(lang: str | None = None) -> str:
+    """Indemnul rostit la final, pe limba variantei.
+
+    CLIPFORGE_TTS_OUTRO_RO / _FR au prioritate, apoi CLIPFORGE_TTS_OUTRO. Pista
+    romana si cea franceza ruleaza pe acelasi cod, deci un singur sir ar pune
+    text romanesc peste naratiunea franceza.
+
+    Citit la fiecare apel, NU la import: altfel schimbarea textului ar cere
+    repornirea backend-ului, iar o randare pornita cu backendul vechi iese fara
+    outro fara sa se planga nimeni (s-a intamplat).
+    """
+    if lang:
+        v = os.environ.get(f"CLIPFORGE_TTS_OUTRO_{lang.strip().upper()}", "").strip()
+        if v:
+            return v
+    return os.environ.get("CLIPFORGE_TTS_OUTRO", "").strip()
 
 
-def _with_outro(text: str) -> str:
-    if not TTS_OUTRO:
+def _with_outro(text: str, lang: str | None = None) -> str:
+    outro = tts_outro(lang)
+    if not outro:
         return text
     t = (text or "").rstrip()
-    if t.lower().endswith(TTS_OUTRO.lower()):
+    if t.lower().endswith(outro.lower()):
         return t
     sep = "" if t.endswith((".", "!", "?")) else "."
-    return f"{t}{sep} {TTS_OUTRO}"
+    return f"{t}{sep} {outro}"
 
 
 # ── Caption distribution from cleaned text ──────────────────────────────────
@@ -544,7 +560,8 @@ async def _stage_audio_chain(
 
     # 2/2 — synthesize the voice from the cleaned text (30–100%).
     # outro-ul intra in TTS; `cleaned` ramane curat pentru descrieri
-    voice = await synth_voice_from_text(_with_outro(cleaned), project_dir, cfg,
+    voice = await synth_voice_from_text(
+        _with_outro(cleaned, cfg.get("transcript_target_lang")), project_dir, cfg,
                                         slc.sub(0.30, 1.0))
     return voice, cleaned
 
@@ -1044,7 +1061,9 @@ async def handle_remix_pipeline(
     slc_cap = _Sliced(queue, job_id, 0.65, cap_hi)
     captioned_path = project_dir / ("video_captioned.mp4" if has_commentator else "video_final.mp4")
     sm_stats = await _stage_match_and_caption(
-        erased_path, voice_path, _with_outro(cleaned_text), cfg, captioned_path, slc_cap,
+        erased_path, voice_path,
+        _with_outro(cleaned_text, cfg.get("transcript_target_lang")),
+        cfg, captioned_path, slc_cap,
     )
 
     # Stage 6 (optional) — commentator overlay. When no commentator is
