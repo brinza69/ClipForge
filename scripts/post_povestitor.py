@@ -70,7 +70,9 @@ PROFILES = {
     },
     "facebook": {
         "channel": targets.get("facebook_channel"),
-        "plan": _ROOT / "data" / "fb_post_list_povestitor.json",
+        # acelasi plan ca TikTok: fisierele sunt aceleasi, difera doar evidenta
+        # a ce s-a postat (folderul posted/ vs. istoricul din Buffer)
+        "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "buffer",
         # vertical 1080x1920 -> Reel; `post` ar aparea ca video obisnuit in feed
         "metadata": {"facebook": {"type": "reel"}},
@@ -204,6 +206,10 @@ def main():
     if which not in PROFILES:
         raise SystemExit(f"--channel trebuie sa fie: {', '.join(PROFILES)}")
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else None
+    # --first 226,227 le urca in fata cozii fara sa schimbe planul; restul
+    # ramane in ordinea de creare. Util cand vrei sa vezi repede un lot nou.
+    doar = [s.strip() for s in argv[argv.index("--first") + 1].split(",")
+            if s.strip()] if "--first" in argv else []
     prof = PROFILES[which]
 
     org = default_org()
@@ -243,7 +249,14 @@ def main():
 
     slots = free_slots(datetime.now(timezone.utc), taken)
     sent = 0
-    for g in load_groups(prof["plan"]):
+    grupuri = load_groups(prof["plan"])
+    if doar:
+        fata = [g for g in grupuri if str(g["key"]) in doar]
+        lipsa = [d for d in doar if d not in {str(g["key"]) for g in fata}]
+        if lipsa:
+            print(f"  --first: nu am gasit in plan {lipsa}")
+        grupuri = fata + [g for g in grupuri if str(g["key"]) not in doar]
+    for g in grupuri:
         if sent >= n_max:
             break
         if not g["desc"]:
@@ -275,6 +288,15 @@ def main():
                 inp["metadata"] = prof["metadata"]
             try:
                 res = (gql(CREATE, {"i": inp}) or {}).get("createPost") or {}
+                # Reels cere fix 9:16. Cateva randari vechi au iesit 1080x1980
+                # (raport 0.5455) si sunt respinse. Merg totusi ca postare
+                # obisnuita in feed — mai bine acolo decat deloc, si coada nu se
+                # blocheaza pe ele.
+                e_reel = (prof["metadata"] or {}).get("facebook", {}).get("type") == "reel"
+                if e_reel and "aspect ratio" in (res.get("message") or "").lower():
+                    print(f"  {label}: raport gresit pentru Reels — pun ca postare in feed")
+                    alt = dict(inp, metadata={"facebook": {"type": "post"}})
+                    res = (gql(CREATE, {"i": alt}) or {}).get("createPost") or {}
             except RuntimeError as e:
                 # Buffer are DOUA plafoane: 100 cereri/15min si 250/24h. Pe cel
                 # de 15 minute se asteapta si se reia; ce s-a programat deja
