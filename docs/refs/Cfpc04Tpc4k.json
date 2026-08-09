@@ -1,0 +1,56 @@
+{
+  "id": "Cfpc04Tpc4k",
+  "duration_s": 13.974,
+  "fps": 30.0,
+  "resolution": "1080x1920",
+  "cut_times_s": [1.101, 2.569, 6.99, 13.18],
+  "avg_shot_s": 2.795,
+  "cuts_per_min": 17.17,
+  "shot_len_p10_p50_p90": [0.917, 1.468, 5.482],
+
+  "framing_style": {
+    "distinct_framings": 4,
+    "same_scene_reframe_pct": 0,
+    "zoom_levels_observed": [
+      "wide: seated full-torso in gaming chair, room visible",
+      "medium: chest-up, leaning toward lens",
+      "close-up: face fills upper half",
+      "extreme close-up: upper arm / tattoo fills the frame",
+      "b-roll over-shoulder: tattoo artist + tablet reference (separate location)"
+    ],
+    "punch_in_used": false,
+    "shake_used": true,
+    "pan_drift_used": true,
+    "speed_ramp_used": false,
+    "description": "All framing variety is PHYSICAL, not digital. A single handheld camera plus the subject moving relative to it produces the entire range from full-body-wide to extreme-close-on-the-tattoo, continuously, inside single takes. Verified on the 8fps sheets (sheet_tail.png, sheet_1114.png): adjacent 0.125s frames slide smoothly between arm-fills-frame and full-body-in-chair with no discontinuity, and tight shots are optically sharp rather than upscaled-soft, so they are the camera physically close, not a crop. There is NO animated crop, NO digital punch-in, and none of the 4 cuts is a reframe of the same footage (same_scene_reframe_pct = 0) - every cut jumps to genuinely different footage. Constant handheld shake and drift throughout; heavy motion blur on fast moves (this is what inflates the scene detector at low thresholds). No speed ramping: mpdecimate drops a near-uniform ~47% of frames across the whole file, which a retimed section would not do. A renderer that can only animate a crop CANNOT reproduce this look - the motion is in the source footage, so the honest reproduction is to keep the source camera move and cut on it, not to add synthetic zooms."
+  },
+
+  "caption": {
+    "present": false,
+    "position": null,
+    "words_per_card": null,
+    "style_description": "No burned-in captions or subtitles anywhere. Checked the 36-frame timeline sheet, the 8-frame hook sheet, two 20-25 frame dense sheets, and four full-resolution 540px frames (t=0.6, 5.0, 8.5, 11.5) - no caption band, no karaoke text, no title card at any point. The ONLY burned-in text in the video is the 0.79s end card at 13.18s: black background, the single word SUBSCRIBE in red, heavy condensed bold, all caps, centred, cap height ~2.5% of frame height. That is an outro graphic, not a caption track. Note also that the yellow SPEED lightning-bolt logo visible top-right from ~8s is PHYSICAL wall art in the room (it sits behind the shelf and parallaxes with the camera) - it is set dressing, not an edit overlay.",
+    "color": null,
+    "outline": null,
+    "animation": null,
+    "all_caps": null,
+    "highlight_active_word": null
+  },
+
+  "effects": [
+    "warm orange/gold light-leak flash transition placed ON the cut, used twice (2.32-2.62s and 6.87-7.19s); each lasts ~0.30s with a ~0.07s peak, and the footage change happens hidden under the peak",
+    "flash A (2.4s cut) is a SATURATED GOLD wash that does NOT clip to white: peak mean luma 209.5/255, max luma 235, mean saturation rises 14 -> 71",
+    "flash B (6.99s reveal cut) blows THROUGH near-white: peak mean luma 234.6/255, max luma 251, saturation COLLAPSES to 1.9 - so it is effectively white but still ~4 counts short of pure 255; it enters and exits through orange (sat 48-62)",
+    "flash renders as vertical streaky bands with the underlying image still faintly visible - consistent with a screen-blended light-leak overlay rather than a plain white dip",
+    "SUBSCRIBE end card: hard cut at 13.18s to black with red condensed bold caps, held 0.79s to the end",
+    "constant handheld camera shake and motion blur (source-inherent, not an added effect)",
+    "before/after match-cut reveal: old faded tattoo -> new crisp Ronaldo portrait, same arm and near-identical framing, hidden under flash B",
+    "NOT PRESENT: captions/subtitles, zoom lines, emoji or stickers, meme cutaways, arrows or circles, borders, progress bar, vignette, added grain, chromatic aberration, speed ramps, digital punch-ins"
+  ],
+
+  "hook": "0.00-1.10s: Speed shirtless in his red Secret Lab gaming chair, Real Madrid shorts, framed Ronaldo Man Utd #7 shirt on the wall behind him, talking straight down the lens and pointing at his own arm - a verbal setup with no on-screen text of any kind. Hard cut at 1.101s to tattoo-shop b-roll: artist in an orange BENGALS cap and blue gloves wiping the arm, tablet held up showing the black-and-white Ronaldo reference photo. So the hook is claim-then-proof: 1.1s of the person promising something, then immediate cutaway evidence that the work actually happened. No title card, no caption, no cold-open flash - the first cut does all the work, and it lands at 1.1s (well inside the 2s window).",
+
+  "audio": "Integrated -15.1 LUFS, LRA 2.5 LU, true peak +0.3 dBFS (slightly over 0, so it clips). The very narrow 2.5 LU range means heavy compression/limiting on a loud, shouty vocal. NO MUSIC BED: the spectrogram goes essentially black in the pauses and windowed RMS falls to -77 dBFS (p05 -69 dBFS), with a genuine ~1.3s near-silence at 7.3-8.6s holding only room tone around -52 dBFS - a music bed would hold the floor up through those gaps and does not. So the track is raw source audio (his voice plus room) for its whole length. There ARE at least two bass-heavy SFX/stings, identified by comparing sub-120Hz RMS against full-band RMS: during speech the sub-band sits 13-29 dB below full band, but at 6.90-7.20s (landing exactly on the tattoo-reveal cut at 6.99) it comes within 1.5-2.8 dB of full band, and at 13.20-13.50s (under the SUBSCRIBE end card) within 0.2-0.7 dB while hitting the loudest sub-bass in the file at -10.9 dBFS. Speech cannot produce that ratio, so both are bass-dominated impact/boom elements - one hit on the reveal cut, one sting under the outro.",
+
+  "notes": "EFFECTIVE FRAME RATE: the container declares 59.94 fps (r_frame_rate 60000/1001, 836 frames), but mpdecimate keeps only 445 of 836 frames = 53.2%, i.e. 31.8 unique fps. The file is a ~30fps timeline duplicated up to 59.94, so 'fps' above is reported as the effective/target rate of 30, not the container's 59.94. A renderer should output 30fps; targeting 60 would only re-create duplicate frames and double the bitrate for nothing. (The survivor count is slightly above a clean half, 445 vs 418, because the flash frames and some heavy-motion-blur frames are genuinely unique.)\n\nFLASH MEASUREMENT (full numbers): two flashes, both ~0.30s total with a ~0.07s peak, both sitting on a cut. Flash A at 2.32-2.62s peaks at mean luma 209.5/255 with max luma 235 and mean saturation 71 - a saturated gold that never clips to white. Flash B at 6.87-7.19s peaks at mean luma 234.6/255 with max luma 251 and saturation 1.9 - desaturated to near-white but still short of pure 255 - and ramps in and out through orange. So: do not model these as a white dip to #FFFFFF; model as a warm gold light-leak that one of the two times blows most of the way to white.\n\nSCENE-DETECTION COUNTS: raw hits were 150 at threshold 0.10, 27 at 0.20, and 8 at 0.35. Collapsing hits closer than 0.4s gave 9, 8 and 4 respectively. The collapsed count at 0.35 (4) is the one that matches what I actually see in the frames. The low thresholds are wildly inflated for two reasons, both confirmed on cut-pair sheets: (1) handheld shake and motion blur - pair_cut5.png (4.19s) and pair_cut6.png (10.61s) each show the SAME shot either side, just blurred vs sharp, so both are false positives; and (2) the flash transitions, which fire the detector on the way into the blow-out AND on the way out, giving 4 separate hits for the single real cut at 2.57s. Note the 0.10 threshold is so noisy it chains 9.71-13.18s into one 75-hit blob, which is pure motion, not cutting.\n\nTHE FOUR REAL CUTS, each verified on a before/after pair sheet: 1.101s bedroom -> tattoo-shop b-roll (pair_cut1.png); 2.569s tattoo shop -> bedroom with the old faded tattoo, hidden under flash A (pair_cut2.png); 6.990s old faded tattoo -> new crisp Ronaldo portrait, hidden under flash B (pair_cut3.png); 13.180s -> black SUBSCRIBE end card (pair_cut4.png). All four jump to different footage; none is a reframe, hence same_scene_reframe_pct = 0.\n\nCOULD NOT DETERMINE: (1) Whether the orange flashes are an added editing overlay or a real warm lamp swinging past the lens cannot be settled from frames alone - the streaky vertical banding looks physical, but both land exactly on cuts and hide them, which is edit behaviour, so I treat them as an intentional transition. (2) Whether the bass hits at 6.99s and 13.18s are library SFX or loud source sounds cannot be separated without reference audio; the sub-band/full-band ratio proves they are bass-dominated and not speech, but not their origin. (3) All caption fields are null because there is no caption track to measure - they are absent, not undetermined. (4) The shot at 2.569-6.990s and the one at 6.990-13.180s are long by short-form standards (4.4s and 6.2s); I found no hidden cuts inside them on 4fps and 8fps sheets, but a very brief cut fully masked by motion blur would be hard to exclude.\n\nREPRODUCTION SUMMARY: 1080x1920, 30fps, 4 cuts in 14s (17.2 cuts/min - slow for the format), no captions, no stickers, no punch-ins. The entire style is: energetic handheld source footage, cut four times at story beats (setup -> proof -> before -> after -> subscribe), with a gold flash hiding two of the cuts and a bass hit on the reveal. The edit is doing very little; the source performance and the before/after payoff carry it."
+}
