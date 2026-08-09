@@ -267,8 +267,8 @@ python scripts/render_dynamic_clip.py <project> --top 3 \
   off-screen at that moment. The three single-speaker clips use colour for emphasis
   instead. This is the house rule, not an idea — and it still needs diarisation,
   so it stays out of reach for now.
-- **Caption vertical position: 43% is wrong.** Seven measurements: 50.0 / 50.0 /
-  50.2 / 51.1 / 53 / 62.5 / 73.5% of frame height. Four of seven cluster at 50-53%.
+- **Caption vertical position: 43% is wrong.** Seven measurements: 50.0 / 50.2 /
+  51.1 / 53 / 62.5 / 73.5 / 77.9% of frame height. Four of seven cluster at 50-53%.
   `--caption-pos center` currently resolves to 43.75% via `SAFE_CAPTION_CENTER`,
   above every reference. Nothing in the set supports it. Untested against retention.
 - **Add a framing ladder.** The two locked-off stream references punch in on

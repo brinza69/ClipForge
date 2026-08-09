@@ -92,10 +92,18 @@ def _ass_alignment(_unused: str) -> int:
 
 MIN_HIGHLIGHT_MS = 60
 
-# Entry pop, measured frame by frame on `_LQ379ZhspI` (docs/dynamic-edit-recipe.md
-# §3): the card lands at 0.91x, overshoots to 1.05x at ~83ms and settles at 1.00x
-# by ~130ms. No fade, no slide. It is anchored at the text centre, which the \an5
-# already in the prefix gives us for free.
+# Entry pop, measured frame by frame on `uRU9SzlVClg` and `8cO8UWyjGyc`
+# (docs/refs/): the card lands at 0.91x, overshoots to 1.05x at ~83ms and settles
+# at 1.00x by ~130ms. No fade, no slide. It is anchored at the text centre, which
+# the \an5 already in the prefix gives us for free.
+#
+# Three of the seven captioned references run this, and they agree closely —
+# uRU9SzlVClg measured 0.909 -> 1.050 at +5 frames -> 1.000 by +133ms over eight
+# card starts. (An earlier draft credited `_LQ379ZhspI`; that clip's cards hard-swap
+# at full size with no pop at all. The numbers were right, the citation was not.)
+# The other four references do something else entirely — a 1-frame snap, a per-word
+# scale-in, a motion-blur smear, or nothing — so this is a well-supported default,
+# not a house style. See docs/refs/style-spec.json.
 POP_START_PCT = 91.0
 POP_PEAK_PCT = 105.0
 POP_PEAK_MS = 83

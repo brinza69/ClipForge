@@ -100,8 +100,12 @@ references with 2+ speakers all do it, each confirmed by a card coloured for a s
 is off-screen at that moment. The three single-speaker clips use colour for emphasis
 instead. Reproducing this needs diarisation.
 
-**Caption vertical position** measured 50.0 / 50.0 / 50.2 / 51.1 / 53 / 62.5 / 73.5% of
-frame height. All below mid-frame; none near the 43% §3 claims.
+**Caption vertical position** measured 50.0 / 50.2 / 51.1 / 53 / 62.5 / 73.5 / 77.9% of
+frame height — four of seven cluster at 50-53%, the rest spread to the lower third.
+None is near the 43% §3 claims. Read the vertical figure out of `caption.position`
+carefully: several profiles state the horizontal centre first, so a naive "first
+percentage in the string" gives 50.0% for `_LQ379ZhspI`, whose captions actually sit
+at 77.9%.
 
 **In-shot movement splits by source type, not by house style.** The two clips that most
 resemble a stream VOD — `uRU9SzlVClg` and `-dHfHZgtXJw`, both locked-off captures cut
