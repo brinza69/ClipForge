@@ -7,13 +7,11 @@ Written 2026-08-06. Every number below came from ffmpeg/ffprobe on the
 downloaded files or from looking at contact sheets, not from memory. Where a
 measurement is missing, it says so.
 
-**Coverage, stated up front.** Cut rates were measured mechanically for all
-nine. Full frame-by-frame profiles exist for only **two** — `Cfpc04Tpc4k` and
-`_LQ379ZhspI` — because the agent fan-out that was producing them ran out of
-session quota twice. Three more (`8cO8UWyjGyc`, `8-eCvn1gWIg`, `jOUyn64mSsk`)
-were inspected by hand via contact sheets, which is enough for framing and
-caption style but not for pixel-level claims. The remaining four have cut rates
-and nothing else. Section 10 lists what is still open.
+**Coverage.** All nine now have a full profile, in `docs/refs/*.json` — one per
+clip, every visual claim from contact sheets an agent actually viewed, every
+undetermined value left `null` with a reason in `notes`. Read `docs/refs/README.md`
+alongside this document: where the two disagree, the profiles win, because this
+file was written when only two of the nine had been profiled.
 
 ---
 
@@ -23,26 +21,36 @@ The first thing the measurements killed was the assumption that the nine clips
 share a cut rate. They do not, and averaging them produces a style none of them
 has.
 
-| id | dur | size | cuts/min | avg shot | median shot | what it is |
-|---|---|---|---|---|---|---|
-| `8-eCvn1gWIg` | 37.1s | 1080x1920 | 46.9 | 1.24s | 1.08s | produced studio skit, reaction cutaways |
-| `8cO8UWyjGyc` | 11.6s | 1080x1920 | 30.9 | 1.66s | 1.08s | **two-camera stream switch** |
-| `_LQ379ZhspI` | 27.4s | 1080x1920 | 21.9 | 2.49s | 2.40s | mixed |
-| `Cfpc04Tpc4k` | 14.0s | 1080x1920 | 17.2 | 2.80s | 1.42s | handheld vlog, flash transitions |
-| `q-SaGj-pDh0` | 30.0s | 1080x1440 | 12.0 | 4.29s | 3.38s | lightly cut |
-| `9L2Yrs6jwb4` | 10.3s | 1080x1920 | 11.7 | 3.42s | 2.25s | lightly cut |
-| `uRU9SzlVClg` | 17.2s | 1080x1920 | 3.5 | 8.58s | 14.20s | near single-take |
-| `jOUyn64mSsk` | 27.5s | 1080x1440 | 0 | — | — | **raw single take, no cuts, no captions** |
-| `-dHfHZgtXJw` | 24.3s | 1080x1440 | 0 | — | — | raw single take |
+| id | dur | size | cuts/min | avg shot | median shot | cuts | what it is |
+|---|---|---|---|---|---|---|---|
+| `8-eCvn1gWIg` | 37.1s | 1080x1920 | 45.3 | 1.28s | 1.10s | 28 | produced studio skit, second shoot + background removal |
+| `8cO8UWyjGyc` | 11.6s | 1080x1920 | 36.1 | 1.45s | 0.82s | 7 | **two crop windows on one locked wide** |
+| `uRU9SzlVClg` | 17.1s | 1080x1920 | 31.5 | 1.71s | 1.80s | 9 | **locked-off stream, two static crops** |
+| `q-SaGj-pDh0` | 30.0s | 1080x1440 | 30.0 | 1.88s | 1.65s | 15 | handheld selfie vlog, physical reframing |
+| `-dHfHZgtXJw` | 24.3s | 1080x1440 | 24.7 | 2.21s | 2.23s | 10 | **locked-off stream, blur-transition cuts** |
+| `_LQ379ZhspI` | 27.4s | 1080x1920 | 21.9 | 2.49s | 2.40s | 10 | two stream cams, speaker-turn cuts |
+| `9L2Yrs6jwb4` | 10.3s | 1080x1920 | 17.6 | 2.56s | 2.23s | 3 | animated crop over landscape footage |
+| `Cfpc04Tpc4k` | 14.0s | 1080x1920 | 17.2 | 2.80s | 1.47s | 4 | handheld vlog, flash transitions |
+| `jOUyn64mSsk` | 27.5s | 1080x1440 | 0 | — | — | 0 | **raw single take, no cuts, no captions** |
 
-Method: `select='gt(scene,0.35)'` with hits closer than 0.4s collapsed. The
-collapse is not optional — a flash transition and handheld shake both fire the
-detector several times per cut. On `Cfpc04Tpc4k` the raw counts were 141 / 27 /
-8 at thresholds 0.10 / 0.20 / 0.35 against 4 real cuts.
+Method: per-frame mean-absolute-difference with the caption band masked, every
+candidate then confirmed on labelled before/after pairs. **Not** `select='gt(scene,N)'`
+— that was the original method and it is wrong on five of the nine. It missed
+nine real cuts on `uRU9SzlVClg` and ten on `-dHfHZgtXJw`, because a jump cut on a
+locked-off stream leaves the background pixel-identical and the detector blind;
+in the other direction AV1 quality refreshes and caption swaps fire it where
+there is no cut. `docs/refs/README.md` has the full comparison and what replaced it.
 
-**Two of the nine have no edit at all.** They are stream moments cropped
-vertical. That is worth stating plainly: part of what makes this content work is
-the moment, not the montage.
+**One of the nine has no edit at all**, not two: `-dHfHZgtXJw` was filed as a raw
+take and is actually cut ten times. `jOUyn64mSsk` is the genuine single take,
+confirmed three independent ways. It is still worth stating that part of what
+makes that clip work is the moment, not the montage — 38.7M views on a passthrough
+with a watermark — but it is one clip, not a category.
+
+The thesis survives and sharpens: the nine share no cut rate. But the real spread
+is **17-45 cuts/min for eight of nine**, not the 0-47 the mechanical pass implied.
+They are markedly more homogeneous than this section used to claim, and nothing in
+the set is "lightly cut".
 
 ## 2. The model to copy: `8cO8UWyjGyc`
 
@@ -217,12 +225,21 @@ Stated so nobody goes looking for it in the code:
 | `max_same_family` | 2 | the model clip never sits on one subject longer |
 | `flash_s` | 0.18 | `Cfpc04Tpc4k` measured 0.28s; shortened because ours fire on audio peaks, which are more frequent than its two transitions |
 | `saturation` / `contrast` | 1.16 / 1.07 | eyeballed against the references, NOT measured |
-| `push_amount` / `snap_amount` / `shake_px` | **0** | both profiled references hold the crop perfectly still inside a shot |
+| `push_amount` / `snap_amount` / `shake_px` | **0** | the two references that are locked-off stream captures — our case — hold the crop at exactly s=1.0000 with no ramp (see below) |
 
 Those three were 0.07 / 0.055 / 6.0 in the first version, on the assumption that
 a locked-off VOD crop would read as frozen. The frame-by-frame profile of
-`_LQ379ZhspI` said otherwise, so they are now 0 by default and available
-per clip:
+`_LQ379ZhspI` said otherwise, so they are now 0 by default.
+
+The full set settles this, and not the way two profiles suggested. In-shot movement
+splits by **source type**, not by house style. The clips built like ours —
+`uRU9SzlVClg` and `-dHfHZgtXJw`, locked-off captures cut between discrete crop
+windows — measure s=1.0000 with sub-pixel translation and no ramp at all, punching
+in hard on a ladder of roughly 1.00 / 1.10 / 1.25 / 1.40x. Every clip built any
+other way ramps continuously: +0.8-1.2%/s on `8cO8UWyjGyc`, −2.5 to −3.2%/s on
+`9L2Yrs6jwb4`, +46%/s on the studio panel in `8-eCvn1gWIg`. So 0 is right for the
+default, for a better reason than the one it was originally given, and the ladder
+is the thing worth adding. Still available per clip:
 
 ```bash
 python scripts/render_dynamic_clip.py <project> --top 3 \
@@ -231,19 +248,36 @@ python scripts/render_dynamic_clip.py <project> --top 3 \
 
 ## 10. Still open
 
-- **Seven of nine references have no full profile.** Cut rates only. Re-run
-  `ref-style-extraction` (the workflow script is saved under the session's
-  `workflows/scripts/`) with `resumeFromRunId` — the two finished agents replay
-  from cache for free.
-- ~~The caption entry pop~~ — done, `--caption-pop`, verified against the
-  measurement on a synthetic render (§3). **Never checked on the VOD itself**,
-  because that machine had no `data/clipper/`.
-- **Speaker-keyed caption colour** needs diarisation; irrelevant for a
-  one-speaker VOD, correct for anything with two people.
-- **Caption vertical position** is genuinely contested between the references
-  (43% vs 78%). Currently 43% via `--caption-pos center`. Untested against
-  retention.
-- `saturation` / `contrast` (1.16 / 1.07) were **eyeballed, never measured.**
+- ~~Seven of nine have no full profile~~ — done. All nine are in `docs/refs/`.
+- ~~The caption entry pop~~ — done, `--caption-pop`. And now corroborated: three
+  of the seven captioned references run a per-card centre-anchored pop peaking at
+  ~1.05 at exactly +5 frames, and `uRU9SzlVClg` measured 0.909 → 1.050 → 1.000 by
+  133ms, which is what `_pop_tags` emits. §3 attributed it to the wrong clip; the
+  numbers were right. **Still never checked on the VOD itself** — no `data/clipper/`
+  on this machine.
+- **The pop is one of six caption animations, not the house style.** The others:
+  a 1-frame snap (`8-eCvn1gWIg`), a per-*word* scale-in over 200-233ms
+  (`q-SaGj-pDh0`), a motion-blur smear with no scaling (`-dHfHZgtXJw`), an elastic
+  variant that undershoots to 0.956 at 183ms before settling (`9L2Yrs6jwb4`), and
+  none at all (`_LQ379ZhspI`). The pop is the plurality and the only repeated one —
+  a reasonable default, but it should be a preset, not a law. The undershoot variant
+  is worth adding as the second preset.
+- **Speaker-keyed caption colour: 4 of 4.** Every reference with two or more
+  speakers does it, each confirmed by a card coloured for a speaker who is
+  off-screen at that moment. The three single-speaker clips use colour for emphasis
+  instead. This is the house rule, not an idea — and it still needs diarisation,
+  so it stays out of reach for now.
+- **Caption vertical position: 43% is wrong.** Seven measurements: 50.0 / 50.0 /
+  50.2 / 51.1 / 53 / 62.5 / 73.5% of frame height. Four of seven cluster at 50-53%.
+  `--caption-pos center` currently resolves to 43.75% via `SAFE_CAPTION_CENTER`,
+  above every reference. Nothing in the set supports it. Untested against retention.
+- **Add a framing ladder.** The two locked-off stream references punch in on
+  discrete steps of roughly 1.00 / 1.10 / 1.25 / 1.40x and never animate between
+  them. `dynamic_edit.py` has no ladder concept.
+- `saturation` / `contrast` (1.16 / 1.07) were **eyeballed, never measured** — the
+  one §8 value the nine profiles still do not settle.
+- **Loudness does not cluster.** §4's "-14 to -15 LUFS" describes two clips. The
+  nine span -7.4 to -23.4 LUFS with LRA from 1.7 to 13.9.
 
 ## 9. How it renders
 
