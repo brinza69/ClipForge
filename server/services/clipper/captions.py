@@ -25,7 +25,6 @@ from services.captioner_events import _group_words
 from services.captioner_presets import (
     DEFAULT_PRESETS,
     SAFE_CAPTION_BOTTOM,
-    SAFE_CAPTION_CENTER,
     SAFE_HOOK_MID_Y,
     SAFE_TOP,
 )
@@ -47,6 +46,14 @@ CAPTION_BOX_W_PCT = 0.80
 
 NUDGE_STEP_PCT = 0.04
 MAX_NUDGE_TRIES = 5
+
+# Where "center" actually puts the block, as a fraction of frame height.
+# Measured on all seven captioned references (docs/refs/): 50.0, 50.2, 51.1, 53,
+# 62.5, 73.5 and 77.9% — four of seven cluster at 50-53%, and none sits as high
+# as the 43.75% the shared SAFE_CAPTION_CENTER offset yields. That constant is
+# deliberately left alone: services/captioner.py uses it for the ordinary export
+# path, whose provenance is not these nine short-form clips.
+CLIPPER_CAPTION_CENTER_PCT = 0.51
 
 # A chunk shorter than this reads as a flicker; libass also rounds to ms.
 MIN_CHUNK_S = 0.12
@@ -260,7 +267,7 @@ def _base_y_pct(position: str, out_h: int) -> float:
     if pos in ("top", "upper"):
         return (SAFE_TOP / out_h) + half
     if pos in ("center", "middle", "mid"):
-        return (out_h / 2 - SAFE_CAPTION_CENTER) / out_h
+        return CLIPPER_CAPTION_CENTER_PCT
     if pos in ("hook", "mid_high"):
         return SAFE_HOOK_MID_Y / out_h
     return (out_h - SAFE_CAPTION_BOTTOM) / out_h

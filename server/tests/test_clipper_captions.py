@@ -246,6 +246,38 @@ def test_the_popping_card_animates_the_highlight_and_the_rest_together(tmp_path)
     assert "\\t(83,130,\\fscx100\\fscy100)" in first   # everything after it
 
 
+def test_spring_variant_swings_past_one_before_settling():
+    # `9L2Yrs6jwb4` carries the swing through an undershoot; the other two
+    # measured references stop at the peak, which is why this is opt-in.
+    assert caption_overlays._pop_tags(100.0, True) == (
+        "\\fscx91\\fscy91"
+        "\\t(0,83,\\fscx105\\fscy105)"
+        "\\t(83,183,\\fscx96\\fscy96)"
+        "\\t(183,240,\\fscx100\\fscy100)"
+    )
+
+
+def test_spring_is_opt_in_and_leaves_the_default_pop_untouched():
+    assert caption_overlays._pop_tags(100.0) == caption_overlays._pop_tags(100.0, False)
+    assert "\\fscx96" not in caption_overlays._pop_tags(100.0)
+
+
+def test_spring_selected_by_value_not_by_a_separate_flag(tmp_path):
+    plain = _events(tmp_path, [_pop_overlay(entry_pop=True)])[0]
+    spring = _events(tmp_path, [_pop_overlay(entry_pop="spring")])[0]
+    assert "\\fscx96" not in plain
+    assert "\\t(83,183,\\fscx96\\fscy96)" in spring
+
+
+def test_center_sits_where_the_references_put_it():
+    # Seven captioned references measured 50.0-77.9% of frame height, four of
+    # them at 50-53%. The shared SAFE_CAPTION_CENTER offset yields 43.75%, above
+    # every one of them, and is left alone for the non-clipper export path.
+    _, y = captions.resolve_position("center", {}, out_w=1080, out_h=1920)
+    assert y == pytest.approx(0.51, abs=0.005)
+    assert 0.50 <= y <= 0.53
+
+
 def test_plan_carries_entry_pop_only_when_asked():
     words = [("hello", 0.0, 0.4), ("there", 0.5, 0.9)]
     off = captions.build_caption_plan(

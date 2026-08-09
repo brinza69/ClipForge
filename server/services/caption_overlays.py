@@ -109,8 +109,16 @@ POP_PEAK_PCT = 105.0
 POP_PEAK_MS = 83
 POP_SETTLE_MS = 130
 
+# The same pop on `9L2Yrs6jwb4`, which carries the swing through to an undershoot
+# before it settles: 0.849 -> 1.048 at 83-100ms -> 0.956 at 183ms -> 1.000 by
+# ~240ms. Opt in with entry_pop="spring"; the two-segment version above stays the
+# default because two of the three measured references stop at the peak.
+SPRING_UNDER_PCT = 95.6
+SPRING_UNDER_MS = 183
+SPRING_SETTLE_MS = 240
 
-def _pop_tags(base_pct: float) -> str:
+
+def _pop_tags(base_pct: float, spring: bool = False) -> str:
     """The measured entry overshoot as an ASS ``\\t`` chain around `base_pct`.
 
     `base_pct` is whatever scale that run of text would otherwise hold — 100 for
@@ -120,9 +128,22 @@ def _pop_tags(base_pct: float) -> str:
     ``\\t`` times are relative to the start of the event carrying them, so this
     only ever belongs on the event that puts the card on screen. On a later
     word-highlight span it would replay the pop mid-card.
+
+    With `spring`, the swing carries past 1.00 into an undershoot before settling
+    — the `9L2Yrs6jwb4` variant. Same peak, longer tail.
     """
     def at(pct: float) -> int:
         return int(round(base_pct * pct / 100.0))
+
+    if spring:
+        return (
+            f"\\fscx{at(POP_START_PCT)}\\fscy{at(POP_START_PCT)}"
+            f"\\t(0,{POP_PEAK_MS},\\fscx{at(POP_PEAK_PCT)}\\fscy{at(POP_PEAK_PCT)})"
+            f"\\t({POP_PEAK_MS},{SPRING_UNDER_MS},"
+            f"\\fscx{at(SPRING_UNDER_PCT)}\\fscy{at(SPRING_UNDER_PCT)})"
+            f"\\t({SPRING_UNDER_MS},{SPRING_SETTLE_MS},"
+            f"\\fscx{at(100.0)}\\fscy{at(100.0)})"
+        )
 
     return (
         f"\\fscx{at(POP_START_PCT)}\\fscy{at(POP_START_PCT)}"
@@ -175,9 +196,11 @@ def _word_highlight_spans(
     # In the first span every token already sits under one of these inline tags,
     # so a line-level \t would never be seen. The pop has to ride the tags
     # themselves, each around its own resting scale.
-    if overlay.get("entry_pop"):
-        first_open = "{" + f"\\c{active}{_pop_tags(pop)}" + "}"
-        first_close = "{" + f"\\c{base}{_pop_tags(100.0)}" + "}"
+    entry = overlay.get("entry_pop")
+    if entry:
+        spring = str(entry).lower() == "spring"
+        first_open = "{" + f"\\c{active}{_pop_tags(pop, spring)}" + "}"
+        first_close = "{" + f"\\c{base}{_pop_tags(100.0, spring)}" + "}"
     else:
         first_open, first_close = open_tag, close_tag
 
@@ -293,7 +316,8 @@ def build_overlays_ass(
         if rot:
             prefix_bits.append(f"\\frz{rot:.2f}")
         if ovl.get("entry_pop") and not spans:
-            prefix_bits.append(_pop_tags(100.0))
+            prefix_bits.append(
+                _pop_tags(100.0, str(ovl["entry_pop"]).lower() == "spring"))
         prefix = "{" + "".join(prefix_bits) + "}"
         if spans:
             for span_start, span_end, span_text in spans:

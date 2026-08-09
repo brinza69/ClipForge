@@ -51,11 +51,15 @@ _FACE_CAMS = ("face", "face_tight")
 _GAME_CAMS = ("game", "game_tight")
 
 DEFAULT_STYLE: dict[str, Any] = {
-    # Shot grammar. Measured across the references: the heavily-cut ones run
-    # 31-47 cuts/min with a median shot just over a second.
+    # Shot grammar. All nine references now have a full profile (docs/refs/) and
+    # they are tighter than the first mechanical pass suggested: eight of nine run
+    # 17-45 cuts/min, and the three that are actually built like a stream VOD
+    # average 1.45 / 1.71 / 2.21s per shot with p90 at 2.66-3.63s. The old 1.25 /
+    # 2.40 came from a cut-rate table that has since been measured wrong on five
+    # of nine clips -- it cut faster than any reference we now trust.
     "min_shot_s": 0.60,
-    "target_shot_s": 1.25,
-    "max_shot_s": 2.40,
+    "target_shot_s": 1.80,
+    "max_shot_s": 3.00,
     "pause_gap_s": 0.14,
     # What counts as "he is talking" / "something is happening".
     "speech_ratio_on": 0.30,
@@ -67,11 +71,16 @@ DEFAULT_STYLE: dict[str, Any] = {
     # the check is to catch the second one.
     "game_dead_below": 0.35,
     # In-shot camera moves — OFF by default, and that is a finding, not an
-    # oversight. Two references were checked frame by frame and both hold the
-    # crop perfectly still inside a shot: background landmarks land on identical
-    # pixels at the head and tail of a 5-second shot. The energy comes from the
-    # cut, not from motion inside it. Turn them up per clip if a long shot needs
-    # rescuing: --style '{"push_amount":0.07,"shake_px":6}'.
+    # oversight. It holds across all nine profiles, but it splits by SOURCE TYPE
+    # rather than by house style: the two references that are locked-off stream
+    # captures cut between discrete crop windows — our exact case — measure
+    # s=1.0000 with sub-pixel translation and no ramp at all. Every reference
+    # built any other way ramps continuously (+0.8-1.2%/s, -2.5 to -3.2%/s,
+    # +46%/s on a studio panel), so this is not a vote we won; it is the value
+    # for the kind of source we point at. shake_px=0 is the best-supported of the
+    # three — no reference adds synthetic shake anywhere. The energy comes from
+    # the cut, not from motion inside it. Turn them up per clip if a long shot
+    # needs rescuing: --style '{"push_amount":0.07,"shake_px":6}'.
     "push_min_shot_s": 0.95,
     "push_amount": 0.0,
     "push_hz": 10.0,
