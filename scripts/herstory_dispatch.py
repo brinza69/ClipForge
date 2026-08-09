@@ -28,6 +28,17 @@ TAB = os.environ.get("CLIPFORGE_FR_TAB") or _targets.get("fr_tab", "Victoria")
 PRESET = "victoria"
 DRIVE_FOLDER = _targets.get("fr_drive_folder")
 BACKENDS = {"A(:8420)": "http://127.0.0.1:8420", "B(:8421)": "http://127.0.0.1:8421"}
+# `--backend A` (sau B) leaga dispecerul de o singura placa, ca sa poata rula
+# doua piste in paralel: una pe fiecare GPU. Fara asta, doua dispecere ar vedea
+# amandoua aceeasi placa libera si i-ar trimite cate un job fiecare.
+_only = None
+for _i, _a in enumerate(sys.argv):
+    if _a == "--backend" and _i + 1 < len(sys.argv):
+        _only = sys.argv[_i + 1].strip().upper()
+if _only:
+    BACKENDS = {k: v for k, v in BACKENDS.items() if k.upper().startswith(_only)}
+    if not BACKENDS:
+        raise SystemExit(f"--backend {_only}: nu exista; alege A sau B")
 BACKEND_DBS = {"A(:8420)": r"D:\clipforge\data\db\clipforge.db",
                "B(:8421)": r"D:\clipforge\data_b\db\clipforge.db"}
 # Column letters in THIS sheet (not the master's layout).

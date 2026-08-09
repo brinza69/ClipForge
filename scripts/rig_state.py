@@ -21,7 +21,10 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 STATE = _ROOT / "data" / "rig_state.json"
 
 CHEI = {
+    # "script.py" conduce ambele placi; "script.py:A" o leaga de una singura.
+    # Doua dispecere cer AMANDOUA sufixul, altfel si-ar trimite joburi peste.
     "CLIPFORGE_DISPATCHER": "dual_dispatch.py",
+    "CLIPFORGE_DISPATCHER_2": "",
     "CLIPFORGE_PRESETS": "narator,comentator",
     "CLIPFORGE_DISPATCH_MIN_ROW": "2",
     "CLIPFORGE_TTS_OUTRO": "",
@@ -73,6 +76,7 @@ def main():
     if cmd == "set":
         cfg = load()
         mapare = {"--dispatcher": "CLIPFORGE_DISPATCHER",
+                  "--dispatcher2": "CLIPFORGE_DISPATCHER_2",
                   "--presets": "CLIPFORGE_PRESETS",
                   "--min-row": "CLIPFORGE_DISPATCH_MIN_ROW",
                   "--outro": "CLIPFORGE_TTS_OUTRO",

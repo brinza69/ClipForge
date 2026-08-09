@@ -22,9 +22,27 @@ $root = "D:\clipforge"
 #   dual_dispatch.py     - sheet-ul mare, roluri RO (implicit)
 #   herstory_dispatch.py - sheet-ul francez
 # Schimba cu: setx CLIPFORGE_DISPATCHER herstory_dispatch.py
-$dispatcher = $env:CLIPFORGE_DISPATCHER
-if (-not $dispatcher) { $dispatcher = "dual_dispatch.py" }
-$dispatchRe = [regex]::Escape($dispatcher)
+# Forma: "script.py" sau "script.py:A" — a doua parte leaga dispecerul de o
+# singura placa. Cu CLIPFORGE_DISPATCHER_2 setat, rigul ruleaza DOUA piste in
+# paralel, cate una pe fiecare GPU. Fara sufix, un dispecer conduce ambele placi
+# si NU trebuie sa existe al doilea: si-ar trimite joburi unul peste altul.
+function Parse-Dispatcher($spec, $fallback) {
+    if (-not $spec) { $spec = $fallback }
+    if (-not $spec) { return $null }
+    $parts = $spec.Split(':')
+    [pscustomobject]@{
+        Script  = $parts[0]
+        Backend = $(if ($parts.Count -gt 1) { $parts[1] } else { $null })
+        Pattern = [regex]::Escape($parts[0])
+    }
+}
+$d1 = Parse-Dispatcher $env:CLIPFORGE_DISPATCHER 'dual_dispatch.py'
+$d2 = Parse-Dispatcher $env:CLIPFORGE_DISPATCHER_2 $null
+if ($d2 -and (-not $d1.Backend -or -not $d2.Backend)) {
+    Log "REFUZ doua dispecere fara placa explicita (foloseste script.py:A / script.py:B)"
+    $d2 = $null
+}
+$dispatchRe = $d1.Pattern
 $py   = "$root\server\.venv\Scripts\python.exe"
 $log  = "$root\data\watchdog.log"
 
@@ -132,14 +150,15 @@ function Ensure-Backend($port, $uuid, $dataDir, $name) {
     Start-Backend $port $uuid $dataDir $name
 }
 
-function Ensure-Proc($pattern, $scriptPath, $outLog, $errLog, $name) {
+function Ensure-Proc($pattern, $scriptPath, $outLog, $errLog, $name, $extraArgs = @()) {
     # NOTE: the venv python.exe is a LAUNCHER that spawns a real child, so ONE
     # logical process (dispatcher / status writer / backend) shows up as TWO
     # python.exe. Do NOT "dedupe" by killing the extra — that kills the launcher
     # and takes the real process down with it, which caused the restart churn +
     # OOM earlier. Just make sure at least one is running.
     if (Test-ProcRunning $pattern) { return }
-    Start-Process -WindowStyle Hidden -FilePath $py -ArgumentList $scriptPath `
+    $argv = @($scriptPath) + $extraArgs
+    Start-Process -WindowStyle Hidden -FilePath $py -ArgumentList $argv `
         -WorkingDirectory $root -RedirectStandardOutput $outLog -RedirectStandardError $errLog
     Log "started $name"
 }
@@ -168,7 +187,14 @@ while ($true) {
     # Start dispatcher + status writer once ALL detected backends are healthy.
     if (($oks.Count -gt 0) -and (-not ($oks -contains $false))) {
         # dispatcher stdout MUST be dispatch.log — the status writer parses it for row numbers
-        Ensure-Proc $dispatchRe "$root\scripts\$dispatcher" "$root\data\dispatch.log"   "$root\data\dispatch.err.log" "dispatcher"
+        # dispecerul 1 scrie in dispatch.log — status writer-ul il parseaza de acolo
+        $a1 = @(); if ($d1.Backend) { $a1 = @('--backend', $d1.Backend) }
+        Ensure-Proc $d1.Pattern "$root\scripts\$($d1.Script)" "$root\data\dispatch.log" `
+            "$root\data\dispatch.err.log" "dispatcher($($d1.Script)$(if($d1.Backend){' '+$d1.Backend}))" $a1
+        if ($d2) {
+            Ensure-Proc $d2.Pattern "$root\scripts\$($d2.Script)" "$root\data\dispatch2.log" `
+                "$root\data\dispatch2.err.log" "dispatcher2($($d2.Script) $($d2.Backend))" @('--backend', $d2.Backend)
+        }
         Ensure-Proc 'dual_status_writer\.py' "$root\scripts\dual_status_writer.py" "$root\data\status.out.log" "$root\data\status.err.log"   "status-writer"
     }
 
