@@ -13,20 +13,41 @@ State (persisted, survives restart):
 
 Runs forever; new herystory rows picked up within ~20s. Stop with Ctrl+C / kill.
 """
-import sys, json, time, urllib.request
+import sys, os, json, time, urllib.request
 sys.path.insert(0, r"D:\clipforge\server")
 from services import sheets_config as _scfg
 from services.sheets import _service, write_cell
 
 _cfg = _scfg.load() or {}
 SID = _cfg.get("spreadsheet_id", "")
+if not SID:
+    raise SystemExit("lipseste spreadsheet_id in data/sheets_config.json")
 TAB = _cfg.get("tab", "Sheet1")
-BACKENDS = ["http://127.0.0.1:8420", "http://127.0.0.1:8421"]   # 3060, 1660
+BACKENDS = ["http://127.0.0.1:8420", "http://127.0.0.1:8421"]
 SUBMITTED = r"D:\clipforge\data\victoria_submitted.json"
 INFLIGHT = r"D:\clipforge\data\victoria_inflight.json"
 MATCH = "herytstory"
+# Only rows at/after this sheet row are eligible. Without it a wiped
+# victoria_submitted.json would re-generate every old herystory row (156-162)
+# from scratch. Override with CLIPFORGE_VICTORIA_MIN_ROW.
+MIN_ROW = int(os.environ.get("CLIPFORGE_VICTORIA_MIN_ROW", "211"))
 # French goes in its OWN columns so it never collides with the Romanian column D.
 FR_DESC_COL, FR_VIDEO_COL, FR_STATUS_COL = "E", "J", "K"
+
+
+def _gpu_name(idx):
+    """Card name for backend `idx` — backends are pinned by nvidia-smi INDEX
+    order (start_all.ps1: gpus[0] -> :8420, gpus[1] -> :8421), so never
+    hardcode a model name here; the index-to-card mapping differs per rig."""
+    try:
+        import subprocess
+        for line in subprocess.run(["nvidia-smi", "-L"], capture_output=True,
+                                   text=True, timeout=15).stdout.splitlines():
+            if line.startswith(f"GPU {idx}:"):
+                return line.split(":", 1)[1].split("(")[0].strip().replace("NVIDIA GeForce ", "")
+    except Exception:
+        pass
+    return f"gpu{idx}"
 
 
 def victoria_links(result):
@@ -68,7 +89,7 @@ def read_hery():
     for i, r in enumerate(vals, start=1):
         a = (r[0].strip() if len(r) > 0 and r[0] else "")
         b = (r[1].strip() if len(r) > 1 and r[1] else "")
-        if MATCH in b and b.startswith("http"):
+        if MATCH in b and b.startswith("http") and i >= MIN_ROW:
             out.append((i, a, b))
     return out
 
@@ -84,8 +105,8 @@ def main():
     submitted = set(jload(SUBMITTED, []))
     inflight = jload(INFLIGHT, {})        # url -> {row,nr,jid,port}
     rr = 0
-    print(f"victoria-watch v2 online; {len(submitted)} submitted, "
-          f"{len(inflight)} awaiting D-writeback", flush=True)
+    print(f"victoria-watch v2 online; rows >= {MIN_ROW}; {len(submitted)} submitted, "
+          f"{len(inflight)} awaiting writeback", flush=True)
     while True:
         # 1) submit new herystory rows
         try:
@@ -98,7 +119,7 @@ def main():
                 continue
             be = BACKENDS[rr % 2]; rr += 1
             port = 8420 if "8420" in be else 8421
-            gpu = "3060" if port == 8420 else "1660"
+            gpu = _gpu_name(0 if port == 8420 else 1)
             try:
                 jid = submit(be, num, url)
                 submitted.add(url); jsave(SUBMITTED, sorted(submitted))

@@ -1,0 +1,47 @@
+{
+  "id": "jOUyn64mSsk",
+  "duration_s": 27.474,
+  "fps": 60,
+  "resolution": "1080x1440",
+
+  "cut_times_s": [],
+  "avg_shot_s": 27.474,
+  "cuts_per_min": 0,
+  "shot_len_p10_p50_p90": [0, 0, 0],
+
+  "framing_style": {
+    "distinct_framings": 2,
+    "same_scene_reframe_pct": 0,
+    "zoom_levels_observed": [
+      "medium close-up / chest-up, held for the entire clip: subject head (hair top to chin) spans ~43% of frame height, eye line at 68-72% of frame height",
+      "scale is constant end to end - multi-scale phase correlation against a t=0.6s reference returned best-fit scale 1.00 at t=2,4,9,11,13,15,21,27 (only ties/noise where people occluded the background), and the neon sign measures the same ~340px wide at t=0.6, 13.0 and 27.0"
+    ],
+    "punch_in_used": false,
+    "shake_used": false,
+    "pan_drift_used": true,
+    "speed_ramp_used": false,
+    "description": "One uninterrupted handheld-feeling take at a single fixed scale. The subject is NOT centred: Speed sits bottom-right (face centre ~72-78% of frame width, ~76-79% of frame height, eye line 68-72%); the top-left ~40% of the frame is room decor - a neon One Piece Luffy sign top-right, a lit SPEED 7 jersey display case left, bed behind. When his girlfriend enters at ~t=8s she occupies the upper-left (her eye line 35-53% of frame height, x 12-22%). Motion is pure horizontal translation with zero scale change. Baseline is a slow float: median inter-frame displacement 0.62% of frame width per 0.1s, and the framing stays within +/-10% of its origin for 51% of the clip and within +/-20% for 82%. One deliberate sustained pan runs t=5.3-8.9s, sliding the scene left to a maximum of 68% of frame width off-origin at t=6.9s (revealing a PRIME cooler and red light tubes on the far wall) before returning to almost exactly the starting framing. That excursion is the second distinct framing. There is no jitter/shake component (median frame-to-frame acceleration 0.00% of width, p90 1.25%), no push-in, and no speed ramp - frame timing is perfectly constant at 0.01667s for every frame checked."
+  },
+
+  "caption": {
+    "present": false,
+    "position": "",
+    "words_per_card": 0,
+    "style_description": "No captions of any kind. Verified across a 36-frame timeline sheet, an 8-frame hook sheet, an 18-frame sheet over the pan, a 33-frame 60fps sheet of the ending, and six dedicated full-resolution crops of the bottom 37% of frame (y=900-1440) at t=1,5,10,15,20,25. A temporal-mean image over 110 frames also shows no persistent text anywhere except the reposter watermark. The clip carries zero burned-in subtitles, zero hook text, zero title card. All context is delivered by the YouTube title instead.",
+    "color": "",
+    "outline": "",
+    "animation": "",
+    "all_caps": false,
+    "highlight_active_word": false
+  },
+
+  "effects": [
+    "static burned-in reposter watermark '@SpeedZone': horizontally centred (spans ~36-63% of frame width, centre ~49%), sitting at the very bottom at ~96-99% of frame height, semi-transparent white/light-grey rounded sans-serif with a soft dark shadow, cap height ~2.8% of frame height (~40px at 1440). Confirmed static by a 110-frame temporal mean in which everything else blurs to mush while this text stays perfectly sharp."
+  ],
+
+  "hook": "The first 2 seconds do nothing editorially - no text, no zoom, no cut, no sound design. Speed simply stares straight down the lens, deadpan and almost motionless, while an unseen person's hand (blue bracelet, white beaded bracelet) reaches in from frame left at t=0.37s, touches his chest/shoulder, and withdraws by t=1.5s. Audio over this stretch is near-silent: momentary loudness sits at -40 to -48 LUFS for the first ~3s and only climbs to about -33 LUFS from t=4.5s. The hold is entirely situational - a known creator, a blank expectant stare, and an unexplained hand intruding into frame, with the title ('Vanessa Ended Speed's Stream!') supplying the premise the video itself never states.",
+
+  "audio": "Raw source audio only. Integrated -18.7 LUFS, loudness range 23.9 LU, true peak -4.7 dBFS - no limiting, no normalisation, no loudness maximising (a mastered short would land near -14 LUFS with LRA 5-9 LU and true peak close to -1 dBFS). LRA low is -40.5 LUFS and LRA high -16.6 LUFS, i.e. genuinely near-silent passages alternating with shouting. A spectrogram shows only speech-shaped transients and strong voiced harmonic stacks during the loud moments (t~14.5, 21-23, and a sustained scream at 26-27.5s), with no sustained harmonic bed, no steady beat grid and no low-frequency bassline: there is no music bed and no added sfx hits. Opus stereo 48kHz, ~98 kbps, with the usual ~16 kHz codec ceiling.",
+
+  "notes": "UNCUT - CONFIRMED. The earlier mechanical pass was right: ffmpeg scene detection returns zero hits at thresholds 0.35 and 0.20; the highest scene score anywhere in the clip is 0.146 (t=7.0), and every hit at threshold 0.10 falls inside the t=5.3-8.9s pan or the busy final second, i.e. all motion-driven. Verified independently rather than assumed: phase correlation over 275 frames at 10fps shows a sharp, strong correlation peak at every single frame boundary (peak/mean ratio 63-190 through the fastest motion), which a real cut cannot produce; the lowest raw inter-frame correlation, 0.489 at t=7.3, is accompanied by a peak ratio of 132 and a clean 5px translation, so it is a fast pan and not an edit. Frames were also inspected at full 60fps across the two most suspicious moments (t=6.95-7.65 and the last 0.58s) and every intermediate frame is present with continuous physically plausible motion. So: one raw continuous take, hard in and hard out, no fade or flash at either end.\n\nSHOT STATISTICS: cut_times_s, cuts_per_min and shot_len_p10_p50_p90 are deliberately empty/zero because there are no cuts - percentiles over a single shot would be meaningless. avg_shot_s is set to the full 27.474s because that is the literal measured length of the one and only shot.\n\nTHIS IS A RAW STREAM MOMENT CROPPED TO VERTICAL, which is the finding most relevant to what is being built. There is no editing craft in this clip at all: no cuts, no reframing, no punch-in, no captions, no effects, no music, no audio mastering. The only thing added by the uploader is a channel watermark. 38.7M views came from the moment and the title, not the edit. Any attempt to reproduce this 'style' programmatically is essentially a passthrough with a watermark.\n\nASPECT: the frame is 1080x1440, aspect 0.75 (3:4), NOT 9:16 - it will letterbox top and bottom on a phone. Checked at full resolution that this is full-bleed live content: the outer 12 rows/columns on all four edges carry normal image data (row means 76/130, column means 101/119), so there are no black bars, no blurred fill and no pillarbox baked in.\n\nCOULD NOT DETERMINE: whether the t=5.3-8.9s pan originated as a physical camera move or as a digital crop move across a wider source. Both produce exactly what was measured (pure horizontal translation at constant scale). A background-sharpness-versus-pan-speed test was run to separate them and came back inconclusive, because the sampled band contains different scene content at different times, so gradient energy tracks content rather than motion blur (values 59-95 with no relationship to pan speeds of 0-13.5 px/frame). Either way it is reproducible as a constant-scale horizontal crop move. Also not determinable from the file alone: the source resolution and original aspect before the uploader's 3:4 framing, since only the re-encode was available.\n\nSOURCE: title 'Vanessa Ended Speed's Stream!' (channel SpeedZone, reposter not the original creator, uploaded 2025-05-09, 38.76M views, 611.7k likes). Video AV1 60fps CFR ~2.75 Mbps."
+}

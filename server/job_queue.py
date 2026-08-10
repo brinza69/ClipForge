@@ -26,8 +26,24 @@ class JobCancelledError(Exception):
 # unlike parallel_pipeline which monopolizes the GPU. Without the separate
 # lane, the video factory keeps the single job slot busy ~forever and every
 # doodle job starves in `queued` (the UI looks frozen at 0/N images).
+#
+# The TikTok Transformation wizard's light steps join this lane for the same
+# reason: they are API calls / single-frame ffmpeg work, and without a lane the
+# video factory would starve the whole wizard. tiktok_render is deliberately
+# NOT here — it is a full 1080x1920 encode and belongs in the heavy lane.
+#
+# The AI Stream Clipper splits the same way. clipper_analyze/score/preview read
+# a 480p proxy and do CPU-light work, so they join this lane and the review UI
+# keeps responding while a render is going. clipper_ingest (yt-dlp + proxy
+# build), clipper_transcribe (whisper on the GPU) and clipper_export (full
+# 1080x1920 encode) stay heavy.
 DOODLE_LANE_TYPES = frozenset(
-    {"doodle_script", "doodle_tts", "doodle_render", "doodle_images"}
+    {
+        "doodle_script", "doodle_tts", "doodle_render", "doodle_images",
+        "tiktok_import", "tiktok_frames", "tiktok_script", "tiktok_voice",
+        "tiktok_thumbnails", "tiktok_description",
+        "clipper_analyze", "clipper_score", "clipper_preview",
+    }
 )
 DOODLE_LANE_LIMIT = 2
 

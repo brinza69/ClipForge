@@ -84,6 +84,18 @@ class Settings(BaseSettings):
     def doodle_dir(self) -> Path:
         return self.data_dir / "doodle"
 
+    @property
+    def tiktok_dir(self) -> Path:
+        """Per-project workspace for the TikTok Transformation wizard."""
+        return self.data_dir / "tiktok"
+
+    @property
+    def clipper_dir(self) -> Path:
+        """Per-project workspace for the AI Stream Clipper (proxies, signals,
+        sampled frames, previews, exports). Under data/, so .gitignore already
+        excludes it and deleting the dir reclaims everything."""
+        return self.data_dir / "clipper"
+
     def ensure_dirs(self) -> None:
         for d in [
             self.data_dir,
@@ -96,8 +108,95 @@ class Settings(BaseSettings):
             self.cache_dir,
             self.knowledge_dir,
             self.doodle_dir,
+            self.tiktok_dir,
+            self.clipper_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
+
+    # ── AI Stream Clipper ─────────────────────────────────────────────────────
+    # Feature flag. False leaves the code in place but registers neither the
+    # router nor the job handlers — the documented rollback switch.
+    clipper_enabled: bool = True
+
+    # Ingestion limits. The cap keeps one bad paste from filling the disk; the
+    # free-space check runs before the download starts, not after.
+    # 12 h rather than 6: this is a *stream* clipper, and a full Twitch/YouTube
+    # live VOD routinely runs 6-10 hours. A 6-hour cap rejected ordinary input.
+    clipper_max_source_duration_s: float = 43200.0     # 12 hours
+    clipper_max_upload_bytes: int = 21_474_836_480     # 20 GB
+    clipper_min_free_bytes: int = 10_737_418_240       # 10 GB
+
+    # Analysis proxy. EVERY analysis pass reads this, never the original — a
+    # 480px/10fps proxy makes a multi-hour VOD tractable on CPU.
+    clipper_proxy_width: int = 480
+    clipper_proxy_fps: int = 10
+    # How many frames the vision passes may sample in total, regardless of
+    # source length. Bounds the OpenCV cost on a 6-hour stream.
+    clipper_max_sampled_frames: int = 400
+
+    # Output shape. 15-45s is the documented sweet spot for stream clips; we
+    # allow up to 90s for explanations that genuinely need it.
+    clipper_default_clip_count: int = 8
+    clipper_min_clip_s: float = 15.0
+    clipper_max_clip_s: float = 90.0
+    clipper_target_clip_s: float = 35.0
+
+    # Duplicate removal.
+    clipper_overlap_threshold: float = 0.4
+    clipper_text_similarity_threshold: float = 0.62
+
+    # Pass D (expensive multimodal review). Blank engine → the pass is skipped
+    # entirely and headlines fall back to deterministic extraction, so the
+    # pipeline never fails just because an optional provider is missing.
+    clipper_top_n_llm: int = 8
+    clipper_llm_engine: str = ""
+
+    # Export. crf 18 + slow is the single quality pass — crop, scale, stack and
+    # caption burn are fused into ONE encode (no second generation of loss).
+    clipper_export_crf: int = 18
+    clipper_export_preset: str = "slow"
+    clipper_export_fps: int = 30
+
+    # Gaming layout: default share of the 1080x1920 canvas given to the facecam.
+    clipper_face_pct: float = 0.35
+
+    # 0 = never auto-purge project artifacts.
+    clipper_retention_days: int = 0
+
+    # Use the learned ranker when it qualifies (enough labels AND it beats the
+    # heuristic on held-out NDCG@5). Otherwise heuristic weights stand.
+    clipper_ranker_enabled: bool = True
+
+    # Let a language model nominate moments and judge candidates. Off by
+    # default: it needs either Ollama running or an API key, and a clipper run
+    # must not depend on either. Both passes degrade to the heuristic ranking
+    # rather than failing, so turning this on can only change the ordering.
+    #
+    # Measured with tiktoken on real transcripts (90..395 tokens/minute across
+    # 19 of them): about 3.7 cents for a 12-hour gaming stream and 11.1 for a
+    # talk-heavy one, with nomination on a local model and judging on an API.
+    clipper_llm_select: bool = False
+    # How much of `overall` the model's verdict carries.
+    #
+    # Swept on the co-stream against two hand-labelled reference clips — a bit
+    # where chat trolls the streamer and he calls them out (good), and a
+    # stretch of "let's cook our food" (filler). Their ranks out of 46:
+    #
+    #   weight   0.0    0.3    0.5    0.7    1.0
+    #   good      45     33     14      6      4
+    #   filler     2      6      6      8     13
+    #
+    # 0.5 is not enough to undo the heuristic's ordering. 1.0 throws away what
+    # the model cannot see — audio energy, boundary quality, duration fit — and
+    # the model is not deterministic between runs, so the heuristic is also
+    # what keeps an ordering stable. 0.7 gets both reference clips where they
+    # belong and keeps that anchor.
+    #
+    # TREAT THIS AS PROVISIONAL. It is fitted to TWO labels on ONE 12-minute
+    # segment. The direction is consistent and the reasoning holds, but the
+    # sample cannot justify a third decimal — re-sweep it when there is real
+    # feedback to fit against.
+    clipper_llm_weight: float = 0.7
 
     # CORS: comma-separated list of allowed origins.
     # E.g. CLIPFORGE_ALLOWED_ORIGINS="https://myapp.vercel.app,http://localhost:3000"
@@ -109,6 +208,29 @@ class Settings(BaseSettings):
 
     # Optional: explicit path to ffmpeg binary directory (auto-detected if blank)
     ffmpeg_path: str = ""
+
+    # ── AI Upscaler (Real-ESRGAN ncnn-vulkan) ─────────────────────────────────
+    # Explicit path to realesrgan-ncnn-vulkan.exe. Blank → auto-detect at
+    # <repo>/tools/realesrgan/pkg/realesrgan-ncnn-vulkan.exe.
+    realesrgan_path: str = ""
+    # Vulkan GPU index for the upscaler. NOTE: the ncnn Vulkan device order is
+    # REVERSED vs nvidia-smi/CUDA on this rig — index 0 = RTX 3060 (fast),
+    # index 1 = GTX 1660 Super. Override via CLIPFORGE_REALESRGAN_GPU_ID.
+    realesrgan_gpu_id: int = 0
+
+    @property
+    def realesrgan_bin(self) -> str | None:
+        """Absolute path to the Real-ESRGAN binary, or None if not installed."""
+        from pathlib import Path as _Path
+        if self.realesrgan_path:
+            p = _Path(self.realesrgan_path)
+            return str(p) if p.exists() else None
+        exe = "realesrgan-ncnn-vulkan" + (".exe" if __import__("os").name == "nt" else "")
+        default = self.data_dir.parent / "tools" / "realesrgan" / "pkg" / exe
+        if default.exists():
+            return str(default)
+        import shutil
+        return shutil.which("realesrgan-ncnn-vulkan")
 
     @property
     def ffmpeg_location(self) -> str | None:

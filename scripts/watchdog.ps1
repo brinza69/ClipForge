@@ -17,6 +17,14 @@
 # ============================================================================
 $ErrorActionPreference = "Continue"
 $root = "D:\clipforge"
+# Care dispecer se supravegheaza. Doua dispecere pe aceleasi doua backend-uri
+# si-ar trimite joburi unul peste altul, deci ruleaza UNUL singur:
+#   dual_dispatch.py     - sheet-ul mare, roluri RO (implicit)
+#   herstory_dispatch.py - sheet-ul francez
+# Schimba cu: setx CLIPFORGE_DISPATCHER herstory_dispatch.py
+$dispatcher = $env:CLIPFORGE_DISPATCHER
+if (-not $dispatcher) { $dispatcher = "dual_dispatch.py" }
+$dispatchRe = [regex]::Escape($dispatcher)
 $py   = "$root\server\.venv\Scripts\python.exe"
 $log  = "$root\data\watchdog.log"
 
@@ -160,13 +168,13 @@ while ($true) {
     # Start dispatcher + status writer once ALL detected backends are healthy.
     if (($oks.Count -gt 0) -and (-not ($oks -contains $false))) {
         # dispatcher stdout MUST be dispatch.log — the status writer parses it for row numbers
-        Ensure-Proc 'dual_dispatch\.py'      "$root\scripts\dual_dispatch.py"      "$root\data\dispatch.log"   "$root\data\dispatch.err.log" "dispatcher"
+        Ensure-Proc $dispatchRe "$root\scripts\$dispatcher" "$root\data\dispatch.log"   "$root\data\dispatch.err.log" "dispatcher"
         Ensure-Proc 'dual_status_writer\.py' "$root\scripts\dual_status_writer.py" "$root\data\status.out.log" "$root\data\status.err.log"   "status-writer"
     }
 
     if ($tick % 20 -eq 0) {
         Log ("heartbeat  gpus={0} backendsOk=[{1}] dispatch={2} status={3}" -f `
-            $gpus.Count, ($oks -join ','), (Test-ProcRunning 'dual_dispatch\.py'), (Test-ProcRunning 'dual_status_writer\.py'))
+            $gpus.Count, ($oks -join ','), (Test-ProcRunning $dispatchRe), (Test-ProcRunning 'dual_status_writer\.py'))
     }
     $tick++
     Start-Sleep -Seconds 30

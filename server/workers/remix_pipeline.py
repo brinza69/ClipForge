@@ -118,6 +118,39 @@ class _Sliced:
         return _Sliced(self._q, self._jid, self._lo + a * span, self._lo + b * span)
 
 
+# Indemn rostit la finalul naratiunii (gol = dezactivat). Ajunge si in voce, si
+# in subtitrari — trebuie sa fie acelasi text in amandoua, fiindca alinierea pe
+# cuvinte potriveste audio-ul TTS cu exact acest sir. NU intra in descriere:
+# acolo ar polua captionul postarii.
+def tts_outro(lang: str | None = None) -> str:
+    """Indemnul rostit la final, pe limba variantei.
+
+    CLIPFORGE_TTS_OUTRO_RO / _FR au prioritate, apoi CLIPFORGE_TTS_OUTRO. Pista
+    romana si cea franceza ruleaza pe acelasi cod, deci un singur sir ar pune
+    text romanesc peste naratiunea franceza.
+
+    Citit la fiecare apel, NU la import: altfel schimbarea textului ar cere
+    repornirea backend-ului, iar o randare pornita cu backendul vechi iese fara
+    outro fara sa se planga nimeni (s-a intamplat).
+    """
+    if lang:
+        v = os.environ.get(f"CLIPFORGE_TTS_OUTRO_{lang.strip().upper()}", "").strip()
+        if v:
+            return v
+    return os.environ.get("CLIPFORGE_TTS_OUTRO", "").strip()
+
+
+def _with_outro(text: str, lang: str | None = None) -> str:
+    outro = tts_outro(lang)
+    if not outro:
+        return text
+    t = (text or "").rstrip()
+    if t.lower().endswith(outro.lower()):
+        return t
+    sep = "" if t.endswith((".", "!", "?")) else "."
+    return f"{t}{sep} {outro}"
+
+
 # ── Caption distribution from cleaned text ──────────────────────────────────
 
 
@@ -526,7 +559,10 @@ async def _stage_audio_chain(
         raise RuntimeError("Transcript cleaning produced empty text")
 
     # 2/2 — synthesize the voice from the cleaned text (30–100%).
-    voice = await synth_voice_from_text(cleaned, project_dir, cfg, slc.sub(0.30, 1.0))
+    # outro-ul intra in TTS; `cleaned` ramane curat pentru descrieri
+    voice = await synth_voice_from_text(
+        _with_outro(cleaned, cfg.get("transcript_target_lang")), project_dir, cfg,
+                                        slc.sub(0.30, 1.0))
     return voice, cleaned
 
 
@@ -727,6 +763,12 @@ async def _stage_commentator(
 # Override with CLIPFORGE_OUTPUT_W/H if a different target is ever needed.
 OUTPUT_W = int(os.environ.get("CLIPFORGE_OUTPUT_W", "1080"))
 OUTPUT_H = int(os.environ.get("CLIPFORGE_OUTPUT_H", "1920"))
+# Final output frame rate — forced the same way the size is, so every clip
+# posts as 1080p60 no matter what the source was. A 30fps source gets its
+# frames duplicated (no extra smoothness, but it hits the platforms' 60fps
+# quality tier); a 60fps source is kept at 60 instead of drifting to VFR.
+# Override with CLIPFORGE_OUTPUT_FPS.
+OUTPUT_FPS = int(os.environ.get("CLIPFORGE_OUTPUT_FPS", "60"))
 
 
 def _force_output_size_vf(w: int, h: int) -> str:
@@ -885,6 +927,7 @@ async def _stage_match_and_caption(
         "-map", "0:v:0", "-map", "1:a:0",
         "-filter:v", fused_vf,
         "-c:v", "libx264", "-preset", "slow", "-crf", "16",
+        "-r", str(OUTPUT_FPS),     # forced CFR — see OUTPUT_FPS
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
@@ -1018,7 +1061,9 @@ async def handle_remix_pipeline(
     slc_cap = _Sliced(queue, job_id, 0.65, cap_hi)
     captioned_path = project_dir / ("video_captioned.mp4" if has_commentator else "video_final.mp4")
     sm_stats = await _stage_match_and_caption(
-        erased_path, voice_path, cleaned_text, cfg, captioned_path, slc_cap,
+        erased_path, voice_path,
+        _with_outro(cleaned_text, cfg.get("transcript_target_lang")),
+        cfg, captioned_path, slc_cap,
     )
 
     # Stage 6 (optional) — commentator overlay. When no commentator is

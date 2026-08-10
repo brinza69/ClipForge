@@ -90,6 +90,146 @@ def _ass_alignment(_unused: str) -> int:
     return 5
 
 
+MIN_HIGHLIGHT_MS = 60
+
+# Entry pop, measured frame by frame on `uRU9SzlVClg` and `8cO8UWyjGyc`
+# (docs/refs/): the card lands at 0.91x, overshoots to 1.05x at ~83ms and settles
+# at 1.00x by ~130ms. No fade, no slide. It is anchored at the text centre, which
+# the \an5 already in the prefix gives us for free.
+#
+# Three of the seven captioned references run this, and they agree closely —
+# uRU9SzlVClg measured 0.909 -> 1.050 at +5 frames -> 1.000 by +133ms over eight
+# card starts. (An earlier draft credited `_LQ379ZhspI`; that clip's cards hard-swap
+# at full size with no pop at all. The numbers were right, the citation was not.)
+# The other four references do something else entirely — a 1-frame snap, a per-word
+# scale-in, a motion-blur smear, or nothing — so this is a well-supported default,
+# not a house style. See docs/refs/style-spec.json.
+POP_START_PCT = 91.0
+POP_PEAK_PCT = 105.0
+POP_PEAK_MS = 83
+POP_SETTLE_MS = 130
+
+# The same pop on `9L2Yrs6jwb4`, which carries the swing through to an undershoot
+# before it settles: 0.849 -> 1.048 at 83-100ms -> 0.956 at 183ms -> 1.000 by
+# ~240ms. Opt in with entry_pop="spring"; the two-segment version above stays the
+# default because two of the three measured references stop at the peak.
+SPRING_UNDER_PCT = 95.6
+SPRING_UNDER_MS = 183
+SPRING_SETTLE_MS = 240
+
+
+def _pop_tags(base_pct: float, spring: bool = False) -> str:
+    """The measured entry overshoot as an ASS ``\\t`` chain around `base_pct`.
+
+    `base_pct` is whatever scale that run of text would otherwise hold — 100 for
+    ordinary words, `highlight_pop` for the active one — so the pop multiplies
+    the existing size instead of flattening it.
+
+    ``\\t`` times are relative to the start of the event carrying them, so this
+    only ever belongs on the event that puts the card on screen. On a later
+    word-highlight span it would replay the pop mid-card.
+
+    With `spring`, the swing carries past 1.00 into an undershoot before settling
+    — the `9L2Yrs6jwb4` variant. Same peak, longer tail.
+    """
+    def at(pct: float) -> int:
+        return int(round(base_pct * pct / 100.0))
+
+    if spring:
+        return (
+            f"\\fscx{at(POP_START_PCT)}\\fscy{at(POP_START_PCT)}"
+            f"\\t(0,{POP_PEAK_MS},\\fscx{at(POP_PEAK_PCT)}\\fscy{at(POP_PEAK_PCT)})"
+            f"\\t({POP_PEAK_MS},{SPRING_UNDER_MS},"
+            f"\\fscx{at(SPRING_UNDER_PCT)}\\fscy{at(SPRING_UNDER_PCT)})"
+            f"\\t({SPRING_UNDER_MS},{SPRING_SETTLE_MS},"
+            f"\\fscx{at(100.0)}\\fscy{at(100.0)})"
+        )
+
+    return (
+        f"\\fscx{at(POP_START_PCT)}\\fscy{at(POP_START_PCT)}"
+        f"\\t(0,{POP_PEAK_MS},\\fscx{at(POP_PEAK_PCT)}\\fscy{at(POP_PEAK_PCT)})"
+        f"\\t({POP_PEAK_MS},{POP_SETTLE_MS},\\fscx{at(100.0)}\\fscy{at(100.0)})"
+    )
+
+
+def _word_highlight_spans(
+    safe_text: str,
+    overlay: Dict,
+    style: Dict,
+    start_ms: int,
+    end_ms: int,
+) -> List[Tuple[int, int, str]]:
+    """Split one overlay into per-word events with the active word recoloured.
+
+    Opt-in: an overlay without a `words` list renders exactly as it always has,
+    as a single event. With one, the caller gets the short-form "one word lights
+    up" look — the whole line stays on screen and only the word being spoken
+    changes colour and pops.
+
+    The spans TILE [start_ms, end_ms] with no gaps: each word holds the
+    highlight until the next one starts. Leaving real gaps makes libass drop the
+    line for a frame or two, which reads as a flicker rather than a beat.
+
+    Returns [] whenever the words cannot be trusted to line up with the rendered
+    text (a different count, or no timings), so the caller falls back to the
+    plain single event instead of mangling the line.
+    """
+    words = overlay.get("words")
+    if not isinstance(words, list) or len(words) < 2:
+        return []
+
+    lines = safe_text.split("\\N")
+    tokens: List[Tuple[int, str]] = [
+        (line_idx, tok)
+        for line_idx, line in enumerate(lines)
+        for tok in line.split()
+    ]
+    if len(tokens) != len(words):
+        return []
+
+    active = hex_to_ass_color(str(style.get("highlight_color") or "#FFD700"))
+    base = hex_to_ass_color(str(style.get("text_color") or "#FFFFFF"))
+    pop = int(float(overlay.get("highlight_pop") or 112))
+    open_tag = "{" + f"\\c{active}\\fscx{pop}\\fscy{pop}" + "}"
+    close_tag = "{" + f"\\c{base}\\fscx100\\fscy100" + "}"
+
+    # In the first span every token already sits under one of these inline tags,
+    # so a line-level \t would never be seen. The pop has to ride the tags
+    # themselves, each around its own resting scale.
+    entry = overlay.get("entry_pop")
+    if entry:
+        spring = str(entry).lower() == "spring"
+        first_open = "{" + f"\\c{active}{_pop_tags(pop, spring)}" + "}"
+        first_close = "{" + f"\\c{base}{_pop_tags(100.0, spring)}" + "}"
+    else:
+        first_open, first_close = open_tag, close_tag
+
+    spans: List[Tuple[int, int, str]] = []
+    for i in range(len(words)):
+        try:
+            w_start = int(float(words[i].get("start", 0.0)) * 1000)
+            w_next = (int(float(words[i + 1].get("start", 0.0)) * 1000)
+                      if i + 1 < len(words) else end_ms)
+        except (TypeError, ValueError, AttributeError):
+            return []
+
+        span_start = start_ms if i == 0 else max(start_ms, min(w_start, end_ms))
+        span_end = end_ms if i + 1 == len(words) else max(span_start, min(w_next, end_ms))
+        if span_end - span_start < MIN_HIGHLIGHT_MS and i + 1 < len(words):
+            span_end = min(end_ms, span_start + MIN_HIGHLIGHT_MS)
+        if span_end <= span_start:
+            continue
+
+        o_tag, c_tag = (first_open, first_close) if i == 0 else (open_tag, close_tag)
+        rebuilt: List[List[str]] = [[] for _ in lines]
+        for idx, (line_idx, tok) in enumerate(tokens):
+            rebuilt[line_idx].append(o_tag + tok + c_tag if idx == i else tok)
+        spans.append((span_start, span_end,
+                      "\\N".join(" ".join(bits) for bits in rebuilt)))
+
+    return spans
+
+
 def build_overlays_ass(
     overlays: List[Dict],
     video_w: int,
@@ -159,14 +299,6 @@ def build_overlays_ass(
         y_px = int(round(float(ovl.get("y_pct", 0.85)) * video_h))
         rot = float(ovl.get("rotation") or 0.0)
 
-        # Build the ASS text payload: \pos for placement, \frz for rotation,
-        # \q2 to prevent libass from wrapping the line at runtime (the user
-        # places a single block; line breaks are explicit \N).
-        prefix_bits = [f"\\an5", f"\\pos({x_px},{y_px})", "\\q2"]
-        if rot:
-            prefix_bits.append(f"\\frz{rot:.2f}")
-        prefix = "{" + "".join(prefix_bits) + "}"
-
         # Replace literal newlines with libass \N
         safe_text = text.replace("\r\n", "\n").replace("\n", "\\N")
 
@@ -174,6 +306,28 @@ def build_overlays_ass(
         end_ms = int(float(ovl.get("end_t", 3.0)) * 1000)
         if end_ms <= start_ms:
             end_ms = start_ms + 1000
+
+        spans = _word_highlight_spans(safe_text, ovl, s, start_ms, end_ms)
+
+        # Build the ASS text payload: \pos for placement, \frz for rotation,
+        # \q2 to prevent libass from wrapping the line at runtime (the user
+        # places a single block; line breaks are explicit \N).
+        prefix_bits = [f"\\an5", f"\\pos({x_px},{y_px})", "\\q2"]
+        if rot:
+            prefix_bits.append(f"\\frz{rot:.2f}")
+        if ovl.get("entry_pop") and not spans:
+            prefix_bits.append(
+                _pop_tags(100.0, str(ovl["entry_pop"]).lower() == "spring"))
+        prefix = "{" + "".join(prefix_bits) + "}"
+        if spans:
+            for span_start, span_end, span_text in spans:
+                subs.events.append(pysubs2.SSAEvent(
+                    start=span_start,
+                    end=span_end,
+                    style=style_name,
+                    text=prefix + span_text,
+                ))
+            continue
 
         evt = pysubs2.SSAEvent(
             start=start_ms,

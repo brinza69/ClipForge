@@ -39,6 +39,7 @@ from models import JobModel, JobType
 # Reuse every stage from the remix pipeline — same building blocks, different
 # orchestration.
 from workers.remix_pipeline import (
+    OUTPUT_FPS,
     _Sliced,
     _creationflags,
     _ffmpeg_bin,
@@ -47,6 +48,7 @@ from workers.remix_pipeline import (
     _stage_download,
     _stage_erase,
     _stage_match_and_caption,
+    _with_outro,
     _stage_transcribe,
     _speech_intervals_from_tx,
     _transcript_words_from_tx,
@@ -115,6 +117,7 @@ def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") ->
             ffmpeg, "-y", "-loglevel", "error",
             "-ss", f"{start:.3f}", "-i", str(final_path), "-t", f"{part_len:.3f}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-r", str(OUTPUT_FPS),   # parts keep the forced 60fps of the final
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(dst),
         ]
@@ -315,12 +318,16 @@ async def handle_parallel_pipeline(
 
         # This variant's cleaned text is in ITS language (voice + captions).
         v_cleaned = cleaned_by_lang[_lang_key(variant)]
+        # Acelasi text merge si in voce, si in subtitrari — alinierea pe
+        # cuvinte potriveste audio-ul TTS exact cu acest sir.
+        v_spoken = _with_outro(v_cleaned, vcfg.get("transcript_target_lang")
+                               or vcfg.get("tts_language"))
 
         await v_slc.update(0.0, f"[{i + 1}/{n}] {label}: voice…")
 
         # 1) voice (0–40% of this variant's slice)
         voice_path = await synth_voice_from_text(
-            v_cleaned, vdir, vcfg, v_slc.sub(0.0, 0.40), out_stem="voice",
+            v_spoken, vdir, vcfg, v_slc.sub(0.0, 0.40), out_stem="voice",
         )
 
         # 2+3) FUSED speed-match + caption burn (one encode) on the shared
@@ -330,7 +337,7 @@ async def handle_parallel_pipeline(
         cap_hi = 0.80 if has_com else 1.0
         captioned_path = vdir / ("video_captioned.mp4" if has_com else "video_final.mp4")
         sm_stats = await _stage_match_and_caption(
-            erased_path, voice_path, v_cleaned, vcfg, captioned_path,
+            erased_path, voice_path, v_spoken, vcfg, captioned_path,
             v_slc.sub(0.40, cap_hi),
         )
 

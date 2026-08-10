@@ -68,6 +68,13 @@ async def lifespan(app: FastAPI):
     register_parallel_handlers(job_queue)
     from workers.doodle_pipeline import register_doodle_handlers
     register_doodle_handlers(job_queue)
+    # AI Stream Clipper. Gated so the feature can be switched off wholesale
+    # (CLIPFORGE_CLIPPER_ENABLED=false) without removing the code — with no
+    # handler registered, a stray clipper job just fails cleanly rather than
+    # hanging in `queued`.
+    if settings.clipper_enabled:
+        from workers.clipper_pipeline import register_clipper_handlers
+        register_clipper_handlers(job_queue)
     queue_task = asyncio.create_task(job_queue.start())
     logger.info("Background job queue started.")
 
@@ -138,6 +145,13 @@ app.include_router(commentators_router)
 app.include_router(sheets_router)
 app.include_router(auto_router)
 app.include_router(doodle_router)
+
+if settings.clipper_enabled:
+    from routers.clipper import router as clipper_router
+    from routers.clipper_clips import router as clipper_clips_router
+
+    app.include_router(clipper_router)
+    app.include_router(clipper_clips_router)
 
 # Ensure every StaticFiles mount dir exists — a fresh/second data dir (e.g.
 # data_b/) may be missing one (doodle/), which otherwise crashes uvicorn on

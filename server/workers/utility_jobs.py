@@ -483,10 +483,69 @@ async def handle_commentator_bg_remove(job_id, project_id, clip_id, metadata, qu
     logger.info(f"commentator_bg_remove {job_id}: {preset_id} → {dst.name}")
 
 
+async def handle_upscale(job_id, project_id, clip_id, metadata, queue):
+    """
+    AI-upscale a user-uploaded video with Real-ESRGAN (Utilities → AI Upscale).
+    Metadata carries paths + params; output served via
+    GET /api/utilities/upscale/{job_id}/download.
+    """
+    import asyncio as _asyncio
+    from config import settings
+    from services.upscaler import upscale_video
+
+    input_path = metadata["input_path"]
+    output_path = metadata["output_path"]
+    model = metadata.get("model", "video")
+    target_p = int(metadata.get("target_p", 1080))
+    denoise = bool(metadata.get("denoise", True))
+
+    if not Path(input_path).exists():
+        raise RuntimeError(f"Input file missing: {input_path}")
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    await queue.update_progress(job_id, 0.01, "Starting AI upscale…")
+
+    loop = _asyncio.get_event_loop()
+
+    def _on_progress(p: float, msg: str):
+        _asyncio.run_coroutine_threadsafe(
+            queue.update_progress(job_id, max(0.0, min(1.0, p)), msg), loop
+        )
+
+    try:
+        stats = await loop.run_in_executor(
+            None,
+            lambda: upscale_video(
+                input_path, output_path,
+                model=model, target_p=target_p, denoise=denoise,
+                gpu_id=settings.realesrgan_gpu_id,
+                workdir=str(Path(output_path).parent / "work"),
+                on_progress=_on_progress,
+            ),
+        )
+    except Exception as e:
+        logger.exception(f"Upscale job {job_id} failed")
+        raise RuntimeError(f"Upscale failed: {str(e)[-400:]}")
+
+    metadata["stats"] = stats
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+        if job:
+            job.metadata_json = json.dumps(metadata)
+            await session.commit()
+
+    await queue.update_progress(
+        job_id, 1.0,
+        f"Upscaled to {stats['out_w']}×{stats['out_h']} ({stats['frames']} frames)",
+    )
+    logger.info(f"upscale {job_id}: done -> {output_path}")
+
+
 def register_utility_handlers(queue):
     queue.register_handler(JobType.erase.value, handle_erase)
     queue.register_handler(JobType.erase_project.value, handle_erase_project)
     queue.register_handler(JobType.silence_remove.value, handle_silence_remove)
+    queue.register_handler(JobType.upscale.value, handle_upscale)
     queue.register_handler(JobType.caption_burn.value, handle_caption_burn)
     queue.register_handler(JobType.commentator_bg_remove.value, handle_commentator_bg_remove)
     logger.info("Utility handlers registered")

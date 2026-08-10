@@ -1,0 +1,58 @@
+{
+  "id": "8cO8UWyjGyc",
+  "duration_s": 11.634,
+  "fps": 60.0,
+  "resolution": "1080x1920",
+  "cut_times_s": [
+    0.867,
+    1.183,
+    1.95,
+    2.567,
+    3.183,
+    4.6,
+    6.7
+  ],
+  "avg_shot_s": 1.454,
+  "cuts_per_min": 36.1,
+  "shot_len_p10_p50_p90": [
+    0.527,
+    0.817,
+    2.95
+  ],
+  "framing_style": {
+    "distinct_framings": 3,
+    "same_scene_reframe_pct": 100.0,
+    "zoom_levels_observed": [
+      "1.00x wide (widest framing seen; held only at 6.70s)",
+      "1.15x (end of the travelling final shot)",
+      "1.32-1.34x medium (BOTH alternating windows sit at the same scale)",
+      "1.38x tight (end of the 4.60-6.70s push-in)"
+    ],
+    "punch_in_used": true,
+    "shake_used": false,
+    "pan_drift_used": true,
+    "speed_ramp_used": false,
+    "description": "TWO SUBJECTS INSIDE ONE SOURCE FRAME. All 7 cuts alternate between two fixed crop windows of a single continuous, locked-off wide recording: window A = the kid at the prize wheel (left + upper part of the source), window B = Kai in the gaming chair (right + lower part). No cut goes to different footage. Proven three ways: (1) SIFT+RANSAC matches KID-shot frames to late frames of the final shot (40-90 inliers, rot~0) and KAI-shot frames to the first frame of the final shot (79-113 inliers, scale 0.758), and the final shot is one continuous uncut piece (max inter-frame MAD 19.6 vs 56-64 at real cuts) whose crop travels from the chair region to the wheel region; (2) a similarity transform fits as well as a full homography (median residual 0.85px vs 0.82px on 402->690), so the motion is a crop translate+scale, not a physical camera pan; (3) a stream timer graphic burned into the SOURCE is clipped at the top edge of every KID framing and absent from every KAI framing, and it scales/moves exactly with the crop. The KAI window returns to within 1px and 0.05% scale after cutting away and back (n=70 -> n=117), i.e. saved preset 'cameras'. Reconstructed geometry, in units of the wide crop (1080x1920 = 1.0 window): KID window scale 0.755 at offset (-1161,+52); KAI window scale 0.758 at offset (+128,+505); window centres are 1.20 window-widths apart horizontally and 0.24 window-heights vertically. Every shot carries a slow continuous push-in of +0.8 to +1.2%/s; three shots add a tracking pan (2.57-3.18s: +108px with +3.3%/s; 4.60-6.70s: -198px with +1.9%/s; 6.70-11.63s: +754px with +3.0%/s as the crop follows Kai out of his chair). Subject placement: the kid's face sits at 21-24% of frame height, Kai's at 32-35% - both well above the caption band. No rotation anywhere (|rot| < 0.7 deg), no shake, no speed ramp (zero exact-duplicate frames, no repeating duplication pattern)."
+  },
+  "caption": {
+    "present": true,
+    "position": "centred horizontally; text vertical centre at 62.5% of frame height, cap-baseline at ~66% (lower-middle, clear of both faces)",
+    "words_per_card": 1.33,
+    "style_description": "Heavy condensed all-caps sans (Anton/Impact-like), cap height 145px = 7.55% of frame height. 15 cards over 0.00-6.70s, mean 0.45s each, 1-2 words per card (20 words / 15 cards). The final 4.93s (6.70-11.63s) has NO captions at all - the payoff runs clean.",
+    "color": "#FDF400 yellow when the kid speaks, #F1F6FB near-white when Kai speaks. Colour encodes the SPEAKER, not the shot: a yellow card runs over a Kai shot at 3.72-4.25s.",
+    "outline": "Black hard outline ~10-12px at 1080px width (~8% of cap height; near-black fraction of the surrounding ring holds at 0.87 out to 10-12px), plus a soft dark shadow/glow decaying out to ~25px.",
+    "animation": "Per-card pop with overshoot, scaled about the card's own centre: 0.88x at +2 frames, 1.034x at +4, peak 1.055x at +5-6, back to 1.00x by +8 frames (0.13s). Measured on the yellow 'SISTER' card starting n=223. This is a PER-CARD entry animation, NOT a full-frame scale ramp - two discriminators: (a) the picture's own push-in is only 1-2%/s, i.e. ~0.2% over the 0.13s pop, two orders of magnitude too small to produce a 17% swing; (b) during the 'GIRLFRIEND' card (6.20-6.70s) the picture pans ~3.6px/frame yet the caption's centre stays pinned within a few px and its cap height stays 145-154px, so the captions are an independent overlay composited after the crop, not part of the scaled/panned picture.",
+    "all_caps": true,
+    "highlight_active_word": false
+  },
+  "effects": [
+    "two-colour speaker-coded captions with per-card pop-in (the only graphic treatment)",
+    "continuous slow push-in on every shot (+0.8 to +1.2%/s)",
+    "subject-tracking crop pan on 3 of 8 shots",
+    "source-burned stream timer clipped at the top edge of the kid framing (belongs to the original stream, NOT added by the editor)",
+    "NOT present: white flash on cuts, zoom/speed lines, emoji or stickers, meme cutaways, arrows or circles, borders, grain, vignette, chromatic aberration, progress bar"
+  ],
+  "hook": "Starts already mid-sentence with no title card, no cold open and no establishing wide: frame 0 is the kid at the prize wheel with the yellow caption 'YOU HAVE' caught mid-pop (the pop-in animation is already running at t=0). 'SISTER?' lands at 0.37s. First cut at 0.867s to Kai's deadpan reaction 'WHAT?', then straight back to the kid at 1.183s - the 0.317s Kai shot is the shortest in the clip, so the fastest cut pair in the whole video is front-loaded into the first 1.2 seconds. The question-plus-reaction beat is the hook.",
+  "audio": "Raw source audio only. No music bed: beat autocorrelation peaks at just 0.044 (95 BPM, i.e. nothing), and 40-300Hz energy collapses by 5-7dB during speech gaps instead of holding steady. No sfx on cuts: onset strength at cuts 1.183, 2.567 and 3.183 sits at only the 84th-93rd percentile, and the clip's single largest transient (t=6.78s) lands 80ms AFTER the 6.70s cut, so it is a shout, not a cut-synced hit. Cuts land on speech boundaries, and the audio runs continuously across every cut with no splice artefacts - consistent with the whole piece being one unbroken take reframed, not assembled. Integrated -19.0 LUFS, LRA 3.1 LU (heavily limited/compressed), true peak -0.0 dBFS.",
+  "notes": "COMPLETE. Source: 'Kai Cenat Is Done With Tota', channel 'Kai Cenat Live', uploaded 2025-09-04, 2.18M views; native 1080x1920 @60fps, AV1 + Opus.  METHOD NOTE ON CUTS: ffmpeg's scene filter is unreliable here because the large captions make it fire on card changes. At threshold 0.20 it reports 0.867/1.950/2.567/3.183/4.600/6.700 but MISSES the real cut at 1.183 once hits closer than 0.4s are collapsed, and at 0.10 it adds 4.250 and 5.500 which are caption swaps, not cuts (verified on labelled before/after frames: identical framing, only the text changed). The 7 cuts above come instead from per-frame mean-absolute-difference on the top 55% of the frame (above the caption band), where real cuts score 56-64 and every caption-only event scores under 8 - a clean two-order separation. Beware also that 'ffmpeg -ss <t> -i' input seeking was NOT frame-accurate on this AV1 file and initially produced before/after pairs that showed the same shot; all frames used here were extracted with select='eq(n,K)' by exact frame number.  WHAT I COULD NOT DETERMINE: (1) the source video's absolute resolution, and therefore the crop rectangles in real source pixels - only their ratios are recoverable from the output. If the wide framing at 6.70s is a full-source-height 9:16 crop and the source is 16:9, the two windows fit comfortably inside it (they span 2107 x 1908 of an available 3413 x 1920), which is consistent, but I cannot prove the wide framing is full height, so the geometry above is given in units of that wide crop rather than in source pixels. (2) The exact caption typeface - a heavy condensed all-caps grotesque in the Anton/Impact family, but not identified precisely. (3) speed_ramp_used is set false on negative evidence (no exact duplicate frames, no repeating duplication pattern, uniform 60fps); a ramp done by true resampling rather than frame duplication would not be detectable from the output alone.  The vidstab transforms.trf left by the earlier attempt was not used (binary in this ffmpeg build) and was not needed - SIFT+RANSAC gave per-shot motion directly."
+}

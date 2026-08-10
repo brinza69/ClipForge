@@ -2,6 +2,9 @@
 ClipForge Worker - Async SQLite database setup via SQLAlchemy 2.0
 """
 
+import logging
+
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -17,7 +20,45 @@ class Base(DeclarativeBase):
 
 
 _db_url = f"sqlite+aiosqlite:///{settings.db_path}"
-engine = create_async_engine(_db_url, echo=settings.debug)
+# timeout: how long a connection waits for the write lock before raising
+# "database is locked". The default is 5s, which a long pipeline write can
+# exceed while the UI is polling.
+engine = create_async_engine(_db_url, echo=settings.debug, connect_args={"timeout": 30})
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _sqlite_pragmas(dbapi_connection, _record) -> None:
+    """WAL + a real busy timeout on every connection.
+
+    In the default rollback-journal mode a single writer blocks every reader,
+    so a running pipeline made ordinary GETs fail with "database is locked" —
+    the job queue writes progress once a second while the review UI polls. WAL
+    lets readers run concurrently with the one writer, which is exactly this
+    app's shape: one worker process writing, several pollers reading.
+
+    NORMAL synchronous is the standard companion to WAL: durable across a
+    process crash, and only at risk from an OS-level crash — acceptable for a
+    local media scratch DB, and much cheaper than FULL on every progress tick.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        # busy_timeout first, and unconditionally: it is the one that saves us
+        # if the mode switch below cannot happen.
+        cursor.execute("PRAGMA busy_timeout=30000")
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            # Switching journal mode needs a brief exclusive lock, so it fails
+            # while another process still has the file open in the old mode
+            # (e.g. an older backend build during a rolling restart). Falling
+            # back to the previous mode is strictly better than refusing to
+            # open the connection at all.
+            logging.getLogger("clipforge.db").warning(
+                "could not enable WAL; continuing in the existing journal mode"
+            )
+    finally:
+        cursor.close()
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -123,6 +164,58 @@ async def init_db() -> None:
             await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_projects_batch_id ON projects(batch_id)"))
         except Exception:
             pass
+
+        # ── AI Stream Clipper ────────────────────────────────────────────────
+        # Additive only: every column is nullable and unread by existing code,
+        # so an older build keeps working against a migrated DB (see the
+        # rollback notes in docs/plans/ai-stream-clipper-repository-audit.md).
+        _clipper_project_migrations = [
+            ("clipper_settings", "TEXT"),
+            ("content_type", "VARCHAR(30)"),
+            ("content_type_confidence", "REAL"),
+            ("content_type_override", "VARCHAR(30)"),
+            ("analysis_version", "VARCHAR(20)"),
+            ("rights_confirmed", "BOOLEAN"),
+            ("source_kind", "VARCHAR(20)"),
+        ]
+        for col, col_type in _clipper_project_migrations:
+            try:
+                await conn.execute(text(f"ALTER TABLE projects ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass
+
+        _clipper_clip_migrations = [
+            ("overall_score", "REAL"),
+            ("sub_scores", "TEXT"),
+            ("score_reason", "TEXT"),
+            ("layout_plan", "TEXT"),
+            ("caption_plan", "TEXT"),
+            ("headline_text", "TEXT"),
+            ("content_type", "VARCHAR(30)"),
+            ("warnings", "TEXT"),
+            ("dedupe_group", "VARCHAR(12)"),
+            ("is_alternative", "BOOLEAN"),
+            ("rank_position", "INTEGER"),
+            ("feature_vector", "TEXT"),
+            ("ranker_version", "VARCHAR(20)"),
+            ("preview_path", "TEXT"),
+        ]
+        for col, col_type in _clipper_clip_migrations:
+            try:
+                await conn.execute(text(f"ALTER TABLE clips ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass
+
+        # Ranked review lists sort by (project_id, rank_position) constantly.
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_clips_project_rank ON clips(project_id, rank_position)",
+            "CREATE INDEX IF NOT EXISTS idx_clip_feedback_clip ON clip_feedback(clip_id)",
+            "CREATE INDEX IF NOT EXISTS idx_clip_feedback_event ON clip_feedback(event_type)",
+        ):
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass
 
         # Fix any projects stuck at 'downloaded' that already have scored clips
         try:

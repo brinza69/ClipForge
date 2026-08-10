@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Eraser, AudioLines, Wand2, ExternalLink, Mic, FileText, Type } from "lucide-react";
+import { Eraser, AudioLines, Wand2, ExternalLink, Mic, FileText, Type, Sparkles } from "lucide-react";
 
 // Full Tailwind class strings (no dynamic interpolation — it gets purged).
 const STUDIOS = [
@@ -46,6 +46,36 @@ export default function UtilitiesPage() {
       </div>
 
       <div className="grid md:grid-cols-2 gap-4">
+        {/* AI Upscale */}
+        <Link href="/utilities/upscale" className="block group">
+          <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-fuchsia-500/40 hover:bg-fuchsia-500/[0.03] transition-colors h-full flex flex-col">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-fuchsia-500/10 shrink-0 group-hover:bg-fuchsia-500/20 transition-colors">
+                <Sparkles className="h-5 w-5 text-fuchsia-400" />
+              </div>
+              <div>
+                <h2 className="font-semibold">AI Upscale</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Make a soft or low-res clip genuinely higher-res — real detail, not a stretch.
+                </p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/5 p-3">
+              <div className="flex items-center gap-2 text-xs text-fuchsia-300">
+                <Wand2 className="h-3.5 w-3.5" />
+                <span className="font-semibold">Real-ESRGAN GPU upscaling</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed mt-1">
+                720p → real 1080p/1440p. Reconstructs texture frame-by-frame, keeps your audio.
+              </p>
+            </div>
+            <div className="flex-1" />
+            <Button variant="outline" className="w-full gap-2 border-fuchsia-500/30 text-fuchsia-300 hover:bg-fuchsia-500/10 hover:text-fuchsia-200 group-hover:border-fuchsia-500/50">
+              Open AI Upscale <ExternalLink className="h-3.5 w-3.5 ml-auto" />
+            </Button>
+          </Card>
+        </Link>
+
         {/* Caption / Logo Eraser */}
         <Link href="/utilities/caption-eraser" className="block group">
           <Card className="p-6 space-y-5 border-border/40 bg-card/60 hover:border-amber-500/40 hover:bg-amber-500/[0.03] transition-colors h-full flex flex-col">
