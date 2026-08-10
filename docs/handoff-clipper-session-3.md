@@ -6,27 +6,11 @@ about the machine, except where this file says otherwise.
 
 ## Where it stopped
 
-**Five of the six open problems from session 2 are fixed and committed.** The
-sixth (nothing pushed) is yours to decide.
+**Five of the six open problems from session 2 are fixed and committed**, the
+end-to-end run is done, and the export path has been exercised for the first
+time. The sixth problem (nothing pushed) is yours to decide.
 
-An end-to-end run had just started and was **not** finished:
-
-```
-POST /api/clipper/projects/2d3375ee3420/analyze  ->  job e7cb92e465a4
-```
-
-A backend was left running on port 8420, started with:
-
-```powershell
-cd F:\ClipForge\server; .\.venv\Scripts\python.exe -m uvicorn main:app --port 8420
-```
-
-It is almost certainly gone now. **Restart it and re-run the analyze call** —
-the job is idempotent and the project's artifacts are still on disk. The old
-`regions.json` was copied to the scratchpad before the run, but the scratchpad
-is session-scoped and will not survive; `git` has everything that matters.
-
-## Commits this session (4, on `claude/ai-stream-clipper`)
+## Commits this session (5, on `claude/ai-stream-clipper`)
 
 | commit | problem | what |
 |---|---|---|
@@ -34,8 +18,62 @@ is session-scoped and will not survive; `git` has everything that matters.
 | `c69c4a7` | #2 | menu-heavy windows rank lower |
 | `5238cda` | #1, #4 | every facecam found, from the faces not a contour |
 | `573e914` | #5 | Pass C split into three files |
+| `36c3280` | — | three faults the first real export exposed |
 
-`main` is now **42 commits behind this branch**, still never pushed.
+`main` is **43 commits behind this branch**, still never pushed.
+
+## Do not trust the backend on port 8420
+
+It is not started by this work and it runs whatever code it was launched with.
+Two uvicorn processes claim that port, and **the one that wins is running on
+the system Python (`C:\Users\vlado\AppData\Local\Programs\Python\Python311`),
+not the project venv.** A `Start-Process` of your own uvicorn will fail to
+bind and you will not notice — it logs `[Errno 10048]` to stderr and exits
+while the API keeps answering.
+
+Worse, the **job queue is shared through the DB**, so anything enqueued via
+`POST /analyze` is a race with that stale worker. It cost this session a full
+analysis run that silently produced nothing: the artifacts came back byte for
+byte identical and it took a process listing to work out why.
+
+Run pipeline stages in-process instead. The pattern that worked:
+
+```python
+class StubQueue:
+    async def update_progress(self, job_id, progress, message=""): print(message)
+    def is_cancelled(self, job_id): return False
+    async def enqueue(self, **kw): return "stub"      # swallow it
+
+await clipper_pipeline.handle_analyze("stub", project_id, None, {}, StubQueue())
+```
+
+That runs the same handler the worker would, with no queue and no server.
+`handle_export` takes the clip id as its third argument.
+
+## What the first real export exposed
+
+Three faults, all found by looking at the file rather than the code. All three
+are fixed in `36c3280`; the detail is in that commit message. The short form:
+
+1. **The gaming layout was unreachable in production.** `plan_layout` sniffed
+   the content type out of the candidate dict, and neither pipeline caller put
+   it there. Every gaming export was a tracking crop with no face band.
+2. **The face band reached outside the facecam** and sliced the stats bar
+   underneath it in half.
+3. **`speech_ratio` measured the noise floor**, reading 94% on a source whose
+   transcript covers 34%.
+
+Numbers worth keeping: on this source the whole 57-clip field scores between
+**48.2 and 62.2** — a 14-point spread with a stdev near 3. The ranking barely
+discriminates, and that is a bigger problem than any single feature. Fixing
+`speech_ratio` widened `clarity`'s spread from 12.96 to 18.39 but moved
+`overall` almost not at all, because the gaming profile weights clarity at
+3/100. **If you want the ranking to mean something, the profile weights and
+the sub-score dynamic ranges are where to look, not another feature.**
+
+Re-scoring a project **keeps clips that were already exported** and writes the
+new set alongside them (`_write_clips`, deliberate and documented). Duplicate
+windows in the clip list after several runs are that, not a bug.
 
 ## Environment — two things session 2 called mandatory are now automatic
 
@@ -123,22 +161,43 @@ chrome a layout carries. On the co-stream: clean gameplay windows 0.000-0.012,
 menu stretches 0.478-0.697. Menu stretches sit at 200-240s, 380-420s, 480s and
 680-720s.
 
-## What to do next, in order
+## Verified end to end
 
-1. **Restart the backend and re-run analysis on `2d3375ee3420`.** Everything
-   below depends on artifacts that run produces. Watch for it to finish; it
-   took under 10 minutes last time it ran end to end.
-2. **Check the menu penalty actually re-ranked anything.** Compare the top
-   candidates' `start` times against the menu stretches above. The penalty is
-   worth ~7 points of `overall` on the gaming profile (visual_energy 79 -> 20 at
-   weight 12/100). If nothing moved, the penalty is too small — say so with the
-   numbers rather than just turning it up.
-3. **Export a clip through `POST /api/clipper/clips/{id}/export`.** This has
-   **never been run**. Session 2 only ever rendered through
-   `scripts/render_dynamic_clip.py`. It is the largest untested surface in the
-   feature.
-4. **Watch the export and fine-tune.** This is what the user actually asked
-   for and it is the part that did not happen.
+Analysis re-run in-process on `2d3375ee3420` with current code:
+
+| artifact | before | after |
+|---|---|---|
+| `regions.webcams` | `null` | both facecams, conf 0.912 / 0.703 |
+| `regions.hud` | `(360,0,120,44)` — the right facecam | `(420,0,60,44)` — the actual overlay |
+| `faces.json` | 19 boxes, none in a facecam | 273 boxes: 99 left, 123 right, 51 stray |
+| `motion.ui` | absent | 1441 samples, p25 0.020 p95 0.161 |
+| winners' layout | n/a | 9 of 10 `face_top_game_bottom` |
+
+The menu penalty works and is correctly sized: menu-heavy clips now average
+**55.1 overall against 56.1** for clean ones, having previously scored HIGHER
+(a streamer in an inventory screen is talking, so hook, clarity and caption
+suitability all reward it). One clip over 0.5 menu share sits in the top ten.
+
+**A caution about how that was nearly mis-measured.** The first check drew the
+menu stretches by hand off a 20-second bucket plot and concluded 7 of the top
+10 were menu-heavy. That was wrong — the hand-drawn ranges smear, and a clip
+they scored at 0.93 measures 0.295 against the raw series. Take ground truth
+from `signals.motion.ui` directly (share of hops over ~0.09, the midpoint
+between the two measured modes), never from a plot.
+
+Three clips exported through the real `clipper_export`: 1080x1920, 60 fps,
+yuv420p, AAC 48 kHz, ~5.9 Mbps, and the render is a single encode as intended.
+
+## What to do next
+
+1. **Look at the ranking's dynamic range.** 48.2 to 62.2 across 57 clips is
+   the biggest remaining problem and no individual feature will fix it.
+2. **Caption coverage is 37% of clip length** where the transcript has words
+   for 34% — those agree, so captions are not dropping text. But 64 wpm over
+   the whole VOD is low for this streamer; whether Whisper is losing speech
+   under game audio is unmeasured and worth an hour.
+3. **KaiCenat's facecam left edge is ~9px short.** See below.
+4. **Push, or decide not to.** 43 commits, one machine.
 
 ## Known-unfinished, deliberately
 
