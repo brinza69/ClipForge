@@ -31,6 +31,7 @@ from services.clipper.segmentation import (
     norm_token, overlap_seconds, points_in, sentences_from_words, series_slice,
     signal_view, word_list,
 )
+from services.clipper.segmentation import _continues  # noqa: F401  (shared vocabulary)
 
 logger = logging.getLogger("clipforge.clipper.candidates")
 
@@ -75,6 +76,8 @@ REACTION_MAX_S = 3.0      # how far past the payoff a reaction may run
 TAIL_PAD_S = 0.25         # breathing room kept after the last word
 LEAD_IN_MAX_S = 5.0       # a longer preceding sentence is context, not a lead-in
 SNAP_TOLERANCE_S = 2.5    # furthest a start is moved to reach a sentence
+SENTENCE_END_REACH_S = 3.5  # furthest an end is pushed OUT to finish a sentence
+DANGLE_PAUSE_S = 1.5      # silence after an orphan word that proves it is one
 GRID_S = 0.5              # payoff search resolution
 PAYOFF_WINDOW_S = 1.5     # emotion words this close count towards the payoff
 _EPS = 1e-6
@@ -330,6 +333,32 @@ def _nearest_sentence_start(sentences: Sequence[dict], t: float) -> float | None
     return best
 
 
+def _nearest_sentence_end(sentences: Sequence[dict], t: float) -> float | None:
+    """The sentence end to finish on, or None if there is none close enough.
+
+    The start side has had `_nearest_sentence_start` from the beginning; the end
+    side never had a mirror, and it showed. Measured on a real clip set, all four
+    top candidates ended one word into a phrase — "...of water bro let's" before
+    "go", "...cook our food let's" before "cook", "...trail chamber oh" before
+    "my god". The payoff, reaction and answer rules that already run on the end
+    decide WHICH thought to finish on; none of them makes it land on a boundary.
+
+    Reaching FORWARD is allowed further than pulling back, because the failure
+    being fixed is a truncated phrase: completing it is what the viewer wants,
+    and trimming earlier only helps when the sentence had already closed.
+    """
+    best, distance = None, 0.0
+    for s in sentences:
+        end = _num(s["end"])
+        gap = end - t
+        reach = SENTENCE_END_REACH_S if gap >= 0 else SNAP_TOLERANCE_S
+        if abs(gap) <= reach and (best is None or abs(gap) < distance):
+            best, distance = end, abs(gap)
+        elif end > t + SENTENCE_END_REACH_S:
+            break
+    return best
+
+
 def _first_tokens(sentence: dict | None) -> list[str]:
     if not sentence:
         return []
@@ -405,6 +434,33 @@ def _trim_tail(end: float, words: Sequence[dict], floor: float) -> float:
     if last <= 0 or end - last <= PAUSE_KEEP_S:
         return end
     return max(floor, min(end, last + TAIL_PAD_S))
+
+
+def _drop_dangling_tail(end: float, words: Sequence[dict], start: float,
+                        lo: float) -> float:
+    """Cut before a final word the speaker never finished the thought on.
+
+    Measured on a real stream: clips ended "...of water bro let's" with the "go"
+    16s later, "...trail chamber oh" with "my god" 5.5s later. The cut is in the
+    right PLACE — speech genuinely stops there — but it keeps an orphan word that
+    reads as a mistake. Extending across the silence would be worse; dropping the
+    orphan is what a human editor does.
+
+    Only fires when a real pause follows, so a clip that simply runs into the
+    next sentence is untouched, and never when it would breach the minimum.
+    """
+    inside = [w for w in words if _num(w["end"]) <= end + _EPS]
+    if len(inside) < 2:
+        return end
+    tail = inside[-1]
+    if not _continues(str(tail.get("word", ""))):
+        return end
+    following = next((w for w in words if _num(w["start"]) > _num(tail["end"]) + _EPS),
+                     None)
+    if following is None or _num(following["start"]) - _num(tail["end"]) < DANGLE_PAUSE_S:
+        return end
+    trimmed = _num(inside[-2]["end"])
+    return trimmed if trimmed - start >= lo else end
 
 
 def _fit(start: float, end: float, words: Sequence[dict], lo: float, hi: float,
@@ -495,6 +551,26 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
     if trimmed < end - 0.05 and trimmed - start >= lo and (payoff is None or trimmed > payoff + 0.2):
         end = trimmed
         _add(reasons, "tail_trimmed")
+
+    # Last thing before the duration fit: land the end on a finished thought.
+    # Runs after payoff/reaction/answer because those choose WHICH thought the
+    # clip ends on, and this only moves the cut onto its boundary. Never drops
+    # below the minimum, never breaches the maximum, never crosses the payoff.
+    # Order matters: snap onto a sentence boundary FIRST, then drop an orphan
+    # word if the boundary itself sits on one. Reversed, the snap pulls the end
+    # back onto the very word the drop just removed.
+    sentence_end = _nearest_sentence_end(sentences, end)
+    if sentence_end is not None and abs(sentence_end - end) > 0.05:
+        candidate_end = min(ceiling, sentence_end)
+        if (lo <= candidate_end - start <= hi
+                and (payoff is None or candidate_end > payoff + 0.2)):
+            end = candidate_end
+            _add(reasons, "end_on_sentence")
+
+    dropped = _drop_dangling_tail(end, words, start, lo)
+    if dropped < end - 0.05:
+        end = dropped
+        _add(reasons, "dangling_tail_dropped")
 
     start, end = _fit(start, end, words, lo, hi, floor, ceiling)
     inside, _before, _after = _neighbourhood(words, start, end)

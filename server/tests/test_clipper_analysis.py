@@ -341,3 +341,66 @@ def test_smoothing_reduces_jitter():
         jitter, max_pan_px_per_s=60.0, max_zoom_per_s=0.15, ema=0.35
     )
     assert travel(smoothed) < travel(jitter), "smoothing must actually damp movement"
+
+
+# ── clip endings ────────────────────────────────────────────────────────────
+#
+# Measured on a real stream: every top clip ended one word into a phrase —
+# "...of water bro let's" with "go" 15.8s later, "...trail chamber oh" with
+# "my god" 5.5s later. The cut was in the right PLACE (speech genuinely stops
+# there); it kept an orphan word that reads as a mistake.
+
+def _w(word, start, end):
+    return {"word": word, "start": start, "end": end}
+
+
+def test_a_pause_does_not_end_a_sentence_on_a_word_nobody_stops_after():
+    # "let's" then 1.4s of silence: the thought is plainly unfinished.
+    words = [_w("we", 0.0, 0.3), _w("should", 0.3, 0.6), _w("let's", 0.6, 0.9),
+             _w("go", 2.3, 2.6)]
+    sents = segmentation.sentences_from_words(words)
+    assert len(sents) == 1, "a pause closed the sentence on 'let's'"
+
+
+def test_a_long_enough_silence_ends_it_anyway():
+    # He did stop. Whatever the word, 3s of nothing settles the question.
+    words = [_w("we", 0.0, 0.3), _w("should", 0.3, 0.6), _w("let's", 0.6, 0.9),
+             _w("go", 4.5, 4.8)]
+    assert len(segmentation.sentences_from_words(words)) == 2
+
+
+def test_punctuation_still_outranks_the_guard():
+    words = [_w("stop.", 0.0, 0.4), _w("Then", 1.9, 2.2), _w("go", 2.2, 2.5)]
+    assert len(segmentation.sentences_from_words(words)) == 2
+
+
+def test_continues_ignores_case_and_trailing_punctuation():
+    assert segmentation._continues("Let's")
+    assert segmentation._continues("the,")
+    assert not segmentation._continues("chamber")
+    assert not segmentation._continues("")
+
+
+def test_an_orphan_final_word_is_dropped_when_silence_follows():
+    words = [_w("trail", 0.0, 0.4), _w("chamber", 0.4, 0.9), _w("oh", 0.9, 1.2),
+             _w("my", 6.7, 6.9), _w("god", 6.9, 7.2)]
+    out = candidates._drop_dangling_tail(1.2, words, start=0.0, lo=0.5)
+    assert out == pytest.approx(0.9), "clip still ends on 'oh'"
+
+
+def test_a_word_that_completes_a_thought_is_kept():
+    words = [_w("trail", 0.0, 0.4), _w("chamber", 0.4, 0.9),
+             _w("oh", 6.7, 6.9)]
+    assert candidates._drop_dangling_tail(0.9, words, start=0.0, lo=0.5) == 0.9
+
+
+def test_no_drop_when_the_next_word_follows_immediately():
+    # Running into the next phrase is not a dangling tail — it is a tight cut.
+    words = [_w("we", 0.0, 0.4), _w("should", 0.4, 0.8), _w("let's", 0.8, 1.1),
+             _w("go", 1.2, 1.5)]
+    assert candidates._drop_dangling_tail(1.1, words, start=0.0, lo=0.5) == 1.1
+
+
+def test_the_minimum_duration_wins_over_a_tidy_ending():
+    words = [_w("okay", 0.0, 0.4), _w("let's", 0.4, 0.7), _w("go", 9.0, 9.3)]
+    assert candidates._drop_dangling_tail(0.7, words, start=0.0, lo=0.6) == 0.7
