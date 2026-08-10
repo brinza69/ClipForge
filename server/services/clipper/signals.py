@@ -348,6 +348,28 @@ def motion_timeline(proxy_path: str, *, hop_s: float = 0.5) -> dict[str, Any]:
     return result
 
 
+FACE_SCALE_FACTOR = 1.05
+FACE_MIN_NEIGHBOURS = 5
+FACE_MIN_SIZE = (20, 20)
+_FACE_MERGE_IOU = 0.35
+
+
+def _merge_boxes(boxes: list[list[int]]) -> list[list[int]]:
+    """Drop boxes that overlap one already kept — two cascades see one face twice."""
+    kept: list[list[int]] = []
+    for box in sorted(boxes, key=lambda b: -b[2] * b[3]):
+        x0, y0, w0, h0 = box
+        for x1, y1, w1, h1 in kept:
+            ix = max(0, min(x0 + w0, x1 + w1) - max(x0, x1))
+            iy = max(0, min(y0 + h0, y1 + h1) - max(y0, y1))
+            inter = ix * iy
+            if inter and inter / float(w0 * h0 + w1 * h1 - inter) >= _FACE_MERGE_IOU:
+                break
+        else:
+            kept.append(box)
+    return kept
+
+
 def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
     """Face boxes at each requested timestamp, in PROXY pixel coordinates.
 
@@ -363,10 +385,20 @@ def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
         logger.warning("face_presence: missing proxy %s", proxy_path)
         return blank
 
-    cascade_file = str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
-    cascade = cv2.CascadeClassifier(cascade_file)
-    if cascade.empty():
-        logger.warning("face_presence: could not load cascade %s", cascade_file)
+    # Two cascades, not one: a co-stream has a facecam per person and they are
+    # rarely both facing the lens. Measured over 40 frames, the frontal cascade
+    # found the left facecam 17 times and the right one NEVER (that streamer was
+    # turned away); the profile cascade found the right one 3 times. Neither
+    # produced a false positive at 1.05/5, the best of six combinations tried —
+    # 1.15 missed almost everything, minNeighbors=3 let nine into the gameplay.
+    cascades = []
+    for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"):
+        c = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / name))
+        if not c.empty():
+            cascades.append(c)
+        else:
+            logger.warning("face_presence: could not load cascade %s", name)
+    if not cascades:
         return blank
 
     out: list[dict[str, Any]] = []
@@ -382,9 +414,13 @@ def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
                 out.append({"t": round(t, 3), "boxes": []})
                 continue
             grey = cv2.equalizeHist(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-            found = cascade.detectMultiScale(grey, 1.15, 5, minSize=(24, 24))
-            boxes = [[int(x), int(y), int(w), int(h)] for x, y, w, h in found]
-            out.append({"t": round(t, 3), "boxes": boxes})
+            raw: list[list[int]] = []
+            for cascade in cascades:
+                for x, y, w, h in cascade.detectMultiScale(
+                        grey, FACE_SCALE_FACTOR, FACE_MIN_NEIGHBOURS,
+                        minSize=FACE_MIN_SIZE):
+                    raw.append([int(x), int(y), int(w), int(h)])
+            out.append({"t": round(t, 3), "boxes": _merge_boxes(raw)})
     except cv2.error as exc:
         logger.warning("face_presence: detection failed for %s (%s)", proxy_path, exc)
         return blank

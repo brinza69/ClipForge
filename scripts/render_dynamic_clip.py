@@ -39,61 +39,9 @@ from services.clipper.signals import face_presence                # noqa: E402
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_REPO / "data")) / "clipper"
 FACE_HOP_S = 0.25
 
-# Fallback slice of the frame that "is something happening in the game" is
-# measured over, as fractions of width/height: (x0, x1, y0, y1). Used only when
-# no facecam is found — otherwise the band is derived per clip by action_band().
-#
-# This constant used to be the only option, and it encoded ONE stream's layout
-# (facecam bottom-left, chat right). A second stream in the same test set puts
-# its facecam top-right, where this band would have framed the facecam itself as
-# "the gameplay" — the exact thing the band exists to avoid.
-ACTION_BAND = (0.34, 0.86, 0.04, 0.94)
-
-# Keep this much clear of the frame edges regardless: the stream's own HUD (top
-# bar, hotbar, subscriber counters) lives there and is not gameplay.
-_EDGE_INSET = 0.04
-
-
-def action_band(faces: list[dict], proxy_w: int, proxy_h: int
-                ) -> tuple[float, float, float, float]:
-    """The largest edge-aligned band that excludes the detected facecam.
-
-    Takes the facecam's median box, then cuts the frame on whichever axis leaves
-    more area: keep everything left/right of it, or everything above/below it.
-    A facecam in a corner therefore costs one column or one row, never both, so
-    the gameplay camera keeps as much of the picture as it can.
-
-    Falls back to ACTION_BAND when nothing was detected — a band derived from a
-    phantom face would be worse than a wrong constant.
-    """
-    boxes = [b for s in faces for b in (s.get("boxes") or [])
-             if isinstance(b, (list, tuple)) and len(b) >= 4]
-    if len(boxes) < 3 or proxy_w <= 0 or proxy_h <= 0:
-        return ACTION_BAND
-
-    def med(vals: list[float]) -> float:
-        vals = sorted(vals)
-        return vals[len(vals) // 2]
-
-    # Median box, in fractions of the frame, padded so the band clears its edge.
-    pad = 0.02
-    fx0 = med([float(b[0]) for b in boxes]) / proxy_w - pad
-    fx1 = med([float(b[0]) + float(b[2]) for b in boxes]) / proxy_w + pad
-    fy0 = med([float(b[1]) for b in boxes]) / proxy_h - pad
-    fy1 = med([float(b[1]) + float(b[3]) for b in boxes]) / proxy_h + pad
-
-    lo, hi = _EDGE_INSET, 1.0 - _EDGE_INSET
-    # Four candidate bands: left of / right of / above / below the facecam.
-    options = [
-        (lo, min(fx0, hi), lo, hi),
-        (max(fx1, lo), hi, lo, hi),
-        (lo, hi, lo, min(fy0, hi)),
-        (lo, hi, max(fy1, lo), hi),
-    ]
-    best = max(options, key=lambda b: max(0.0, b[1] - b[0]) * max(0.0, b[3] - b[2]))
-    if (best[1] - best[0]) < 0.25 or (best[3] - best[2]) < 0.25:
-        return ACTION_BAND       # facecam dominates the frame; trust nothing
-    return best
+from services.clipper.dynamic_cameras import (   # noqa: E402
+    ACTION_BAND, action_band,
+)
 
 
 def load(project: Path, name: str) -> dict | list:

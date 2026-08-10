@@ -361,3 +361,62 @@ def test_a_clip_with_no_hits_still_gets_the_base_grade():
     plan["hits"] = []
     flt = dynamic_render._eq_filter(plan)
     assert "exp(" not in flt and "saturation=" in flt
+
+
+# --------------------------------------------------------------------------
+# Action band
+# --------------------------------------------------------------------------
+#
+# Observed on a co-stream: two facecams, top-left and top-right. Taking the
+# median of every detection lands between them, on the gameplay, so the band has
+# to exclude each one separately. And with a stronger detector a Minecraft
+# texture in mid-frame clustered as a third "face", shrinking the band to the
+# bottom half — which is why persistence, not tightness, decides what is a
+# facecam.
+
+from services.clipper.dynamic_cameras import ACTION_BAND, action_band, face_clusters
+
+
+def _track(boxes_per_sample):
+    return [{"t": i * 0.25, "boxes": b} for i, b in enumerate(boxes_per_sample)]
+
+
+def _steady(box, n=40, every=1):
+    """A facecam: present across the whole window."""
+    return [[box] if i % every == 0 else [] for i in range(n)]
+
+
+def test_no_faces_falls_back_to_the_constant():
+    assert action_band(_track([[]] * 40), 480, 270) == ACTION_BAND
+
+
+def test_one_facecam_is_cut_out_of_the_band():
+    band = action_band(_track(_steady([10, 10, 60, 60])), 480, 270)
+    assert band != ACTION_BAND
+    # The facecam spans x 0.02-0.15, y 0.04-0.26; the band must clear it.
+    assert band[0] >= 0.14 or band[2] >= 0.25
+
+
+def test_two_facecams_are_both_cut_out():
+    left, right = [10, 10, 60, 60], [400, 10, 60, 60]
+    track = [{"t": i * 0.25, "boxes": [left, right]} for i in range(40)]
+    clusters = face_clusters(track, 480, 270)
+    assert len(clusters) == 2, "the two facecams merged into one"
+    band = action_band(track, 480, 270)
+    for cx0, cx1, cy0, cy1 in clusters:
+        assert not (cx0 < band[1] and cx1 > band[0]
+                    and cy0 < band[3] and cy1 > band[2]), "a facecam is inside the band"
+
+
+def test_a_face_that_flashes_past_is_not_a_facecam():
+    # A mob texture the cascade likes for a moment. Enough hits to pass a count
+    # threshold, nowhere near enough of the window to be an inset.
+    track = _track([[[240, 120, 40, 40]] if 5 <= i <= 8 else [] for i in range(40)])
+    assert face_clusters(track, 480, 270) == []
+
+
+def test_a_facecam_seen_intermittently_still_counts():
+    # Detection is unreliable on a turned head; what matters is that it keeps
+    # coming back across the window, not that every sample finds it.
+    track = _track(_steady([10, 10, 60, 60], n=40, every=4))
+    assert len(face_clusters(track, 480, 270)) == 1

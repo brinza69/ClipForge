@@ -25,7 +25,8 @@ from __future__ import annotations
 from bisect import bisect_left
 from typing import Any, Sequence
 
-__all__ = ["ASPECT", "CAMERAS", "DEFAULT_STYLE", "camera_rects"]
+__all__ = ["ASPECT", "CAMERAS", "DEFAULT_STYLE", "camera_rects",
+           "ACTION_BAND", "action_band", "face_clusters"]
 
 ASPECT = 9.0 / 16.0
 
@@ -291,3 +292,118 @@ def camera_rects(face: dict[str, float], style: dict,
     out["game_tight"] = _rect(0, src_h * _f(style.get("game_zoom"), 0.64),
                               action_cx, action_cy, 0.5, src_w, src_h)
     return out
+
+
+# Fallback slice of the frame that "is something happening in the game" is
+# measured over, as fractions of width/height: (x0, x1, y0, y1). Used only when
+# no facecam is found — otherwise the band is derived per clip by action_band().
+#
+# This constant used to be the only option, and it encoded ONE stream's layout
+# (facecam bottom-left, chat right). A second stream in the same test set puts
+# its facecam top-right, where this band would have framed the facecam itself as
+# "the gameplay" — the exact thing the band exists to avoid.
+ACTION_BAND = (0.34, 0.86, 0.04, 0.94)
+
+# Keep this much clear of the frame edges regardless: the stream's own HUD (top
+# bar, hotbar, subscriber counters) lives there and is not gameplay.
+_EDGE_INSET = 0.04
+
+
+_CLUSTER_TOL = 0.12      # centres this close, as a frame fraction, are one cam
+_MIN_CLUSTER = 3         # detections below this are noise, not a facecam
+_MIN_PERSISTENCE = 0.35  # share of the window a real facecam must appear across
+
+
+def face_clusters(faces: list[dict], proxy_w: int, proxy_h: int
+                  ) -> list[tuple[float, float, float, float]]:
+    """One padded bounding box per facecam, in frame fractions.
+
+    A co-stream has TWO facecams — the observed stream puts one top-left and one
+    top-right — and taking the median of every detection lands between them, on
+    the gameplay. So detections are grouped by centre first.
+
+    Grouping alone is not enough, and the failure is instructive: with a better
+    detector the second cluster came back at the MIDDLE of the frame, a Minecraft
+    texture the cascade liked, and the band shrank to the bottom half to avoid a
+    face that was never there. What separates a facecam from a mob is not how
+    tightly it clusters but that IT IS ALWAYS THERE — an inset persists for the
+    whole clip, a texture flashes past. Clusters must therefore span a real share
+    of the window, not merely collect a few hits.
+    """
+    if proxy_w <= 0 or proxy_h <= 0:
+        return []
+    samples = [(i, b) for i, s in enumerate(faces)
+               for b in (s.get("boxes") or [])
+               if isinstance(b, (list, tuple)) and len(b) >= 4]
+    if not samples or not faces:
+        return []
+
+    groups: list[list[tuple[int, float, float, float, float]]] = []
+    for i, b in samples:
+        x0, y0 = float(b[0]) / proxy_w, float(b[1]) / proxy_h
+        x1, y1 = x0 + float(b[2]) / proxy_w, y0 + float(b[3]) / proxy_h
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        for g in groups:
+            gx = sum((a[1] + a[2]) / 2 for a in g) / len(g)
+            gy = sum((a[3] + a[4]) / 2 for a in g) / len(g)
+            if abs(cx - gx) <= _CLUSTER_TOL and abs(cy - gy) <= _CLUSTER_TOL:
+                g.append((i, x0, x1, y0, y1))
+                break
+        else:
+            groups.append([(i, x0, x1, y0, y1)])
+
+    def med(vals: list[float]) -> float:
+        vals = sorted(vals)
+        return vals[len(vals) // 2]
+
+    pad = 0.02
+    out = []
+    for g in groups:
+        if len(g) < _MIN_CLUSTER:
+            continue
+        span = (max(a[0] for a in g) - min(a[0] for a in g) + 1) / len(faces)
+        if span < _MIN_PERSISTENCE:
+            continue
+        out.append((med([a[1] for a in g]) - pad, med([a[2] for a in g]) + pad,
+                    med([a[3] for a in g]) - pad, med([a[4] for a in g]) + pad))
+    return out
+
+
+def action_band(faces: list[dict], proxy_w: int, proxy_h: int
+                ) -> tuple[float, float, float, float]:
+    """The largest edge-aligned band that excludes EVERY detected facecam.
+
+    Cut lines are taken from each cluster's own edges, so the search covers
+    "left of both", "between them", "below both" and so on rather than assuming
+    a single inset. With one facecam this reduces to the old behaviour; with two
+    it is the difference between a gameplay camera and one framing a co-streamer.
+
+    Falls back to ACTION_BAND when nothing was detected — a band derived from a
+    phantom face would be worse than a wrong constant.
+    """
+    clusters = face_clusters(faces, proxy_w, proxy_h)
+    lo, hi = _EDGE_INSET, 1.0 - _EDGE_INSET
+    if not clusters:
+        return ACTION_BAND
+
+    xs = sorted({lo, hi} | {v for c in clusters for v in (c[0], c[1])})
+    ys = sorted({lo, hi} | {v for c in clusters for v in (c[2], c[3])})
+
+    best, best_area = None, 0.0
+    for i, x0 in enumerate(xs):
+        for x1 in xs[i + 1:]:
+            for j, y0 in enumerate(ys):
+                for y1 in ys[j + 1:]:
+                    x0c, x1c = max(x0, lo), min(x1, hi)
+                    y0c, y1c = max(y0, lo), min(y1, hi)
+                    area = (x1c - x0c) * (y1c - y0c)
+                    if area <= best_area:
+                        continue
+                    if any(cx0 < x1c and cx1 > x0c and cy0 < y1c and cy1 > y0c
+                           for cx0, cx1, cy0, cy1 in clusters):
+                        continue
+                    best, best_area = (x0c, x1c, y0c, y1c), area
+
+    if best is None or (best[1] - best[0]) < 0.25 or (best[3] - best[2]) < 0.25:
+        return ACTION_BAND       # facecams dominate the frame; trust nothing
+    return best
