@@ -420,3 +420,35 @@ def test_a_facecam_seen_intermittently_still_counts():
     # coming back across the window, not that every sample finds it.
     track = _track(_steady([10, 10, 60, 60], n=40, every=4))
     assert len(face_clusters(track, 480, 270)) == 1
+
+
+def test_an_open_menu_is_never_cut_to():
+    # An inventory panel moves and is full of contrast, so motion and detail
+    # both call it alive. Only the UI share rejects it.
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    plan = dynamic_edit.plan_dynamic_edit(
+        cand, _signals(20.0), _faces(0.0, 20.0), src_w=SRC_W, src_h=SRC_H,
+        proxy_w=PROXY_W, proxy_h=PROXY_H,
+        game_motion=[0.9] * 200, game_focus=[900.0] * 200,
+        game_detail=[60.0] * 200, game_ui=[0.20] * 200, game_motion_hop=0.25)
+    assert all(s["camera"].startswith("face") for s in plan["shots"])
+
+
+def test_gameplay_below_the_ui_share_is_still_cut_to():
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    plan = dynamic_edit.plan_dynamic_edit(
+        cand, _signals(20.0), _faces(0.0, 20.0), src_w=SRC_W, src_h=SRC_H,
+        proxy_w=PROXY_W, proxy_h=PROXY_H,
+        game_motion=[0.9] * 200, game_focus=[900.0] * 200,
+        game_detail=[60.0] * 200, game_ui=[0.01] * 200, game_motion_hop=0.25)
+    assert any(s["camera"].startswith("game") for s in plan["shots"])
+
+
+def test_the_ui_guard_is_off_when_the_caller_does_not_measure_it():
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    kwargs = dict(src_w=SRC_W, src_h=SRC_H, proxy_w=PROXY_W, proxy_h=PROXY_H,
+                  game_motion=[0.9] * 200, game_focus=[900.0] * 200,
+                  game_detail=[60.0] * 200, game_motion_hop=0.25)
+    plan = dynamic_edit.plan_dynamic_edit(cand, _signals(20.0), _faces(0.0, 20.0),
+                                          **kwargs)
+    assert any(s["camera"].startswith("game") for s in plan["shots"])

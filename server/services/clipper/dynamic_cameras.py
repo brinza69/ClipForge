@@ -101,6 +101,22 @@ DEFAULT_STYLE: dict[str, Any] = {
     # Catching those needs a different signal (template match on the HUD, or OCR),
     # which is not what this is.
     "game_flat_below": 8.0,
+    # ...and above this share of flat mid-grey it is an inventory or crafting
+    # panel, not the game. The third rejection exists because the first two
+    # provably miss menus: a panel is high-contrast and the cursor keeps moving,
+    # so detail and motion both call it alive, and 17% of the tested slice was
+    # menu screens.
+    #
+    # Measured on 90 frames: 74 gameplay frames scored under 0.02, 15 menu
+    # frames over 0.11, and NOTHING landed between 0.05 and 0.11. 0.08 sits in
+    # that empty gap. Saturation was tried first and separates the same frames
+    # far less cleanly (44-59 against 62-105, overlapping); a lattice measure
+    # ran backwards, because Minecraft terrain is more periodic than a menu is.
+    #
+    # This assumes a UI panel drawn in flat neutral grey, which is Minecraft and
+    # most game menus but is not a law. A game with a coloured or transparent
+    # inventory would need its own palette.
+    "game_ui_above": 0.08,
     # In-shot camera moves — OFF by default, and that is a finding, not an
     # oversight. It holds across all nine profiles, but it splits by SOURCE TYPE
     # rather than by house style: the two references that are locked-off stream

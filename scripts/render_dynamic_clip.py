@@ -53,9 +53,17 @@ def load(project: Path, name: str) -> dict | list:
 
 MOTION_COLS = 8
 
+# What a game UI panel looks like and gameplay does not: near-neutral colour at
+# middling brightness. Measured on 90 frames of the test slice, the share of the
+# band matching this is bimodal with an empty gap — 74 gameplay frames under
+# 0.02, 15 menu frames over 0.11, nothing between 0.05 and 0.11.
+UI_SPREAD_MAX = 18     # max channel spread for "this pixel is grey"
+UI_LUM_MIN, UI_LUM_MAX = 110, 215
+
 
 def region_motion(window: Path, hop: float, band: tuple[float, float, float, float],
-                  src_w: int) -> tuple[list[float], list[float], list[float]]:
+                  src_w: int) -> tuple[list[float], list[float], list[float],
+                                       list[float]]:
     """(how much is happening, where, and how much there is to look at) per `hop`.
 
     Two things the whole-frame motion signal in signals.json cannot give us.
@@ -75,6 +83,13 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
     spinner ticking over scores as "something is happening" while being the worst
     thing the clip could cut to. Detail separates them, because a dead screen has
     nothing in it whichever frame you look at.
+
+    The fourth is the share of the band that is flat, mid-luminance grey — an
+    open inventory or crafting panel. Neither motion nor detail catches those:
+    a menu is high-contrast and the mouse keeps moving, so both call it alive,
+    and 17% of the tested slice was menu screens. What a game UI panel is that
+    gameplay is not is DESATURATED AND FLAT, so count pixels whose channels sit
+    within 18 levels of each other at middling brightness.
     """
     import cv2
     import numpy as np
@@ -89,6 +104,7 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
         totals: list[float] = []
         focus: list[float] = []
         detail: list[float] = []
+        ui: list[float] = []
         previous = None
         index = 0
         while True:
@@ -99,6 +115,13 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
                 h, w = frame.shape[:2]
                 crop = frame[int(h * band[2]):int(h * band[3]),
                              int(w * band[0]):int(w * band[1])]
+                colour = cv2.resize(crop, (MOTION_COLS * 12, 54),
+                                    interpolation=cv2.INTER_AREA).astype(np.int16)
+                lo = colour.min(axis=2)
+                spread = colour.max(axis=2) - lo
+                lum = colour.mean(axis=2)
+                ui.append(float(np.mean((spread < UI_SPREAD_MAX)
+                                        & (lum > UI_LUM_MIN) & (lum < UI_LUM_MAX))))
                 grey = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY),
                                   (MOTION_COLS * 12, 54),
                                   interpolation=cv2.INTER_AREA).astype(np.float32)
@@ -117,7 +140,7 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
                                  else band_x0 + (hottest + 0.5) * col_w)
                 previous = grey
             index += 1
-        return totals, focus, detail
+        return totals, focus, detail, ui
     finally:
         cap.release()
 
@@ -125,7 +148,7 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
 def analyse_window(proxy: Path, start: float, duration: float,
                    band: tuple[float, float, float, float] | None, src_w: int
                    ) -> tuple[list[dict], list[float], list[float], list[float],
-                              tuple[float, float, float, float]]:
+                              list[float], tuple[float, float, float, float]]:
     """(dense face track in proxy pixels, the three band series, and the band).
 
     Pass `band=None` to derive it from the facecam this clip actually has, which
@@ -155,8 +178,8 @@ def analyse_window(proxy: Path, start: float, duration: float,
             info = video_info(str(window))
             band = action_band(samples, int(info.get("width") or 0),
                                int(info.get("height") or 0))
-        totals, focus, detail = region_motion(window, FACE_HOP_S, band, src_w)
-        return faces, totals, focus, detail, band
+        totals, focus, detail, ui = region_motion(window, FACE_HOP_S, band, src_w)
+        return faces, totals, focus, detail, ui, band
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -240,7 +263,7 @@ def main() -> None:
         print(f"    {(cand.get('text') or '')[:110]}")
 
         t0 = time.time()
-        faces, motion, focus, detail, band = analyse_window(
+        faces, motion, focus, detail, ui, band = analyse_window(
             proxy, start, duration, None if args.auto_band else ACTION_BAND, src_w)
         print(f"    banda de actiune x {band[0]:.2f}-{band[1]:.2f}  "
               f"y {band[2]:.2f}-{band[3]:.2f}"
@@ -254,7 +277,7 @@ def main() -> None:
             proxy_w=int(signals.get("proxy_width") or 0),
             proxy_h=int(signals.get("proxy_height") or 0),
             game_motion=motion, game_focus=focus, game_detail=detail,
-            game_motion_hop=FACE_HOP_S, style=style)
+            game_ui=ui, game_motion_hop=FACE_HOP_S, style=style)
         shots = plan["shots"]
         # lowercase -> uppercase reads widest -> tightest.
         letters = {"face": "f", "face_medium": "m", "face_tight": "F",

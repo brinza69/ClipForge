@@ -279,6 +279,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                       game_motion: Sequence[float] | None = None,
                       game_focus: Sequence[float] | None = None,
                       game_detail: Sequence[float] | None = None,
+                      game_ui: Sequence[float] | None = None,
                       game_motion_hop: float = 0.25,
                       style: dict | None = None) -> dict:
     """Plan the shot list for one candidate.
@@ -367,6 +368,13 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                              motion_base + a, motion_base + b) for a, b in spans]
                if game_detail else [])
     flat_below = _f(merged.get("game_flat_below"), 8.0) if details else -1.0
+    # A third rejection, for the case the first two provably miss: an open
+    # inventory or crafting panel. It moves and it is full of contrast, so
+    # motion and detail both call it alive.
+    uis = ([_series_mean(list(game_ui), motion_hop,
+                         motion_base + a, motion_base + b) for a, b in spans]
+           if game_ui else [])
+    ui_above = _f(merged.get("game_ui_above"), 0.08) if uis else 2.0
     push_min = _f(merged.get("push_min_shot_s"), 0.95)
 
     max_run = max(1, int(merged.get("max_same_family") or 2))
@@ -382,9 +390,11 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
         if _EMPHATIC.search(text) or _EMOTION.search(text):
             energy = min(1.0, energy + 0.18)
 
-        # "Alive" now means both: something moved AND there is something there.
-        alive = motions[i] > dead_below and (
-            not details or details[i] > flat_below)
+        # "Alive" means all three: something moved, there is something there,
+        # and what is there is the game rather than its menus.
+        alive = (motions[i] > dead_below
+                 and (not details or details[i] > flat_below)
+                 and (not uis or uis[i] < ui_above))
         camera = _pick_camera(ratio >= speech_on, action >= action_on,
                               alive, energy, previous, run, max_run, merged)
         if i == 0:
