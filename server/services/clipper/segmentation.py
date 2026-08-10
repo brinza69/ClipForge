@@ -124,6 +124,12 @@ def signal_view(signals: dict | None) -> dict:
                    if _as_float(v) is not None],
         "motion_hop": _as_float(motion_d.get("hop_s")
                                 or sig.get("motion_hop_s")) or 0.5,
+        # Read only from the motion blob, never from a top-level "ui": the
+        # series is sliced with motion_hop, and it shares that hop only because
+        # motion_timeline emits both from one decode pass. A loose top-level
+        # key would be sliced against a hop it never agreed to.
+        "ui": [_as_float(v) or 0.0 for v in (motion_d.get("ui") or [])
+               if _as_float(v) is not None],
         "faces": [f for f in (sig.get("faces") or []) if isinstance(f, dict)],
     }
 

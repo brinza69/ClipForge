@@ -24,7 +24,7 @@ treated as 0.0:
     emotion_intensity, laughter_score, sentiment_magnitude
     novelty, repetition_ratio
     audio_rms_mean, audio_peak_ratio, audio_dynamic_range
-    motion_mean, motion_peak, scene_cut_rate (raw cuts/second)
+    motion_mean, motion_peak, scene_cut_rate (raw cuts/second), game_ui_ratio
     reaction_score, post_payoff_energy
     words_per_second (raw), word_confidence
     ends_mid_sentence, self_contained, pronoun_dependency
@@ -277,6 +277,15 @@ def _compute_sub_scores(cand: dict[str, Any], features: dict[str, Any],
     filler = _unit(g("filler_ratio"))
     dead_air = _unit(g("dead_air_ratio"))
 
+    # A window spent in an inventory screen scores full marks on motion and
+    # detail — the panel is high-contrast and the cursor keeps moving — so
+    # nothing else in this file would mark it down. The shot planner already
+    # refuses to CUT to a menu; without this the window still gets ranked as a
+    # top candidate and then renders as almost pure facecam, which throws away
+    # the cross-cutting the gaming style exists for. Scaled, not gated: a clip
+    # with one glance at the map should lose a little, not be disqualified.
+    on_screen = 1.0 - 0.75 * _unit(g("game_ui_ratio"))
+
     scores = {
         "hook": (55.0 * _unit(g("hook_strength"))
                  + 25.0 * _unit(g("first_seconds_energy"))
@@ -297,9 +306,9 @@ def _compute_sub_scores(cand: dict[str, Any], features: dict[str, Any],
         "audio_energy": (50.0 * _unit(g("audio_rms_mean"))
                          + 30.0 * _unit(g("audio_peak_ratio"))
                          + 20.0 * _unit(g("audio_dynamic_range"))),
-        "visual_energy": (45.0 * _unit(g("motion_mean"))
-                          + 30.0 * _unit(g("motion_peak"))
-                          + 0.25 * cuts),
+        "visual_energy": on_screen * (45.0 * _unit(g("motion_mean"))
+                                      + 30.0 * _unit(g("motion_peak"))
+                                      + 0.25 * cuts),
         "reaction": (55.0 * _unit(g("reaction_score"))
                      + 25.0 * _unit(g("post_payoff_energy"))
                      + 20.0 * _unit(g("laughter_score"))),
@@ -384,13 +393,19 @@ def _fmt_duration(seconds: float) -> str:
     return f"{total // 60}m{total % 60:02d}s"
 
 
-def explain(sub_scores: dict, cand: dict) -> str:
+def explain(sub_scores: dict, cand: dict, features: dict | None = None) -> str:
     """One or two factual sentences naming the strongest and weakest signals.
 
     No superlatives and no performance claims — the user is deciding whether to
     watch the preview, and an inflated reason costs them that trust once.
     """
     values = {name: _num((sub_scores or {}).get(name, 0.0)) for name in SUB_SCORES}
+    weak = dict(_WEAK)
+    # visual_energy is the one sub-score with two different ways to be low, and
+    # the default clause is a lie about the other one: an inventory screen has
+    # plenty of motion. Say what is actually wrong with the window.
+    if _unit(_num((features or {}).get("game_ui_ratio", 0.0))) >= 0.5:
+        weak["visual_energy"] = "The game spends much of this window in a menu"
     duration = _fmt_duration(_duration_of(cand or {}, {}))
 
     # Ties break on SUB_SCORES order so the same clip always reads the same.
@@ -411,7 +426,7 @@ def explain(sub_scores: dict, cand: dict) -> str:
     # Only call out a weakness that is both low in absolute terms and clearly
     # out of line with the rest of the clip.
     if values[weakest] < 45.0 and (best - values[weakest]) >= 25.0:
-        return f"{first} {_WEAK[weakest]} for a {duration} clip."
+        return f"{first} {weak[weakest]} for a {duration} clip."
     return f"{first} Runs {duration}."
 
 
@@ -440,5 +455,5 @@ def score_candidate(cand: dict, features: dict, *, profile: str,
     return {
         "overall": round(_clamp(overall), 1),
         "sub_scores": sub_scores,
-        "reason": explain(sub_scores, cand),
+        "reason": explain(sub_scores, cand, features),
     }

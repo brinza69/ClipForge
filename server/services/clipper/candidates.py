@@ -100,6 +100,7 @@ FEATURE_KEYS: tuple[str, ...] = (
     "ends_mid_sentence", "self_contained", "pronoun_dependency", "energy_trend",
     "dead_air_ratio", "boundary_confidence", "snap_quality", "loudness_ok",
     "clipping_ratio", "blur_score", "resolution_ok", "profanity_ratio", "flagged_terms",
+    "game_ui_ratio",
 )
 
 
@@ -697,6 +698,37 @@ def _audio(start: float, end: float, duration: float, sv: dict, payoff: float) -
     }
 
 
+# Below this absolute spread between a source's quiet floor and its busiest
+# frames, the source simply has no menu behaviour and the whole measure is
+# noise. Measured on the gameplay slice the spread is 0.14 (p25 0.020 -> p95
+# 0.161); on any source without panels it is a rounding error.
+_UI_MIN_SPREAD = 0.03
+
+
+def _ui_ratio(sv: dict, start: float, end: float) -> float:
+    """How menu-heavy this window is, 0..1, RELATIVE TO ITS OWN SOURCE.
+
+    An absolute threshold cannot work here: the share of flat mid-grey depends
+    on how much permanent chrome the streamer's layout carries, and calibrating
+    it per stream is exactly the kind of constant that rots. Measuring against
+    the source's own p25/p95 asks the question that actually matters — is THIS
+    window menu-heavy for THIS stream — and needs no calibration.
+
+    Returns 0.0 when the source has no menu behaviour to speak of, which is the
+    benign default: scoring treats absent and zero alike.
+    """
+    series = sv.get("ui") or []
+    window = series_slice(series, sv["motion_hop"], start, end)
+    if not window or len(series) < 8:
+        return 0.0
+    ordered = sorted(series)
+    floor = ordered[max(0, int(0.25 * (len(ordered) - 1)))]
+    ceiling = ordered[min(len(ordered) - 1, int(0.95 * (len(ordered) - 1)))]
+    if ceiling - floor < _UI_MIN_SPREAD:
+        return 0.0
+    return _clamp01((_mean(window) - floor) / (ceiling - floor))
+
+
 def _visual(start: float, end: float, duration: float, sv: dict, signals: Any) -> dict[str, float]:
     motion = series_slice(sv["motion"], sv["motion_hop"], start, end)
     cuts = float(len(points_in(start, end, sv["scenes"])))
@@ -713,6 +745,7 @@ def _visual(start: float, end: float, duration: float, sv: dict, signals: Any) -
         "scene_cut_rate": _div(cuts, duration),
         "face_presence_ratio": _div(float(sum(1 for f in samples if f.get("boxes"))),
                                     float(len(samples))),
+        "game_ui_ratio": _ui_ratio(sv, start, end),
         # Not measurable from the Pass A signals; emitted as real zeros/ones so
         # the vector stays fixed-width for the ranker.
         "blur_score": 0.0,

@@ -296,6 +296,73 @@ def test_face_pct_is_clamped():
         assert 0.15 - 1e-9 <= plan["face_pct"] <= 0.6 + 1e-9
 
 
+# ── menu-heavy windows rank lower ────────────────────────────────────────────
+#
+# Numbers below are the real ones, measured on data/clipper/2d3375ee3420 (a
+# 12-minute 1080p60 Minecraft co-stream, 1441 samples at a 0.5s hop):
+# clean gameplay windows scored 0.000-0.012 and menu stretches 0.478-0.697.
+# The synthetic series here reproduces that two-orders-of-magnitude split.
+
+
+def _ui_signals(quiet: float, busy: float, busy_from: int, busy_to: int,
+                n: int = 240) -> dict:
+    series = [quiet] * n
+    for i in range(busy_from, min(n, busy_to)):
+        series[i] = busy
+    return segmentation.signal_view({"motion": {"hop_s": 0.5, "motion": [0.4] * n,
+                                                "ui": series}})
+
+
+def test_a_menu_stretch_reads_as_menu_and_gameplay_does_not():
+    # busy from index 100 to 160 -> 50s to 80s at a 0.5s hop
+    sv = _ui_signals(0.021, 0.180, 100, 160)
+    assert candidates._ui_ratio(sv, 0.0, 40.0) < 0.05, "clean gameplay flagged as menu"
+    assert candidates._ui_ratio(sv, 52.0, 78.0) > 0.80, "a menu stretch went unnoticed"
+
+
+def test_a_source_with_no_menus_never_reports_one():
+    """The measure is relative to the source's own floor, so a source with no
+    panels at all must return 0 rather than amplifying its own noise."""
+    sv = _ui_signals(0.020, 0.023, 100, 160)   # spread 0.003, all noise
+    for a, b in ((0.0, 40.0), (52.0, 78.0)):
+        assert candidates._ui_ratio(sv, a, b) == 0.0
+
+
+def test_a_menu_window_loses_visual_energy_against_identical_motion():
+    """A menu is high-contrast and the cursor keeps moving, so every other
+    signal in scoring.py calls it alive. This is the only thing that does not."""
+    base = {"motion_mean": 0.6, "motion_peak": 0.9, "scene_cut_rate": 0.2,
+            "duration": 35.0}
+    cand = {"start": 0.0, "end": 35.0}
+    clean = scoring.score_candidate(cand, dict(base, game_ui_ratio=0.0),
+                                    profile="gaming", platform="tiktok")
+    menu = scoring.score_candidate(cand, dict(base, game_ui_ratio=1.0),
+                                   profile="gaming", platform="tiktok")
+    assert menu["sub_scores"]["visual_energy"] < clean["sub_scores"]["visual_energy"] * 0.4
+    assert menu["overall"] < clean["overall"]
+
+
+def test_a_missing_ui_feature_costs_nothing():
+    """Absent must behave as 'this source has no menus', not as a penalty —
+    every pre-existing caller omits the key."""
+    base = {"motion_mean": 0.6, "motion_peak": 0.9, "scene_cut_rate": 0.2,
+            "duration": 35.0}
+    cand = {"start": 0.0, "end": 35.0}
+    absent = scoring.score_candidate(cand, base, profile="gaming", platform="tiktok")
+    zero = scoring.score_candidate(cand, dict(base, game_ui_ratio=0.0),
+                                   profile="gaming", platform="tiktok")
+    assert absent["overall"] == zero["overall"]
+
+
+def test_the_menu_reason_does_not_claim_the_screen_was_still():
+    """'There is little on-screen motion' is a lie about an inventory screen."""
+    sub = {name: 80.0 for name in scoring.SUB_SCORES}
+    sub["visual_energy"] = 5.0
+    reason = scoring.explain(sub, {"start": 0.0, "end": 35.0}, {"game_ui_ratio": 0.9})
+    assert "menu" in reason.lower()
+    assert "little on-screen motion" not in reason.lower()
+
+
 def test_emitted_rects_are_even_and_inside_the_source():
     plan = layout.plan_layout(
         {"start": 0.0, "end": 30.0, "content_type": "gaming"},

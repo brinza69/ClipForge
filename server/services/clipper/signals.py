@@ -47,6 +47,22 @@ SPEECH_MERGE_GAP_S = 0.25
 
 MOTION_W, MOTION_H = 64, 36  # 16:9 thumbnail — enough for gross frame differencing
 
+# "This pixel belongs to a game UI panel": desaturated and mid-bright. An open
+# inventory or crafting screen is the one thing motion and detail both call
+# alive — the panel is high-contrast and the cursor keeps moving — so it needs
+# its own measure. Same constants as scripts/render_dynamic_clip.py, which
+# scores shots with it; these decide whether a WINDOW is worth ranking at all.
+#
+# Measured on the 12-min gameplay slice, 361 samples: gameplay sits at 0.021
+# (p25 0.020, p75 0.023) and menu stretches at 0.16-0.20. Bimodal, with two
+# orders of magnitude between the modes, so the threshold is not delicate.
+# Measured at this 64x36 whole-frame scale against the 192x54 gameplay-band
+# scale render_dynamic_clip uses: r = 0.993. The coarse grid loses nothing,
+# which is what lets this ride along in the motion decode instead of costing a
+# second full pass over a 12-hour VOD.
+UI_SPREAD_MAX = 18
+UI_LUM_MIN, UI_LUM_MAX = 110, 215
+
 FACE_HOP_S = 2.0
 MAX_FACE_SAMPLES = 2000      # caps Haar cost regardless of VOD length
 MAX_MOTION_SAMPLES = 200_000  # ~27 h at the default hop; guards a broken decoder
@@ -301,11 +317,18 @@ def _cv2() -> ModuleType | None:
 
 
 def motion_timeline(proxy_path: str, *, hop_s: float = 0.5) -> dict[str, Any]:
-    """Frame-differencing motion energy over the proxy, normalised 0..1."""
+    """Frame-differencing motion energy over the proxy, normalised 0..1.
+
+    Also returns `ui`: the RAW (un-normalised) share of each frame that looks
+    like a game UI panel. Raw on purpose — `motion` is normalised because only
+    its shape matters, but the UI share is compared against the source's own
+    quiet floor in candidates.py, and normalising here would destroy the
+    distinction between "this source has menus" and "this source has none".
+    """
     if hop_s <= 0:
         logger.warning("motion_timeline: hop_s must be > 0, got %s — using 0.5", hop_s)
         hop_s = 0.5
-    result: dict[str, Any] = {"hop_s": hop_s, "motion": []}
+    result: dict[str, Any] = {"hop_s": hop_s, "motion": [], "ui": []}
     cv2 = _cv2()
     if cv2 is None or not proxy_path or not Path(proxy_path).exists():
         if cv2 is not None:
@@ -322,6 +345,7 @@ def motion_timeline(proxy_path: str, *, hop_s: float = 0.5) -> dict[str, Any]:
         limit = (count / fps) if fps > 0 and count > 0 else 0.0
 
         diffs: list[float] = []
+        uis: list[float] = []
         previous = None
         t = 0.0
         while len(diffs) < MAX_MOTION_SAMPLES:
@@ -332,6 +356,11 @@ def motion_timeline(proxy_path: str, *, hop_s: float = 0.5) -> dict[str, Any]:
             if not ok or frame is None:
                 break
             small = cv2.resize(frame, (MOTION_W, MOTION_H), interpolation=cv2.INTER_AREA)
+            channels = small.astype(np.int16)
+            spread = channels.max(axis=2) - channels.min(axis=2)
+            lum = channels.mean(axis=2)
+            uis.append(float(np.mean((spread < UI_SPREAD_MAX)
+                                     & (lum > UI_LUM_MIN) & (lum < UI_LUM_MAX))))
             grey = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
             # The first sample has nothing to compare against; 0 keeps the
             # series index-aligned with t = i * hop_s.
@@ -345,6 +374,7 @@ def motion_timeline(proxy_path: str, *, hop_s: float = 0.5) -> dict[str, Any]:
         cap.release()
 
     result["motion"] = _normalise(np.asarray(diffs, dtype=np.float64)) if diffs else []
+    result["ui"] = [round(v, 5) for v in uis]
     return result
 
 
