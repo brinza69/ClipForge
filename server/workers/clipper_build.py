@@ -158,7 +158,10 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         await queue.update_progress(job_id, 0.48, "Judging candidates")
         try:
             await llm_select.judge(
-                refined, weight=float(settings.clipper_llm_weight))
+                refined,
+                weight=float(settings.clipper_llm_weight),
+                model=(cfg.get("llm_judge_model")
+                       or settings.clipper_llm_judge_model or None))
         except Exception:
             logger.warning("LLM judging failed; keeping the heuristic ranking",
                            exc_info=True)

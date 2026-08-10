@@ -176,6 +176,14 @@ class Settings(BaseSettings):
     # 19 of them): about 3.7 cents for a 12-hour gaming stream and 11.1 for a
     # talk-heavy one, with nomination on a local model and judging on an API.
     clipper_llm_select: bool = False
+    # The judging pass needs a FRONTIER model, and the repo-wide default is a
+    # small one. Measured on the same 46 candidates: gpt-4o-mini answered
+    # almost everything 50, 40 or 10 with reasons like "Excitement about
+    # discovery" and moved the reference clip from #45 only to #36, where a
+    # frontier model spread its scores over eight values and moved it to #4.
+    # Nomination is bulk reading and a small model is fine at it; judging is
+    # taste and it is not. Blank falls back to the repo default.
+    clipper_llm_judge_model: str = "gpt-4o"
     # How much of `overall` the model's verdict carries.
     #
     # Swept on the co-stream against two hand-labelled reference clips — a bit
