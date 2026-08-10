@@ -349,6 +349,67 @@ def test_face_pct_is_clamped():
         assert 0.15 - 1e-9 <= plan["face_pct"] <= 0.6 + 1e-9
 
 
+# ── features have to actually vary ───────────────────────────────────────────
+#
+# A feature pinned to one value is not neutral: it is weight spent on an
+# offset. Measured on the co-stream's 57 candidate windows before these fixes,
+# audio_peak_ratio read exactly 1.000 on every single one (30% of
+# audio_energy) and audio_dynamic_range had a stdev of 0.027 with a median of
+# 0.998 (another 20%). audio_energy therefore carried 12% of the gaming
+# profile's weight with a stdev of 3.4.
+
+
+def _two_halves() -> dict:
+    """A source whose first half is loud and peaky and second half is not.
+
+    The shared `chain` fixture cannot show this: its rms is a periodic
+    sequence, so every window of the same length has an identical distribution
+    and these features are legitimately constant on it. Testing against it
+    would test the fixture.
+    """
+    hop, half = 0.25, 600                       # 150s each side
+    rms = [0.9 if (i // 8) % 2 == 0 else 0.1 for i in range(half)]  # swinging
+    rms += [0.4] * half                                             # flat
+    peaks = [round(i * 1.5, 2) for i in range(1, 100)]              # first half only
+    span = [[0.0, 300.0]]
+    return {
+        "duration": 300.0,
+        "audio": {"hop_s": hop, "rms": rms, "peaks": peaks,
+                  "silence": [], "speech": span},
+        "peaks": peaks, "silence": [], "speech": span,
+        "motion": {"hop_s": 0.5, "motion": [0.3] * 600},
+    }
+
+
+def test_the_audio_features_respond_to_the_audio():
+    """Each of these was pinned before: audio_peak_ratio read exactly 1.000 on
+    all 57 real windows, audio_dynamic_range had sd 0.027 at a median of 0.998,
+    and peak_prominence divided by a max that the source normalisation had
+    already pinned to 1.0."""
+    sv = segmentation.signal_view(_two_halves())
+    loud = candidates._audio(10.0, 60.0, 50.0, sv, 40.0)
+    flat = candidates._audio(200.0, 250.0, 50.0, sv, 230.0)
+
+    for key in ("audio_peak_ratio", "audio_dynamic_range", "peak_prominence"):
+        assert loud[key] != flat[key], f"{key} cannot tell the two halves apart"
+        assert not (loud[key] == 1.0 and flat[key] == 1.0), f"{key} saturates"
+
+    assert loud["audio_dynamic_range"] > flat["audio_dynamic_range"]
+    assert loud["peak_prominence"] > flat["peak_prominence"]
+    assert loud["audio_peak_ratio"] > flat["audio_peak_ratio"]
+
+
+def test_peak_ratio_is_relative_to_the_source_not_a_fixed_rate():
+    """The old divisor assumed one peak per 8 seconds. On a source that peaks
+    every 1.5s that cleared on every window, so the feature said 1.000 always."""
+    sv = segmentation.signal_view(_two_halves())
+    at_source_rate = candidates._audio(10.0, 60.0, 50.0, sv, 40.0)
+    assert at_source_rate["audio_peak_ratio"] < 0.99, (
+        f"a window at roughly the source's own peak rate reads "
+        f"{at_source_rate['audio_peak_ratio']:.3f} — the fixed divisor is back"
+    )
+
+
 # ── speech comes from the transcript, not the noise floor ────────────────────
 
 

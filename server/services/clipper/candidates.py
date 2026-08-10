@@ -197,7 +197,24 @@ def _structure(inside: Sequence[dict], sentences: Sequence[dict], before: dict |
     }
 
 
-def _audio(start: float, end: float, duration: float, sv: dict, payoff: float) -> dict[str, float]:
+def _percentile(ordered: Sequence[float], q: float) -> float:
+    """Nearest-rank percentile of an ALREADY SORTED series; 0.0 when empty."""
+    if not ordered:
+        return 0.0
+    return float(ordered[min(len(ordered) - 1, max(0, int(q * (len(ordered) - 1))))])
+
+
+def _peak_rate(sv: dict) -> float:
+    """The SOURCE's own peaks per second, for judging a window against it."""
+    peaks = sv.get("peaks") or []
+    if len(peaks) < 2:
+        return 0.0
+    span = _num(peaks[-1]) - _num(peaks[0])
+    return _div(float(len(peaks)), span)
+
+
+def _audio(start: float, end: float, duration: float, sv: dict,
+           payoff: float) -> dict[str, float]:
     rms = series_slice(sv["rms"], sv["rms_hop"], start, end)
     mean, top = _mean(rms), max(rms, default=0.0)
     half = len(rms) // 2
@@ -222,9 +239,27 @@ def _audio(start: float, end: float, duration: float, sv: dict, payoff: float) -
         # rms is normalised 0..1 over the whole source, so a 0.2 delta is a
         # large swing inside one clip.
         "energy_trend": max(-1.0, min(1.0, delta / 0.2)),
-        "audio_peak_ratio": _clamp01(_div(peaks, max(1.0, duration / 8.0))),
-        "audio_dynamic_range": _clamp01(_div(top - min(rms, default=0.0), top)),
-        "peak_prominence": _clamp01(_div(top - median, top)),
+        # How peaky this window is FOR THIS SOURCE. The old divisor assumed one
+        # peak per 8 seconds; measured on the co-stream the source runs about
+        # one per 3, so every clip cleared the bar and the feature read exactly
+        # 1.000 on all 57 of them — 30% of audio_energy, contributing nothing
+        # but an offset. Parity with the source reads 0.5, twice as peaky 1.0.
+        "audio_peak_ratio": _clamp01(0.5 * _div(_div(peaks, duration), _peak_rate(sv)))
+        if _peak_rate(sv) > 0 else _clamp01(_div(peaks, max(1.0, duration / 8.0))),
+        # p90-p10, not max-min. rms is normalised 0..1 across the whole source,
+        # so within any window of real length the max is near 1 and the min near
+        # 0 and (top-min)/top is ~1 by construction: measured, sd 0.027 with a
+        # median of 0.998. A percentile spread measures the same intent and
+        # survives one silent hop.
+        "audio_dynamic_range": _clamp01(_percentile(ordered, 0.90)
+                                        - _percentile(ordered, 0.10)),
+        # How far the window's loud moments stand above its own typical level.
+        # Dividing by `top` cannot measure that here: rms is normalised across
+        # the source, so `top` is 1.000 in the median window (sd 0.053) and
+        # (top-median)/top collapses to 1-median, a loudness measure wearing a
+        # prominence label. p95 over median instead — same intent, 2.4x the
+        # spread (0.058 -> 0.139), and one clipped hop no longer defines it.
+        "peak_prominence": _clamp01(_percentile(ordered, 0.95) - median),
         "silence_ratio": _clamp01(_div(silence, duration)),
         "dead_air_ratio": _clamp01(_div(dead, duration)),
         "speech_ratio": _clamp01(_div(overlap_seconds(start, end, sv["speech"]), duration))
