@@ -79,6 +79,37 @@ def _plan(start: float = 100.0, end: float = 133.0, **style):
 # Shot grammar
 # --------------------------------------------------------------------------
 
+def test_rung_steps_up_once_per_threshold_cleared():
+    fam = ("wide", "medium", "tight")
+    assert dynamic_edit._rung(fam, 0.10, [0.42, 0.72]) == "wide"
+    assert dynamic_edit._rung(fam, 0.42, [0.42, 0.72]) == "medium"
+    assert dynamic_edit._rung(fam, 0.71, [0.42, 0.72]) == "medium"
+    assert dynamic_edit._rung(fam, 0.72, [0.42, 0.72]) == "tight"
+    assert dynamic_edit._rung(fam, 1.00, [0.42, 0.72]) == "tight"
+
+
+def test_rung_is_generic_over_family_length():
+    # The game family kept two rungs and its original 0.55 boundary; the point of
+    # _rung is that neither family needs the other's arity hard-coded.
+    two = ("game", "game_tight")
+    assert dynamic_edit._rung(two, 0.54, [0.55]) == "game"
+    assert dynamic_edit._rung(two, 0.55, [0.55]) == "game_tight"
+    # More thresholds than rungs must clamp, not raise.
+    assert dynamic_edit._rung(two, 0.99, [0.42, 0.72]) == "game_tight"
+
+
+def test_the_middle_face_rung_is_actually_reachable():
+    # Adding a rung the planner never selects would be worse than not adding it.
+    cams = {s["camera"] for s in _plan()["shots"]}
+    assert "face_medium" in cams
+
+
+def test_every_planned_camera_has_a_rect():
+    plan = _plan()
+    for shot in plan["shots"]:
+        assert shot["camera"] in plan["cameras"]
+
+
 def test_adjacent_shots_never_share_a_camera():
     # A cut onto the same rectangle is invisible: it reads as a stutter, not an
     # edit. This is the single invariant the whole style rests on.

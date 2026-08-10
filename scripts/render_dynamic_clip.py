@@ -225,7 +225,9 @@ def main() -> None:
             game_motion=motion, game_focus=focus, game_motion_hop=FACE_HOP_S,
             style=style)
         shots = plan["shots"]
-        letters = {"face": "f", "face_tight": "F", "game": "g", "game_tight": "G"}
+        # lowercase -> uppercase reads widest -> tightest.
+        letters = {"face": "f", "face_medium": "m", "face_tight": "F",
+                   "game": "g", "game_tight": "G"}
         print(f"    {len(shots)} shots, {len(plan['hits'])} hits  "
               f"(avg {duration / max(1, len(shots)):.2f}s)  "
               f"[{''.join(letters.get(s['camera'], '?') for s in shots)}]")
