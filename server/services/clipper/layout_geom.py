@@ -86,6 +86,41 @@ def _aspect(rect: Any, default: float = 1.0) -> float:
     return w / h if h > 0 and w > 0 else default
 
 
+def _fit_inside(rect: Any, aspect: float, src_w: int, src_h: int,
+                anchor: Any = None) -> dict[str, int] | None:
+    """The largest rect of `aspect` that fits INSIDE `rect`, never outside it.
+
+    The opposite of _fit_aspect, and the right one for a facecam band. Growing
+    a facecam rect to the band's aspect pulls in whatever the streamer parked
+    next to the inset — measured on the co-stream, a 488x272 facecam grown to
+    the 1.607 band aspect became 488x304 and dragged the bottom half of the
+    "60,450,306 | 10 | 6 | 4" stats bar into frame, sliced through the middle.
+    Everything outside the inset is by definition not facecam.
+
+    `anchor` is a rect to keep in view when the fit has to crop — the face, so
+    a tall facecam loses headroom rather than a chin.
+    """
+    base = _clamp_rect(rect, src_w, src_h)
+    if base is None or aspect <= 0:
+        return None
+    w = min(float(base["w"]), base["h"] * aspect)
+    h = w / aspect
+    if w < 2 or h < 2:
+        return None
+
+    cx, cy = rect_centre(base)
+    if isinstance(anchor, dict):
+        ax, ay = rect_centre(anchor)
+        # Follow the anchor only along the axis actually being cropped, and
+        # never past the inset's own edges.
+        if base["w"] - w > 1:
+            cx = min(max(ax, base["x"] + w / 2.0), base["x"] + base["w"] - w / 2.0)
+        if base["h"] - h > 1:
+            cy = min(max(ay, base["y"] + h / 2.0), base["y"] + base["h"] - h / 2.0)
+    return _clamp_rect({"x": cx - w / 2.0, "y": cy - h / 2.0, "w": w, "h": h},
+                       src_w, src_h)
+
+
 def _fit_aspect(rect: Any, aspect: float, src_w: int, src_h: int) -> dict[str, int] | None:
     """Grow the rect about its centre until w/h == aspect, then clamp into frame.
 

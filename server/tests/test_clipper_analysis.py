@@ -269,6 +269,57 @@ def _regions(webcam=None, conf=0.9):
     }
 
 
+def test_a_gaming_source_with_a_facecam_gets_the_split_layout():
+    """The content type has to REACH plan_layout. It did not: neither pipeline
+    caller passed it, the candidate dict never carried it and neither did
+    regions.json, so `gaming` was always False and every gaming export came out
+    as a tracking crop with no face band. Verified on a real export before the
+    fix — layout was 'talking_head' on a source with two facecams."""
+    plan = layout.plan_layout(
+        {"start": 0.0, "end": 30.0},          # no content_type here, as in the pipeline
+        _regions(webcam={"x": 0, "y": 0, "w": 122, "h": 68}),
+        [{"t": float(i), "boxes": [[20, 15, 30, 30]]} for i in range(20)],
+        1920, 1080, mode="auto", content_type="gaming",
+    )
+    assert plan["layout"] == "face_top_game_bottom", plan["layout"]
+    assert plan["face_rect"], "a gaming split layout with no face band is the bug"
+
+
+def test_the_pipeline_callers_pass_the_content_type():
+    """Both call sites, asserted by name — the failure above is invisible at
+    runtime, so it has to be caught here."""
+    from workers import clipper_build, clipper_render_jobs
+
+    for mod in (clipper_build, clipper_render_jobs):
+        src = inspect.getsource(mod)
+        assert "plan_layout(" in src, f"{mod.__name__} no longer plans layouts"
+        call = src[src.index("plan_layout("):]
+        assert "content_type=" in call[:600], (
+            f"{mod.__name__} calls plan_layout without content_type"
+        )
+
+
+def test_the_face_band_never_reaches_outside_the_facecam():
+    """Growing the facecam rect to the band's aspect drags in whatever the
+    streamer parked next to it. Measured on a real export: a 488x272 facecam
+    became 488x304 and sliced the stats bar underneath in half."""
+    webcam = {"x": 0, "y": 0, "w": 488, "h": 272}
+    plan = layout.plan_layout(
+        {"start": 0.0, "end": 30.0},
+        _regions(webcam={"x": 0, "y": 0, "w": 122, "h": 68}),
+        [{"t": float(i), "boxes": [[20, 15, 30, 30]]} for i in range(20)],
+        1920, 1080, mode="auto", content_type="gaming", face_pct=0.35,
+    )
+    face = plan["face_rect"]
+    assert face, "gaming split with no face band"
+    assert face["x"] >= webcam["x"] and face["y"] >= webcam["y"]
+    assert face["x"] + face["w"] <= webcam["x"] + webcam["w"] + 2
+    assert face["y"] + face["h"] <= webcam["y"] + webcam["h"] + 2, (
+        f"the band reaches {face['y'] + face['h']}px, past the facecam's "
+        f"{webcam['y'] + webcam['h']}px — that is the stats bar"
+    )
+
+
 def test_no_webcam_falls_back_and_never_leaves_an_empty_face_band():
     plan = layout.plan_layout(
         {"start": 0.0, "end": 30.0, "content_type": "gaming"},
@@ -296,6 +347,37 @@ def test_face_pct_is_clamped():
             mode="auto", face_pct=requested,
         )
         assert 0.15 - 1e-9 <= plan["face_pct"] <= 0.6 + 1e-9
+
+
+# ── speech comes from the transcript, not the noise floor ────────────────────
+
+
+def test_speech_ratio_measures_words_not_noise(chain):
+    """The audio spans answer 'is the track above the silence floor', which on
+    a stream with constant game audio is always yes. Measured on the co-stream:
+    94% of the VOD called speech, 24 of 56 windows at exactly 1.000, against a
+    transcript covering 34%."""
+    cand = chain["candidates"][0]
+    sig = dict(chain["signals"])
+    # A source that is never silent — the gaming case.
+    span = (0.0, chain["duration"])
+    sig["speech"] = [list(span)]
+    sig["silence"] = []
+    feats = candidates.extract_features(cand, chain["transcript"], sig, chain["duration"])
+    assert feats["speech_ratio"] < 0.95, (
+        "speech_ratio still reads the noise floor: "
+        f"{feats['speech_ratio']:.3f} on a transcript with real gaps"
+    )
+    assert feats["speech_ratio"] > 0.0
+
+
+def test_speech_ratio_falls_back_when_there_are_no_word_timings(chain):
+    """No timings means the audio estimate is the only one there is."""
+    cand = dict(chain["candidates"][0])
+    cand["words"] = []
+    feats = candidates.extract_features(cand, {"segments": []}, chain["signals"],
+                                        chain["duration"])
+    assert 0.0 <= feats["speech_ratio"] <= 1.0
 
 
 # ── facecam insets ───────────────────────────────────────────────────────────

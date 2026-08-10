@@ -181,6 +181,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 mode=layout_mode,
                 face_pct=face_pct,
                 include_chat=bool(cfg.get("include_chat")),
+                content_type=profile,
             )
         except Exception:
             logger.warning("layout planning failed; falling back to a full-frame crop",

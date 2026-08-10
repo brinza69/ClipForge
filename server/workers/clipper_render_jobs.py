@@ -21,6 +21,7 @@ from config import settings
 from database import async_session
 from models import ClipModel, ClipStatus, ProjectModel
 from services.clipper import storage
+from services.clipper.serialize import effective_content_type
 
 logger = logging.getLogger("clipforge.clipper.render")
 
@@ -99,6 +100,7 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
         mode=cfg.get("layout_mode") or "auto",
         face_pct=float(cfg.get("face_pct") or settings.clipper_face_pct),
         include_chat=bool(cfg.get("include_chat")),
+        content_type=clip.content_type or effective_content_type(project),
     )
 
 

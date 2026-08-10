@@ -273,6 +273,34 @@ def _ui_ratio(sv: dict, start: float, end: float) -> float:
     return _clamp01((_mean(window) - floor) / (ceiling - floor))
 
 
+def _spoken_ratio(inside: Sequence[dict], start: float, end: float,
+                  span: float) -> float | None:
+    """Share of the window someone is actually saying a word.
+
+    The audio version of this answers a different question — "is the track
+    above the silence floor" — and on a stream with constant game audio the
+    answer is always yes. Measured on the 12-minute co-stream: the audio spans
+    call 94% of the VOD speech, the median window 0.985 and 24 of 56 windows
+    exactly 1.000, a stdev of 0.069 across the whole field. That is a constant,
+    not a feature, and `clarity` hands it 30 points while `low_dialogue` gates
+    on it. The transcript's own word timings put the real figure at 34%.
+
+    None when there are no word timings to measure — then the audio estimate
+    is the only one available and stands.
+    """
+    timed = [(_num(w.get("start"), -1.0), _num(w.get("end"), -1.0)) for w in inside]
+    timed = [(a, b) for a, b in timed if a >= 0 and b > a]
+    if not timed or span <= 0:
+        return None
+    covered, cursor = 0.0, start
+    for a, b in sorted(timed):
+        a, b = max(a, cursor), min(b, end)
+        if b > a:
+            covered += b - a
+            cursor = b
+    return _clamp01(covered / span)
+
+
 def _visual(start: float, end: float, duration: float, sv: dict, signals: Any) -> dict[str, float]:
     motion = series_slice(sv["motion"], sv["motion_hop"], start, end)
     cuts = float(len(points_in(start, end, sv["scenes"])))
@@ -338,6 +366,8 @@ def extract_features(cand: dict, transcript: dict, signals: dict,
     raw.update(_structure(inside, source["sentences"], before, after, start, end))
     raw.update(_audio(start, end, span, sv, payoff_at))
     raw.update(_visual(start, end, span, sv, signals))
+    if (spoken := _spoken_ratio(inside, start, end, span)) is not None:
+        raw["speech_ratio"] = spoken
 
     # A reaction is loud audio AND someone still talking after the payoff.
     spoken_after = float(sum(1 for w in inside if _num(w["start"]) >= payoff_at))
