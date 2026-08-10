@@ -99,18 +99,30 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     # nominates roughly the same obvious moments the scorer already finds, so
     # using it as a filter would discard exactly the non-obvious picks the
     # judging pass is paid to find. Two recalls that fail differently.
+    reasoning = str(cfg.get("reasoning_version")
+                    or settings.clipper_reasoning_version or "legacy").lower()
     if bool(cfg.get("llm_select", settings.clipper_llm_select)):
         await queue.update_progress(job_id, 0.25, "Reading the transcript")
+        segments = transcript.get("segments") or []
         try:
-            nominated = await llm_select.nominate(
-                transcript.get("segments") or [], duration)
+            if reasoning == "story_v1":
+                # Payoff first: each anchor carries what a viewer must already
+                # know, so the window can open on the earliest required fact
+                # rather than on the first audio spike.
+                anchors = await llm_select.detect_anchors(segments, duration)
+                nominated = cand_mod.candidates_from_anchors(
+                    anchors, transcript, sig, min_s=min_s, max_s=max_s,
+                    duration=duration)
+            else:
+                nominated = await llm_select.nominate(segments, duration)
         except Exception:
-            logger.warning("LLM nomination failed; keeping the rule-based set",
+            logger.warning("LLM proposal failed; keeping the rule-based set",
                            exc_info=True)
             nominated = []
         if nominated:
             raw = cand_mod.merge_nominations(
-                raw, nominated, transcript, min_s=min_s, max_s=max_s)
+                raw, nominated, transcript, min_s=min_s, max_s=max_s,
+                keep_overlaps=(reasoning == "story_v1"))
         _guard(queue, job_id)
 
     refined = []
@@ -170,6 +182,16 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     storage.write_artifact(project_id, "candidates", refined)
 
     # ── Dedupe + diversity ──────────────────────────────────────────────────
+    # Moments already on the board as exports come out FIRST, before dedupe
+    # picks group leaders. Doing it at write time instead silently shrank the
+    # board: dedupe would elect a leader, the leader would be dropped for
+    # overlapping an export, and its group's runner-up was never promoted —
+    # measured, 8 winners became 3 and every story-built cut was left flagged
+    # as an alternative behind a leader that no longer existed.
+    refined = drop_moments_already_exported(
+        refined, await _exported_spans(project_id),
+        float(settings.clipper_overlap_threshold))
+
     await queue.update_progress(job_id, 0.55, "Removing duplicates")
     ranked = dedupe_mod.deduplicate(
         refined,
@@ -288,6 +310,19 @@ async def _attach_headlines(winners: list[dict], cfg: dict, queue, job_id: str) 
             cand["headline"] = ""
 
 
+async def _exported_spans(project_id: str) -> list[dict]:
+    """Spans of clips the user already exported — real deliverables, preserved
+    across a re-analysis, and therefore moments the new set must not re-propose."""
+    async with async_session() as session:
+        rows = await session.execute(
+            select(ClipModel.start_time, ClipModel.end_time)
+            .where(ClipModel.project_id == project_id)
+            .where(ClipModel.status == ClipStatus.exported.value)
+        )
+    return [{"start": float(a or 0.0), "end": float(b or 0.0)}
+            for a, b in rows.all()]
+
+
 def drop_moments_already_exported(ranked: list[dict], kept_spans: list[dict],
                                   threshold: float) -> list[dict]:
     """Candidates whose moment is not already on the board as an export.
@@ -304,6 +339,24 @@ def drop_moments_already_exported(ranked: list[dict], kept_spans: list[dict],
     return [c for c in ranked
             if not any(dedupe_mod.overlap_ratio(c, span) > threshold
                        for span in kept_spans)]
+
+
+def _reasoning_of(cand: dict) -> dict | None:
+    """Everything that explains this pick, or None when there is nothing to say.
+
+    Kept as one JSON column rather than a dozen: the shape differs between the
+    legacy path (reasons only) and story_v1 (anchor, payoff, required context,
+    archetype, variant), and freezing a schema across both would mean a
+    migration every time the reasoning changes.
+    """
+    out: dict = {}
+    if cand.get("reasons"):
+        out["reasons"] = [str(r) for r in cand["reasons"]][:12]
+    for key in ("story", "variant", "llm_score", "llm_reason", "llm_tag"):
+        value = cand.get(key)
+        if value not in (None, "", [], {}):
+            out[key] = value
+    return out or None
 
 
 async def _write_clips(
@@ -338,6 +391,8 @@ async def _write_clips(
             stmt = stmt.where(ClipModel.id.notin_(keep_ids))
         await session.execute(stmt)
 
+        # Belt and braces: handle_score already filtered these out before
+        # dedupe, but _write_clips is the only thing guarding the table.
         fresh = drop_moments_already_exported(
             ranked, kept_spans, float(settings.clipper_overlap_threshold))
         for cand in fresh:
@@ -361,6 +416,7 @@ async def _write_clips(
                     layout_plan=layout,
                     caption_plan=cand.get("captions") if is_winner else None,
                     warnings=(layout or {}).get("warnings") or [],
+                    reasoning=_reasoning_of(cand),
                     dedupe_group=cand.get("dedupe_group"),
                     is_alternative=bool(cand.get("is_alternative")),
                     rank_position=cand.get("rank_position"),

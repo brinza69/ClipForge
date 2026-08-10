@@ -175,6 +175,14 @@ class Settings(BaseSettings):
     # Measured with tiktoken on real transcripts (90..395 tokens/minute across
     # 19 of them): about 3.7 cents for a 12-hour gaming stream and 11.1 for a
     # talk-heavy one, with nomination on a local model and judging on an API.
+    # How the clipper reasons about what deserves a clip.
+    #   "legacy"   — interesting signals -> window -> features -> score
+    #   "story_v1" — payoff first: find what happened, then reconstruct the
+    #                earliest start that carries every fact the payoff needs
+    # Legacy stays the default until story_v1 has been measured on more than
+    # one source. Both need clipper_llm_select; with it off this has no effect.
+    clipper_reasoning_version: str = "legacy"
+
     clipper_llm_select: bool = False
     # The judging pass needs a FRONTIER model, and the repo-wide default is a
     # small one. Measured on the same 46 candidates: gpt-4o-mini answered

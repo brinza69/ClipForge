@@ -339,6 +339,11 @@ class ClipModel(Base):
     # Frozen at scoring time so the ranker trains on what the model actually
     # saw, not on features recomputed by newer code.
     feature_vector: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Why this clip exists, in the words of whatever proposed it: the anchor,
+    # the payoff, the facts a viewer needs, the archetype, which edit variant
+    # this is, and what the LLM said. Without it a candidate is a bare score
+    # and nothing about a bad pick can be explained after the fact.
+    reasoning: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     ranker_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     preview_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 

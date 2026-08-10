@@ -134,8 +134,80 @@ def generate_candidates(windows: list[dict], signals: dict, *, min_s: float,
 _NOMINATION_OVERLAP = 0.75
 
 
+# A silent run-in longer than this carries nothing, so a start inside it is
+# not the latest complete start — the first word after it is.
+_CONTEXT_SNAP_S = 1.5
+
+
+def _snap_context_to_speech(anchor: dict, words: Sequence[dict]) -> dict:
+    """Move each required-context timestamp onto the word that states it.
+
+    A model names a moment by the segment it sits in, and segment starts are
+    coarse. Measured: a context timestamp landed 12.6s before the first word
+    of the thing it described, so the window opened on twelve seconds of
+    silence and its own hook_latency reported exactly that. Snapping forward
+    is the principle the module is built on — a start with no speech after it
+    until the payoff carries no information, so it is not the latest complete
+    start.
+    """
+    context = anchor.get("required_context") or []
+    if not context or not words:
+        return anchor
+    starts = [_num(w.get("start"), -1.0) for w in words]
+    snapped = []
+    for item in context:
+        t = _num(item.get("t"), -1.0)
+        after = next((s for s in starts if s >= t - 0.05), None)
+        if after is not None and after - t > _CONTEXT_SNAP_S:
+            item = {**item, "t": round(after, 3)}
+        snapped.append(item)
+    return {**anchor, "required_context": snapped}
+
+
+def candidates_from_anchors(anchors: Sequence[dict], transcript: Any,
+                            signals: Any, *, min_s: float, max_s: float,
+                            duration: float = 0.0) -> list[dict]:
+    """Anchors -> candidate windows, reasoned backwards from the payoff.
+
+    The forward half is not reimplemented here: `_reaction_end` already knows
+    how far past a payoff the reaction runs, and `refine_boundaries` will run
+    it again along with the sentence-true in-point and the dangling-tail trim.
+    This supplies the LATEST COMPLETE START — which is the half the old
+    reasoning had no way to find, because the earliest required fact is a
+    semantic question and the audio has no opinion on it.
+    """
+    from services.clipper import story
+    from services.clipper.candidate_boundaries import _reaction_end
+
+    lo, hi = _bounds(min_s, max_s)
+    words = word_list(transcript) if isinstance(transcript, dict) else []
+    sv = signal_view(signals)
+    ceiling = _num(duration) or (_num(words[-1]["end"]) if words else 0.0)
+
+    out: list[dict] = []
+    for anchor in anchors or []:
+        payoff = _num(anchor.get("payoff_t"), -1.0)
+        if payoff < 0:
+            continue
+        reaction = _reaction_end(payoff, words, sv, ceiling or payoff + hi)
+        anchor = _snap_context_to_speech(anchor, words)
+        for win in story.variants_from_anchor(anchor, reaction, lo=lo, hi=hi,
+                                              ceiling=ceiling):
+            inside, _b, _a = _neighbourhood(words, win["start"], win["end"])
+            win["story"]["context_debt"] = story.context_debt(inside, anchor)
+            win["story"]["hook_latency"] = story.hook_latency(
+                win["start"], anchor.get("hook_t"), inside)
+            out.append({**win, "text": _text_of(inside), "words": list(inside),
+                        "window_index": -1})
+
+    out.sort(key=lambda c: (c["start"], c["end"]))
+    logger.info("Pass C: %d windows from %d anchors", len(out), len(anchors or []))
+    return out
+
+
 def merge_nominations(cands: list[dict], nominated: Sequence[dict],
-                      transcript: Any, *, min_s: float, max_s: float) -> list[dict]:
+                      transcript: Any, *, min_s: float, max_s: float,
+                      keep_overlaps: bool = False) -> list[dict]:
     """Add nominated windows that the existing candidates do not already cover.
 
     Union, not replacement. The two nominators fail differently — the scorer
@@ -143,6 +215,15 @@ def merge_nominations(cands: list[dict], nominated: Sequence[dict],
     interesting — and keeping both is the whole reason for running the second
     one. Nominations arrive as bare spans, so each gets its words and text
     filled in here, the same shape generate_candidates emits.
+
+    `keep_overlaps` turns the coverage check off, and story_v1 needs it. That
+    path does not propose bare timestamps; it proposes a CUT, derived from the
+    earliest fact the payoff needs. When it lands on the same moment as a
+    heuristic window the two are not duplicates — they are two boundaries for
+    one moment, and the better one is a question for `dedupe` AFTER scoring,
+    not for a coverage test before it. Measured: with the check on, every one
+    of 14 story windows was swallowed by the heuristic window it overlapped
+    and none reached the board.
     """
     lo, hi = _bounds(min_s, max_s)
     words = word_list(transcript) if isinstance(transcript, dict) else []
@@ -162,16 +243,24 @@ def merge_nominations(cands: list[dict], nominated: Sequence[dict],
     added = 0
     for win in nominated or []:
         start, end = _num(win.get("start")), _num(win.get("end"))
-        if not (lo <= end - start <= hi) or covered(start, end):
+        if not (lo <= end - start <= hi):
+            continue
+        if not keep_overlaps and covered(start, end):
             continue
         inside, _b, _a = _neighbourhood(words, start, end)
-        merged.append({
+        entry = {
             "start": round(start, 3), "end": round(end, 3),
             "text": _text_of(inside), "words": list(inside),
             "reasons": list(win.get("reasons") or ["llm_nominated"]),
             "llm_tag": win.get("llm_tag", ""),
             "window_index": -1,
-        })
+        }
+        # The story rationale is the whole point of the story path — losing it
+        # here would leave a candidate nobody can explain or debug.
+        for key in ("story", "variant"):
+            if win.get(key) is not None:
+                entry[key] = win[key]
+        merged.append(entry)
         added += 1
 
     merged.sort(key=lambda c: (_num(c.get("start")), _num(c.get("end"))))
@@ -454,6 +543,13 @@ def extract_features(cand: dict, transcript: dict, signals: dict,
     raw.update(_visual(start, end, span, sv, signals))
     if (spoken := _spoken_ratio(inside, start, end, span)) is not None:
         raw["speech_ratio"] = spoken
+
+    # The story engine measured these against the anchor it built the window
+    # from; nothing else can. On the legacy path they stay 0.0, which reads as
+    # "nothing owed, opens on the hook" — the benign default scoring expects.
+    told = cand.get("story") if isinstance(cand.get("story"), dict) else {}
+    raw["context_debt"] = _clamp01(_num(told.get("context_debt")))
+    raw["hook_latency"] = max(0.0, _num(told.get("hook_latency")))
 
     # A reaction is loud audio AND someone still talking after the payoff.
     spoken_after = float(sum(1 for w in inside if _num(w["start"]) >= payoff_at))

@@ -86,7 +86,7 @@ FEATURE_KEYS: tuple[str, ...] = (
     "ends_mid_sentence", "self_contained", "pronoun_dependency", "energy_trend",
     "dead_air_ratio", "boundary_confidence", "snap_quality", "loudness_ok",
     "clipping_ratio", "blur_score", "resolution_ok", "profanity_ratio", "flagged_terms",
-    "game_ui_ratio",
+    "game_ui_ratio", "context_debt", "hook_latency",
 )
 
 

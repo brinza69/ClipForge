@@ -237,6 +237,41 @@ def nominate_prompt(lines: str, want: int) -> str:
     )
 
 
+ANCHOR_PROMPT_VERSION = "anchor_v1"
+
+
+def anchor_prompt(lines: str, want: int) -> str:
+    """Payoff-first. The question is not where a window should start."""
+    from services.clipper.story import ARCHETYPES
+
+    return (
+        "Below is a livestream transcript, one line per segment, prefixed with "
+        "its start time in seconds.\n\n"
+        f"Find up to {want} moments that deserve a standalone short clip. For "
+        "each one, work BACKWARDS from what happened:\n"
+        "  1. the PAYOFF — the thing that makes the moment worth watching, and "
+        "when it happens\n"
+        "  2. the REQUIRED CONTEXT — every fact a viewer who saw nothing else "
+        "must already know for that payoff to land, each with the timestamp "
+        "where it is established. Usually one or two. Never more than 90 "
+        "seconds before the payoff.\n"
+        "  3. the HOOK — the earliest line that gives a stranger a reason to "
+        "keep watching, if there is one\n"
+        "  4. UNRESOLVED CONTEXT — anything the clip would still leave "
+        "unexplained: a name never introduced, an event referred to but not "
+        "shown\n\n"
+        f"Archetypes, choose one or two: {', '.join(ARCHETYPES)}\n\n"
+        "Ignore moments that are only loud. Narrating routine actions, reading "
+        "an inventory and filler are not payoffs.\n\n"
+        'Answer as JSON only: [{"payoff_t": <seconds>, "payoff_strength": '
+        '<0-1>, "archetypes": ["..."], "why": "<max 12 words>", '
+        '"required_context": [{"t": <seconds>, "fact": "<max 8 words>"}], '
+        '"hook": {"t": <seconds>}, "unresolved_context": ["..."], '
+        '"confidence": <0-1>}]\n\n'
+        f"--- TRANSCRIPT ---\n{lines}"
+    )
+
+
 def judge_prompt(cands: Sequence[dict]) -> str:
     body = []
     for i, cand in enumerate(cands):
@@ -291,6 +326,40 @@ async def nominate(segments: Sequence[dict], duration: float, *,
             continue
         found.extend(moments_to_windows(parse_json(answer), duration))
     logger.info("llm_select: nominated %d moments", len(found))
+    return found
+
+
+async def detect_anchors(segments: Sequence[dict], duration: float, *,
+                         per_chunk: int = 10,
+                         engines: Sequence[str] = NOMINATE_ENGINES,
+                         model: str | None = None) -> list[dict]:
+    """Anchors: a payoff, what a viewer must know for it to land, an archetype.
+
+    The richer sibling of `nominate`, and the input to the story engine. Same
+    failure contract — [] when no engine answers, so the run falls back to the
+    heuristic candidates rather than stopping.
+
+    Chunked, never the whole stream in one prompt: a 12-hour transcript is
+    ~64k tokens at the measured rate and up to 285k on a talkative source,
+    past the context of the models this would otherwise use.
+    """
+    from services.clipper.story import normalise_anchor
+
+    lines = transcript_lines(segments)
+    if not lines:
+        return []
+    found: list[dict] = []
+    for chunk in chunk_lines(lines):
+        answer = await _ask(engines, anchor_prompt(chunk, per_chunk), model=model)
+        if answer is None:
+            continue
+        for raw in (parse_json(answer) or []):
+            anchor = normalise_anchor(raw, duration)
+            if anchor is not None:
+                anchor["prompt_version"] = ANCHOR_PROMPT_VERSION
+                found.append(anchor)
+    found.sort(key=lambda a: a["payoff_t"])
+    logger.info("llm_select: %d anchors (%s)", len(found), ANCHOR_PROMPT_VERSION)
     return found
 
 

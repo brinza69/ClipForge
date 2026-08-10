@@ -203,6 +203,13 @@ def _ramp01(value: float, lo: float, hi: float) -> float:
     return _clamp((value - lo) / (hi - lo), 0.0, 1.0)
 
 
+def _ramp_down(value: float, good: float, bad: float) -> float:
+    """1.0 at or below `good`, 0.0 at or above `bad`. For costs, not merits."""
+    if bad <= good:
+        return 1.0 if value <= good else 0.0
+    return _clamp(1.0 - (value - good) / (bad - good), 0.0, 1.0)
+
+
 def _band_score(value: float, lo: float, hi: float,
                 lo_fall: float, hi_fall: float) -> float:
     """100 inside [lo, hi], decaying linearly to 0 over the falloff distance."""
@@ -287,9 +294,15 @@ def _compute_sub_scores(cand: dict[str, Any], features: dict[str, Any],
     on_screen = 1.0 - 0.75 * _unit(g("game_ui_ratio"))
 
     scores = {
-        "hook": (55.0 * _unit(g("hook_strength"))
-                 + 25.0 * _unit(g("first_seconds_energy"))
-                 + 20.0 * _unit(g("question_opening"))
+        # A hook is not energy — a whisper can be one. `hook_latency` is how
+        # long a cold viewer waits to learn why to stay, and it is the one
+        # thing here that measures that directly: past ~3s the swipe has
+        # already happened. Absent (0.0) reads as "opens on it", which is the
+        # right default for the legacy path.
+        "hook": (45.0 * _unit(g("hook_strength"))
+                 + 20.0 * _ramp_down(g("hook_latency"), 1.0, 8.0)
+                 + 20.0 * _unit(g("first_seconds_energy"))
+                 + 15.0 * _unit(g("question_opening"))
                  - 20.0 * _unit(g("starts_mid_sentence"))),
         "clarity": (0.45 * rate
                     + 30.0 * _unit(g("speech_ratio"))
@@ -316,10 +329,16 @@ def _compute_sub_scores(cand: dict[str, Any], features: dict[str, Any],
                                 + 25.0 * _unit(g("word_confidence"))
                                 + 15.0 * (1.0 - filler)),
         "platform_fit": platform_fit_score(duration, platform),
-        "context_completeness": (45.0 * _unit(g("self_contained"))
-                                 + 25.0 * (1.0 - _unit(g("starts_mid_sentence")))
-                                 + 20.0 * (1.0 - _unit(g("ends_mid_sentence")))
-                                 + 10.0 * (1.0 - _unit(g("pronoun_dependency")))),
+        # context_debt answers the same question these three proxies circle —
+        # can a cold viewer follow this — but directly, and it is the only one
+        # of them that can see a name the clip never introduced. It takes the
+        # largest share when it is present, and is absent (0.0, no penalty) on
+        # the legacy path, where the proxies carry it as before.
+        "context_completeness": (40.0 * (1.0 - _unit(g("context_debt")))
+                                 + 30.0 * _unit(g("self_contained"))
+                                 + 15.0 * (1.0 - _unit(g("starts_mid_sentence")))
+                                 + 10.0 * (1.0 - _unit(g("ends_mid_sentence")))
+                                 + 5.0 * (1.0 - _unit(g("pronoun_dependency")))),
         "retention": (45.0 * ((trend + 1.0) / 2.0)
                       + 30.0 * (1.0 - dead_air)
                       + 0.25 * payoff_pos),
