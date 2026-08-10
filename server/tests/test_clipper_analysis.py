@@ -20,7 +20,9 @@ import re
 
 import pytest
 
-from services.clipper import candidates, dedupe, layout, ranker, scoring, segmentation
+from services.clipper import (
+    candidate_boundaries, candidates, dedupe, layout, ranker, scoring, segmentation,
+)
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
@@ -563,23 +565,23 @@ def test_continues_ignores_case_and_trailing_punctuation():
 def test_an_orphan_final_word_is_dropped_when_silence_follows():
     words = [_w("trail", 0.0, 0.4), _w("chamber", 0.4, 0.9), _w("oh", 0.9, 1.2),
              _w("my", 6.7, 6.9), _w("god", 6.9, 7.2)]
-    out = candidates._drop_dangling_tail(1.2, words, start=0.0, lo=0.5)
+    out = candidate_boundaries._drop_dangling_tail(1.2, words, start=0.0, lo=0.5)
     assert out == pytest.approx(0.9), "clip still ends on 'oh'"
 
 
 def test_a_word_that_completes_a_thought_is_kept():
     words = [_w("trail", 0.0, 0.4), _w("chamber", 0.4, 0.9),
              _w("oh", 6.7, 6.9)]
-    assert candidates._drop_dangling_tail(0.9, words, start=0.0, lo=0.5) == 0.9
+    assert candidate_boundaries._drop_dangling_tail(0.9, words, start=0.0, lo=0.5) == 0.9
 
 
 def test_no_drop_when_the_next_word_follows_immediately():
     # Running into the next phrase is not a dangling tail — it is a tight cut.
     words = [_w("we", 0.0, 0.4), _w("should", 0.4, 0.8), _w("let's", 0.8, 1.1),
              _w("go", 1.2, 1.5)]
-    assert candidates._drop_dangling_tail(1.1, words, start=0.0, lo=0.5) == 1.1
+    assert candidate_boundaries._drop_dangling_tail(1.1, words, start=0.0, lo=0.5) == 1.1
 
 
 def test_the_minimum_duration_wins_over_a_tidy_ending():
     words = [_w("okay", 0.0, 0.4), _w("let's", 0.4, 0.7), _w("go", 9.0, 9.3)]
-    assert candidates._drop_dangling_tail(0.7, words, start=0.0, lo=0.6) == 0.7
+    assert candidate_boundaries._drop_dangling_tail(0.7, words, start=0.0, lo=0.6) == 0.7
