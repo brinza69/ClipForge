@@ -188,16 +188,68 @@ between the two measured modes), never from a plot.
 Three clips exported through the real `clipper_export`: 1080x1920, 60 fps,
 yuv420p, AAC 48 kHz, ~5.9 Mbps, and the render is a single encode as intended.
 
+## The ranking's dynamic range
+
+The field spanned 48.2 to 62.2 with a stdev of 3.2 — near-arbitrary ordering.
+Attributing that variance per sub-score (weight x stdev) showed the cause was
+**the inputs, not the weights**: the heaviest sub-scores were the flattest, and
+they were flat because most of what they average never moved.
+
+Three features were measuring nothing. Fixed in `2289a97`:
+
+| feature | before | why |
+|---|---|---|
+| `audio_peak_ratio` | **exactly 1.000 on all 57 windows** | divisor assumed 1 peak/8s; the source runs 1 per 3 |
+| `audio_dynamic_range` | sd 0.027, median 0.998 | `(top-min)/top` where source-normalised rms pins top≈1, min≈0 |
+| `peak_prominence` | sd 0.057 | divided by that same pinned max, collapsing to `1-median` |
+
+Result: `audio_energy` sd **3.40 -> 11.56**, `payoff` sd **4.66 -> 9.93**,
+`overall` range **14.0 -> 20.1**.
+
+**Still flat, deliberately.** `emotion` holds 8% of the gaming profile at sd
+4.1 because `laughter_score` is 0 on every window — Whisper does not
+transcribe laughter as "haha", so the word list can never match, and `emotion`
+is capped at 70 and `reaction` at 80. Detecting laughter needs audio, not a
+vocabulary. Do not "fix" it by dropping the term: that would silently reward
+its absence.
+
+Two traps for whoever continues here:
+
+- **`audio_rms_max` is 1.000 in the median window.** Any feature that divides
+  by it is measuring `1 - other_thing`. Three did.
+- **Do not test these against the `chain` fixture.** Its rms is a periodic
+  sequence, so every window of the same length has an identical distribution
+  and these features are *legitimately* constant on it. A test written that
+  way tests the fixture. `_two_halves()` in the test file exists for this.
+
+## KaiCenat's left edge — measured, and left alone
+
+The right facecam's left edge reads 364 against a truth of 355. Four rules
+were scored against every edge whose truth is known:
+
+| edge | truth | argmax | outer60 | outer40 | grad x var |
+|---|---|---|---|---|---|
+| L right | 122 | **122** | 122 | 122 | 122 |
+| L bottom | 69 | **69** | 79 | 80 | 79 |
+| R left | 355 | 364 | 370 | 390 | 364 |
+| R bottom | 68 | **68** | 68 | 69 | 68 |
+
+Nothing fixes R-left, and both alternatives break L-bottom from 69 to 79 —
+which is the stats bar back inside the face band, the exact defect `36c3280`
+removed. **argmax is the best rule available; the 9px is its price, not an
+oversight.** Do not re-litigate this without a new signal.
+
 ## What to do next
 
-1. **Look at the ranking's dynamic range.** 48.2 to 62.2 across 57 clips is
-   the biggest remaining problem and no individual feature will fix it.
+1. **The ranking is still narrow** at 41.2-61.3. The remaining causes are
+   `emotion`'s dead laughter term and the profile weights themselves — the
+   latter is a product decision, not a bug, and the weights carry documented
+   rationale. Changing them is a judgement call for the owner.
 2. **Caption coverage is 37% of clip length** where the transcript has words
    for 34% — those agree, so captions are not dropping text. But 64 wpm over
    the whole VOD is low for this streamer; whether Whisper is losing speech
    under game audio is unmeasured and worth an hour.
-3. **KaiCenat's facecam left edge is ~9px short.** See below.
-4. **Push, or decide not to.** 43 commits, one machine.
+3. **Push, or decide not to.** 45 commits, one machine.
 
 ## Known-unfinished, deliberately
 
