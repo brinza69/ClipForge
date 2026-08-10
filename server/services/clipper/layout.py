@@ -263,6 +263,12 @@ def plan_layout(cand: dict, regions: dict, faces: list[dict],
     rsx = src_w / float(fw) if fw >= 2 else 1.0
     rsy = src_h / float(fh) if fh >= 2 else 1.0
     webcam = _clamp_rect(_scale_rect(regions.get("webcam"), rsx, rsy), src_w, src_h)
+    # Every facecam, not just the best one. A co-stream has one per person and
+    # a gameplay crop that only slides off the first frames the second streamer
+    # as though he were the game.
+    webcams = [r for r in (_clamp_rect(_scale_rect(w, rsx, rsy), src_w, src_h)
+                           for w in regions.get("webcams") or []) if r] or (
+        [webcam] if webcam else [])
     gameplay = _clamp_rect(_scale_rect(regions.get("gameplay"), rsx, rsy), src_w, src_h)
     chat = _clamp_rect(_scale_rect(regions.get("chat"), rsx, rsy), src_w, src_h)
     hud = [r for r in (_clamp_rect(_scale_rect(h, rsx, rsy), src_w, src_h)
@@ -336,7 +342,7 @@ def plan_layout(cand: dict, regions: dict, faces: list[dict],
 
     if layout in _STACKED:
         face_rect = _fit_aspect(webcam, OUT_W / float(band_h), src_w, src_h)
-        game_rect = _game_crop(gameplay, avoid + [webcam],
+        game_rect = _game_crop(gameplay, avoid + list(webcams),
                                OUT_W / float(rest_h), src_w, src_h)
     elif layout == "pip":
         face_rect = webcam

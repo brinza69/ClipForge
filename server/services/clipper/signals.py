@@ -400,6 +400,61 @@ def _merge_boxes(boxes: list[list[int]]) -> list[list[int]]:
     return kept
 
 
+_FACE_CASCADES: list[Any] | None = None
+
+
+def face_cascades() -> list[Any]:
+    """The tuned cascade set, loaded once.
+
+    Two cascades, not one: a co-stream has a facecam per person and they are
+    rarely both facing the lens. Measured over 40 frames, the frontal cascade
+    found the left facecam 17 times and the right one NEVER (that streamer was
+    turned away); the profile cascade found the right one 3 times. Neither
+    produced a false positive at 1.05/5, the best of six combinations tried —
+    1.15 missed almost everything, minNeighbors=3 let nine into the gameplay.
+    """
+    global _FACE_CASCADES
+    if _FACE_CASCADES is not None:
+        return _FACE_CASCADES
+    _FACE_CASCADES = []
+    cv2 = _cv2()
+    if cv2 is None:
+        return _FACE_CASCADES
+    for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"):
+        c = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / name))
+        if not c.empty():
+            _FACE_CASCADES.append(c)
+        else:
+            logger.warning("face_cascades: could not load cascade %s", name)
+    return _FACE_CASCADES
+
+
+def detect_faces(grey: Any) -> list[list[int]]:
+    """Face boxes in one GREYSCALE frame, as [x, y, w, h].
+
+    The single entry point for face detection in the clipper. There used to be
+    a second, untuned one in content_type.py, and on the co-stream it measured
+    0 faces in 40 frames where this finds the left facecam in 14 and the right
+    in 13 with one false positive — which is why regions.json reported no
+    webcam on a source with two of them. Equalisation is part of the tuning,
+    not a nicety: these facecams are small and dim.
+    """
+    cascades = face_cascades()
+    if not cascades:
+        return []
+    cv2 = _cv2()
+    if cv2 is None:
+        return []
+    equalised = cv2.equalizeHist(grey)
+    raw: list[list[int]] = []
+    for cascade in cascades:
+        for x, y, w, h in cascade.detectMultiScale(
+                equalised, FACE_SCALE_FACTOR, FACE_MIN_NEIGHBOURS,
+                minSize=FACE_MIN_SIZE):
+            raw.append([int(x), int(y), int(w), int(h)])
+    return _merge_boxes(raw)
+
+
 def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
     """Face boxes at each requested timestamp, in PROXY pixel coordinates.
 
@@ -415,20 +470,7 @@ def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
         logger.warning("face_presence: missing proxy %s", proxy_path)
         return blank
 
-    # Two cascades, not one: a co-stream has a facecam per person and they are
-    # rarely both facing the lens. Measured over 40 frames, the frontal cascade
-    # found the left facecam 17 times and the right one NEVER (that streamer was
-    # turned away); the profile cascade found the right one 3 times. Neither
-    # produced a false positive at 1.05/5, the best of six combinations tried —
-    # 1.15 missed almost everything, minNeighbors=3 let nine into the gameplay.
-    cascades = []
-    for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"):
-        c = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / name))
-        if not c.empty():
-            cascades.append(c)
-        else:
-            logger.warning("face_presence: could not load cascade %s", name)
-    if not cascades:
+    if not face_cascades():
         return blank
 
     out: list[dict[str, Any]] = []
@@ -443,14 +485,8 @@ def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
             if not ok or frame is None:
                 out.append({"t": round(t, 3), "boxes": []})
                 continue
-            grey = cv2.equalizeHist(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-            raw: list[list[int]] = []
-            for cascade in cascades:
-                for x, y, w, h in cascade.detectMultiScale(
-                        grey, FACE_SCALE_FACTOR, FACE_MIN_NEIGHBOURS,
-                        minSize=FACE_MIN_SIZE):
-                    raw.append([int(x), int(y), int(w), int(h)])
-            out.append({"t": round(t, 3), "boxes": _merge_boxes(raw)})
+            grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            out.append({"t": round(t, 3), "boxes": detect_faces(grey)})
     except cv2.error as exc:
         logger.warning("face_presence: detection failed for %s (%s)", proxy_path, exc)
         return blank

@@ -296,6 +296,118 @@ def test_face_pct_is_clamped():
         assert 0.15 - 1e-9 <= plan["face_pct"] <= 0.6 + 1e-9
 
 
+# ── facecam insets ───────────────────────────────────────────────────────────
+#
+# Synthetic frames, not decoded ones, but the geometry is the co-stream's:
+# two 1080p60 facecams, IShowSpeed top-left flush to the corner and KaiCenat
+# top-right, over a 480x270 analysis proxy. Ground truth read off the real
+# frames is (0,0,122,69) and (355,5,93,63).
+
+
+def _scene(insets, fw=480, fh=270, frames=20):
+    """Dark noisy 'gameplay' with bright, still rectangles composited on it.
+
+    A real inset differs from its surroundings in both level and how much it
+    changes frame to frame, which is what the edge search keys on.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    out = []
+    for _ in range(frames):
+        frame = (rng.integers(0, 60, size=(fh, fw))).astype("uint8")
+        for x, y, w, h in insets:
+            patch = np.full((h, w), 190, dtype="uint8")
+            patch[h // 4:h // 2, w // 4:w // 2] = rng.integers(150, 230)
+            frame[y:y + h, x:x + w] = patch
+        out.append(frame)
+    return out
+
+
+def _face_at(insets, seen, frames=20):
+    """A face box in the middle of each inset, present in `seen` frames."""
+    from services.clipper.content_geom import make_rect
+
+    per_frame = []
+    for i in range(frames):
+        boxes = []
+        for j, (x, y, w, h) in enumerate(insets):
+            if i < seen[j]:
+                boxes.append(make_rect(x + w * 0.35, y + h * 0.30, w * 0.30, h * 0.35))
+        per_frame.append(boxes)
+    return per_frame
+
+
+def test_both_facecams_of_a_co_stream_are_found():
+    """The old detector returned at most one, so a layout built from it framed
+    the second streamer as though he were the game."""
+    from services.clipper import content_type
+
+    insets = [(0, 0, 122, 68), (356, 6, 92, 62)]
+    rects, confs = content_type._find_webcams(
+        _scene(insets), _face_at(insets, seen=[14, 13]), 480, 270)
+    assert len(rects) == 2, f"expected two facecams, got {rects}"
+    assert all(c > 0.0 for c in confs)
+    found = sorted((r["x"], r["x"] + r["w"]) for r in rects)
+    assert found[0][0] <= 6 and abs(found[0][1] - 122) <= 12
+    assert abs(found[1][0] - 356) <= 14 and abs(found[1][1] - 448) <= 14
+
+
+def test_a_facecam_seen_in_a_third_of_frames_still_counts():
+    """Measured on the real frames the two facecams landed 14 and 13 hits out
+    of 40. The old gate wanted half, which neither could ever have cleared."""
+    from services.clipper import content_type
+
+    insets = [(0, 0, 122, 68)]
+    rects, _ = content_type._find_webcams(
+        _scene(insets), _face_at(insets, seen=[7]), 480, 270)
+    assert rects, "a facecam present in 35% of frames was discarded"
+
+
+def test_a_face_that_flashes_past_is_not_a_facecam():
+    from services.clipper import content_type
+
+    insets = [(0, 0, 122, 68)]
+    rects, _ = content_type._find_webcams(
+        _scene(insets), _face_at(insets, seen=[2]), 480, 270)
+    assert not rects, "two sightings are noise, not an inset"
+
+
+def test_a_wide_shot_with_people_in_it_is_not_a_facecam():
+    """The gym-camera project has no inset at all: one wide IRL camera with
+    people in frame. Deriving a rect from the faces reported its own right
+    half as a facecam, area 0.36 and aspect 0.78 — outside both bounds."""
+    from services.clipper import content_type
+
+    huge = [(286, 0, 192, 246)]
+    rects, _ = content_type._find_webcams(
+        _scene(huge), _face_at(huge, seen=[18]), 480, 270)
+    assert not rects, "a region covering a third of the frame is not an inset"
+
+
+def test_a_facecam_flush_to_the_frame_reaches_the_frame():
+    """There is no border to find at a flush edge, so the strongest step in
+    range is interior texture. Measured, that cost the left facecam its first
+    24 columns."""
+    from services.clipper import content_type
+
+    insets = [(0, 0, 122, 68)]
+    rects, _ = content_type._find_webcams(
+        _scene(insets), _face_at(insets, seen=[14]), 480, 270)
+    assert rects and rects[0]["x"] == 0 and rects[0]["y"] == 0
+
+
+def test_one_face_detector_not_two():
+    """content_type used to run its own untuned cascade. On the co-stream it
+    measured 0 faces in 40 frames where the tuned one finds 27 — which is why
+    regions.json reported no webcam on a source with two of them."""
+    from services.clipper import content_type, signals
+
+    src = inspect.getsource(content_type)
+    assert "CascadeClassifier" not in src, "a second face detector came back"
+    assert callable(signals.detect_faces)
+
+
 # ── menu-heavy windows rank lower ────────────────────────────────────────────
 #
 # Numbers below are the real ones, measured on data/clipper/2d3375ee3420 (a
