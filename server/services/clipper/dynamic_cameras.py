@@ -76,6 +76,30 @@ DEFAULT_STYLE: dict[str, Any] = {
     # moment of a busy clip" from "nothing moved at all", and the whole point of
     # the check is to catch the second one.
     "game_dead_below": 0.35,
+    # ...and below this spatial standard deviation there is nothing IN it. A shot
+    # cuts to gameplay only if it clears both.
+    #
+    # Measured through the same code path on synthetic content (never on the VOD,
+    # which is not on this machine). Numbers move a little between runs because
+    # the animated sources are sampled over two seconds:
+    #
+    #   pure black          0.0     flat colour            0.0
+    #   gentle gradient     2.5-5.1 downsampled noise      2.0
+    #   black + spinner     6.1     black + progress bar   44.9
+    #   strong gradient     33-68   smpte bars             45.8
+    #   busy video          76.8
+    #
+    # 8.0 sits in the empty gap between everything genuinely blank (max 6.1) and
+    # anything with a picture in it (33+).
+    #
+    # BUT READ THE PROGRESS-BAR ROW BEFORE TRUSTING THIS TO FIX LOADING SCREENS.
+    # A white bar on black is maximum contrast, so it scores 44.9 — higher than a
+    # strong gradient. This guard rejects a screen that is genuinely EMPTY; it
+    # does not reject a loading screen that has UI drawn on it, and no spatial
+    # variance measure would, because such a screen is objectively high-contrast.
+    # Catching those needs a different signal (template match on the HUD, or OCR),
+    # which is not what this is.
+    "game_flat_below": 8.0,
     # In-shot camera moves — OFF by default, and that is a finding, not an
     # oversight. It holds across all nine profiles, but it splits by SOURCE TYPE
     # rather than by house style: the two references that are locked-off stream

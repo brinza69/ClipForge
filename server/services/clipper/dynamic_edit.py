@@ -278,6 +278,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                       proxy_w: int = 0, proxy_h: int = 0,
                       game_motion: Sequence[float] | None = None,
                       game_focus: Sequence[float] | None = None,
+                      game_detail: Sequence[float] | None = None,
                       game_motion_hop: float = 0.25,
                       style: dict | None = None) -> dict:
     """Plan the shot list for one candidate.
@@ -291,7 +292,9 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
     which is noisier because the facecam moves too. `game_focus` is the matching
     per-hop x centre (SOURCE pixels) of whatever moved, `-1` for "nothing did";
     it is what lets the gameplay camera follow the action instead of staring at
-    a fixed rectangle.
+    a fixed rectangle. `game_detail` is the matching per-hop spatial standard
+    deviation of the band — how much there is to look at, regardless of whether
+    it moved. Without it the planner keeps the old motion-only guard.
 
     Returns `{duration, shots, hits, cameras, style, subject, warnings}` with
     every time CLIP-RELATIVE (the renderer seeks with -ss before -i) and every
@@ -355,6 +358,15 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
     # whole-frame fallback is on an uncalibrated scale, so applying an absolute
     # floor to it would mute the second camera for the whole clip.
     dead_below = _f(merged.get("game_dead_below"), 0.35) if game_motion else -1.0
+    # Detail is the second half of that guard: motion answers "did anything
+    # change", detail answers "is anything there". Measured, the pair only
+    # reliably rejects a genuinely empty band — see game_flat_below, which
+    # documents what it does NOT catch. Same reasoning as above: only applied
+    # when the caller measured the band, never to the whole-frame fallback.
+    details = ([_series_mean(list(game_detail), motion_hop,
+                             motion_base + a, motion_base + b) for a, b in spans]
+               if game_detail else [])
+    flat_below = _f(merged.get("game_flat_below"), 8.0) if details else -1.0
     push_min = _f(merged.get("push_min_shot_s"), 0.95)
 
     max_run = max(1, int(merged.get("max_same_family") or 2))
@@ -370,9 +382,11 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
         if _EMPHATIC.search(text) or _EMOTION.search(text):
             energy = min(1.0, energy + 0.18)
 
+        # "Alive" now means both: something moved AND there is something there.
+        alive = motions[i] > dead_below and (
+            not details or details[i] > flat_below)
         camera = _pick_camera(ratio >= speech_on, action >= action_on,
-                              motions[i] > dead_below, energy, previous, run,
-                              max_run, merged)
+                              alive, energy, previous, run, max_run, merged)
         if i == 0:
             # Open on a face: the hook of every reference is a person, not a room.
             camera = _rung(_FACE_CAMS, energy, merged["face_rung_energy"])

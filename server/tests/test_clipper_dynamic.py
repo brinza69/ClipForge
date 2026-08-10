@@ -154,6 +154,35 @@ def test_shots_tile_the_window_without_gaps():
         assert a["t1"] == b["t0"]
 
 
+def test_a_blank_gameplay_band_is_never_cut_to_even_when_it_moves():
+    # Motion alone says this band is alive; detail says there is nothing in it.
+    # A shot may only cut to gameplay when BOTH agree.
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    signals = _signals(20.0)
+    moving = [0.9] * 200
+    plan = dynamic_edit.plan_dynamic_edit(
+        cand, signals, _faces(0.0, 20.0), src_w=SRC_W, src_h=SRC_H,
+        proxy_w=PROXY_W, proxy_h=PROXY_H,
+        game_motion=moving, game_focus=[900.0] * 200,
+        game_detail=[1.0] * 200, game_motion_hop=0.25)
+    assert all(s["camera"].startswith("face") for s in plan["shots"])
+
+
+def test_detail_is_ignored_when_the_caller_does_not_measure_it():
+    # The old motion-only behaviour has to survive a caller that never passes
+    # game_detail, or every existing entry point silently changes.
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    signals = _signals(20.0)
+    kwargs = dict(src_w=SRC_W, src_h=SRC_H, proxy_w=PROXY_W, proxy_h=PROXY_H,
+                  game_motion=[0.9] * 200, game_focus=[900.0] * 200,
+                  game_motion_hop=0.25)
+    without = dynamic_edit.plan_dynamic_edit(cand, signals, _faces(0.0, 20.0), **kwargs)
+    rich = dynamic_edit.plan_dynamic_edit(cand, signals, _faces(0.0, 20.0),
+                                          game_detail=[60.0] * 200, **kwargs)
+    assert [s["camera"] for s in without["shots"]] == [s["camera"] for s in rich["shots"]]
+    assert any(s["camera"].startswith("game") for s in without["shots"])
+
+
 def test_a_dead_gameplay_region_is_never_cut_to():
     # Zero motion in the band means a loading screen or an empty sky; holding
     # on the face one shot too long beats cutting to nothing.

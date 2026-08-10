@@ -50,8 +50,8 @@ MOTION_COLS = 8
 
 
 def region_motion(window: Path, hop: float, band: tuple[float, float, float, float],
-                  src_w: int) -> tuple[list[float], list[float]]:
-    """(how much is happening in the game, where it is happening) per `hop`.
+                  src_w: int) -> tuple[list[float], list[float], list[float]]:
+    """(how much is happening, where, and how much there is to look at) per `hop`.
 
     Two things the whole-frame motion signal in signals.json cannot give us.
     It cannot answer "is something happening in the GAME", because the facecam
@@ -63,6 +63,13 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
 
     The focus value is an x centre in SOURCE pixels, ready to hand to
     `dynamic_edit`; `-1.0` means "nothing moved, no opinion".
+
+    The third series is the band's spatial standard deviation — how much DETAIL
+    is on screen, independent of whether it moved. Motion alone cannot tell a
+    loading screen from a quiet moment of real gameplay: a black screen with a
+    spinner ticking over scores as "something is happening" while being the worst
+    thing the clip could cut to. Detail separates them, because a dead screen has
+    nothing in it whichever frame you look at.
     """
     import cv2
     import numpy as np
@@ -76,6 +83,7 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
 
         totals: list[float] = []
         focus: list[float] = []
+        detail: list[float] = []
         previous = None
         index = 0
         while True:
@@ -89,6 +97,9 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
                 grey = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY),
                                   (MOTION_COLS * 12, 54),
                                   interpolation=cv2.INTER_AREA).astype(np.float32)
+                # Spatial spread of THIS frame — no previous needed, so the
+                # first sample carries a real value instead of a zero.
+                detail.append(float(grey.std()))
                 if previous is None:
                     totals.append(0.0)
                     focus.append(-1.0)
@@ -101,15 +112,15 @@ def region_motion(window: Path, hop: float, band: tuple[float, float, float, flo
                                  else band_x0 + (hottest + 0.5) * col_w)
                 previous = grey
             index += 1
-        return totals, focus
+        return totals, focus, detail
     finally:
         cap.release()
 
 
 def analyse_window(proxy: Path, start: float, duration: float,
                    band: tuple[float, float, float, float], src_w: int
-                   ) -> tuple[list[dict], list[float], list[float]]:
-    """(dense face track in proxy pixels, gameplay-band motion) for one window.
+                   ) -> tuple[list[dict], list[float], list[float], list[float]]:
+    """(dense face track in proxy pixels, then the three gameplay-band series).
 
     The whole-VOD face track in signals.json samples roughly every 11 seconds —
     three boxes inside a 30-second clip, nowhere near enough to anchor 20 shots.
@@ -131,8 +142,8 @@ def analyse_window(proxy: Path, start: float, duration: float,
         # Re-base onto the source clock: dynamic_edit subtracts cand["start"].
         faces = [{"t": float(s.get("t", 0.0)) + start, "boxes": s.get("boxes") or []}
                  for s in samples]
-        totals, focus = region_motion(window, FACE_HOP_S, band, src_w)
-        return faces, totals, focus
+        totals, focus, detail = region_motion(window, FACE_HOP_S, band, src_w)
+        return faces, totals, focus, detail
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -212,8 +223,8 @@ def main() -> None:
         print(f"    {(cand.get('text') or '')[:110]}")
 
         t0 = time.time()
-        faces, motion, focus = analyse_window(proxy, start, duration,
-                                              ACTION_BAND, src_w)
+        faces, motion, focus, detail = analyse_window(proxy, start, duration,
+                                                      ACTION_BAND, src_w)
         seen = sum(1 for f in faces if f["boxes"])
         print(f"    faces {seen}/{len(faces)} samples, "
               f"{len(motion)} motion samples  ({time.time() - t0:.1f}s)")
@@ -222,8 +233,8 @@ def main() -> None:
             cand, signals, faces, src_w=src_w, src_h=src_h,
             proxy_w=int(signals.get("proxy_width") or 0),
             proxy_h=int(signals.get("proxy_height") or 0),
-            game_motion=motion, game_focus=focus, game_motion_hop=FACE_HOP_S,
-            style=style)
+            game_motion=motion, game_focus=focus, game_detail=detail,
+            game_motion_hop=FACE_HOP_S, style=style)
         shots = plan["shots"]
         # lowercase -> uppercase reads widest -> tightest.
         letters = {"face": "f", "face_medium": "m", "face_tight": "F",
