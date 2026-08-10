@@ -49,16 +49,25 @@ async def _call_llm(
     engine: str,
     user: str,
     model: Optional[str] = None,
+    system: Optional[str] = None,
+    temperature: float = 0.5,
+    num_ctx: int = 8192,
 ) -> str:
-    """Multi-engine LLM call with the descriptions system prompt.
-    Returns text with meta-commentary stripped."""
+    """Multi-engine LLM call. Returns text with meta-commentary stripped.
+
+    `system` defaults to the descriptions prompt, which is what every caller
+    wanted until clip selection needed a different job from the same three
+    engines. Passing it beats opening a fourth HTTP path — the retry, key
+    handling and error shapes only have to be right once.
+    """
+    system = system or _SYSTEM_PROMPT
     if engine == "ollama":
         payload = {
             "model": model or DEFAULT_OLLAMA_MODEL,
             "stream": False,
-            "options": {"temperature": 0.5, "num_ctx": 8192},
+            "options": {"temperature": temperature, "num_ctx": num_ctx},
             "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
@@ -75,9 +84,9 @@ async def _call_llm(
             raise RuntimeError("OpenAI API key not configured")
         payload = {
             "model": model or DEFAULT_OPENAI_MODEL,
-            "temperature": 0.5,
+            "temperature": temperature,
             "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
@@ -99,8 +108,8 @@ async def _call_llm(
         payload = {
             "model": model or DEFAULT_ANTHROPIC_MODEL,
             "max_tokens": 1024,
-            "temperature": 0.5,
-            "system": _SYSTEM_PROMPT,
+            "temperature": temperature,
+            "system": system,
             "messages": [{"role": "user", "content": user}],
         }
         async with httpx.AsyncClient(timeout=300.0) as client:

@@ -38,13 +38,13 @@ from services.clipper.candidate_terms import (
     _tokens, _words_for,
 )
 from services.clipper.segmentation import (
-    norm_token, overlap_seconds, points_in, series_slice, signal_view,
+    norm_token, overlap_seconds, points_in, series_slice, signal_view, word_list,
 )
 
 logger = logging.getLogger("clipforge.clipper.candidates")
 
-__all__ = ["FEATURE_KEYS", "generate_candidates", "refine_boundaries",
-           "extract_features"]
+__all__ = ["FEATURE_KEYS", "generate_candidates", "merge_nominations",
+           "refine_boundaries", "extract_features"]
 
 
 # --------------------------------------------------------------------------
@@ -126,6 +126,57 @@ def generate_candidates(windows: list[dict], signals: dict, *, min_s: float,
     out.sort(key=lambda c: (c["start"], c["end"]))
     logger.info("Pass C: %d candidates from %d windows", len(out), len(windows or []))
     return out
+
+
+# How much a nominated window may overlap an existing candidate before it is
+# the same proposal. Loose on purpose: the point of a second nominator is the
+# moments the first one MISSED, so only a near-identical span is redundant.
+_NOMINATION_OVERLAP = 0.75
+
+
+def merge_nominations(cands: list[dict], nominated: Sequence[dict],
+                      transcript: Any, *, min_s: float, max_s: float) -> list[dict]:
+    """Add nominated windows that the existing candidates do not already cover.
+
+    Union, not replacement. The two nominators fail differently — the scorer
+    finds what is loud and structurally clean, a language model finds what is
+    interesting — and keeping both is the whole reason for running the second
+    one. Nominations arrive as bare spans, so each gets its words and text
+    filled in here, the same shape generate_candidates emits.
+    """
+    lo, hi = _bounds(min_s, max_s)
+    words = word_list(transcript) if isinstance(transcript, dict) else []
+    merged = list(cands)
+
+    def covered(start: float, end: float) -> bool:
+        for existing in merged:
+            a, b = _num(existing.get("start")), _num(existing.get("end"))
+            shortest = min(b - a, end - start)
+            if shortest <= 0:
+                continue
+            overlap = min(b, end) - max(a, start)
+            if overlap > 0 and overlap / shortest > _NOMINATION_OVERLAP:
+                return True
+        return False
+
+    added = 0
+    for win in nominated or []:
+        start, end = _num(win.get("start")), _num(win.get("end"))
+        if not (lo <= end - start <= hi) or covered(start, end):
+            continue
+        inside, _b, _a = _neighbourhood(words, start, end)
+        merged.append({
+            "start": round(start, 3), "end": round(end, 3),
+            "text": _text_of(inside), "words": list(inside),
+            "reasons": list(win.get("reasons") or ["llm_nominated"]),
+            "llm_tag": win.get("llm_tag", ""),
+            "window_index": -1,
+        })
+        added += 1
+
+    merged.sort(key=lambda c: (_num(c.get("start")), _num(c.get("end"))))
+    logger.info("Pass C: %d of %d nominations were new", added, len(nominated or []))
+    return merged
 
 
 # --------------------------------------------------------------------------

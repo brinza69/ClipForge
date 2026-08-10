@@ -49,6 +49,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     from services.clipper import captions as cap_mod
     from services.clipper import dedupe as dedupe_mod
     from services.clipper import layout as layout_mod
+    from services.clipper import llm_select
     from services.clipper import ranker, scoring, segmentation
 
     async with async_session() as session:
@@ -93,6 +94,25 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         max_s=max_s,
         target_s=float(settings.clipper_target_clip_s),
     )
+    # A cheap model reads the whole transcript and nominates moments. UNIONED
+    # with the rule-based candidates, never substituted: a small model
+    # nominates roughly the same obvious moments the scorer already finds, so
+    # using it as a filter would discard exactly the non-obvious picks the
+    # judging pass is paid to find. Two recalls that fail differently.
+    if bool(cfg.get("llm_select", settings.clipper_llm_select)):
+        await queue.update_progress(job_id, 0.25, "Reading the transcript")
+        try:
+            nominated = await llm_select.nominate(
+                transcript.get("segments") or [], duration)
+        except Exception:
+            logger.warning("LLM nomination failed; keeping the rule-based set",
+                           exc_info=True)
+            nominated = []
+        if nominated:
+            raw = cand_mod.merge_nominations(
+                raw, nominated, transcript, min_s=min_s, max_s=max_s)
+        _guard(queue, job_id)
+
     refined = []
     for cand in raw:
         try:
@@ -132,7 +152,17 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         else:
             cand["overall"] = round(heuristic, 2)
             cand["ranker_version"] = "heuristic-1"
-    _guard(queue, job_id)
+    # The frontier pass, over the union. Blended into `overall`, so a failure
+    # here costs the judgement, not the run.
+    if bool(cfg.get("llm_select", settings.clipper_llm_select)):
+        await queue.update_progress(job_id, 0.48, "Judging candidates")
+        try:
+            await llm_select.judge(
+                refined, weight=float(settings.clipper_llm_weight))
+        except Exception:
+            logger.warning("LLM judging failed; keeping the heuristic ranking",
+                           exc_info=True)
+        _guard(queue, job_id)
 
     storage.write_artifact(project_id, "candidates", refined)
 

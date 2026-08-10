@@ -167,6 +167,37 @@ class Settings(BaseSettings):
     # heuristic on held-out NDCG@5). Otherwise heuristic weights stand.
     clipper_ranker_enabled: bool = True
 
+    # Let a language model nominate moments and judge candidates. Off by
+    # default: it needs either Ollama running or an API key, and a clipper run
+    # must not depend on either. Both passes degrade to the heuristic ranking
+    # rather than failing, so turning this on can only change the ordering.
+    #
+    # Measured with tiktoken on real transcripts (90..395 tokens/minute across
+    # 19 of them): about 3.7 cents for a 12-hour gaming stream and 11.1 for a
+    # talk-heavy one, with nomination on a local model and judging on an API.
+    clipper_llm_select: bool = False
+    # How much of `overall` the model's verdict carries.
+    #
+    # Swept on the co-stream against two hand-labelled reference clips — a bit
+    # where chat trolls the streamer and he calls them out (good), and a
+    # stretch of "let's cook our food" (filler). Their ranks out of 46:
+    #
+    #   weight   0.0    0.3    0.5    0.7    1.0
+    #   good      45     33     14      6      4
+    #   filler     2      6      6      8     13
+    #
+    # 0.5 is not enough to undo the heuristic's ordering. 1.0 throws away what
+    # the model cannot see — audio energy, boundary quality, duration fit — and
+    # the model is not deterministic between runs, so the heuristic is also
+    # what keeps an ordering stable. 0.7 gets both reference clips where they
+    # belong and keeps that anchor.
+    #
+    # TREAT THIS AS PROVISIONAL. It is fitted to TWO labels on ONE 12-minute
+    # segment. The direction is consistent and the reasoning holds, but the
+    # sample cannot justify a third decimal — re-sweep it when there is real
+    # feedback to fit against.
+    clipper_llm_weight: float = 0.7
+
     # CORS: comma-separated list of allowed origins.
     # E.g. CLIPFORGE_ALLOWED_ORIGINS="https://myapp.vercel.app,http://localhost:3000"
     allowed_origins_raw: str = "http://localhost:3000,http://127.0.0.1:3000"
