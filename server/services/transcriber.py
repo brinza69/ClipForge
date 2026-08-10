@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import traceback
 from typing import Optional, Callable, Awaitable, Dict, Any, List, Tuple
@@ -39,6 +40,65 @@ _model_info: dict = {
 }
 
 
+_dll_path_prepared = False
+
+
+def _ensure_cuda_dll_path() -> None:
+    """Put the pip-installed CUDA runtime DLLs on PATH (Windows only).
+
+    `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` ship their DLLs inside
+    site-packages, which Windows does not search. Without this, CTranslate2
+    loads the model and THEN dies with `cublas64_12.dll is not found` — which
+    reads like a GPU problem rather than a path problem. Idempotent.
+    """
+    global _dll_path_prepared
+    if _dll_path_prepared or sys.platform != "win32":
+        return
+    _dll_path_prepared = True
+
+    import site
+    bases = list(site.getsitepackages())
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str):
+        bases.append(user_site)
+
+    bins = []
+    for base in bases:
+        root = Path(base) / "nvidia"
+        if not root.is_dir():
+            continue
+        for pkg in sorted(root.iterdir()):
+            b = pkg / "bin"
+            if b.is_dir():
+                bins.append(str(b))
+
+    if not bins:
+        return
+    current = os.environ.get("PATH", "")
+    missing = [b for b in bins if b.lower() not in current.lower()]
+    if missing:
+        os.environ["PATH"] = os.pathsep.join(missing) + os.pathsep + current
+        logger.info(f"Added {len(missing)} CUDA DLL dir(s) to PATH: {missing}")
+
+
+def _resolve_auto_device() -> str:
+    """Resolve device="auto" by asking the library that actually runs the model.
+
+    faster-whisper runs on **CTranslate2**, not torch. Asking
+    `torch.cuda.is_available()` is the wrong question: `kokoro` pulls a CPU-only
+    torch from PyPI, so on a perfectly good CUDA box torch says False and every
+    transcription silently falls to CPU (~9x slower).
+    """
+    _ensure_cuda_dll_path()
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception as e:
+        logger.warning(f"CTranslate2 CUDA probe failed ({e}); falling back to CPU")
+    return "cpu"
+
+
 def get_model_info() -> dict:
     """Return a dict describing what the loaded Whisper model is, or what
     settings would be used if it hasn't loaded yet. Safe to call without
@@ -50,11 +110,7 @@ def get_model_info() -> dict:
     desired_model = cfg.get("whisper_model") or settings.whisper_model
     desired_device = cfg.get("whisper_device") or settings.whisper_device
     if desired_device == "auto":
-        try:
-            import torch
-            desired_device = "cuda" if torch.cuda.is_available() else "cpu"
-        except ImportError:
-            desired_device = "cpu"
+        desired_device = _resolve_auto_device()
     return {
         "configured_model": desired_model,
         "configured_device": desired_device,
@@ -151,11 +207,10 @@ def _get_model():
         device = overrides.get("whisper_device") or settings.whisper_device
         configured_device = device
         if device == "auto":
-            try:
-                import torch
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-            except ImportError:
-                device = "cpu"
+            device = _resolve_auto_device()
+        elif device == "cuda":
+            # Explicitly-requested CUDA needs the DLLs too.
+            _ensure_cuda_dll_path()
 
         compute_type = settings.whisper_compute_type
         if device == "cpu":
