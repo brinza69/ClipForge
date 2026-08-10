@@ -255,6 +255,24 @@ async def _attach_headlines(winners: list[dict], cfg: dict, queue, job_id: str) 
             cand["headline"] = ""
 
 
+def drop_moments_already_exported(ranked: list[dict], kept_spans: list[dict],
+                                  threshold: float) -> list[dict]:
+    """Candidates whose moment is not already on the board as an export.
+
+    A preserved export still occupies its moment, but dedupe only ever sees the
+    fresh candidates, so nothing else stops the new set proposing it again.
+    Observed after three exports and a re-score: 11 winners for a requested 8,
+    with one moment on the board three times.
+    """
+    from services.clipper import dedupe as dedupe_mod
+
+    if not kept_spans:
+        return list(ranked)
+    return [c for c in ranked
+            if not any(dedupe_mod.overlap_ratio(c, span) > threshold
+                       for span in kept_spans)]
+
+
 async def _write_clips(
     project_id: str, ranked: list[dict], winners: list[dict], profile: str
 ) -> None:
@@ -262,23 +280,34 @@ async def _write_clips(
 
     A re-analysis should not leave the previous run's clips behind, but clips
     the user already exported are real deliverables — those are preserved.
+
+    A preserved clip still occupies its moment, so the new set must not propose
+    that moment again: dedupe only ever sees the fresh candidates, and without
+    this the board shows the same window twice, once as the export and once as
+    a new winner. Observed after three exports and a re-score — 11 winners for
+    a requested 8, with one moment on the board three times.
     """
     winner_ids = {id(c) for c in winners}
 
     async with async_session() as session:
         keep = await session.execute(
-            select(ClipModel.id)
+            select(ClipModel.id, ClipModel.start_time, ClipModel.end_time)
             .where(ClipModel.project_id == project_id)
             .where(ClipModel.status == ClipStatus.exported.value)
         )
-        keep_ids = set(keep.scalars().all())
+        kept = keep.all()
+        keep_ids = {row[0] for row in kept}
+        kept_spans = [{"start": float(row[1] or 0.0), "end": float(row[2] or 0.0)}
+                      for row in kept]
 
         stmt = sql_delete(ClipModel).where(ClipModel.project_id == project_id)
         if keep_ids:
             stmt = stmt.where(ClipModel.id.notin_(keep_ids))
         await session.execute(stmt)
 
-        for cand in ranked:
+        fresh = drop_moments_already_exported(
+            ranked, kept_spans, float(settings.clipper_overlap_threshold))
+        for cand in fresh:
             is_winner = id(cand) in winner_ids
             layout = cand.get("layout") if is_winner else None
             start = float(cand.get("start") or 0.0)

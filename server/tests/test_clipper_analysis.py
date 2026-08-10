@@ -349,6 +349,38 @@ def test_face_pct_is_clamped():
         assert 0.15 - 1e-9 <= plan["face_pct"] <= 0.6 + 1e-9
 
 
+# ── a re-score must not put an exported moment on the board twice ────────────
+
+
+def test_a_re_score_does_not_re_propose_an_exported_moment():
+    """Exported clips are preserved across a re-analysis, deliberately. But
+    dedupe only ever sees the fresh candidates, so nothing stopped the new set
+    proposing the same moment again. Observed after three exports and a
+    re-score: 11 winners for a requested 8, one moment on the board 3 times."""
+    from workers.clipper_build import drop_moments_already_exported
+
+    kept = [{"start": 117.8, "end": 157.5}]
+    ranked = [
+        {"start": 117.8, "end": 157.5},   # the same window
+        {"start": 134.8, "end": 157.5},   # entirely inside it
+        {"start": 100.3, "end": 139.3},   # heavily overlapping
+        {"start": 381.3, "end": 404.4},   # a different moment
+        {"start": 633.3, "end": 666.7},   # a different moment
+    ]
+    fresh = drop_moments_already_exported(ranked, kept, 0.4)
+    spans = [(c["start"], c["end"]) for c in fresh]
+    assert (117.8, 157.5) not in spans
+    assert (134.8, 157.5) not in spans, "a window inside the export is the same moment"
+    assert (381.3, 404.4) in spans and (633.3, 666.7) in spans
+
+
+def test_nothing_exported_means_nothing_dropped():
+    from workers.clipper_build import drop_moments_already_exported
+
+    ranked = [{"start": 0.0, "end": 30.0}, {"start": 60.0, "end": 90.0}]
+    assert drop_moments_already_exported(ranked, [], 0.4) == ranked
+
+
 # ── features have to actually vary ───────────────────────────────────────────
 #
 # A feature pinned to one value is not neutral: it is weight spent on an
