@@ -299,6 +299,34 @@ def test_the_pipeline_callers_pass_the_content_type():
         )
 
 
+def test_the_face_band_is_sharpened_and_the_gameplay_lane_is_not():
+    """A stream composites a small webcam into its 1080p canvas, so the face
+    band is a 2.5x enlargement and the softest thing on screen. The gameplay
+    lane is barely enlarged and sharpening it would only harden the
+    compression noise in a dark scene."""
+    graph = layout.build_filtergraph({
+        "layout": "face_top_game_bottom",
+        "face_rect": {"x": 12, "y": 0, "w": 436, "h": 272},
+        "game_rect": {"x": 492, "y": 0, "w": 934, "h": 1080},
+        "face_pct": 0.35,
+    })
+    face_lane, game_lane = graph.split(";")[0], graph.split(";")[1]
+    assert "unsharp" in face_lane, "the face band is the lane that needs it"
+    assert "unsharp" not in game_lane, "the gameplay lane must not be sharpened"
+
+
+def test_a_lane_that_is_barely_enlarged_is_left_alone():
+    """Below the threshold the lane has its own detail; sharpening is noise."""
+    graph = layout.build_filtergraph({
+        "layout": "face_top_game_bottom",
+        # 1000px wide into a 1080 lane — 1.08x, nothing to recover.
+        "face_rect": {"x": 0, "y": 0, "w": 1000, "h": 620},
+        "game_rect": {"x": 0, "y": 0, "w": 934, "h": 1080},
+        "face_pct": 0.35,
+    })
+    assert "unsharp" not in graph
+
+
 def test_the_face_band_never_reaches_outside_the_facecam():
     """Growing the facecam rect to the band's aspect drags in whatever the
     streamer parked next to it. Measured on a real export: a 488x272 facecam

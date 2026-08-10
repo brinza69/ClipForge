@@ -227,16 +227,36 @@ def _safe_zones(layout: str, face_rect: dict | None, game_rect: dict | None,
 # the one fused filtergraph
 # --------------------------------------------------------------------------
 
-def _lane(rect: Any, w: int, h: int, label: str, *, pad: bool = False) -> str:
+# Past this much enlargement a lane is mostly interpolated and reads soft, so
+# it gets an unsharp pass. Below it the lane has its own detail and sharpening
+# would only harden compression noise.
+#
+# The facecam is the case this exists for: a stream composites a small webcam
+# into its 1080p canvas, so the inset is ~436x272 and the band is 1080x672 —
+# 2.48x, 16% real pixels, and the softest thing on screen is the face.
+SHARPEN_ABOVE = 1.5
+# Measured on that lane, variance-of-Laplacian against the plain lanczos lane:
+# 0.4 -> 1.35x, 0.8 -> 1.54x, 1.4 -> 2.20x. Clipped pixels move 0.61% -> 0.74%
+# at 0.8 and 0.86% at 1.4, so the strong setting is starting to overshoot
+# edges — which reads as a halo, not as detail. 0.8 is the last honest one.
+SHARPEN_AMOUNT = 0.8
+
+
+def _lane(rect: Any, w: int, h: int, label: str, *, pad: bool = False,
+          sharpen: bool = False) -> str:
     """One [0:v] -> [label] chain. `pad` letterboxes instead of stretching."""
     body: list[str] = []
+    scale_x = 1.0
     if isinstance(rect, dict) and rect.get("w", 0) >= 2 and rect.get("h", 0) >= 2:
         body.append(f"crop={rect['w']}:{rect['h']}:{rect['x']}:{rect['y']}")
+        scale_x = w / float(rect["w"])
     if pad:
         body.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos")
         body.append(f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black")
     else:
         body.append(f"scale={w}:{h}:flags=lanczos")
+    if sharpen and scale_x >= SHARPEN_ABOVE:
+        body.append(f"unsharp=5:5:{SHARPEN_AMOUNT}:5:5:0.0")
     body.append("setsar=1")
     return "[0:v]" + ",".join(body) + f"[{label}]"
 
@@ -256,16 +276,21 @@ def build_filtergraph(plan: dict, out_w: int = OUT_W, out_h: int = OUT_H) -> str
 
     if layout in _STACKED and isinstance(face, dict) and isinstance(game, dict):
         band_h, rest_h = _bands(face_pct, out_h)
+        # Only the face lane is sharpened. The gameplay lane is barely enlarged
+        # (1.16x on the measured plan) and already carries its own detail, so
+        # the same filter there would only harden compression noise in the dark.
         if layout == "face_top_game_bottom":
-            top, bot = _lane(face, out_w, band_h, "top"), _lane(game, out_w, rest_h, "bot")
+            top = _lane(face, out_w, band_h, "top", sharpen=True)
+            bot = _lane(game, out_w, rest_h, "bot")
         else:
-            top, bot = _lane(game, out_w, rest_h, "top"), _lane(face, out_w, band_h, "bot")
+            top = _lane(game, out_w, rest_h, "top")
+            bot = _lane(face, out_w, band_h, "bot", sharpen=True)
         return f"{top};{bot};[top][bot]vstack=inputs=2[v]"
 
     if layout == "pip" and isinstance(face, dict):
         box = _pip_box(face, face_pct, out_w, out_h)
         return (f"{_lane(game, out_w, out_h, 'bg', pad=True)};"
-                f"{_lane(face, box['w'], box['h'], 'pip')};"
+                f"{_lane(face, box['w'], box['h'], 'pip', sharpen=True)};"
                 f"[bg][pip]overlay={box['x']}:{box['y']}[v]")
 
     if layout == "split_screen" and isinstance(face, dict) and isinstance(game, dict):
