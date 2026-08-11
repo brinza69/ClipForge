@@ -73,12 +73,32 @@ keep the setup, **0.53** on the tight ones that cut it.
    silence. `_snap_context_to_speech` moves it forward — same principle: a
    start with no speech after it carries no information.
 
+## Comparative ranking (`judge_v2_comparative`)
+
+Absolute scoring compressed: eight distinct values across 46 candidates, and
+on a quiet source everything between 5 and 40. The judge now asks for a ranked
+shortlist and derives the score from position, plus three verdicts each —
+`story_editor`, `cold_viewer` (weighted higher; that is who decides a short)
+and `critic`, which names reject reasons from a closed list of eleven.
+
+`ARCHETYPE_SHAPE` feeds this prompt, so each candidate is judged against the
+shape its own kind of clip needs.
+
+| | before | after |
+|---|---|---|
+| score range | 20.1 | **63.8** |
+| stdev | 3.90 | **15.67** |
+| llm values | 8 distinct, 5–40 | 10 distinct, 0–90.7 |
+| story-built winners | 1 of 8 | **5 of 8**, five different archetypes |
+
+**A candidate the judge leaves out is scored as left out.** The first run
+shortlisted 9 of 42 and the other 33 kept an unblended heuristic ~58, so a
+clip the judge declined to rank beat one it ranked fourth.
+
 ## Known limitations
 
-- **Story windows reach the board but do not dominate it.** Across runs, 0–1
-  of 8 winners were story-built. They are scored fairly and sometimes lose to
-  heuristic windows on the same moment, which is the design working — but it
-  means the payoff-first path is not yet *driving* the result.
+- **Validated on one run of one source.** The numbers above are a single
+  measurement; the models are not deterministic.
 - **The models are not deterministic.** The same 46 candidates scored twice
   gave different orderings, and two runs of the full board gave different top
   threes. Any judgement about whether story_v1 is better needs several runs,
@@ -91,9 +111,14 @@ keep the setup, **0.53** on the tight ones that cut it.
 
 ## Not built (from the upgrade spec)
 
-**P1** — comparative ranking (A vs B rather than absolute scores), stream
-memory and episodes, story threads, promises/callbacks, semantic dedupe,
-second-efficiency trimming.
+**P1** — stream memory and episodes, story threads, promises/callbacks,
+semantic dedupe, second-efficiency trimming. *(Comparative ranking is done.)*
+
+**Unprioritised in the spec but not built** — event atoms as a first-class
+structure (§1). Anchors are found straight from the transcript, which works,
+but it means the event graph (§5) and timeline retrieval (§25) have no
+foundation to sit on. Also missing: a frontend inspection panel (§34) and
+golden cases (§36).
 
 **P2** — multimodal Pass D over rendered previews, diarization, pairwise human
 feedback, the boundary-learning dataset.
@@ -103,8 +128,12 @@ ranker.
 
 ## Next step
 
-Comparative ranking (P1). The judge currently scores each candidate alone and
-its answers compress hard — measured, eight distinct values across 46 clips,
-and on a quiet source everything lands between 5 and 30. Asking *"if we could
-publish only N moments from this stream, which N"* is both what the spec wants
-and the fix for the compression.
+**Event atoms (§1), then story threads and callbacks (§3, §4).** Anchors are
+found per chunk with no memory across them, so a payoff that lands on a setup
+from an hour earlier cannot be detected at all — and that is the kind of clip
+the whole payoff-first design is best suited to find. Atoms are the structure
+threads, the event graph and retrieval all need.
+
+**Semantic dedupe (§20)** is the cheaper one and worth doing first: dedupe is
+still time and text only, so two cuts of the same story from slightly
+different timestamps can both survive.

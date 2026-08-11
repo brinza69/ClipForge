@@ -172,6 +172,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
             await llm_select.judge(
                 refined,
                 weight=float(settings.clipper_llm_weight),
+                want=target_count,
                 model=(cfg.get("llm_judge_model")
                        or settings.clipper_llm_judge_model or None))
         except Exception:
@@ -352,7 +353,8 @@ def _reasoning_of(cand: dict) -> dict | None:
     out: dict = {}
     if cand.get("reasons"):
         out["reasons"] = [str(r) for r in cand["reasons"]][:12]
-    for key in ("story", "variant", "llm_score", "llm_reason", "llm_tag"):
+    for key in ("story", "variant", "llm_score", "llm_rank", "llm_verdict",
+                "llm_reason", "llm_tag"):
         value = cand.get(key)
         if value not in (None, "", [], {}):
             out[key] = value
