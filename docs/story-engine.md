@@ -126,14 +126,24 @@ feedback, the boundary-learning dataset.
 **P3** — game-specific detectors, post-publish metrics, the advanced learned
 ranker.
 
+## Semantic dedupe and archetype diversity (§20)
+
+`dedupe.same_story` groups two candidates that share a payoff within 6s. Time
+overlap and shared words miss this: a tight cut and a story-rich cut of one
+joke have different openings and can share almost no text while being the same
+clip. It only ever *adds* groupings — a candidate with no story never matches,
+so legacy pairings are unchanged.
+
+`_diversify` now spreads by archetype as well as along the timeline, so a
+stream with a clutch, a story and an argument does not return eight rage
+clips. Timeline spread is tried first, and both share the existing
+`MAX_DIVERSITY_SACRIFICE` ceiling: diversity stops redundancy, it does not
+rescue a weak clip.
+
 ## Next step
 
 **Event atoms (§1), then story threads and callbacks (§3, §4).** Anchors are
 found per chunk with no memory across them, so a payoff that lands on a setup
-from an hour earlier cannot be detected at all — and that is the kind of clip
-the whole payoff-first design is best suited to find. Atoms are the structure
-threads, the event graph and retrieval all need.
-
-**Semantic dedupe (§20)** is the cheaper one and worth doing first: dedupe is
-still time and text only, so two cuts of the same story from slightly
-different timestamps can both survive.
+from an hour earlier cannot be detected at all — and that is exactly the clip
+the payoff-first design is best suited to find. Atoms are the structure that
+threads, the event graph (§5) and retrieval (§25) all need.

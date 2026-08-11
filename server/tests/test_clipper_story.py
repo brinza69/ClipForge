@@ -364,6 +364,81 @@ def test_a_story_candidate_emits_both_through_extract_features():
     assert feats["hook_latency"] == pytest.approx(2.5)
 
 
+# ── semantic dedupe and archetype diversity ──────────────────────────────────
+
+
+def _cut(start, end, score, payoff=None, kinds=()):
+    c = {"start": start, "end": end, "overall": score,
+         "text": f"words at {start:.0f} and nothing else in common"}
+    if payoff is not None:
+        c["story"] = {"payoff_t": payoff, "archetypes": list(kinds)}
+    return c
+
+
+def test_two_cuts_of_one_moment_collapse_even_with_different_words():
+    """A tight cut and a story-rich cut of one joke share little text and can
+    fall under the overlap threshold, while being the same clip. What makes
+    them the same is the payoff."""
+    from services.clipper import dedupe
+
+    a = _cut(100.0, 130.0, 80.0, payoff=128.0, kinds=["FUNNY"])
+    b = _cut(124.0, 140.0, 70.0, payoff=129.0, kinds=["FUNNY"])
+    assert dedupe.same_story(a, b)
+    out = dedupe.deduplicate([a, b], overlap_threshold=0.99,
+                             text_threshold=0.99, target_count=8)
+    assert sum(1 for c in out if not c["is_alternative"]) == 1
+
+
+def test_two_different_moments_are_not_collapsed():
+    from services.clipper import dedupe
+
+    a = _cut(100.0, 130.0, 80.0, payoff=128.0, kinds=["FUNNY"])
+    b = _cut(400.0, 430.0, 70.0, payoff=428.0, kinds=["FUNNY"])
+    assert not dedupe.same_story(a, b)
+
+
+def test_a_legacy_candidate_is_never_grouped_by_story():
+    """This only ever adds groupings — a candidate with no story must behave
+    exactly as before."""
+    from services.clipper import dedupe
+
+    plain = _cut(100.0, 130.0, 80.0)
+    told = _cut(500.0, 530.0, 70.0, payoff=528.0, kinds=["FAIL"])
+    assert not dedupe.same_story(plain, told)
+    assert not dedupe.same_story(plain, plain)
+
+
+def test_the_board_does_not_fill_with_one_archetype():
+    """Eight rage clips when the same stream also has a clutch and a story is
+    the failure this exists to stop."""
+    from services.clipper import dedupe
+
+    cands = [_cut(i * 100.0, i * 100.0 + 30.0, 90.0 - i,
+                  payoff=i * 100.0 + 28.0, kinds=["RAGE"]) for i in range(5)]
+    # Slightly worse, but the only clip of its kind.
+    cands.append(_cut(600.0, 630.0, 82.0, payoff=628.0, kinds=["CLUTCH"]))
+    out = dedupe.deduplicate(cands, overlap_threshold=0.5, text_threshold=0.9,
+                             target_count=3)
+    top3 = sorted((c for c in out if not c["is_alternative"]),
+                  key=lambda c: c["rank_position"])[:3]
+    kinds = {k for c in top3 for k in (c["story"]["archetypes"])}
+    assert "CLUTCH" in kinds, f"the only clutch never made the board: {kinds}"
+
+
+def test_diversity_does_not_rescue_a_weak_clip():
+    """It exists to stop redundancy, not to promote something bad."""
+    from services.clipper import dedupe
+
+    strong = [_cut(i * 100.0, i * 100.0 + 30.0, 90.0,
+                   payoff=i * 100.0 + 28.0, kinds=["RAGE"]) for i in range(3)]
+    weak = _cut(900.0, 930.0, 5.0, payoff=928.0, kinds=["WHOLESOME"])
+    out = dedupe.deduplicate(strong + [weak], overlap_threshold=0.5,
+                             text_threshold=0.9, target_count=2)
+    top2 = sorted((c for c in out if not c["is_alternative"]),
+                  key=lambda c: c["rank_position"])[:2]
+    assert all(c["overall"] > 50 for c in top2), "a weak clip was promoted"
+
+
 # ── the LLM pass, without an LLM ─────────────────────────────────────────────
 
 
