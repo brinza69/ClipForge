@@ -178,6 +178,39 @@ def test_what_the_model_says_is_unresolved_outweighs_the_word_list():
     assert flagged > plain >= 0.0
 
 
+def test_a_back_reference_whose_referent_is_in_the_clip_costs_nothing():
+    """The word list charges for "remember what he said" either way. It costs
+    nothing when he said it eight seconds ago and the viewer just heard it."""
+    from services.clipper import atoms as atoms_mod
+
+    said = _words("Mike said the warden spawns in the deep dark", 100.0)
+    recalled = _words("remember what Mike said about the warden", 112.0)
+    inside = said + recalled
+    stream = [{"i": 0, "start": 100.0, "end": 108.0,
+               "text": " ".join(w["word"] for w in said),
+               "audio": {"energy": 0.3, "peaks": 0, "laughter": 0.0},
+               "visual": {"motion": 0.3, "scene_change": False, "ui": 0.0},
+               "semantic": {"kind": "speech", "cues": 0, "words": len(said),
+                            "importance": 0.2}}]
+
+    refs = story.resolve_backrefs(inside, stream, start=100.0)
+    assert refs and refs[0]["resolved"], "the referent is inside the clip"
+    paid = story.context_debt(inside, None, backrefs=refs)
+
+    # The same words, but the referent is an hour back and outside the clip.
+    far = [dict(stream[0], start=10.0, end=18.0)]
+    refs_far = story.resolve_backrefs(recalled, far, start=112.0)
+    owed = story.context_debt(recalled, None, backrefs=refs_far)
+    assert owed > paid
+
+
+def test_with_no_atoms_the_word_list_still_answers():
+    """Every legacy path passes no atoms, and must behave exactly as before."""
+    words = _words("and then he told me exactly what you said yesterday")
+    assert story.resolve_backrefs(words, None, 0.0) == []
+    assert story.context_debt(words) > 0.5
+
+
 def test_context_debt_is_always_a_usable_number():
     for words in ([], None, _words("a"), _words("he it that they")):
         d = story.context_debt(words)

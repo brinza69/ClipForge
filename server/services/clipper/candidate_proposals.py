@@ -61,7 +61,8 @@ def _snap_context_to_speech(anchor: dict, words: Sequence[dict]) -> dict:
 
 def candidates_from_anchors(anchors: Sequence[dict], transcript: Any,
                             signals: Any, *, min_s: float, max_s: float,
-                            duration: float = 0.0) -> list[dict]:
+                            duration: float = 0.0,
+                            atoms: Sequence[dict] | None = None) -> list[dict]:
     """Anchors -> candidate windows, reasoned backwards from the payoff.
 
     The forward half is not reimplemented here: `_reaction_end` already knows
@@ -89,7 +90,14 @@ def candidates_from_anchors(anchors: Sequence[dict], transcript: Any,
         for win in story.variants_from_anchor(anchor, reaction, lo=lo, hi=hi,
                                               ceiling=ceiling):
             inside, _b, _a = _neighbourhood(words, win["start"], win["end"])
-            debt = story.context_debt(inside, anchor)
+            backrefs = story.resolve_backrefs(inside, atoms, win["start"])
+            if backrefs:
+                win["story"]["backrefs"] = backrefs
+                unresolved = [b for b in backrefs if not b["resolved"]]
+                if unresolved:
+                    win["story"]["unresolved_refs"] = unresolved
+            debt = story.context_debt(inside, anchor,
+                                      backrefs=backrefs if atoms else None)
             if anchor.get("callback_to"):
                 # A callback's setup is minutes or hours away and can never be
                 # in the window. The clip owes it, and owes less only when the

@@ -196,11 +196,30 @@ That is the third time an absolute threshold measured nothing on a busy source,
 after `audio_peak_ratio` and `game_ui_ratio`. **Compare a moment against its own
 stream.**
 
+## Timeline retrieval (§25)
+
+`atoms.search` — token overlap weighted by rarity across the stream, bounded
+to atoms *before* the reference. No embeddings, no index, no new dependency.
+
+Its consumer is `story.resolve_backrefs`, which turns `context_debt` from a
+word count into evidence: *"remember what he said"* costs nothing when he said
+it eight seconds ago and the viewer just heard it, and costs full price when
+the referent is an hour back. `unresolved_refs` then names what is missing
+instead of guessing. With no atoms it returns `[]` and the word list answers as
+before.
+
+Measured: "blast furnace look to your left" → the atom at 171s (0.98), "piss
+counter drink a lot of water" → 399s (1.00). On the whole stream there is
+exactly one real back-reference — *"one from yesterday and today"* — and it
+resolves to nothing, correctly: it points outside the stream.
+
+That measurement also caught `_BACKREFS` carrying ordinary connectives
+("before", "again"), which produced three false back-references out of four.
+
 ## Next step
 
 **A source with a real callback**, to find out whether the linking works at
 all. Every other piece here was validated by running it; that one has only
 been validated by mocks.
 
-Then **story threads (§3)** and the **event graph (§5)** on top of atoms, and
-**retrieval (§25)** over them.
+Then **story threads (§3)** and the **event graph (§5)** on top of atoms.

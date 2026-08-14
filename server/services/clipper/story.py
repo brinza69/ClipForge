@@ -84,9 +84,16 @@ _DANGLING_REFS = frozenset((
     "alea", "acolo", "atunci", "lui", "ii",
 ))
 # ...and words that promise a shared history the clip has not shown.
+#
+# Only words that genuinely point at something already said. "before",
+# "again", "iar" and "inainte" were in here and are ordinary connectives:
+# measured on the real stream, "before we start fighting" and "before we keep
+# exploring" were counted as back-references and then "resolved" against
+# unrelated earlier atoms, three false positives out of four. Multi-word
+# entries were dead weight too — this is matched against single tokens.
 _BACKREFS = frozenset((
-    "again", "earlier", "before", "yesterday", "remember", "said", "told",
-    "like i", "as i", "iar", "inainte", "ieri", "tineti", "ziceam", "spuneam",
+    "earlier", "yesterday", "remember", "said", "told", "mentioned",
+    "ieri", "ziceam", "spuneam", "tineti", "spuneai",
 ))
 
 # How far back required context may reach. Past this the setup is no longer
@@ -158,7 +165,47 @@ def normalise_anchor(raw: Any, duration: float) -> dict | None:
 # context debt
 # --------------------------------------------------------------------------
 
-def context_debt(words: Sequence[dict], anchor: dict | None = None) -> float:
+def resolve_backrefs(words: Sequence[dict], atoms: Sequence[dict] | None,
+                     start: float) -> list[dict]:
+    """Back-references in the clip, and whether their referent is inside it.
+
+    "remember what he said" is only a debt if the thing he said is not in the
+    clip. The word list alone cannot tell those apart — it charges for the
+    phrase either way. Searching the atoms for what the sentence is actually
+    about answers it: a referent inside the window is paid, one an hour back
+    is owed, and naming it turns `unresolved_context` from a guess into a
+    fact.
+
+    Returns [] when there are no atoms, which is every legacy path — the
+    caller then falls back to the word list, exactly as before.
+    """
+    if not atoms or not words:
+        return []
+    from services.clipper.atoms import search
+
+    end = max((_num(w.get("end")) for w in words), default=start)
+    tokens = [(norm_token(w.get("word", "")), _num(w.get("start"))) for w in words]
+    out: list[dict] = []
+    for index, (token, when) in enumerate(tokens):
+        if token not in _BACKREFS:
+            continue
+        # The sentence around the reference is the query — "remember" alone
+        # says nothing about what is being remembered.
+        window = " ".join(t for t, _ in tokens[max(0, index - 4):index + 9])
+        hits = search(atoms, window, before=when, limit=1)
+        referent = hits[0]["start"] if hits else None
+        out.append({
+            "phrase": token,
+            "t": round(when, 3),
+            "referent_t": referent,
+            # Inside the clip means the viewer saw it; the debt is paid.
+            "resolved": referent is not None and start <= referent <= end,
+        })
+    return out
+
+
+def context_debt(words: Sequence[dict], anchor: dict | None = None,
+                 backrefs: Sequence[dict] | None = None) -> float:
     """How much a cold viewer has to already know, 0..1.
 
     Two things make a clip unwatchable on its own: it OPENS on a reference it
@@ -179,11 +226,19 @@ def context_debt(words: Sequence[dict], anchor: dict | None = None) -> float:
     opening = tokens[:8]
     opens_dangling = any(t in _DANGLING_REFS for t in opening[:3])
     open_refs = sum(1 for t in opening if t in _DANGLING_REFS) / max(1, len(opening))
-    backrefs = sum(1 for t in tokens if t in _BACKREFS) / float(len(tokens))
+
+    if backrefs is not None:
+        # Evidence beats the word list: charge only for the references whose
+        # referent is NOT in the clip. "remember what he said" costs nothing
+        # when he said it eight seconds ago and the viewer just heard it.
+        owed = sum(1 for b in backrefs if not b.get("resolved"))
+        back_share = owed / float(max(1, len(tokens))) * 3.0
+    else:
+        back_share = sum(1 for t in tokens if t in _BACKREFS) / float(len(tokens)) * 12.0
 
     debt = 0.45 * (1.0 if opens_dangling else 0.0)
     debt += 0.30 * _clamp01(open_refs * 2.0)
-    debt += 0.25 * _clamp01(backrefs * 12.0)
+    debt += 0.25 * _clamp01(back_share)
 
     listed = len((anchor or {}).get("unresolved_context") or [])
     if listed:

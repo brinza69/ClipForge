@@ -188,6 +188,46 @@ def test_prompt_lines_keep_their_timestamp():
     assert atoms_mod.to_lines(out).startswith("[100] ")
 
 
+# ── retrieval over the timeline ──────────────────────────────────────────────
+
+
+def _stream():
+    return atoms_mod.build(_transcript([
+        ("Mike said the warden spawns in the deep dark.", 10.0, 16.0),
+        ("Anyway we are mining for iron right now.", 20.0, 25.0),
+        ("This cave is looking good chat honestly.", 30.0, 35.0),
+        ("Remember what Mike said about the warden.", 300.0, 305.0),
+    ]), _signals(duration=400.0))
+
+
+def test_retrieval_finds_the_thing_a_back_reference_points_at():
+    hits = atoms_mod.search(_stream(), "Remember what Mike said about the warden",
+                            before=300.0)
+    assert hits, "the referent was in the stream and was not found"
+    assert hits[0]["start"] == 10.0
+    assert "Mike" in hits[0]["text"]
+
+
+def test_retrieval_never_matches_something_that_has_not_happened_yet():
+    """A back-reference points backwards; matching forwards invents a
+    referent rather than finding one."""
+    assert atoms_mod.search(_stream(), "Mike warden deep dark", before=5.0) == []
+
+
+def test_a_word_used_everywhere_identifies_nothing():
+    spec = [(f"we are mining for iron right now number {i}", i * 10.0, i * 10.0 + 5.0)
+            for i in range(12)]
+    stream = atoms_mod.build(_transcript(spec), _signals(duration=200.0))
+    # "mining" and "iron" are in every atom, so they cannot single one out.
+    hits = atoms_mod.search(stream, "mining iron", before=200.0, limit=3)
+    assert not hits or hits[0]["match"] < 0.5
+
+
+def test_a_query_of_only_common_words_returns_nothing():
+    for query in ("", "the and that this", "yeah okay bro"):
+        assert atoms_mod.search(_stream(), query, before=400.0) == []
+
+
 def test_the_line_budget_is_respected():
     spec = [(f"line number {i} says something", i * 5.0, i * 5.0 + 4.0)
             for i in range(60)]

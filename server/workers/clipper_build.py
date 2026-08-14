@@ -132,7 +132,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                     segments, duration, promises=known, atoms=atoms)
                 nominated = cand_mod.candidates_from_anchors(
                     anchors, transcript, sig, min_s=min_s, max_s=max_s,
-                    duration=duration)
+                    duration=duration, atoms=atoms)
             else:
                 nominated = await llm_select.nominate(segments, duration)
         except Exception:

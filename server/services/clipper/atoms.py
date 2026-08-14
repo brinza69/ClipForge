@@ -224,6 +224,63 @@ def build(transcript: Any, signals: Any) -> list[dict]:
     return atoms
 
 
+# Words too common to identify anything. Not a full stopword list — just the
+# ones that would otherwise dominate an overlap score.
+_TOO_COMMON = frozenset((
+    "the", "and", "that", "this", "with", "have", "there", "what", "just",
+    "like", "your", "they", "them", "then", "here", "gonna", "really", "bro",
+    "chat", "yeah", "okay", "know", "going", "about", "because", "sunt",
+    "este", "care", "pentru", "acum", "foarte",
+))
+
+
+def search(atoms: Sequence[dict], query: str, *, before: float,
+           limit: int = 3, min_score: float = 0.12) -> list[dict]:
+    """Earlier atoms that best match `query`, most relevant first.
+
+    Token overlap weighted by rarity across the stream — no embeddings, no
+    index, no new dependency, which is what §25 asks for. It answers the one
+    question that matters here: when a clip says "remember what he said", is
+    the thing it refers to anywhere in this stream, and how far back?
+
+    `before` is a hard bound, not a preference: a back-reference points
+    backwards, and matching something that has not happened yet would invent
+    a referent rather than find one.
+    """
+    pool = [a for a in atoms or [] if _num(a.get("start"), 1e18) < before]
+    if not pool:
+        return []
+
+    wanted = {t for t in (norm_token(w) for w in str(query or "").split())
+              if t and len(t) > 3 and t not in _TOO_COMMON}
+    if not wanted:
+        return []
+
+    # How many atoms each word appears in — a word used everywhere in this
+    # stream identifies nothing in it.
+    seen: dict[str, int] = {}
+    tokens_by_atom: list[set[str]] = []
+    for atom in pool:
+        toks = {t for t in (norm_token(w) for w in atom["text"].split())
+                if t and len(t) > 3 and t not in _TOO_COMMON}
+        tokens_by_atom.append(toks)
+        for t in toks & wanted:
+            seen[t] = seen.get(t, 0) + 1
+
+    total = float(len(pool))
+    scored: list[tuple[float, dict]] = []
+    for atom, toks in zip(pool, tokens_by_atom):
+        hit = toks & wanted
+        if not hit:
+            continue
+        # Rarity weight: 1.0 for a word in one atom, falling as it spreads.
+        weight = sum(1.0 - (seen.get(t, 1) - 1) / total for t in hit)
+        scored.append((weight / float(len(wanted)), atom))
+
+    scored.sort(key=lambda s: (-s[0], -_num(s[1].get("start"))))
+    return [dict(a, match=round(s, 3)) for s, a in scored[:limit] if s >= min_score]
+
+
 def _notable(atoms: Sequence[dict]) -> dict[str, float]:
     """Per-source bars for what counts as notable.
 
