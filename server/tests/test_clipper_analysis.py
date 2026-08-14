@@ -285,6 +285,43 @@ def test_a_gaming_source_with_a_facecam_gets_the_split_layout():
     assert plan["face_rect"], "a gaming split layout with no face band is the bug"
 
 
+def test_a_layout_plan_from_another_resolution_is_not_reused():
+    """A plan is crops in SOURCE pixels, valid only for the dimensions it was
+    computed against. Swap the source — a re-download, an HD replacement of a
+    proxy-resolution cut — and the old rects still apply cleanly and silently
+    produce nonsense: measured, a plan built for 854x480 used against
+    1920x1080 cropped the top-left corner as the facecam and a narrow strip as
+    the gameplay."""
+    from workers.clipper_render_jobs import _plan_fits
+
+    # The exact plan from the broken export: every rect sits comfortably
+    # inside a 1920x1080 frame, so a bounds check cannot tell it is wrong.
+    small = {"src_w": 854, "src_h": 480,
+             "face_rect": {"x": 0, "y": 0, "w": 216, "h": 134},
+             "game_rect": {"x": 218, "y": 0, "w": 414, "h": 480}}
+    assert _plan_fits(small, 854, 480)
+    assert not _plan_fits(small, 1920, 1080), (
+        "a 854x480 plan fits inside 1080p geometrically — only the recorded "
+        "frame can tell them apart"
+    )
+
+
+def test_a_plan_records_the_frame_it_was_measured_in():
+    plan = layout.plan_layout({"start": 0.0, "end": 30.0}, _regions(), [],
+                              1920, 1080, mode="auto")
+    assert plan["src_w"] == 1920 and plan["src_h"] == 1080
+
+
+def test_a_plan_from_before_the_frame_was_recorded_still_bounds_checks():
+    """Older stored plans carry no src_w/src_h; they must not all be thrown
+    away, but a plan larger than the source is still detectable."""
+    from workers.clipper_render_jobs import _plan_fits
+
+    legacy = {"game_rect": {"x": 492, "y": 0, "w": 934, "h": 1080}}
+    assert _plan_fits(legacy, 1920, 1080)
+    assert not _plan_fits(legacy, 854, 480)
+
+
 def test_the_pipeline_callers_pass_the_content_type():
     """Both call sites, asserted by name — the failure above is invisible at
     runtime, so it has to be caught here."""

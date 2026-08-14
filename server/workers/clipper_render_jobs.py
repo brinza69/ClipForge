@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import update
 
@@ -81,11 +82,49 @@ def _write_ass(clip: ClipModel, out_dir: Path) -> str | None:
     return str(ass_path)
 
 
+def _plan_fits(plan: Any, src_w: int, src_h: int) -> bool:
+    """Whether a stored plan's crops belong to THIS source's frame.
+
+    A plan is crops in source pixels, valid only for the dimensions it was
+    measured in. Swap the source file — a re-download, a re-encode, an HD
+    replacement of a proxy-resolution cut — and the old rects can still apply
+    CLEANLY while meaning something else entirely: measured, a plan built for
+    854x480 and used against 1920x1080 cropped the top-left corner as the
+    "facecam" and a narrow strip as the "gameplay", and nothing complained
+    because every rect was comfortably inside the frame.
+
+    So the plan carries the frame it was built for and this compares that. A
+    bounds check cannot do it — the wrong plan fits.
+    """
+    if not isinstance(plan, dict) or src_w < 2 or src_h < 2:
+        return False
+    plan_w, plan_h = int(plan.get("src_w") or 0), int(plan.get("src_h") or 0)
+    if plan_w >= 2 and plan_h >= 2:
+        return plan_w == src_w and plan_h == src_h
+    # Plans written before the frame was recorded: fall back to bounds, which
+    # at least catches a plan larger than the source it is being used on.
+    for key in ("face_rect", "game_rect", "chat_rect"):
+        rect = plan.get(key)
+        if not isinstance(rect, dict):
+            continue
+        if (rect.get("x", 0) + rect.get("w", 0) > src_w + 2
+                or rect.get("y", 0) + rect.get("h", 0) > src_h + 2):
+            return False
+    return True
+
+
 def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
     """Use the stored plan; fall back to a centre crop if analysis never produced
     one (e.g. an alternative the user promoted by hand)."""
+    src_w = int(project.width or 1920)
+    src_h = int(project.height or 1080)
     if clip.layout_plan:
-        return clip.layout_plan
+        if _plan_fits(clip.layout_plan, src_w, src_h):
+            return clip.layout_plan
+        logger.warning(
+            "clip %s has a layout plan that does not fit a %dx%d source — "
+            "replanning. The source has probably been replaced since scoring.",
+            clip.id, src_w, src_h)
     from services.clipper import layout as layout_mod
 
     regions = storage.read_artifact(project.id, "regions") or {}
@@ -95,8 +134,7 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
         _candidate(clip),
         regions,
         faces_blob.get("samples") or [],
-        int(project.width or 1920),
-        int(project.height or 1080),
+        src_w, src_h,
         mode=cfg.get("layout_mode") or "auto",
         face_pct=float(cfg.get("face_pct") or settings.clipper_face_pct),
         include_chat=bool(cfg.get("include_chat")),
