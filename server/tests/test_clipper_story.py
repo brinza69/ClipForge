@@ -251,7 +251,9 @@ def test_a_context_timestamp_in_a_silence_is_snapped_to_the_speech():
                  "end": 30.3 + i * 0.4} for i in range(40)])
     anchor = _anchor(payoff_t=44.0, hook_t=None,
                      required_context=[{"t": 18.0, "fact": "in a gap"}])
-    snapped = cand_mod._snap_context_to_speech(anchor, words)
+    from services.clipper.candidate_proposals import _snap_context_to_speech
+
+    snapped = _snap_context_to_speech(anchor, words)
     assert snapped["required_context"][0]["t"] == pytest.approx(30.0)
 
 
@@ -260,7 +262,9 @@ def test_a_context_timestamp_already_on_speech_is_left_alone():
              for i in range(40)]
     anchor = _anchor(payoff_t=44.0,
                      required_context=[{"t": 30.2, "fact": "on speech"}])
-    snapped = cand_mod._snap_context_to_speech(anchor, words)
+    from services.clipper.candidate_proposals import _snap_context_to_speech
+
+    snapped = _snap_context_to_speech(anchor, words)
     assert snapped["required_context"][0]["t"] == pytest.approx(30.2)
 
 
