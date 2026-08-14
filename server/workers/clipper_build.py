@@ -53,6 +53,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     from services.clipper import llm_select
     from services.clipper import promises as promises_mod
     from services.clipper import ranker, scoring, segmentation
+    from services.clipper import threads as threads_mod
 
     async with async_session() as session:
         project = await session.get(ProjectModel, project_id)
@@ -128,11 +129,20 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 # Payoff first: each anchor carries what a viewer must already
                 # know, so the window can open on the earliest required fact
                 # rather than on the first audio spike.
+                # Narrative arcs, by lexical chaining over the atoms — no
+                # model. Diversity reads them so a stream that spends an hour
+                # on one boss cannot hand back a board that is all that boss.
+                arcs = storage.read_artifact(project_id, "threads")
+                if not isinstance(arcs, list):
+                    arcs = threads_mod.build(atoms)
+                    storage.write_artifact(project_id, "threads", arcs)
                 anchors = await llm_select.detect_anchors(
                     segments, duration, promises=known, atoms=atoms)
+                storage.write_artifact(project_id, "graph",
+                                       threads_mod.edges(arcs, known, anchors))
                 nominated = cand_mod.candidates_from_anchors(
                     anchors, transcript, sig, min_s=min_s, max_s=max_s,
-                    duration=duration, atoms=atoms)
+                    duration=duration, atoms=atoms, threads=arcs)
             else:
                 nominated = await llm_select.nominate(segments, duration)
         except Exception:

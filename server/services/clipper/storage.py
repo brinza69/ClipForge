@@ -41,7 +41,7 @@ ARTIFACT_NAMES: frozenset[str] = frozenset(
     # transcript for setups that could pay off later. It is written before
     # anchor detection reads it, so a re-run does not pay for it twice.
     {"signals", "faces", "regions", "segments", "candidates", "meta",
-     "promises", "atoms"}
+     "promises", "atoms", "threads", "graph"}
 )
 
 _SUBDIRS = (
@@ -137,6 +137,8 @@ def paths(project_id: str) -> dict[str, Path]:
         "meta": analysis / "meta.json",
         "promises": analysis / "promises.json",
         "atoms": analysis / "atoms.json",
+        "threads": analysis / "threads.json",
+        "graph": analysis / "graph.json",
     }
 
 

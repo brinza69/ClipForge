@@ -62,7 +62,8 @@ def _snap_context_to_speech(anchor: dict, words: Sequence[dict]) -> dict:
 def candidates_from_anchors(anchors: Sequence[dict], transcript: Any,
                             signals: Any, *, min_s: float, max_s: float,
                             duration: float = 0.0,
-                            atoms: Sequence[dict] | None = None) -> list[dict]:
+                            atoms: Sequence[dict] | None = None,
+                            threads: Sequence[dict] | None = None) -> list[dict]:
     """Anchors -> candidate windows, reasoned backwards from the payoff.
 
     The forward half is not reimplemented here: `_reaction_end` already knows
@@ -111,6 +112,14 @@ def candidates_from_anchors(anchors: Sequence[dict], transcript: Any,
             win["story"]["context_debt"] = debt
             win["story"]["hook_latency"] = story.hook_latency(
                 win["start"], anchor.get("hook_t"), inside)
+            if threads:
+                # Which arc of the stream this belongs to. Diversity reads it:
+                # five clips from one boss fight are five clips of one thing,
+                # even when they land in five different ten-minute buckets.
+                from services.clipper.threads import thread_at
+                tid = thread_at(threads, win["start"], win["end"])
+                if tid:
+                    win["story"]["thread_id"] = tid
             out.append({**win, "text": _text_of(inside), "words": list(inside),
                         "window_index": -1})
 

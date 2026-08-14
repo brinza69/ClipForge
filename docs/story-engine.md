@@ -216,10 +216,44 @@ resolves to nothing, correctly: it points outside the stream.
 That measurement also caught `_BACKREFS` carrying ordinary connectives
 ("before", "again"), which produced three false back-references out of four.
 
+## Narrative threads (§3)
+
+`threads.py` finds arcs by lexical chaining over atoms — an atom joins a
+thread when it shares enough rare vocabulary with what that thread has been
+about *recently*. No model. Diversity now tries three axes in order of how
+clearly each means "something else": a different **stretch**, then a different
+**story**, then a different **kind**.
+
+Without it, a stream that spends an hour on one boss could return a board that
+is entirely that boss: every clip in a different ten-minute bucket, every one a
+different archetype, all of them the same fight.
+
+**A single atom is not an arc.** Chaining first produced 43 threads over 12
+minutes, 30 of them singletons — as a diversity axis that is one bucket per
+moment. Below two atoms a moment now belongs to no thread. 43 → 9, and the
+nine are real: Minecraft-admins (18–74s), blast furnace (170–188s), trial
+chamber (240–379s), piss counter (390–405s), fortress (612–706s).
+
+## The event graph (§5) — deliberately under-built
+
+`threads.edges()` derives **two** relations: `SETUP_FOR` from a named callback,
+`SAME_STORY` from two payoffs in one thread. Nothing else.
+
+The relations worth having already exist as targeted mechanisms that something
+already reads — `promises`/`callback_to` are SETUP_FOR and RESOLVES,
+`dedupe.same_story` is SAME_STORY by payoff. A general edge store would restate
+them in a vocabulary nothing queries, and **an unread structure is the failure
+this codebase has hit three times** (ARCHETYPE_SHAPE, context_debt,
+hook_latency were all defined before anything read them). CAUSES, ESCALATES and
+CONTRADICTS would each need a model per pair or a guess. A test asserts nothing
+else is invented.
+
 ## Next step
 
 **A source with a real callback**, to find out whether the linking works at
 all. Every other piece here was validated by running it; that one has only
 been validated by mocks.
 
-Then **story threads (§3)** and the **event graph (§5)** on top of atoms.
+After that the story engine is as far as it goes without P2: multimodal Pass D
+over rendered previews (§21–22), diarization (§23), pairwise human feedback
+(§26) and the boundary-learning dataset (§27).

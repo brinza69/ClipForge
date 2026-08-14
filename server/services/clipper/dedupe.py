@@ -220,6 +220,11 @@ def _kinds_of(cand: Any) -> frozenset[str]:
     return frozenset(str(k) for k in (story.get("archetypes") or []))
 
 
+def _thread_of(cand: Any) -> str | None:
+    story = (cand or {}).get("story")
+    return story.get("thread_id") if isinstance(story, dict) else None
+
+
 def same_story(a: Any, b: Any) -> bool:
     """True when two candidates are cuts of the SAME moment.
 
@@ -250,18 +255,22 @@ def _diversify(winners: list[dict], source_duration: float,
                target_count: int) -> list[dict]:
     """Order winners so the first `target_count` spread across the source.
 
-    Across the TIMELINE, so a two-hour stream does not return five clips from
-    the same ten minutes — and across ARCHETYPE, so it does not return eight
-    rage clips when the same stream also has a clutch, a story and an
-    argument. Both are the same trade with the same ceiling: a clip is
-    promoted for variety only while the quality it costs stays under
-    MAX_DIVERSITY_SACRIFICE. Diversity must not rescue a weak clip; it exists
-    to stop redundancy.
+    Three axes, tried in this order because that is how clearly each one means
+    "something else": a different STRETCH of the stream, then a different
+    STORY, then a different KIND of clip. The middle one is why threads exist —
+    a stream that spends an hour on one boss can otherwise hand back a board
+    that is entirely that boss, with every clip in a different ten-minute
+    bucket and every one of them the same arc.
+
+    All three share one ceiling: a clip is promoted for variety only while the
+    quality it costs stays under MAX_DIVERSITY_SACRIFICE. Diversity must not
+    rescue a weak clip; it exists to stop redundancy.
     """
     buckets = max(1, target_count)
     remaining = sorted(winners, key=lambda c: -_score_of(c))
     used_time: set[int] = set()
     used_kind: set[str] = set()
+    used_thread: set[str] = set()
     ordered: list[dict] = []
 
     while remaining:
@@ -276,6 +285,10 @@ def _diversify(winners: list[dict], source_duration: float,
         )
         if fresh is None:
             fresh = next((c for c in remaining
+                          if _thread_of(c) and _thread_of(c) not in used_thread),
+                         None)
+        if fresh is None:
+            fresh = next((c for c in remaining
                           if _kinds_of(c) and not (_kinds_of(c) & used_kind)), None)
         # Once every bucket and every archetype has a winner `fresh` is None
         # and this degenerates to plain score order, which is what "one per
@@ -286,6 +299,8 @@ def _diversify(winners: list[dict], source_duration: float,
         remaining.remove(pick)
         used_time.add(_bucket_of(pick, source_duration, buckets))
         used_kind |= _kinds_of(pick)
+        if _thread_of(pick):
+            used_thread.add(_thread_of(pick))
 
     return ordered
 
