@@ -395,12 +395,19 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
 
     found: list[dict] = []
     for chunk in chunk_lines(lines):
-        # Setups from BEFORE this chunk that are still open. Anything inside
-        # the chunk needs no recall list — the model is reading it. Handing
-        # over the whole list would put an hour-old prediction in front of a
-        # payoff that cannot possibly be its resolution.
-        first_t = _num((chunk.split("]", 1)[0] or "").lstrip("["), 0.0)
-        live = promise_mod.open_at(promises or [], first_t)
+        # Setups still open anywhere up to the END of this chunk, which
+        # includes ones inside it. Filtering to "before the chunk" was wrong
+        # at real scale: a chunk holds five hours of this source, and a model
+        # will not reliably connect a payoff at hour three to a line at hour
+        # one buried in 30k tokens. The recall list is exactly that aid.
+        #
+        # Still bounded — `open_at` drops anything older than the lifetime or
+        # closer than the gap, so a payoff never sees a prediction it cannot
+        # possibly resolve.
+        stamps = [_num(line.split("]", 1)[0].lstrip("["), -1.0)
+                  for line in chunk.splitlines() if line.startswith("[")]
+        last_t = max([t for t in stamps if t >= 0] or [0.0])
+        live = promise_mod.open_at(promises or [], last_t)
         answer = await _ask(engines, anchor_prompt(chunk, per_chunk, live),
                             model=model)
         if answer is None:

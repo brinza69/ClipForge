@@ -480,13 +480,33 @@ async def test_a_named_callback_is_linked_and_tagged(monkeypatch):
                 '"why": "fails exactly as predicted", "callback_to": 3502}]')
 
     monkeypatch.setattr("services.descriptions._call_llm", fake)
-    # A chunk from LATER in the stream — a setup inside the chunk needs no
-    # recall list, the model is already reading it. 23 minutes back, inside
-    # the lifetime a setup stays live for.
+    # 23 minutes before the end of the chunk — inside the lifetime a setup
+    # stays live for, and past the gap a payoff must clear.
     out = await llm_select.detect_anchors(
         [{"start": 4900.0, "text": "x"}], 6000.0, promises=[_promise(3500.0)])
     assert out and out[0]["callback_to"]["t"] == 3500.0
     assert "CALLBACK" in out[0]["archetypes"]
+
+
+async def test_a_setup_inside_the_same_chunk_is_still_recalled(monkeypatch):
+    """A chunk holds five hours of this source. A model will not reliably
+    connect a payoff at hour three to a line at hour one buried in 30k tokens,
+    so in-chunk setups belong in the recall list too."""
+    seen = {}
+
+    async def fake(engine, prompt, **kw):
+        seen["prompt"] = prompt
+        return "[]"
+
+    monkeypatch.setattr("services.descriptions._call_llm", fake)
+    # One chunk spanning the setup AND a much later moment.
+    segments = [{"start": 500.0, "text": "he makes a prediction here"},
+                {"start": 2900.0, "text": "and much later it happens"}]
+    await llm_select.detect_anchors(segments, 4000.0,
+                                    promises=[_promise(500.0)])
+    assert "still unresolved" in seen["prompt"], (
+        "a setup inside the chunk was hidden from the model"
+    )
 
 
 async def test_a_callback_to_a_setup_that_does_not_exist_is_ignored(monkeypatch):
@@ -494,9 +514,8 @@ async def test_a_callback_to_a_setup_that_does_not_exist_is_ignored(monkeypatch)
         return '[{"payoff_t": 5000, "archetypes": ["FAIL"], "callback_to": 4400}]'
 
     monkeypatch.setattr("services.descriptions._call_llm", fake)
-    # A chunk from LATER in the stream — a setup inside the chunk needs no
-    # recall list, the model is already reading it. 23 minutes back, inside
-    # the lifetime a setup stays live for.
+    # 23 minutes before the end of the chunk — inside the lifetime a setup
+    # stays live for, and past the gap a payoff must clear.
     out = await llm_select.detect_anchors(
         [{"start": 4900.0, "text": "x"}], 6000.0, promises=[_promise(3500.0)])
     assert out and "callback_to" not in out[0]
