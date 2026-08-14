@@ -404,10 +404,11 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
         # Still bounded — `open_at` drops anything older than the lifetime or
         # closer than the gap, so a payoff never sees a prediction it cannot
         # possibly resolve.
-        stamps = [_num(line.split("]", 1)[0].lstrip("["), -1.0)
-                  for line in chunk.splitlines() if line.startswith("[")]
-        last_t = max([t for t in stamps if t >= 0] or [0.0])
-        live = promise_mod.open_at(promises or [], last_t)
+        stamps = [t for t in (_num(line.split("]", 1)[0].lstrip("["), -1.0)
+                              for line in chunk.splitlines()
+                              if line.startswith("[")) if t >= 0]
+        first_t, last_t = (min(stamps), max(stamps)) if stamps else (0.0, 0.0)
+        live = promise_mod.open_at(promises or [], last_t, span_from=first_t)
         answer = await _ask(engines, anchor_prompt(chunk, per_chunk, live),
                             model=model)
         if answer is None:

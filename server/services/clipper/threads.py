@@ -105,11 +105,20 @@ def build(atoms: Sequence[dict]) -> list[dict]:
         threads.append(thread)
         open_threads.append(thread)
 
+    # How many threads each word turns up in — a word in half of them names
+    # none of them. Taking sorted(vocab)[:12] instead gave every arc the same
+    # alphabetical opening: "able, activate, activated, actual, actually,
+    # ain't, alive", which identifies nothing.
+    spread: dict[str, int] = {}
+    for thread in threads:
+        for token in thread["_all"]:
+            spread[token] = spread.get(token, 0) + 1
+
     out: list[dict] = []
     for thread in threads:
         if len(thread["atoms"]) < MIN_THREAD_ATOMS:
             continue
-        vocab = sorted(thread["_all"])
+        vocab = sorted(thread["_all"], key=lambda t: (spread.get(t, 1), t))
         out.append({
             "id": thread["id"],
             "start": round(thread["start"], 3),

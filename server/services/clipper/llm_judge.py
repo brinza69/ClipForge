@@ -175,7 +175,12 @@ async def judge(cands: list[dict], *, weight: float = 0.5,
     """Rank candidates against each other and blend it in. 0 when unavailable."""
     if not cands:
         return 0
-    subset = cands[:MAX_JUDGE_CLIPS]
+    # The best candidates so far, NOT the first ones on the clock. `cands` is
+    # in timeline order, so slicing it handed the judge the opening minutes
+    # and nothing else: measured on a 4-hour stream with 925 candidates, it
+    # saw the first 80 — about twenty minutes — while everything after that
+    # kept an unjudged heuristic score and won on it.
+    subset = sorted(cands, key=lambda c: -_num(c.get("overall")))[:MAX_JUDGE_CLIPS]
     answer = await _ask(engines, judge_prompt(subset, want), model=model)
     if answer is None:
         return 0

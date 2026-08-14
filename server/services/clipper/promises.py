@@ -70,17 +70,35 @@ def normalise_promise(raw: Any, duration: float) -> dict | None:
 
 
 def open_at(promises: Sequence[dict], t: float,
-            lifetime_s: float = DEFAULT_LIFETIME_S) -> list[dict]:
-    """Setups still live at time `t`, most recent first.
+            lifetime_s: float = DEFAULT_LIFETIME_S,
+            span_from: float | None = None) -> list[dict]:
+    """Setups a payoff anywhere in [span_from, t] could still be resolving.
 
     Bounded by both a gap and a lifetime. Without the gap a payoff would be
     matched to a setup it is sitting on top of, which the ordinary
     required-context path already handles better; without the lifetime every
     loud moment for the rest of the stream inherits a callback.
+
+    `span_from` matters whenever the caller is asking on behalf of a RANGE
+    rather than a moment — a prompt covers a whole chunk, and a chunk of this
+    source is hours long. Asking only about its end left the first chunk of a
+    4-hour run with zero setups offered, because every promise in it was more
+    than a lifetime older than minute 201. A payoff at minute 60 has to be
+    able to see a promise from minute 20.
     """
-    live = [p for p in promises or []
-            if isinstance(p, dict)
-            and MIN_CALLBACK_GAP_S <= t - _num(p.get("t"), -1e9) <= lifetime_s]
+    earliest = t if span_from is None else min(span_from, t)
+    live = []
+    for p in promises or []:
+        if not isinstance(p, dict):
+            continue
+        when = _num(p.get("t"), -1e9)
+        # Live for anyone in the span: old enough for the earliest payoff that
+        # could use it, young enough for the latest.
+        if when > t - MIN_CALLBACK_GAP_S:
+            continue
+        if when < earliest - lifetime_s:
+            continue
+        live.append(p)
     live.sort(key=lambda p: -_num(p.get("t")))
     return live
 

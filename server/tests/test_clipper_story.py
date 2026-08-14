@@ -420,6 +420,21 @@ def test_only_setups_still_live_are_offered_to_a_later_chunk():
     assert [p["t"] for p in live] == [5000.0, 4000.0], "wrong ones, or wrong order"
 
 
+def test_a_chunk_spanning_hours_offers_setups_from_its_whole_span():
+    """A prompt covers a chunk, and a chunk of a real stream is hours long.
+    Asking only about its end left the first chunk of a 4-hour run with zero
+    setups offered — every promise in it was more than a lifetime older than
+    minute 201. A payoff at minute 60 must be able to see one from minute 20."""
+    from services.clipper import promises
+
+    pool = [_promise(240.0), _promise(1200.0)]      # 4 and 20 minutes in
+    at_end_only = promises.open_at(pool, 12060.0)   # the chunk ends at 201m
+    assert at_end_only == [], "this is the old behaviour, kept for point queries"
+
+    across = promises.open_at(pool, 12060.0, span_from=0.0)
+    assert [p["t"] for p in across] == [1200.0, 240.0]
+
+
 def test_a_setup_the_payoff_is_sitting_on_is_not_a_callback():
     """Closer than the gap and the two are one moment, which the ordinary
     required-context path already handles better."""

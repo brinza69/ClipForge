@@ -305,6 +305,28 @@ async def test_a_model_that_scores_instead_of_ranking_still_counts(monkeypatch):
     assert cands[0]["llm_score"] == 88.0
 
 
+async def test_the_judge_sees_the_best_candidates_not_the_earliest(monkeypatch):
+    """`cands` is in timeline order. Slicing it handed the judge the opening
+    minutes and nothing else: measured on a 4-hour stream with 925 candidates
+    it saw about the first twenty minutes, while everything later kept an
+    unjudged heuristic score and won on it."""
+    seen = {}
+
+    async def fake(engine, prompt, **kw):
+        seen["prompt"] = prompt
+        return "[]"
+
+    monkeypatch.setattr("services.descriptions._call_llm", fake)
+    from services.clipper import llm_judge
+
+    # Timeline order, with the good ones at the end.
+    cands = [{"start": float(i), "end": float(i) + 30.0, "text": f"clip {i}",
+              "overall": float(i)} for i in range(llm_judge.MAX_JUDGE_CLIPS + 40)]
+    await llm_judge.judge(cands, engines=("openai",))
+    assert f"clip {len(cands) - 1}" in seen["prompt"], "the best clip was not judged"
+    assert "clip 0" not in seen["prompt"], "the worst clip took a slot"
+
+
 def test_the_prompt_carries_only_the_rubrics_in_play():
     """A FUNNY clip must not be marked down for lacking stakes, and a CLUTCH
     one must not be excused for lacking them."""

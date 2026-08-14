@@ -248,12 +248,51 @@ hook_latency were all defined before anything read them). CAUSES, ESCALATES and
 CONTRADICTS would each need a model per pair or a guess. A test asserts nothing
 else is invented.
 
-## Next step
+## Verified on four hours
 
-**A source with a real callback**, to find out whether the linking works at
-all. Every other piece here was validated by running it; that one has only
-been validated by mocks.
+Everything above was measured on a 12-minute slice. A 4-hour run (927
+candidates, 1536 atoms, 123 threads, 12 promises) broke three things a short
+source cannot show, all fixed:
 
-After that the story engine is as far as it goes without P2: multimodal Pass D
-over rendered previews (§21–22), diarization (§23), pairwise human feedback
-(§26) and the boundary-learning dataset (§27).
+| fault | why 12 minutes hid it |
+|---|---|
+| the judge read `cands[:80]` in **timeline order** | 46 candidates fit in 80 |
+| the recall window looked only at a chunk's **end** | 12 minutes is one short chunk |
+| thread keywords were **alphabetical** | 9 threads, easy to eyeball |
+
+**Callbacks fired for the first time.** Until this run they had only ever been
+validated by mocks. The model linked *"I think I can go in a cave"* (207m) to a
+payoff at 210m, and *"I'm hitting the cave, bro"* (205m) to one at 221m — six
+callbacks across 927 candidates, from zero.
+
+Fixing the judge's shortlist inverted the ordering: story-built candidates went
+from 33.7–62.7 against a heuristic 10.1–84.8, to **35.5–81.0 against 18.2–66.5**,
+with a story window at the top of the board.
+
+### Timings, 4 hours of 480p source
+
+| stage | time |
+|---|---|
+| ingest (proxy + audio) | 227s |
+| transcribe (large-v3, GPU) | 1918s |
+| analyse | 265s |
+| score, both LLM passes | 164s |
+| **total** | **~44 min** |
+
+About **1 minute of processing per 4 minutes of stream**. Analyse came in at
+4.4 minutes against my 20–25 estimate — the face pass is capped at 2000 samples
+whatever the length, which is what keeps it flat.
+
+The story engine is now as far as it goes without P2: multimodal Pass D over
+rendered previews (§21–22), diarization (§23), pairwise human feedback (§26)
+and the boundary-learning dataset (§27).
+
+Two things worth knowing before the next round:
+
+- **The promise detector finds goals, not stakes.** 8 of the 12 setups on the
+  4-hour run were `goal` — "I'm going to go to the gym", "I'm hitting the cave".
+  Those have no payoff anyone would clip. The spec's own examples are sharper
+  ("if I lose this I'll shave my head"), and tightening the detector toward
+  predictions and bets would raise the quality of the callbacks it finds.
+- **Nobody has watched a clip yet.** Every property that can be measured has
+  been; whether a clip *works* has not.
