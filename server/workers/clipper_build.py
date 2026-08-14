@@ -50,6 +50,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     from services.clipper import dedupe as dedupe_mod
     from services.clipper import layout as layout_mod
     from services.clipper import llm_select
+    from services.clipper import promises as promises_mod
     from services.clipper import ranker, scoring, segmentation
 
     async with async_session() as session:
@@ -106,10 +107,19 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         segments = transcript.get("segments") or []
         try:
             if reasoning == "story_v1":
+                # Setups that could pay off later, swept once over the whole
+                # transcript and checkpointed. Anchor detection runs per chunk
+                # with no memory across chunks, so without this a payoff that
+                # lands on a prediction from an hour earlier is invisible.
+                known = storage.read_artifact(project_id, "promises")
+                if not isinstance(known, list):
+                    known = await promises_mod.detect(segments, duration)
+                    storage.write_artifact(project_id, "promises", known)
                 # Payoff first: each anchor carries what a viewer must already
                 # know, so the window can open on the earliest required fact
                 # rather than on the first audio spike.
-                anchors = await llm_select.detect_anchors(segments, duration)
+                anchors = await llm_select.detect_anchors(
+                    segments, duration, promises=known)
                 nominated = cand_mod.candidates_from_anchors(
                     anchors, transcript, sig, min_s=min_s, max_s=max_s,
                     duration=duration)

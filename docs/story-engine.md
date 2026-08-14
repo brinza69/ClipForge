@@ -140,10 +140,44 @@ clips. Timeline spread is tried first, and both share the existing
 `MAX_DIVERSITY_SACRIFICE` ceiling: diversity stops redundancy, it does not
 rescue a weak clip.
 
+## Promises and callbacks (§4)
+
+`promises.py` sweeps the transcript once for statements that create an
+expectation — prediction, promise, bet, challenge, goal — and checkpoints them
+to `analysis/promises.json`. Anchor detection in a later chunk receives the
+ones still open, so a payoff can be linked to a setup from earlier in the
+stream. A linked anchor gets the `CALLBACK` archetype.
+
+Built without the event-atom substrate (§1, §5) on purpose: callbacks need
+only the setups and a link, and building the substrate first would have spent
+the whole budget before anything detected one. §40 asks for that trade.
+
+**A callback's setup can never be in the window.** It is minutes or hours
+away, so it is not required context to *include* — it is context the clip
+*owes*. `callback_debt` measures that and falls when the payoff line restates
+the setup, which is the case where a callback works standalone at all.
+
+Bounds: a setup goes stale after 45 minutes, and a payoff within 90 seconds of
+its setup is one moment, handled better by the ordinary context path.
+
+### Verified, and not verified
+
+The sweep works — six plausible setups from the 12-minute slice. Linking,
+validation, tagging and the debt are unit-tested against mocked answers.
+
+**No callback has fired on real data.** A 12-minute transcript is one chunk and
+in-chunk setups are excluded from the recall list, so the path cannot fire on
+this source. Forcing the chunking small put the setups in front of the model
+and it still linked none — and it may be right: *"we're gonna give you
+diamond"* is not really paid off by mining one. Verifying this needs a source
+with a confirmed callback; tuning the prompt further against a source with no
+positive case would be fitting to nothing.
+
 ## Next step
 
-**Event atoms (§1), then story threads and callbacks (§3, §4).** Anchors are
-found per chunk with no memory across them, so a payoff that lands on a setup
-from an hour earlier cannot be detected at all — and that is exactly the clip
-the payoff-first design is best suited to find. Atoms are the structure that
-threads, the event graph (§5) and retrieval (§25) all need.
+**A source with a real callback**, to find out whether the linking works at
+all. Everything else here was validated by running it; this one piece has only
+been validated by mocks.
+
+Then **event atoms (§1)** as the substrate for story threads (§3), the event
+graph (§5) and retrieval (§25).

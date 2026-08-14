@@ -364,6 +364,108 @@ def test_a_story_candidate_emits_both_through_extract_features():
     assert feats["hook_latency"] == pytest.approx(2.5)
 
 
+# ── promises and callbacks ───────────────────────────────────────────────────
+#
+# The one kind of clip a per-chunk pass cannot see: "he predicted he would
+# choke" at hour two and "he chokes exactly as predicted" at hour three are
+# two unrelated events unless something remembers the first.
+
+
+def _promise(t, text="he predicted he would choke the final round"):
+    return {"t": t, "kind": "prediction", "text": text, "confidence": 0.8}
+
+
+def test_only_setups_still_live_are_offered_to_a_later_chunk():
+    from services.clipper import promises
+
+    pool = [_promise(100.0), _promise(4000.0), _promise(5000.0)]
+    live = promises.open_at(pool, 5200.0)
+    assert [p["t"] for p in live] == [5000.0, 4000.0], "wrong ones, or wrong order"
+
+
+def test_a_setup_the_payoff_is_sitting_on_is_not_a_callback():
+    """Closer than the gap and the two are one moment, which the ordinary
+    required-context path already handles better."""
+    from services.clipper import promises
+
+    assert promises.open_at([_promise(1000.0)], 1030.0) == []
+
+
+def test_a_setup_goes_stale():
+    """Otherwise every loud moment for the rest of the stream inherits one."""
+    from services.clipper import promises
+
+    assert promises.open_at([_promise(100.0)], 100.0 + 10 * 3600) == []
+
+
+def test_a_callback_that_restates_its_setup_owes_less():
+    """This is the case where a callback works as a standalone clip at all."""
+    from services.clipper import promises
+
+    p = _promise(100.0, "he will choke the final round")
+    restated = [{"word": w} for w in
+                "I said I would choke the final round and I choked".split()]
+    silent = [{"word": w} for w in "well that happened I guess".split()]
+    assert promises.callback_debt(p, restated) < 0.35
+    assert promises.callback_debt(p, silent) > 0.8
+
+
+def test_no_callback_means_nothing_owed():
+    from services.clipper import promises
+
+    assert promises.callback_debt(None, [{"word": "a"}]) == 0.0
+
+
+def test_an_unplaceable_setup_is_dropped():
+    from services.clipper import promises
+
+    for raw in ({}, {"text": "no time"}, {"t": 5}, {"t": -1, "text": "x"}, "nope"):
+        assert promises.normalise_promise(raw, 1000.0) is None
+
+
+def test_a_callback_raises_the_debt_of_the_window_it_lands_in():
+    """The setup is an hour away and can never be in the window."""
+    anchor = _anchor(payoff_t=200.0, hook_t=180.0,
+                     required_context=[{"t": 180.0, "fact": "1 HP"}])
+    plain = cand_mod.candidates_from_anchors(
+        [anchor], _transcript(), {}, min_s=15.0, max_s=90.0, duration=400.0)
+    with_cb = cand_mod.candidates_from_anchors(
+        [{**anchor, "callback_to": _promise(20.0, "totally unrelated wording")}],
+        _transcript(), {}, min_s=15.0, max_s=90.0, duration=400.0)
+    assert with_cb[0]["story"]["callback_to"]["t"] == 20.0
+    assert with_cb[0]["story"]["context_debt"] > plain[0]["story"]["context_debt"]
+
+
+async def test_a_named_callback_is_linked_and_tagged(monkeypatch):
+    async def fake(engine, prompt, **kw):
+        assert "still unresolved" in prompt, "the open setups never reached the model"
+        return ('[{"payoff_t": 5000, "archetypes": ["FAIL"], '
+                '"why": "fails exactly as predicted", "callback_to": 3502}]')
+
+    monkeypatch.setattr("services.descriptions._call_llm", fake)
+    # A chunk from LATER in the stream — a setup inside the chunk needs no
+    # recall list, the model is already reading it. 23 minutes back, inside
+    # the lifetime a setup stays live for.
+    out = await llm_select.detect_anchors(
+        [{"start": 4900.0, "text": "x"}], 6000.0, promises=[_promise(3500.0)])
+    assert out and out[0]["callback_to"]["t"] == 3500.0
+    assert "CALLBACK" in out[0]["archetypes"]
+
+
+async def test_a_callback_to_a_setup_that_does_not_exist_is_ignored(monkeypatch):
+    async def fake(engine, prompt, **kw):
+        return '[{"payoff_t": 5000, "archetypes": ["FAIL"], "callback_to": 4400}]'
+
+    monkeypatch.setattr("services.descriptions._call_llm", fake)
+    # A chunk from LATER in the stream — a setup inside the chunk needs no
+    # recall list, the model is already reading it. 23 minutes back, inside
+    # the lifetime a setup stays live for.
+    out = await llm_select.detect_anchors(
+        [{"start": 4900.0, "text": "x"}], 6000.0, promises=[_promise(3500.0)])
+    assert out and "callback_to" not in out[0]
+    assert "CALLBACK" not in out[0]["archetypes"]
+
+
 # ── semantic dedupe and archetype diversity ──────────────────────────────────
 
 

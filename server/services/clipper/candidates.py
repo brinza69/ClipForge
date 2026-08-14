@@ -194,7 +194,18 @@ def candidates_from_anchors(anchors: Sequence[dict], transcript: Any,
         for win in story.variants_from_anchor(anchor, reaction, lo=lo, hi=hi,
                                               ceiling=ceiling):
             inside, _b, _a = _neighbourhood(words, win["start"], win["end"])
-            win["story"]["context_debt"] = story.context_debt(inside, anchor)
+            debt = story.context_debt(inside, anchor)
+            if anchor.get("callback_to"):
+                # A callback's setup is minutes or hours away and can never be
+                # in the window. The clip owes it, and owes less only when the
+                # payoff line restates it — which is when a callback works as
+                # a standalone clip at all.
+                from services.clipper import promises as promise_mod
+                owed = promise_mod.callback_debt(anchor["callback_to"], inside)
+                win["story"]["callback_to"] = anchor["callback_to"]
+                win["story"]["callback_debt"] = owed
+                debt = max(debt, 0.5 * owed)
+            win["story"]["context_debt"] = debt
             win["story"]["hook_latency"] = story.hook_latency(
                 win["start"], anchor.get("hook_t"), inside)
             out.append({**win, "text": _text_of(inside), "words": list(inside),
