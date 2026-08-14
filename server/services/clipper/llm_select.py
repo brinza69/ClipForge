@@ -285,7 +285,10 @@ def anchor_prompt(lines: str, want: int,
         f"{recall}\n"
         f"Archetypes, choose one or two: {', '.join(ARCHETYPES)}\n\n"
         "Ignore moments that are only loud. Narrating routine actions, reading "
-        "an inventory and filler are not payoffs.\n\n"
+        "an inventory and filler are not payoffs.\n"
+        "Some lines end in <angle brackets> with what the audio and picture "
+        "were doing there. Treat that as evidence, never as the reason on its "
+        "own — LOUD without something happening is not a payoff.\n\n"
         'Answer as JSON only: [{"payoff_t": <seconds>, "payoff_strength": '
         '<0-1>, "archetypes": ["..."], "why": "<max 12 words>", '
         '"required_context": [{"t": <seconds>, "fact": "<max 8 words>"}], '
@@ -363,7 +366,8 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
                          per_chunk: int = 10,
                          engines: Sequence[str] = NOMINATE_ENGINES,
                          model: str | None = None,
-                         promises: Sequence[dict] | None = None) -> list[dict]:
+                         promises: Sequence[dict] | None = None,
+                         atoms: Sequence[dict] | None = None) -> list[dict]:
     """Anchors: a payoff, what a viewer must know for it to land, an archetype.
 
     The richer sibling of `nominate`, and the input to the story engine. Same
@@ -376,7 +380,15 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
     """
     from services.clipper.story import normalise_anchor
 
-    lines = transcript_lines(segments)
+    # Atom lines carry the evidence for their own moment — that the room got
+    # loud, the picture cut, the game went into a menu — where a transcript
+    # line carries only the words. Features as evidence, at the grain of one
+    # utterance, which is what atoms exist for.
+    if atoms:
+        from services.clipper.atoms import to_lines
+        lines = to_lines(atoms, MAX_TRANSCRIPT_CHARS)
+    else:
+        lines = transcript_lines(segments)
     if not lines:
         return []
     from services.clipper import promises as promise_mod

@@ -49,6 +49,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     from services.clipper import captions as cap_mod
     from services.clipper import dedupe as dedupe_mod
     from services.clipper import layout as layout_mod
+    from services.clipper import atoms as atoms_mod
     from services.clipper import llm_select
     from services.clipper import promises as promises_mod
     from services.clipper import ranker, scoring, segmentation
@@ -107,6 +108,15 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         segments = transcript.get("segments") or []
         try:
             if reasoning == "story_v1":
+                # The stream as units the reasoning can point at, each
+                # carrying its own signals. Built from the transcript and the
+                # Pass A series with no model involved — a 12-hour stream is
+                # ~8,600 atoms and the cost rule forbids a call per two
+                # seconds of video.
+                atoms = storage.read_artifact(project_id, "atoms")
+                if not isinstance(atoms, list):
+                    atoms = atoms_mod.build(transcript, sig)
+                    storage.write_artifact(project_id, "atoms", atoms)
                 # Setups that could pay off later, swept once over the whole
                 # transcript and checkpointed. Anchor detection runs per chunk
                 # with no memory across chunks, so without this a payoff that
@@ -119,7 +129,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 # know, so the window can open on the earliest required fact
                 # rather than on the first audio spike.
                 anchors = await llm_select.detect_anchors(
-                    segments, duration, promises=known)
+                    segments, duration, promises=known, atoms=atoms)
                 nominated = cand_mod.candidates_from_anchors(
                     anchors, transcript, sig, min_s=min_s, max_s=max_s,
                     duration=duration)

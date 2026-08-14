@@ -173,11 +173,34 @@ diamond"* is not really paid off by mining one. Verifying this needs a source
 with a confirmed callback; tuning the prompt further against a source with no
 positive case would be fitting to nothing.
 
+## Event atoms (§1)
+
+`atoms.py` turns the stream into units the reasoning can point at: one natural
+utterance, 2–8s, with the Pass A signals for its own span attached. Built with
+no model — a 12-hour stream is ~8,600 atoms and the cost rule forbids a call
+per two seconds. 15 KB of artifact per 12 minutes, so under a megabyte for a
+full stream.
+
+**They are read, not just stored.** `detect_anchors` sends atom lines instead
+of transcript lines, so a model sees *"he said this AND the room got loud AND
+the picture cut"* as one fact. Features as evidence (§16) at the grain of one
+utterance.
+
+Marking is **relative to the source**. An absolute `peaks >= 1` tagged 94% of
+lines because this stream runs about one peak every three seconds — the marks
+became the noise they exist to cut through. Bars are the source's own p80, and
+`hook` is not printed (its vocabulary is "wait", "look", "why" — 22% of atoms).
+94% → 57%.
+
+That is the third time an absolute threshold measured nothing on a busy source,
+after `audio_peak_ratio` and `game_ui_ratio`. **Compare a moment against its own
+stream.**
+
 ## Next step
 
 **A source with a real callback**, to find out whether the linking works at
-all. Everything else here was validated by running it; this one piece has only
+all. Every other piece here was validated by running it; that one has only
 been validated by mocks.
 
-Then **event atoms (§1)** as the substrate for story threads (§3), the event
-graph (§5) and retrieval (§25).
+Then **story threads (§3)** and the **event graph (§5)** on top of atoms, and
+**retrieval (§25)** over them.

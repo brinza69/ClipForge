@@ -40,7 +40,8 @@ ARTIFACT_NAMES: frozenset[str] = frozenset(
     # "promises" is the story path's checkpoint: one sweep over the whole
     # transcript for setups that could pay off later. It is written before
     # anchor detection reads it, so a re-run does not pay for it twice.
-    {"signals", "faces", "regions", "segments", "candidates", "meta", "promises"}
+    {"signals", "faces", "regions", "segments", "candidates", "meta",
+     "promises", "atoms"}
 )
 
 _SUBDIRS = (
@@ -135,6 +136,7 @@ def paths(project_id: str) -> dict[str, Path]:
         "candidates": analysis / "candidates.json",
         "meta": analysis / "meta.json",
         "promises": analysis / "promises.json",
+        "atoms": analysis / "atoms.json",
     }
 
 
