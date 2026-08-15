@@ -262,6 +262,27 @@ class Settings(BaseSettings):
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_from_browser: str = ""
 
+    # JavaScript runtimes yt-dlp may use to solve YouTube's `n` challenge.
+    # Without one, YouTube returns storyboards only and the download fails with
+    # "Requested format is not available" — measured on a public 4-hour VOD,
+    # where every player client returned zero audio/video formats until this
+    # was set. yt-dlp enables "deno" alone by default; this repo already ships
+    # Node for the frontend, so CLIPFORGE_YTDLP_JS_RUNTIMES=node is the cheap
+    # answer. Comma-separated. Blank keeps yt-dlp's own default.
+    # Solving also needs the challenge script: `pip install yt-dlp-ejs`.
+    ytdlp_js_runtimes: str = ""
+
+    @property
+    def ytdlp_opts(self) -> dict:
+        """Everything yt-dlp needs to reach a gated source. Merged at both
+        call sites, so metadata and download always agree."""
+        opts = dict(self.ytdlp_cookie_opts)
+        runtimes = [r.strip().lower()
+                    for r in self.ytdlp_js_runtimes.split(",") if r.strip()]
+        if runtimes:
+            opts["js_runtimes"] = {name: {} for name in runtimes}
+        return opts
+
     @property
     def ytdlp_cookie_opts(self) -> dict:
         """yt-dlp options carrying whatever authentication is configured."""

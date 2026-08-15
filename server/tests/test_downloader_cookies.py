@@ -55,6 +55,31 @@ def test_an_explicit_file_wins_over_a_browser(tmp_path):
     assert opts == {"cookiefile": str(jar)}
 
 
+# ── the JS runtime ───────────────────────────────────────────────────────────
+
+
+def test_no_runtime_configured_leaves_yt_dlps_default_alone():
+    assert "js_runtimes" not in Settings().ytdlp_opts
+
+
+def test_a_runtime_becomes_the_dict_yt_dlp_wants():
+    assert Settings(ytdlp_js_runtimes="node").ytdlp_opts["js_runtimes"] == {"node": {}}
+
+
+def test_several_runtimes_are_all_enabled():
+    opts = Settings(ytdlp_js_runtimes="deno, node").ytdlp_opts
+    assert opts["js_runtimes"] == {"deno": {}, "node": {}}
+
+
+def test_cookies_and_runtime_travel_together(tmp_path):
+    """One property, so a call site cannot pick up half of what it needs."""
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("x", encoding="utf-8")
+    opts = Settings(ytdlp_cookies_file=str(jar),
+                    ytdlp_js_runtimes="node").ytdlp_opts
+    assert opts == {"cookiefile": str(jar), "js_runtimes": {"node": {}}}
+
+
 # ── whether anything reads it ────────────────────────────────────────────────
 
 

@@ -16,6 +16,8 @@ Known limitations:
   - Login-required and bot-checked content needs cookies: set
     CLIPFORGE_YTDLP_COOKIES_FILE or CLIPFORGE_YTDLP_COOKIES_FROM_BROWSER.
     Both blank by default, and blank behaves exactly as before.
+  - YouTube also needs a JS runtime to solve its `n` challenge, or it serves
+    storyboards only: CLIPFORGE_YTDLP_JS_RUNTIMES=node, plus `yt-dlp-ejs`.
   - DRM-protected content is not downloadable
   - Some geo-restricted content may fail
   - Live streams are not supported (only completed VODs)
@@ -188,7 +190,7 @@ def _extract_info_sync(url: str) -> dict[str, Any]:
     # Metadata is gated by the same bot check as the download, so the cookies
     # have to be here too — otherwise a source authenticates at download time
     # having already failed validation.
-    ydl_opts.update(settings.ytdlp_cookie_opts)
+    ydl_opts.update(settings.ytdlp_opts)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -482,7 +484,7 @@ async def download_video(
     _ffmpeg_loc = settings.ffmpeg_location
     if _ffmpeg_loc:
         ydl_opts["ffmpeg_location"] = _ffmpeg_loc
-    ydl_opts.update(settings.ytdlp_cookie_opts)
+    ydl_opts.update(settings.ytdlp_opts)
     
     def _run():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
