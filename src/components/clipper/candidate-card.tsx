@@ -29,10 +29,12 @@ export function CandidateCard({
   clip,
   onAction,
   onShowScore,
+  onShowReasoning,
 }: {
   clip: ClipperClip;
   onAction: (clip: ClipperClip, action: "approve" | "reject" | "export" | "preview") => Promise<void>;
   onShowScore: (clip: ClipperClip) => void;
+  onShowReasoning: (clip: ClipperClip) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -67,14 +69,29 @@ export function CandidateCard({
             {clip.duration.toFixed(1)}s
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => onShowScore(clip)}
-          title="See the 16 sub-scores behind this"
-          className={`shrink-0 rounded-lg border px-2.5 py-1 text-sm font-bold tabular-nums transition-opacity hover:opacity-80 ${scoreTone(score)}`}
-        >
-          {score}
-        </button>
+        <div className="flex shrink-0 items-start gap-1.5">
+          {/* Only when there is something to show — a clip scored by the legacy
+              chain carries no reasoning, and an button that opens an empty
+              dialog is worse than no button. */}
+          {clip.reasoning && (
+            <button
+              type="button"
+              onClick={() => onShowReasoning(clip)}
+              title="Why this clip, and why these boundaries"
+              className="rounded-lg border border-border/50 px-2 py-1 text-xs text-muted-foreground transition-opacity hover:opacity-70"
+            >
+              why
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onShowScore(clip)}
+            title="See the 16 sub-scores behind this"
+            className={`rounded-lg border px-2.5 py-1 text-sm font-bold tabular-nums transition-opacity hover:opacity-80 ${scoreTone(score)}`}
+          >
+            {score}
+          </button>
+        </div>
       </div>
 
       {previewUrl ? (

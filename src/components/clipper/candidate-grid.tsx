@@ -14,6 +14,7 @@ import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { CandidateCard } from "@/components/clipper/candidate-card";
+import { ReasoningPanel } from "@/components/clipper/reasoning-panel";
 import { ScoreBreakdown } from "@/components/clipper/score-breakdown";
 import { Button } from "@/components/ui/button";
 import { errorDescription, readApiError } from "@/lib/api-error";
@@ -72,6 +73,7 @@ export function CandidateGrid({
   const [filter, setFilter] = useState<string>("all");
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [scoreClip, setScoreClip] = useState<ClipperClip | null>(null);
+  const [whyClip, setWhyClip] = useState<ClipperClip | null>(null);
   const [bulk, setBulk] = useState(false);
 
   const winners = clips.filter((c) => !c.is_alternative);
@@ -195,6 +197,7 @@ export function CandidateGrid({
               clip={clip}
               onAction={act}
               onShowScore={setScoreClip}
+              onShowReasoning={setWhyClip}
             />
           ))}
         </div>
@@ -204,6 +207,12 @@ export function CandidateGrid({
         clip={scoreClip}
         open={scoreClip !== null}
         onOpenChange={(v) => !v && setScoreClip(null)}
+      />
+
+      <ReasoningPanel
+        clip={whyClip}
+        open={whyClip !== null}
+        onOpenChange={(v) => !v && setWhyClip(null)}
       />
     </div>
   );

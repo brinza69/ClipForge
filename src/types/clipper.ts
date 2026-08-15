@@ -190,6 +190,45 @@ export interface SourceMetadata {
   suggestion?: string;
 }
 
+// Why a clip was picked, as the backend recorded it. Written by the story
+// engine (`reasoning_version = "story_v1"`); legacy clips carry only `reasons`
+// and the judge's verdict, and everything here is optional for that reason.
+export interface ClipStory {
+  anchor_t?: number;
+  payoff_t?: number;
+  hook_t?: number;
+  reaction_end?: number;
+  archetypes?: string[];
+  why?: string;
+  edit_reason?: string;
+  required_context?: { t?: number; fact?: string }[];
+  unresolved_refs?: { text?: string; resolved?: boolean }[];
+  context_debt?: number;
+  hook_latency?: number;
+  thread_id?: string;
+  story_version?: string;
+  callback_to?: { t?: number; text?: string; kind?: string } | null;
+  callback_debt?: number;
+}
+
+export interface ClipVerdict {
+  story_editor?: string;
+  cold_viewer?: string;
+  critic?: string;
+  reject_reasons?: string[];
+  prompt_version?: string;
+}
+
+export interface ClipReasoning {
+  reasons?: string[];
+  story?: ClipStory;
+  variant?: string;
+  llm_score?: number;
+  llm_rank?: number;
+  llm_reason?: string;
+  llm_verdict?: ClipVerdict;
+}
+
 export interface ClipperClip {
   id: string;
   project_id: string;
@@ -210,6 +249,7 @@ export interface ClipperClip {
   is_alternative: boolean;
   rank_position: number | null;
   ranker_version: string | null;
+  reasoning: ClipReasoning | null;
   status: ClipStatus;
   export_path: string | null;
   preview_path: string | null;
