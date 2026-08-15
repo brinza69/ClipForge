@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import update
 
@@ -57,10 +57,17 @@ def _candidate(clip: ClipModel) -> dict:
     }
 
 
-def _write_ass(clip: ClipModel, out_dir: Path) -> str | None:
+def _write_ass(clip: ClipModel, out_dir: Path,
+               drop_spans: Sequence[tuple[float, float]] | None = None) -> str | None:
     """Render the stored caption plan to an .ass file. Returns None when the
     clip has no captions, which is a legitimate state (the user can turn them
-    off) — the render then simply skips the subtitles filter."""
+    off) — the render then simply skips the subtitles filter.
+
+    `drop_spans` are the dead seconds the render is about to remove. The
+    overlays have to move with them: libass positions against absolute times,
+    so a caption left on the untrimmed clock drifts further out of sync with
+    every second cut.
+    """
     from services.caption_overlays import build_overlays_ass
     from services.clipper.captions import caption_plan_to_overlays
 
@@ -71,6 +78,10 @@ def _write_ass(clip: ClipModel, out_dir: Path) -> str | None:
     except Exception:
         logger.warning("could not turn the caption plan into overlays", exc_info=True)
         return None
+    if drop_spans:
+        from services.clipper.dead_air import remap_overlays
+
+        overlays = remap_overlays(overlays, drop_spans)
     if not overlays:
         return None
 
@@ -140,6 +151,38 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
         include_chat=bool(cfg.get("include_chat")),
         content_type=clip.content_type or effective_content_type(project),
     )
+
+
+async def _dead_spans(clip: ClipModel, project: ProjectModel
+                      ) -> list[tuple[float, float]]:
+    """Dead seconds to cut out of the middle of this clip (§15).
+
+    Words come from the transcript rather than the clip row: `transcript_segments`
+    is not always populated, and the word timings are what veto a "silence" that
+    is really someone speaking quietly.
+    """
+    from sqlalchemy import select as sa_select
+
+    from models import TranscriptModel
+    from services.clipper.dead_air import dead_spans
+
+    signals = storage.read_artifact(project.id, "signals") or {}
+    if not (signals.get("silence") or []):
+        return []
+
+    async with async_session() as session:
+        row = (await session.execute(
+            sa_select(TranscriptModel)
+            .where(TranscriptModel.project_id == project.id).limit(1)
+        )).scalar_one_or_none()
+
+    start, end = float(clip.start_time or 0.0), float(clip.end_time or 0.0)
+    words: list[dict] = []
+    for seg in ((row.segments if row else None) or []):
+        if float(seg.get("end") or 0.0) < start or float(seg.get("start") or 0.0) > end:
+            continue
+        words.extend(seg.get("words") or [])
+    return dead_spans(_candidate(clip), signals, words)
 
 
 async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
@@ -215,7 +258,24 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     paths = storage.paths(project_id)
 
     await queue.update_progress(job_id, 0.05, "Rendering export")
-    ass_path = _write_ass(clip, paths["exports_dir"])
+
+    # §15: seconds inside the window that carry nothing. Computed before the
+    # .ass, because the captions have to be written on the trimmed clock.
+    drop: list[tuple[float, float]] = []
+    if bool(cfg.get("trim_silence", settings.clipper_trim_silence)):
+        try:
+            drop = await _dead_spans(clip, project)
+        except Exception:
+            logger.warning("clip %s: dead-air detection failed; rendering the "
+                           "window whole", clip.id, exc_info=True)
+            drop = []
+    if drop:
+        from services.clipper.dead_air import removed_seconds
+
+        logger.info("clip %s: cutting %d dead span(s), %.1fs total",
+                    clip.id, len(drop), removed_seconds(drop))
+
+    ass_path = _write_ass(clip, paths["exports_dir"], drop)
     plan = _layout_plan(clip, project)
 
     fps = cfg.get("fps")
@@ -267,6 +327,7 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
                 crf=int(settings.clipper_export_crf),
                 preset=settings.clipper_export_preset,
                 watermark=str(cfg.get("watermark_text") or ""),
+                drop_spans=drop,
                 on_progress=lambda p, m: queue.update_progress(job_id, 0.05 + 0.9 * p, m),
                 is_cancelled=lambda: queue.is_cancelled(job_id),
             )

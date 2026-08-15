@@ -17,7 +17,7 @@ import asyncio
 import inspect
 import logging
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from services.clipper.ffmpeg_tools import (
     FFmpegError,
@@ -225,16 +225,45 @@ def build_render_cmd(
     out_w: int = 1080,
     out_h: int = 1920,
     watermark: str = "",
+    drop_spans: Sequence[tuple[float, float]] | None = None,
 ) -> list[str]:
     """One ffmpeg argv list for one clip. Pure — builds, runs nothing.
 
     `-ss` goes BEFORE `-i` so ffmpeg seeks by keyframe index instead of
     decoding from zero; on a 6-hour VOD that is the difference between two
     seconds and twenty minutes of setup.
+
+    `drop_spans` are clip-relative dead seconds to remove (§15). They are cut
+    with select/aselect inside the SAME graph rather than by concatenating
+    renders, because a second encode would add a generation of compression loss
+    — the same reason the caption burn is fused into this pass. With none, the
+    command is exactly what it was before the option existed: audio is mapped
+    straight from the input and never touches the graph.
     """
     out_w, out_h = even(out_w), even(out_h)
     start, duration = _window(cand)
     graph, vlabel = _filter_complex(plan, ass_path, watermark, out_w, out_h)
+
+    alabel = "0:a?"  # `?` keeps a silent source renderable instead of fatal
+    if drop_spans:
+        from services.clipper.dead_air import removed_seconds, select_expr
+
+        # `-t` sits AFTER `-i`, which makes it an OUTPUT duration, not an input
+        # one. Leaving it at the window length means ffmpeg keeps reading past
+        # the window to refill the seconds select just dropped: measured, a
+        # 39.1s clip with 3.5s cut still rendered 39.1s, and the dead air had
+        # simply been replaced by whatever came next. Shortening it by the same
+        # amount stops the output exactly where the window ends.
+        duration = max(0.1, duration - removed_seconds(drop_spans))
+        keep = select_expr(drop_spans)
+        # setpts/asetpts renumber from the surviving frames, which is what
+        # closes the gaps; without them ffmpeg keeps the original timestamps
+        # and the removed seconds come back as freezes.
+        graph = (f"{graph};[{vlabel.strip('[]')}]select='{keep}',"
+                 f"setpts=N/FRAME_RATE/TB[vcut]")
+        vlabel = "[vcut]"
+        graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
+        alabel = "[acut]"
 
     return [
         ffmpeg_bin(), "-y", "-loglevel", "error",
@@ -243,7 +272,7 @@ def build_render_cmd(
         "-t", f"{duration:.3f}",
         "-filter_complex", graph,
         "-map", vlabel,
-        "-map", "0:a?",  # `?` keeps a silent source renderable instead of fatal
+        "-map", alabel,
         "-c:v", "libx264",
         "-preset", str(preset),
         "-crf", str(int(crf)),
@@ -267,6 +296,7 @@ async def render_clip(
     crf: int,
     preset: str,
     watermark: str = "",
+    drop_spans: Sequence[tuple[float, float]] | None = None,
     on_progress: ProgressFn | None = None,
     is_cancelled: CancelFn | None = None,
 ) -> dict[str, Any]:
@@ -276,8 +306,13 @@ async def render_clip(
     cmd = build_render_cmd(
         src, cand, plan, ass_path, out,
         fps=fps, crf=crf, preset=preset, watermark=watermark,
+        drop_spans=drop_spans,
     )
     _, duration = _window(cand)
+    if drop_spans:
+        from services.clipper.dead_air import removed_seconds
+
+        duration = max(0.1, duration - removed_seconds(drop_spans))
     await _report(on_progress, 0.05, f"Encoding {duration:.1f}s at 1080x1920")
 
     Path(out).parent.mkdir(parents=True, exist_ok=True)

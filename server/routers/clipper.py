@@ -76,7 +76,7 @@ def _default_settings() -> dict[str, Any]:
         "headline_auto": True,
         "emoji_enabled": False,
         "profanity_mask": False,
-        "trim_silence": True,
+        "trim_silence": settings.clipper_trim_silence,
         "jump_cuts": False,
         "auto_zoom": True,
         "reaction_zoom": True,

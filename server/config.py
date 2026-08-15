@@ -164,6 +164,12 @@ class Settings(BaseSettings):
     # every clip the pipeline has ever produced took the static path, and this
     # changes what the deliverable looks like, so it is opted into per project.
     clipper_dynamic_edit: bool = False
+    # Cut dead seconds out of the MIDDLE of a chosen window (brief §15). OFF by
+    # default: `trim_silence` has sat in the settings dict since the clipper
+    # shipped with nothing reading it, so no export has ever been trimmed and
+    # nobody's expectations depend on it. Turning it on by default would change
+    # every deliverable at once.
+    clipper_trim_silence: bool = False
 
     # 0 = never auto-purge project artifacts.
     clipper_retention_days: int = 0
