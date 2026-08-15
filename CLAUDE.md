@@ -71,6 +71,17 @@ One commit per batch. Message format: `feat(scope): description` or `fix(scope):
 - Don't re-read files you already read in this session.
 - Use Grep/Glob for targeted lookups; only use full reads for files you'll edit.
 
+### 11. Surgical changes — the comments here are load-bearing
+Every changed line must trace to the request. Don't improve adjacent code, don't reformat,
+don't refactor what isn't broken. If you spot unrelated dead code, say so — don't delete it.
+Remove only the imports and helpers YOUR change orphaned.
+
+This matters more here than in most repos because **the comments carry measurements that cost
+whole sessions to obtain** — "argmax is the best rule available; the 9px is its price, not an
+oversight", "do not re-litigate without a new signal", "`_two_halves()` in the test file exists
+for this", the table of four failed facecam-detection approaches. That is the only place the
+knowledge lives. Reformat over it and the next agent re-runs the same failed experiments.
+
 ---
 
 ## Key File Map
