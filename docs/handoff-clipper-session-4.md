@@ -208,6 +208,30 @@ so it does **not** grow with duration.
 
 ---
 
+## Built and OFF — the switches, and what is behind each
+
+Everything here EXISTS, is tested, and does nothing until it is turned on.
+Written down because a feature that ships off is the easiest kind to forget,
+and this repo has lost work to exactly that six times over.
+
+All three are per-project keys in `clipper_settings`, each falling back to a
+`config.py` default:
+
+| switch | config default | what it turns on |
+|---|---|---|
+| `dynamic_edit` | `clipper_dynamic_edit = False` | Multi-shot export. Plans a shot list and cuts between camera framings instead of rendering one fixed split screen. Verified on a real export: 9 shots, 6 hit flashes, 21s to render an 18s clip. Falls back to the static layout on a missing proxy, a plan with fewer than two shots, or any exception. |
+| `trim_silence` | `clipper_trim_silence = False` | §15 dead-air removal. Cuts wordless silences out of the MIDDLE of a chosen window, in the same encode, and moves the captions with them. Measured on 920 candidates: 298 get a cut, ~3.1s each. |
+| `llm_select` + `reasoning_version` | `False` / `"legacy"` | The story engine. Anchors reasoned back from the payoff, comparative ranking, three judge perspectives. |
+
+`trim_silence` deserves its own note: it sat in the settings dict from the day
+the clipper shipped with **nothing reading it**, defaulted to `True`, and every
+export ignored it. Its default is now `False` and it is wired — so the change
+that made it real also made it stop claiming to be on.
+
+Two things are visible without any switch, because neither changes a
+deliverable: the reasoning panel (the "why" button on a clip, §34) and the
+transcription progress message.
+
 ## Known problems, in priority order
 
 ### 1. The dynamic editor is not wired in
@@ -346,7 +370,49 @@ five listed items still read as a real debt. Thin evidence — two clips, one
 viewing, one source — which is enough to stop an override that contradicted
 every other signal and not enough to tune on.
 
-### 8. Smaller
+### 8. A portrait facecam cannot be detected at all — measured 2026-08-15
+
+First result from a source that is not the Minecraft co-stream. `IShowSpeed —
+EARLY STREAM!`, 4h24m, a gaming stream with an obvious facecam bottom-left,
+chat down the left edge. `regions.json`: **`webcam: None`, `webcams: 0`.**
+
+Traced to the shape gate in `_find_webcams`. The real facecam cluster is found
+easily — **29 hits in 40 frames, rate 0.72**, centred at (65, 132), exactly
+where the eye puts it. It is then thrown away:
+
+```
+hits=29 rate=0.72 med=(65,132,64,64) -> rect=(0,12,150,256)
+                                        area=0.296 aspect=0.59  REJECT:aspect
+```
+
+`_WEBCAM_ASPECT = (1.1, 1.9)` — landscape only. The Minecraft insets measure
+122x68, aspect **1.79**, which sits just inside the top of that band. The band
+was drawn around one stream's layout, so **a portrait or square facecam is
+structurally undetectable**, no matter how confidently it is found.
+
+There is a second fault stacked on it: `_snap_inset` grew a ~120x138 inset to
+150x256, nearly the full 270px height of the proxy, because the chat column
+above the facecam leaves no horizontal edge to stop at. Even a perfect snap
+(aspect ~0.87) would still fail the gate, so the aspect bound is the primary
+cause and the runaway snap is the same seed problem as #4.
+
+**Do not just widen the band.** Fitting (1.1, 1.9) to one source is what caused
+this; refitting it to two sources is the same mistake with a bigger sample. The
+gate wants to express what a facecam actually is — a small, stable, face-
+containing inset near an edge — and `hits`, `rate` and `drift` already measure
+that far better than the aspect ratio does.
+
+### 9. The content classifier called a gaming stream `talking_head`
+
+Same source: `content_type = talking_head`, confidence **0.426**. It is a
+Fortnite/Minecraft stream. This is not cosmetic — `content_type` selects the
+weight row in `scoring.PROFILES`, so every clip from this source is scored
+against the wrong profile, silently. `plan_layout` reads it too.
+
+Predicted before the run as one of three possible outcomes, and it is the worst
+of the three: a wrong answer given confidently enough to be used.
+
+### 10. Smaller
 - `emotion` is flat (8% of the gaming profile, sd 4.1) because
   `laughter_score` is 0 on every window — Whisper does not transcribe laughter
   as "haha". Needs audio detection, not a word list. Do **not** drop the term:
