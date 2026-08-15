@@ -183,7 +183,13 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
         str(paths["audio"]),
         duration=float(project.duration or 0.0),
         is_cancelled=lambda: queue.is_cancelled(job_id),
-        on_progress=lambda p, m: queue.update_progress(job_id, max(0.02, p * 0.97), "Transcribing"),
+        # Pass the transcriber's own message through. It says "Transcribing...
+        # 1234.5s / 15826.0s (12%) [chunk 3/9]"; the constant "Transcribing"
+        # this used to send threw all of it away, and on a 4-hour source that
+        # leaves a 90-minute stage looking identical to a hung one for its
+        # whole duration. handle_export next door already passes `m`.
+        on_progress=lambda p, m: queue.update_progress(
+            job_id, max(0.02, p * 0.97), m or "Transcribing"),
         language=None if language in ("auto", "", None) else language,
         keep_punctuation=True,
     )
