@@ -136,8 +136,12 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 if not isinstance(arcs, list):
                     arcs = threads_mod.build(atoms)
                     storage.write_artifact(project_id, "threads", arcs)
+                # `arcs` also becomes the rolling summary (§2): a chunk at hour
+                # seven is told what the stream has been about before it, which
+                # is the one thing a per-chunk pass otherwise cannot know.
                 anchors = await llm_select.detect_anchors(
-                    segments, duration, promises=known, atoms=atoms)
+                    segments, duration, promises=known, atoms=atoms,
+                    threads=arcs)
                 storage.write_artifact(project_id, "graph",
                                        threads_mod.edges(arcs, known, anchors))
                 nominated = cand_mod.candidates_from_anchors(
