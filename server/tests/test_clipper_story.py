@@ -169,13 +169,39 @@ def test_a_self_contained_opening_is_cheap():
     assert debt < 0.25, f"nothing here needs outside knowledge, debt={debt}"
 
 
-def test_what_the_model_says_is_unresolved_outweighs_the_word_list():
+def test_what_the_model_says_is_unresolved_raises_the_word_list():
     """A word list cannot know that "Daniel" was never introduced."""
     words = _words("the mechanic asked me for five thousand euros")
     plain = story.context_debt(words)
     flagged = story.context_debt(words, {"unresolved_context": ["who Daniel is",
                                                                 "what happened"]})
     assert flagged > plain >= 0.0
+
+
+def test_one_listed_item_cannot_condemn_a_self_contained_clip():
+    """The regression: one unverified string used to pin any clip to 0.500.
+
+    Both clips of the first export anyone watched scored 0.000 on the words and
+    0.500 from a single listed item; watched cold, both were understood.
+    """
+    words = _words("that's all facts or not chat facts or not that's all i ask")
+    assert story.context_debt(words) == 0.0
+    one = story.context_debt(words, {"unresolved_context": ["who Kyle is"]})
+    assert 0.0 < one <= 0.2, f"a single unverified item should nudge, not condemn: {one}"
+
+
+def test_a_long_listed_context_still_reads_as_expensive():
+    """Demoting the floor must not make the model's list toothless."""
+    words = _words("the mechanic asked me for five thousand euros")
+    many = story.context_debt(words, {"unresolved_context": ["a", "b", "c", "d", "e"]})
+    assert many >= 0.3, f"five unresolved facts is a real debt, got {many}"
+
+
+def test_the_listed_contribution_is_capped():
+    words = _words("the mechanic asked me for five thousand euros")
+    three = story.context_debt(words, {"unresolved_context": ["a", "b", "c"]})
+    ten = story.context_debt(words, {"unresolved_context": list("abcdefghij")})
+    assert three == ten
 
 
 def test_a_back_reference_whose_referent_is_in_the_clip_costs_nothing():
@@ -473,6 +499,46 @@ def test_an_unplaceable_setup_is_dropped():
 
     for raw in ({}, {"text": "no time"}, {"t": 5}, {"t": -1, "text": "x"}, "nope"):
         assert promises.normalise_promise(raw, 1000.0) is None
+
+
+def test_a_goal_with_no_stake_is_not_a_setup():
+    """Measured on the 4-hour run: 8 of 12 setups were goals like "I'm hitting
+    the cave" — announcements of the next action, with no payoff to wait for."""
+    from services.clipper import promises
+
+    bare = {"t": 100.0, "kind": "goal", "text": "I'm going to go to the gym"}
+    assert promises.normalise_promise(bare, 1000.0) is None
+    staked = {**bare, "stake": "or he shaves his head"}
+    kept = promises.normalise_promise(staked, 1000.0)
+    assert kept and kept["kind"] == "goal" and kept["stake"]
+
+
+def test_the_falsifiable_kinds_still_need_no_stake():
+    """"there is no way he does that" carries no stake and is still a setup."""
+    from services.clipper import promises
+
+    for kind in ("prediction", "bet", "challenge", "promise"):
+        raw = {"t": 100.0, "kind": kind, "text": "there is no way he does that"}
+        out = promises.normalise_promise(raw, 1000.0)
+        assert out is not None and out["kind"] == kind, kind
+        assert out["stake"] == ""
+
+
+def test_every_setup_carries_the_prompt_version_that_made_it():
+    from services.clipper import promises
+
+    out = promises.normalise_promise(
+        {"t": 10.0, "kind": "bet", "text": "x"}, 1000.0)
+    assert out["prompt_version"] == promises.PROMISE_PROMPT_VERSION == "promises_v2"
+
+
+def test_the_prompt_names_the_intentions_that_were_mistaken_for_setups():
+    """The two false positives the 4-hour run produced, quoted back at it."""
+    from services.clipper import promises
+
+    text = promises.prompt("0.0 hello", 6)
+    assert "gym" in text and "cave" in text
+    assert "stake" in text
 
 
 def test_a_callback_raises_the_debt_of_the_window_it_lands_in():

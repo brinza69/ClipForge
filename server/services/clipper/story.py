@@ -101,6 +101,11 @@ _BACKREFS = frozenset((
 MAX_CONTEXT_REACH_S = 90.0
 # A hook this far into the clip is too late — a cold viewer has already gone.
 GOOD_HOOK_LATENCY_S = 3.0
+# What one item on the model's `unresolved_context` list adds to context debt.
+# It is a contribution, not a floor: see context_debt for the measurement that
+# demoted it. Capped, so a long list cannot decide the score on its own either.
+LISTED_CONTEXT_W = 0.12
+_LISTED_CAP = 3
 
 
 # --------------------------------------------------------------------------
@@ -212,9 +217,24 @@ def context_debt(words: Sequence[dict], anchor: dict | None = None,
     never resolves ("and then he told me..."), and it leans on shared history
     ("remember what he said yesterday"). Both are visible in the words.
 
-    A model's own `unresolved_context` list, when there is one, is stronger
-    evidence than either and is folded in — it can see that "Daniel" was never
-    introduced, which no word list can.
+    A model's own `unresolved_context` list, when there is one, is folded in —
+    it can see that "Daniel" was never introduced, which no word list can.
+
+    It is folded in and NOT taken as a floor. It used to be
+    `max(debt, 0.30 + 0.20 * listed)`, which let one unverified string pin any
+    clip to half of maximum. Measured on the two clips of the first export
+    anyone watched: the word evidence scored both 0.000 — correctly, they open
+    on "That's all. Facts or not, chat?" and "Bro, your logic doesn't make any
+    sense" — and a single listed item took both to 0.500. Watched cold, both
+    were understood without effort.
+
+    The list is also anchor-level, so every edit variant of one anchor pays the
+    same charge no matter how much setup its window actually carries. That is
+    the opposite of what `latest_complete_start` exists to do. So the list
+    raises the debt, it no longer decides it.
+
+    Thin evidence: two clips, one viewing, one source. Enough to stop an
+    override that contradicted every other signal, not enough to tune on.
     """
     tokens = [norm_token(w.get("word", "")) for w in words or []]
     tokens = [t for t in tokens if t]
@@ -242,7 +262,7 @@ def context_debt(words: Sequence[dict], anchor: dict | None = None,
 
     listed = len((anchor or {}).get("unresolved_context") or [])
     if listed:
-        debt = max(debt, _clamp01(0.30 + 0.20 * listed))
+        debt += LISTED_CONTEXT_W * min(listed, _LISTED_CAP)
     return round(_clamp01(debt), 3)
 
 

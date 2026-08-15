@@ -251,10 +251,38 @@ this session — already separates cleanly (gameplay 0.000–0.012, menus
 version of the same measure would give the inventory's rectangle, which drops
 straight into `keep_out`.
 
-### 4. The facecam rect is too tall on this source
+### 4. The facecam rect is too tall on this source — measured 2026-08-15
+
 The detected webcam is 312px where the real inset is ~272, so the streamer's
 stats bar bleeds into the face band. `_fit_inside` correctly stays inside the
 *detected* rect — the rect itself is wrong.
+
+**Ground truth is h=68** on the 480x270 proxy, read off four frames spread
+across the source: the inset ends exactly at the top of the white subscriber
+counter, and h=78 is the counter's *bottom* edge.
+
+Four things were measured before touching anything, and they redirect the fix:
+
+1. **It is not a constant error, it flips.** Detecting on eighths of the source
+   gives `none, 78, 68, 68, 78, 78, 68, 68` — unstable inside one segment, on
+   one layout.
+2. **So per-segment detection (problem 2) would not fix it.** The flip happens
+   within the Minecraft stretch, not between it and the gym segment.
+3. **`argmax` in `_snap_edge` is not the culprit.** On the averaged row
+   profile, y=68 is the STRONGEST peak in every sample measured — 55.6, 66.4,
+   71.4, 79.9, 70.9 — against 54.6, 60.3, 55.6, 54.9, 62.8 at y=79. Given the
+   choice it already picks correctly. (So the outward-biased rules session 3
+   scored are still the wrong direction, and there is no need to retry them.)
+4. **The seed moves the window off the edge.** `_snap_edge` only searches
+   `[cy + 0.75·h, cy + 4·h]` around the median face box, and that box is not
+   stable: its height measures 22, 23, 29, 32, 51 and 62 px across the eighths.
+   When the cluster merges the face with something else the window starts below
+   y=68 and the true edge is not a candidate at all.
+
+**So the fix belongs in the seed, not in the edge rule** — the face cluster is
+what wobbles. That is the same machinery session 3 rebuilt, with a documented
+regression list, so it wants its own pass rather than a quick patch. Not small,
+which is why it was left after being measured.
 
 ### 5. Callback linking is validated only by mocks
 No callback has ever fired on real data. The mechanism is tested end to end
@@ -263,7 +291,62 @@ it linked none. It may be right to decline: "we're gonna give you diamond" is
 not really paid off by mining one. **This needs a source with a confirmed
 callback.**
 
-### 6. Smaller
+### 6. Every clip ends on the last word — FIXED 2026-08-15
+
+Found by watching the three exported clips — the first time anyone
+had. All three end **exactly** on Whisper's `word.end` for their final word
+(13048.82 / 13083.16 / 4401.02, matching to the millisecond). The listener
+hears the last word truncated.
+
+`_nearest_sentence_end` picks the right *sentence* — that part works. What is
+missing is the pad after it. `TAIL_PAD_S = 0.25` is commented "breathing room
+kept after the last word" but `_trim_tail` applies it only as a downward
+ceiling (`max(floor, min(end, last + TAIL_PAD_S))`), and only when there is
+dead air to trim. When the end already sits on the last word it returns
+untouched. **The pad can never extend, only trim.**
+
+Measured on this source: 300 sentence-final words each followed by ≥1.2s of
+silence, walking the RMS envelope in `speech.wav` forward from `word.end` to
+the local noise floor:
+
+| p25 | p50 | p75 | p90 | p95 |
+|---|---|---|---|---|
+| 0.09s | **0.16s** | 0.26s | 0.40s | 0.57s |
+
+So the cut loses real audio on most sentence endings, and 0.4–0.57s on the
+worst tenth — which is what a listener notices.
+
+**Fixed**: `candidate_boundaries._keep_release`, called last in
+`refine_boundaries` so it pads whatever word survived the orphan drop.
+`TAIL_PAD_S` is now 0.40 and works in both directions — `_trim_tail` will not
+cut closer, `_keep_release` will not end closer — so the constant finally does
+what its comment always said. Bounded by the next word (minus `RELEASE_GAP_S`),
+the media end and the duration cap. Applied to the three real clip ends it adds
+exactly 0.40s to each. Five unit tests plus a regression assertion that no
+refined candidate ends on a word's timestamp when there is silence to use.
+
+Sixth instance of a constant that does not do what its name says, after
+`ARCHETYPE_SHAPE`, `context_debt`, `hook_latency`, `audio_peak_ratio` and
+`game_ui_ratio`.
+
+### 7. `context_debt` was decided by one unverified string — FIXED 2026-08-15
+
+Both Minecraft clips carried `context_debt` 0.5, half of maximum. Watched cold,
+both were understood without effort.
+
+Measured: the word evidence scores both **0.000**, correctly. The whole 0.5
+came from `debt = max(debt, 0.30 + 0.20 * listed)` with a single item on the
+model's `unresolved_context` — an unverified list, produced per ANCHOR, so
+every edit variant paid it no matter how much setup its own window carried.
+That is the opposite of what `latest_complete_start` exists to do.
+
+**Fixed**: the list now contributes (`LISTED_CONTEXT_W = 0.12` per item, capped
+at three) instead of setting a floor. The two real clips go 0.500 → 0.120, and
+five listed items still read as a real debt. Thin evidence — two clips, one
+viewing, one source — which is enough to stop an override that contradicted
+every other signal and not enough to tune on.
+
+### 8. Smaller
 - `emotion` is flat (8% of the gaming profile, sd 4.1) because
   `laughter_score` is 0 on every window — Whisper does not transcribe laughter
   as "haha". Needs audio detection, not a word list. Do **not** drop the term:

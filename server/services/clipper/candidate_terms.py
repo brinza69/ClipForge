@@ -59,7 +59,19 @@ _CLOSERS = "\"'”’)]}»"
 
 PAUSE_KEEP_S = 1.2        # gaps shorter than this are rhythm, not dead air
 REACTION_MAX_S = 3.0      # how far past the payoff a reaction may run
-TAIL_PAD_S = 0.25         # breathing room kept after the last word
+# Breathing room after the last word, in BOTH directions: `_trim_tail` will not
+# cut closer than this, and `_keep_release` will not end closer than this.
+#
+# Whisper's word-end marks where the model stops hearing the word, which lands
+# before the sound does. Measured on 300 sentence-final words of the 4-hour
+# source, each followed by >=1.2s of silence, walking the RMS envelope of
+# speech.wav forward to the local noise floor: p25 0.09s, p50 0.16s, p75 0.26s,
+# p90 0.40s, p95 0.57s. At the old 0.25 the end was never padded at all — the
+# constant was a trim ceiling only — and all three clips of the first export
+# anyone watched cut on the exact millisecond of the final word, which a
+# listener hears as a truncated sentence. p90 covers nine endings in ten.
+TAIL_PAD_S = 0.40
+RELEASE_GAP_S = 0.05      # silence left before the next word when padding
 LEAD_IN_MAX_S = 5.0       # a longer preceding sentence is context, not a lead-in
 SNAP_TOLERANCE_S = 2.5    # furthest a start is moved to reach a sentence
 SENTENCE_END_REACH_S = 3.5  # furthest an end is pushed OUT to finish a sentence

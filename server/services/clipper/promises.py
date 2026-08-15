@@ -35,9 +35,12 @@ from services.clipper.segmentation import norm_token
 
 logger = logging.getLogger("clipforge.clipper.promises")
 
-PROMISE_PROMPT_VERSION = "promises_v1"
+PROMISE_PROMPT_VERSION = "promises_v2"
 
 KINDS: tuple[str, ...] = ("prediction", "promise", "challenge", "goal", "bet")
+# Kinds that are not falsifiable by themselves and are only a setup when
+# something is riding on them. See normalise_promise for the measurement.
+_STAKE_REQUIRED: frozenset[str] = frozenset({"goal"})
 
 # A setup stops being live eventually — a prediction about "this round" does
 # not pay off two hours later, and treating it as open forever would attach a
@@ -50,7 +53,16 @@ MIN_CALLBACK_GAP_S = 90.0
 
 
 def normalise_promise(raw: Any, duration: float) -> dict | None:
-    """One model-proposed setup, validated. None when it cannot be placed."""
+    """One model-proposed setup, validated. None when it cannot be placed.
+
+    A `goal` with no stake is dropped. Measured on the 4-hour run: 8 of the 12
+    setups the sweep returned came back as `goal`, and they were "I'm going to
+    go to the gym", "I'm hitting the cave" — announcements of the next action,
+    which nobody waits for and which cannot turn out to be wrong. `goal` was
+    the bucket the model emptied ordinary intentions into. The other four kinds
+    are falsifiable on their own; a goal only becomes one when something is
+    riding on it, which is also the spec's own example ("or I quit").
+    """
     if not isinstance(raw, dict):
         return None
     t = _num(raw.get("t", raw.get("time")), -1.0)
@@ -60,10 +72,15 @@ def normalise_promise(raw: Any, duration: float) -> dict | None:
     if not text:
         return None
     kind = str(raw.get("kind") or "").strip().lower()
+    kind = kind if kind in KINDS else "prediction"
+    stake = str(raw.get("stake") or "").strip()[:120]
+    if kind in _STAKE_REQUIRED and not stake:
+        return None
     return {
         "t": round(t, 3),
-        "kind": kind if kind in KINDS else "prediction",
+        "kind": kind,
         "text": text,
+        "stake": stake,
         "confidence": _clamp01(_num(raw.get("confidence"), 0.6)),
         "prompt_version": PROMISE_PROMPT_VERSION,
     }
@@ -137,11 +154,18 @@ def prompt(lines: str, want: int) -> str:
         '  "there is no way he does that"\n'
         '  "today we are beating this boss or I quit"\n'
         '  "I guarantee this next one works"\n\n'
-        "Ignore ordinary intentions — \"let me get my food\", \"I'll go left\" "
-        "— they create no expectation anyone would remember.\n\n"
+        "Ignore ordinary intentions — \"let me get my food\", \"I'll go left\", "
+        "\"I'm going to the gym later\", \"I'm hitting the cave\". Announcing "
+        "what you are about to do next is not a setup: nobody waits for it and "
+        "nothing about it can turn out to be wrong.\n\n"
+        "A setup must be FALSIFIABLE — there has to be an outcome that would "
+        "make it right or wrong. If it also carries a stake (what happens if "
+        "it fails), say so in `stake`; leave `stake` empty when there is none.\n"
+        "Use kind \"goal\" ONLY when the goal carries a stake. A goal with no "
+        "stake is an ordinary intention: leave it out.\n\n"
         f'Answer as JSON only: [{{"t": <seconds>, "kind": '
         f'"{"|".join(KINDS)}", "text": "<max 12 words, what was promised>", '
-        f'"confidence": <0-1>}}]\n\n'
+        f'"stake": "<max 8 words, or empty>", "confidence": <0-1>}}]\n\n'
         f"--- TRANSCRIPT ---\n{lines}"
     )
 

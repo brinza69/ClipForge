@@ -248,6 +248,38 @@ class Settings(BaseSettings):
         import shutil
         return shutil.which("realesrgan-ncnn-vulkan")
 
+    # ── yt-dlp authentication ────────────────────────────────────────────────
+    # YouTube answers an increasing share of requests with "Sign in to confirm
+    # you're not a bot", which no retry gets past. Both of these are blank by
+    # default: without one, a gated URL fails with `login_required` exactly as
+    # it did before.
+    #
+    # CLIPFORGE_YTDLP_COOKIES_FILE — path to a Netscape cookies.txt export.
+    # CLIPFORGE_YTDLP_COOKIES_FROM_BROWSER — "chrome", "firefox", "edge", or
+    #   "<browser>:<profile>" e.g. "chrome:Profile 1". Reads the browser's own
+    #   cookie store, so the browser must be closed on Windows.
+    # The file wins when both are set: it is the explicit one.
+    ytdlp_cookies_file: str = ""
+    ytdlp_cookies_from_browser: str = ""
+
+    @property
+    def ytdlp_cookie_opts(self) -> dict:
+        """yt-dlp options carrying whatever authentication is configured."""
+        from pathlib import Path as _Path
+        if self.ytdlp_cookies_file:
+            path = _Path(self.ytdlp_cookies_file)
+            if path.exists():
+                return {"cookiefile": str(path)}
+            return {}
+        spec = self.ytdlp_cookies_from_browser.strip()
+        if not spec:
+            return {}
+        browser, _, profile = spec.partition(":")
+        # yt-dlp wants (browser, profile, keyring, container); trailing Nones
+        # mean "default", which is what an unset profile should be.
+        return {"cookiesfrombrowser": (browser.strip().lower(),
+                                       profile.strip() or None, None, None)}
+
     @property
     def ffmpeg_location(self) -> str | None:
         """Return ffmpeg binary directory for yt-dlp, or None to let yt-dlp find it."""
