@@ -370,12 +370,26 @@ def classify_features(features: dict[str, Any]) -> dict[str, Any]:
 
     # Synthetic game art: saturated, edge-dense, full of long straight runs.
     synthetic = clamp01(0.5 * edges_n + 0.3 * lines + 0.2 * sat_n)
-    hud_signal = corner * centre  # static border + moving middle = a HUD
     vote("gaming", 1.6 * synthetic,
          f"synthetic-looking frames ({g('edge_density'):.1%} edge pixels, "
          f"{g('saturation'):.0%} saturation)")
-    if frames >= 2:
-        vote("gaming", 1.8 * hud_signal, f"static HUD corners across {frames} frames")
+    # There used to be a second gaming vote here, weight 1.8, on
+    # `corner_stability * centre_motion` — "static border + moving middle = a
+    # HUD". It contributed exactly 0.0 for its entire life, because
+    # corner_stability was pinned at 0 by an absolute threshold (see
+    # content_type._patch_motion). Un-pinning those features made it fire for
+    # the first time, and measured on five real sources it points the WRONG
+    # WAY: the highest score is a Just Chatting stream (0.397) and the gaming
+    # stream is near the bottom (0.044), because a locked-off webcam has a
+    # static border while a stream that switches between Fortnite, Minecraft
+    # and a Discord call does not. Gating it on `synthetic` does not rescue it
+    # — Just Chatting still leads 0.230 to 0.034.
+    #
+    # So the signal is real and now measurable, but "static corners" means
+    # "locked-off camera", not "game HUD". Removing the vote keeps today's
+    # behaviour exactly (it was contributing nothing) instead of activating a
+    # rule that is wrong. Deciding what it SHOULD vote for needs labelled
+    # sources, which do not exist yet.
     vote("gaming", 1.0 * motion * spiky)
     vote("gaming", 2.0 * g("kw_gaming"), "gaming vocabulary in the transcript")
     if faces <= 1 and face_area < 0.10:

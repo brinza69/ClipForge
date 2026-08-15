@@ -118,19 +118,45 @@ def _load_frames(frames: Sequence[str]) -> tuple[list[Any], float, int, int]:
 
 
 def _patch_motion(grays: Sequence[Any], w: int, h: int) -> tuple[float, float]:
-    """(corner stability, centre motion), both 0..1. 0.08 mean abs diff is a
-    fully-changed patch in practice — brightness flicker sits well below it."""
+    """(corner stability, centre motion), both 0..1, both RELATIVE.
+
+    Each is measured against the same frame pair's own overall change, never
+    against a fixed amount of pixel difference.
+
+    The absolute version compared to 0.08, on the grounds that "0.08 mean abs
+    diff is a fully-changed patch in practice — brightness flicker sits well
+    below it". That is true of ADJACENT video frames, and these are not: the
+    frames handed to the classifier are sampled across the whole source, so on
+    a 4-hour VOD two consecutive ones are ~36 seconds apart and everything in
+    both patches has changed. Measured on five sources, `corner_stability` came
+    back 0.000 on four of them and `centre_motion` 1.000 on all five — so
+    `hud_signal = corner * centre` was 0 everywhere, and the 1.8-weight gaming
+    vote it feeds could never fire. `screen_like` died the same way.
+
+    Fifth time an absolute threshold has measured nothing here, after
+    audio_peak_ratio, audio_dynamic_range, game_ui_ratio and the atom marks.
+    Same fix every time: compare a thing to its own context.
+    """
     if len(grays) < 2 or w < 8 or h < 8:
         return 1.0, 0.0
     cw, ch = max(4, int(w * _CORNER_FRAC)), max(4, int(h * _CORNER_FRAC))
     boxes = [(0, 0), (w - cw, 0), (0, h - ch), (w - cw, h - ch)]
-    corner_d, centre_d = [], []
+    corner_d, centre_d, overall_d = [], [], []
     for a, b in zip(grays, grays[1:]):
         d = np.abs(a.astype(np.int16) - b.astype(np.int16))
         corner_d.append(float(np.mean([np.mean(d[y:y + ch, x:x + cw]) for x, y in boxes])) / 255.0)
         centre_d.append(float(np.mean(d[h // 4:h - h // 4, w // 4:w - w // 4])) / 255.0)
-    return (clamp01(1.0 - float(np.mean(corner_d)) / 0.08),
-            clamp01(float(np.mean(centre_d)) / 0.08))
+        overall_d.append(float(np.mean(d)) / 255.0)
+    corner = float(np.mean(corner_d))
+    centre = float(np.mean(centre_d))
+    overall = float(np.mean(overall_d))
+    if overall <= 1e-9:
+        return 1.0, 0.0  # nothing changed anywhere; no evidence either way
+    # Stability: how much LESS the corners change than the frame as a whole.
+    # Motion: how much MORE the middle changes than the border — which is the
+    # thing the HUD signal was always trying to say.
+    return (clamp01(1.0 - corner / overall),
+            clamp01(1.0 - corner / max(centre, 1e-9)))
 
 
 def frame_features(frames: Sequence[str]) -> dict[str, Any]:
