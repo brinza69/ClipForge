@@ -28,6 +28,38 @@ from services.clipper.serialize import effective_content_type
 logger = logging.getLogger("clipforge.clipper.build")
 
 
+def _anchor_stamp(cfg: dict, duration: float) -> dict:
+    """What a cached anchor set is only valid for.
+
+    A checkpoint without one is worse than no checkpoint: change the prompt,
+    the engine or the reasoning version, re-score, and the run silently reuses
+    answers the new configuration would never have produced. Everything here
+    changes what the model is asked or which model is asked.
+    """
+    from services.clipper import llm_select
+
+    return {
+        "prompt": llm_select.ANCHOR_PROMPT_VERSION,
+        "reasoning": str(cfg.get("reasoning_version")
+                         or settings.clipper_reasoning_version or "legacy"),
+        "engines": list(llm_select.NOMINATE_ENGINES),
+        "duration": round(float(duration or 0.0), 1),
+    }
+
+
+def _cached(project_id: str, name: str, stamp: dict) -> Any | None:
+    """A previous run's model output, or None when it cannot be trusted."""
+    blob = storage.read_artifact(project_id, name)
+    if not isinstance(blob, dict) or blob.get("stamp") != stamp:
+        return None
+    logger.info("clipper %s: reusing %s from a previous run", project_id, name)
+    return blob.get("data")
+
+
+def _cache(project_id: str, name: str, stamp: dict, data: Any) -> None:
+    storage.write_artifact(project_id, name, {"stamp": stamp, "data": data})
+
+
 async def _fetch_transcript(project_id: str) -> dict[str, Any]:
     async with async_session() as session:
         result = await session.execute(
@@ -139,9 +171,14 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 # `arcs` also becomes the rolling summary (§2): a chunk at hour
                 # seven is told what the stream has been about before it, which
                 # is the one thing a per-chunk pass otherwise cannot know.
-                anchors = await llm_select.detect_anchors(
-                    segments, duration, promises=known, atoms=atoms,
-                    threads=arcs)
+                anchors = _cached(project_id, "anchors",
+                                  _anchor_stamp(cfg, duration))
+                if anchors is None:
+                    anchors = await llm_select.detect_anchors(
+                        segments, duration, promises=known, atoms=atoms,
+                        threads=arcs)
+                    _cache(project_id, "anchors",
+                           _anchor_stamp(cfg, duration), anchors)
                 storage.write_artifact(project_id, "graph",
                                        threads_mod.edges(arcs, known, anchors))
                 nominated = cand_mod.candidates_from_anchors(
