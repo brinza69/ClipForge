@@ -142,8 +142,68 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
     )
 
 
+async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
+                        src_w: int, src_h: int) -> dict | None:
+    """A multi-shot edit for this clip, or None when the window cannot carry one.
+
+    Returns None rather than raising: a clip that cannot be cut dynamically is
+    a clip that renders as the static split screen, which is what every export
+    did before this path existed. A failure here must never lose the export.
+    """
+    import asyncio
+
+    from services.clipper import dynamic_edit, dynamic_window
+
+    paths = storage.paths(project.id)
+    proxy = paths["proxy"]
+    if not proxy.exists():
+        logger.warning("clip %s: no analysis proxy, falling back to the static "
+                       "layout — the dynamic editor measures the proxy, not the "
+                       "source", clip.id)
+        return None
+
+    cand = _candidate(clip)
+    duration = float(cand["end"]) - float(cand["start"])
+    if duration <= 0:
+        return None
+
+    signals = storage.read_artifact(project.id, "signals") or {}
+    loop = asyncio.get_event_loop()
+    window = await loop.run_in_executor(
+        None,
+        lambda: dynamic_window.analyse_window(
+            proxy, float(cand["start"]), duration, None, src_w),
+    )
+    plan = await loop.run_in_executor(
+        None,
+        lambda: dynamic_edit.plan_dynamic_edit(
+            cand, signals, window["faces"],
+            src_w=src_w, src_h=src_h,
+            proxy_w=int(signals.get("proxy_width") or 0),
+            proxy_h=int(signals.get("proxy_height") or 0),
+            game_motion=window["motion"], game_focus=window["focus"],
+            game_detail=window["detail"], game_ui=window["ui"],
+            game_motion_hop=window["hop"]),
+    )
+    shots = plan.get("shots") or []
+    if len(shots) < 2:
+        # One shot is a static crop with extra steps, and the static path does
+        # that better — it keeps the face band and the chat exclusion.
+        logger.info("clip %s: the dynamic editor planned %d shot(s); using the "
+                    "static layout instead", clip.id, len(shots))
+        return None
+    plan["src_w"], plan["src_h"] = src_w, src_h
+    plan["band"] = list(window["band"])
+    plan["faces_seen"] = dynamic_window.face_seen(window["faces"])
+    for warning in plan.get("warnings") or []:
+        logger.info("clip %s dynamic edit: %s", clip.id, warning)
+    return plan
+
+
 async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Full-quality 1080x1920 deliverable."""
+    import asyncio
+
     from services.clipper.render import render_clip
 
     if not clip_id:
@@ -163,21 +223,53 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         fps or settings.clipper_export_fps
     )
 
+    # The multi-shot path. Opt-in, and it falls back to the static layout on any
+    # failure — the two renderers take the same source, the same window and the
+    # same .ass, so nothing else in this handler changes.
+    dyn = None
+    if bool(cfg.get("dynamic_edit", settings.clipper_dynamic_edit)):
+        await queue.update_progress(job_id, 0.10, "Planning the shot list")
+        try:
+            dyn = await _dynamic_plan(clip, project,
+                                      int(project.width or 1920),
+                                      int(project.height or 1080))
+        except Exception:
+            logger.warning("clip %s: dynamic planning failed, falling back to "
+                           "the static layout", clip.id, exc_info=True)
+            dyn = None
+
     out = storage.export_path(project_id, clip.id)
     try:
-        result = await render_clip(
-            src,
-            _candidate(clip),
-            plan,
-            ass_path,
-            str(out),
-            fps=fps,
-            crf=int(settings.clipper_export_crf),
-            preset=settings.clipper_export_preset,
-            watermark=str(cfg.get("watermark_text") or ""),
-            on_progress=lambda p, m: queue.update_progress(job_id, 0.05 + 0.9 * p, m),
-            is_cancelled=lambda: queue.is_cancelled(job_id),
-        )
+        if dyn:
+            from services.clipper import dynamic_render
+
+            await queue.update_progress(
+                job_id, 0.20, f"Rendering {len(dyn['shots'])} shots")
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: dynamic_render.render_dynamic_clip(
+                    src, dyn, str(out), start=float(clip.start_time or 0.0),
+                    work_dir=paths["exports_dir"], ass_path=ass_path,
+                    src_w=int(project.width or 1920),
+                    src_h=int(project.height or 1080),
+                    fps=fps, crf=int(settings.clipper_export_crf),
+                    preset=settings.clipper_export_preset),
+            )
+        else:
+            result = await render_clip(
+                src,
+                _candidate(clip),
+                plan,
+                ass_path,
+                str(out),
+                fps=fps,
+                crf=int(settings.clipper_export_crf),
+                preset=settings.clipper_export_preset,
+                watermark=str(cfg.get("watermark_text") or ""),
+                on_progress=lambda p, m: queue.update_progress(job_id, 0.05 + 0.9 * p, m),
+                is_cancelled=lambda: queue.is_cancelled(job_id),
+            )
     except Exception:
         async with async_session() as session:
             await session.execute(
@@ -208,6 +300,10 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
                 "sub_scores": clip.sub_scores,
                 "score_reason": clip.score_reason,
                 "layout_plan": plan,
+                # Present only when the multi-shot path rendered this file. The
+                # static layout_plan above is still written either way, because
+                # it is what a re-render falls back to.
+                "dynamic_plan": dyn,
                 "caption_plan": clip.caption_plan,
                 "content_type": clip.content_type,
                 "analysis_version": project.analysis_version,

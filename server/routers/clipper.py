@@ -81,6 +81,7 @@ def _default_settings() -> dict[str, Any]:
         "auto_zoom": True,
         "reaction_zoom": True,
         "facecam_emphasis": True,
+        "dynamic_edit": settings.clipper_dynamic_edit,
         "include_chat": False,
         "watermark_text": "",
         "min_score": 0,

@@ -159,6 +159,11 @@ class Settings(BaseSettings):
 
     # Gaming layout: default share of the 1080x1920 canvas given to the facecam.
     clipper_face_pct: float = 0.35
+    # Multi-shot export: plan a shot list and cut between cameras instead of
+    # rendering one fixed split screen for the whole clip. OFF by default —
+    # every clip the pipeline has ever produced took the static path, and this
+    # changes what the deliverable looks like, so it is opted into per project.
+    clipper_dynamic_edit: bool = False
 
     # 0 = never auto-purge project artifacts.
     clipper_retention_days: int = 0
