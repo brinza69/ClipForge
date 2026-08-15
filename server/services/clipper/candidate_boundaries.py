@@ -17,7 +17,8 @@ from typing import Sequence
 
 from services.clipper.candidate_terms import (
     DANGLE_PAUSE_S, GRID_S, LEAD_IN_MAX_S, PAUSE_KEEP_S, PAYOFF_WINDOW_S,
-    REACTION_MAX_S, SENTENCE_END_REACH_S, SNAP_TOLERANCE_S, TAIL_PAD_S,
+    REACTION_MAX_S, RELEASE_GAP_S, SENTENCE_END_REACH_S, SNAP_TOLERANCE_S,
+    TAIL_PAD_S,
     _CLOSERS, _CUES, _EPS, _LEAD_IN, _add, _bounds, _mean, _neighbourhood,
     _num, _snap, _source, _text_of, _tokens, _words_for,
 )
@@ -158,6 +159,36 @@ def _trim_tail(end: float, words: Sequence[dict], floor: float) -> float:
     return max(floor, min(end, last + TAIL_PAD_S))
 
 
+def _keep_release(end: float, words: Sequence[dict], ceiling: float,
+                  limit: float) -> float:
+    """Leave the last word room to finish, which its timestamp does not.
+
+    Every rule above decides WHICH word the clip ends on, and each of them
+    lands the cut on that word's `end` — the moment Whisper stops hearing it,
+    which precedes the moment it stops sounding. Measured on this source the
+    gap runs a median 0.16s and a p90 of 0.40s (see TAIL_PAD_S), so cutting on
+    the timestamp truncates the release of the final consonant. All three clips
+    of the first export anyone watched did exactly that, and all three were
+    heard as ending mid-phrase.
+
+    Never crosses into the next word: when speech continues there is no silence
+    to borrow, and the alternative would be splicing in someone's next onset.
+    """
+    inside_end = 0.0
+    for w in words:
+        we = _num(w["end"])
+        if we <= end + _EPS:
+            inside_end = max(inside_end, we)
+    if inside_end <= 0 or end - inside_end > TAIL_PAD_S:
+        return end  # already has room, or the tail rules chose a longer pause
+
+    target = min(inside_end + TAIL_PAD_S, ceiling, limit)
+    following = next((w for w in words if _num(w["start"]) >= end - _EPS), None)
+    if following is not None:
+        target = min(target, _num(following["start"]) - RELEASE_GAP_S)
+    return max(end, target)
+
+
 def _drop_dangling_tail(end: float, words: Sequence[dict], start: float,
                         lo: float) -> float:
     """Cut before a final word the speaker never finished the thought on.
@@ -293,6 +324,14 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
     if dropped < end - 0.05:
         end = dropped
         _add(reasons, "dangling_tail_dropped")
+
+    # Last of all, and after the orphan drop so it pads whatever word survived:
+    # let the final word finish sounding. Bounded by start + hi so the fit below
+    # has nothing left to claw back.
+    released = _keep_release(end, words, ceiling, start + hi)
+    if released > end + 0.01:
+        end = released
+        _add(reasons, "release_kept")
 
     start, end = _fit(start, end, words, lo, hi, floor, ceiling)
     inside, _before, _after = _neighbourhood(words, start, end)

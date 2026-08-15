@@ -388,11 +388,16 @@ async def transcribe(
 
         if outcome is None:
             exit_code = worker.exitcode
+            # Do NOT name a cause here. This message used to assert the worker
+            # had run out of memory, and the two real crashes it was seen on
+            # were a faster-whisper alignment bug and a missing __main__ guard
+            # in the caller — an hour each, spent looking at RAM. The
+            # worker's own traceback is on stderr; point at it.
             raise RuntimeError(
                 f"Transcription worker exited without returning a result "
-                f"(exit code: {exit_code}). "
-                "This usually means the worker ran out of memory or crashed "
-                "loading the model. Try a smaller model or free up RAM."
+                f"(exit code: {exit_code}). Its traceback is in the worker "
+                f"log above. Out of memory and a too-large model are two "
+                f"possible causes among several."
             )
 
         if not outcome.get("ok"):
@@ -464,6 +469,34 @@ def _split_audio_to_chunks(
         timeout=600,
     )
     return sorted(out_dir.glob("chunk_*.wav"))
+
+
+def _tolerant(segments_iter, chunk_no: int, total: int,
+              failed: List[int]):
+    """Yield segments, stopping quietly at the first error in this chunk.
+
+    faster-whisper's iterator is lazy, so the model runs — and fails — during
+    iteration. Without this, one degenerate chunk raises out of the worker and
+    the whole file is lost: measured on a 4-hour VOD, `find_alignment` hit
+    `IndexError: boolean index did not match indexed array` past the halfway
+    mark and discarded two hours of finished transcription.
+
+    Losing the tail of one chunk is a far better outcome than losing the file,
+    and the caller records which chunks were cut short so the result can say
+    so rather than quietly under-reporting.
+    """
+    iterator = iter(segments_iter)
+    while True:
+        try:
+            yield next(iterator)
+        except StopIteration:
+            return
+        except Exception:
+            logger.warning("transcription broke inside chunk %d/%d — keeping "
+                           "what it produced and moving on", chunk_no, total,
+                           exc_info=True)
+            failed.append(chunk_no)
+            return
 
 
 def _transcribe_one(
@@ -596,6 +629,7 @@ def _transcribe_worker(
 
         segments: List[Dict[str, Any]] = []
         full_text_parts: List[str] = []
+        failed_chunks: List[int] = []
         last_update = 0.0
         cancelled = False
         detected_language: Optional[str] = None
@@ -609,23 +643,28 @@ def _transcribe_worker(
 
             try:
                 segments_iter, info = _transcribe_one(model, chunk_path, language)
-            except Exception as e:
-                result_queue.put(
-                    {
-                        "ok": False,
-                        "error": (
-                            f"Transcription failed on chunk "
-                            f"{chunk_index + 1}/{total_chunks}: {e}"
-                        ),
-                        "traceback": traceback.format_exc(),
-                    }
-                )
-                return
+            except Exception:
+                # One bad chunk must not cost the whole file. See the loop
+                # below for why this is skip-and-continue rather than fatal.
+                logger.warning(
+                    "transcription failed to start on chunk %d/%d — skipping",
+                    chunk_index + 1, total_chunks, exc_info=True)
+                failed_chunks.append(chunk_index + 1)
+                continue
 
             if detected_language is None:
                 detected_language = getattr(info, "language", None) or "unknown"
 
-            for segment in segments_iter:
+            # faster-whisper's segment iterator is LAZY — the loop below is
+            # where the model actually runs, so a crash lands there and not in
+            # the call above. Isolating it per chunk is the whole point of
+            # chunking: measured on a 4-hour VOD, find_alignment raised
+            # `IndexError: boolean index did not match indexed array` on one
+            # chunk past the halfway mark and took four finished hours down
+            # with it. Segments already yielded are kept; only the rest of
+            # that chunk is lost.
+            for segment in _tolerant(segments_iter, chunk_index + 1,
+                                     total_chunks, failed_chunks):
                 if cancel_event.is_set():
                     cancelled = True
                     break
@@ -708,6 +747,19 @@ def _transcribe_worker(
             for s in segments
         )
 
+        if failed_chunks and not segments:
+            # Skipping a bad chunk is a repair; skipping every chunk is a
+            # failure wearing a repair's clothes, and returning an empty
+            # transcript as "ok" would send the whole pipeline downstream on
+            # nothing.
+            result_queue.put({
+                "ok": False,
+                "error": (f"Transcription produced nothing: all "
+                          f"{total_chunks} chunk(s) failed."),
+                "traceback": "",
+            })
+            return
+
         result_queue.put(
             {
                 "ok": True,
@@ -717,9 +769,16 @@ def _transcribe_worker(
                     "full_text": full_text,
                     "word_count": word_count,
                     "cancelled": cancelled,
+                    # Named, not hidden: a caller that sees 3 of 24 chunks cut
+                    # short knows why the transcript looks thin.
+                    "failed_chunks": failed_chunks,
                 },
             }
         )
+        if failed_chunks:
+            logger.warning("transcription finished with %d of %d chunks cut "
+                           "short: %s", len(failed_chunks), total_chunks,
+                           failed_chunks)
     finally:
         if tmp_chunks_dir is not None:
             shutil.rmtree(tmp_chunks_dir, ignore_errors=True)

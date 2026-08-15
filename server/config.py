@@ -175,7 +175,23 @@ class Settings(BaseSettings):
     # Measured with tiktoken on real transcripts (90..395 tokens/minute across
     # 19 of them): about 3.7 cents for a 12-hour gaming stream and 11.1 for a
     # talk-heavy one, with nomination on a local model and judging on an API.
+    # How the clipper reasons about what deserves a clip.
+    #   "legacy"   — interesting signals -> window -> features -> score
+    #   "story_v1" — payoff first: find what happened, then reconstruct the
+    #                earliest start that carries every fact the payoff needs
+    # Legacy stays the default until story_v1 has been measured on more than
+    # one source. Both need clipper_llm_select; with it off this has no effect.
+    clipper_reasoning_version: str = "legacy"
+
     clipper_llm_select: bool = False
+    # The judging pass needs a FRONTIER model, and the repo-wide default is a
+    # small one. Measured on the same 46 candidates: gpt-4o-mini answered
+    # almost everything 50, 40 or 10 with reasons like "Excitement about
+    # discovery" and moved the reference clip from #45 only to #36, where a
+    # frontier model spread its scores over eight values and moved it to #4.
+    # Nomination is bulk reading and a small model is fine at it; judging is
+    # taste and it is not. Blank falls back to the repo default.
+    clipper_llm_judge_model: str = "gpt-4o"
     # How much of `overall` the model's verdict carries.
     #
     # Swept on the co-stream against two hand-labelled reference clips — a bit
@@ -231,6 +247,59 @@ class Settings(BaseSettings):
             return str(default)
         import shutil
         return shutil.which("realesrgan-ncnn-vulkan")
+
+    # ── yt-dlp authentication ────────────────────────────────────────────────
+    # YouTube answers an increasing share of requests with "Sign in to confirm
+    # you're not a bot", which no retry gets past. Both of these are blank by
+    # default: without one, a gated URL fails with `login_required` exactly as
+    # it did before.
+    #
+    # CLIPFORGE_YTDLP_COOKIES_FILE — path to a Netscape cookies.txt export.
+    # CLIPFORGE_YTDLP_COOKIES_FROM_BROWSER — "chrome", "firefox", "edge", or
+    #   "<browser>:<profile>" e.g. "chrome:Profile 1". Reads the browser's own
+    #   cookie store, so the browser must be closed on Windows.
+    # The file wins when both are set: it is the explicit one.
+    ytdlp_cookies_file: str = ""
+    ytdlp_cookies_from_browser: str = ""
+
+    # JavaScript runtimes yt-dlp may use to solve YouTube's `n` challenge.
+    # Without one, YouTube returns storyboards only and the download fails with
+    # "Requested format is not available" — measured on a public 4-hour VOD,
+    # where every player client returned zero audio/video formats until this
+    # was set. yt-dlp enables "deno" alone by default; this repo already ships
+    # Node for the frontend, so CLIPFORGE_YTDLP_JS_RUNTIMES=node is the cheap
+    # answer. Comma-separated. Blank keeps yt-dlp's own default.
+    # Solving also needs the challenge script: `pip install yt-dlp-ejs`.
+    ytdlp_js_runtimes: str = ""
+
+    @property
+    def ytdlp_opts(self) -> dict:
+        """Everything yt-dlp needs to reach a gated source. Merged at both
+        call sites, so metadata and download always agree."""
+        opts = dict(self.ytdlp_cookie_opts)
+        runtimes = [r.strip().lower()
+                    for r in self.ytdlp_js_runtimes.split(",") if r.strip()]
+        if runtimes:
+            opts["js_runtimes"] = {name: {} for name in runtimes}
+        return opts
+
+    @property
+    def ytdlp_cookie_opts(self) -> dict:
+        """yt-dlp options carrying whatever authentication is configured."""
+        from pathlib import Path as _Path
+        if self.ytdlp_cookies_file:
+            path = _Path(self.ytdlp_cookies_file)
+            if path.exists():
+                return {"cookiefile": str(path)}
+            return {}
+        spec = self.ytdlp_cookies_from_browser.strip()
+        if not spec:
+            return {}
+        browser, _, profile = spec.partition(":")
+        # yt-dlp wants (browser, profile, keyring, container); trailing Nones
+        # mean "default", which is what an unset profile should be.
+        return {"cookiesfrombrowser": (browser.strip().lower(),
+                                       profile.strip() or None, None, None)}
 
     @property
     def ffmpeg_location(self) -> str | None:

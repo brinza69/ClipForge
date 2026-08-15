@@ -237,22 +237,66 @@ def nominate_prompt(lines: str, want: int) -> str:
     )
 
 
-def judge_prompt(cands: Sequence[dict]) -> str:
-    body = []
-    for i, cand in enumerate(cands):
-        text = " ".join(str(cand.get("text") or "").split())[:MAX_CLIP_CHARS]
-        body.append(f"{i}. [{_num(cand.get('start')):.0f}s] {text}")
+ANCHOR_PROMPT_VERSION = "anchor_v1"
+
+
+def anchor_prompt(lines: str, want: int,
+                  promises: Sequence[dict] | None = None) -> str:
+    """Payoff-first. The question is not where a window should start."""
+    from services.clipper.story import ARCHETYPES
+
+    recall = ""
+    if promises:
+        # Only the setups still open at this point in the stream. A payoff
+        # that lands on one of these is a callback, and it is the one kind of
+        # clip a per-chunk pass cannot otherwise see.
+        #
+        # Stated as its own numbered step, not as an aside. Measured: with the
+        # instruction buried and `callback_to` last in a ten-field schema, a
+        # model found "finds diamond AFTER ASKING ADMINS" — recognising the
+        # link in prose — and still left the field null on all four anchors.
+        recall = (
+            "\n  5. CALLBACK — these were said EARLIER in the stream and are "
+            "still unresolved:\n"
+            + "\n".join(f"       [{p['t']:.0f}] ({p['kind']}) {p['text']}"
+                        for p in promises[:12])
+            + "\n     If a moment below is the answer to one of them, you MUST "
+              "set `callback_to` to that timestamp. A payoff that resolves "
+              "something said earlier is worth far more than one that does "
+              "not, so do not leave it out. Set it to null when nothing "
+              "matches.\n")
+
     return (
-        "Score each candidate clip 0-100 on how well it stands alone as a "
-        "short-form video. 100 is a moment someone would send a friend; 0 is "
-        "someone narrating what they are doing.\n\n"
-        "Judge what happens, not how loud it is. A clip that needs the "
-        "surrounding stream to make sense scores low however lively it is. "
-        "Transcription noise (repeated words, gibberish) is not energy.\n\n"
-        'Answer as JSON only: [{"id": <number>, "score": <0-100>, '
-        '"why": "<max 10 words>"}]\n\n'
-        "--- CANDIDATES ---\n" + "\n".join(body)
+        "Below is a livestream transcript, one line per segment, prefixed with "
+        "its start time in seconds.\n\n"
+        f"Find up to {want} moments that deserve a standalone short clip. For "
+        "each one, work BACKWARDS from what happened:\n"
+        "  1. the PAYOFF — the thing that makes the moment worth watching, and "
+        "when it happens\n"
+        "  2. the REQUIRED CONTEXT — every fact a viewer who saw nothing else "
+        "must already know for that payoff to land, each with the timestamp "
+        "where it is established. Usually one or two. Never more than 90 "
+        "seconds before the payoff.\n"
+        "  3. the HOOK — the earliest line that gives a stranger a reason to "
+        "keep watching, if there is one\n"
+        "  4. UNRESOLVED CONTEXT — anything the clip would still leave "
+        "unexplained: a name never introduced, an event referred to but not "
+        "shown\n\n"
+        f"{recall}\n"
+        f"Archetypes, choose one or two: {', '.join(ARCHETYPES)}\n\n"
+        "Ignore moments that are only loud. Narrating routine actions, reading "
+        "an inventory and filler are not payoffs.\n"
+        "Some lines end in <angle brackets> with what the audio and picture "
+        "were doing there. Treat that as evidence, never as the reason on its "
+        "own — LOUD without something happening is not a payoff.\n\n"
+        'Answer as JSON only: [{"payoff_t": <seconds>, "payoff_strength": '
+        '<0-1>, "archetypes": ["..."], "why": "<max 12 words>", '
+        '"required_context": [{"t": <seconds>, "fact": "<max 8 words>"}], '
+        '"hook": {"t": <seconds>}, "unresolved_context": ["..."], '
+        '"callback_to": <seconds or null>, "confidence": <0-1>}]\n\n'
+        f"--- TRANSCRIPT ---\n{lines}"
     )
+
 
 
 # --------------------------------------------------------------------------
@@ -294,16 +338,98 @@ async def nominate(segments: Sequence[dict], duration: float, *,
     return found
 
 
-async def judge(cands: list[dict], *, weight: float = 0.5,
-                engines: Sequence[str] = JUDGE_ENGINES,
-                model: str | None = None) -> int:
-    """Score candidates with a frontier model and blend it in. 0 when unavailable."""
-    if not cands:
-        return 0
-    subset = cands[:MAX_JUDGE_CLIPS]
-    answer = await _ask(engines, judge_prompt(subset), model=model)
-    if answer is None:
-        return 0
-    hit = apply_scores(subset, parse_json(answer), weight=weight)
-    logger.info("llm_select: judged %d of %d candidates", hit, len(subset))
-    return hit
+def _attach_callback(anchor: dict, raw: Any, promises: Sequence[dict]) -> None:
+    """Link an anchor to the setup it pays off, if the model named one.
+
+    The setup is minutes or hours away, so it can never be inside the window —
+    a callback is context the clip OWES, not context it can carry. Recording
+    it is what lets `story.context_debt` charge for that and the headline say
+    what the viewer missed.
+    """
+    from services.clipper.promises import MIN_CALLBACK_GAP_S
+
+    t = _num((raw or {}).get("callback_to"), -1.0)
+    if t < 0:
+        return
+    match = min(
+        (p for p in promises
+         if anchor["payoff_t"] - _num(p.get("t"), -1e9) >= MIN_CALLBACK_GAP_S),
+        key=lambda p: abs(_num(p.get("t")) - t), default=None)
+    if match is None or abs(_num(match.get("t")) - t) > 30.0:
+        return
+    anchor["callback_to"] = dict(match)
+    if "CALLBACK" not in anchor["archetypes"]:
+        anchor["archetypes"] = (anchor["archetypes"] + ["CALLBACK"])[:3]
+
+
+async def detect_anchors(segments: Sequence[dict], duration: float, *,
+                         per_chunk: int = 10,
+                         engines: Sequence[str] = NOMINATE_ENGINES,
+                         model: str | None = None,
+                         promises: Sequence[dict] | None = None,
+                         atoms: Sequence[dict] | None = None) -> list[dict]:
+    """Anchors: a payoff, what a viewer must know for it to land, an archetype.
+
+    The richer sibling of `nominate`, and the input to the story engine. Same
+    failure contract — [] when no engine answers, so the run falls back to the
+    heuristic candidates rather than stopping.
+
+    Chunked, never the whole stream in one prompt: a 12-hour transcript is
+    ~64k tokens at the measured rate and up to 285k on a talkative source,
+    past the context of the models this would otherwise use.
+    """
+    from services.clipper.story import normalise_anchor
+
+    # Atom lines carry the evidence for their own moment — that the room got
+    # loud, the picture cut, the game went into a menu — where a transcript
+    # line carries only the words. Features as evidence, at the grain of one
+    # utterance, which is what atoms exist for.
+    if atoms:
+        from services.clipper.atoms import to_lines
+        lines = to_lines(atoms, MAX_TRANSCRIPT_CHARS)
+    else:
+        lines = transcript_lines(segments)
+    if not lines:
+        return []
+    from services.clipper import promises as promise_mod
+
+    found: list[dict] = []
+    for chunk in chunk_lines(lines):
+        # Setups still open anywhere up to the END of this chunk, which
+        # includes ones inside it. Filtering to "before the chunk" was wrong
+        # at real scale: a chunk holds five hours of this source, and a model
+        # will not reliably connect a payoff at hour three to a line at hour
+        # one buried in 30k tokens. The recall list is exactly that aid.
+        #
+        # Still bounded — `open_at` drops anything older than the lifetime or
+        # closer than the gap, so a payoff never sees a prediction it cannot
+        # possibly resolve.
+        stamps = [t for t in (_num(line.split("]", 1)[0].lstrip("["), -1.0)
+                              for line in chunk.splitlines()
+                              if line.startswith("[")) if t >= 0]
+        first_t, last_t = (min(stamps), max(stamps)) if stamps else (0.0, 0.0)
+        live = promise_mod.open_at(promises or [], last_t, span_from=first_t)
+        answer = await _ask(engines, anchor_prompt(chunk, per_chunk, live),
+                            model=model)
+        if answer is None:
+            continue
+        for raw in (parse_json(answer) or []):
+            anchor = normalise_anchor(raw, duration)
+            if anchor is not None:
+                anchor["prompt_version"] = ANCHOR_PROMPT_VERSION
+                _attach_callback(anchor, raw, promises or [])
+                found.append(anchor)
+    found.sort(key=lambda a: a["payoff_t"])
+    logger.info("llm_select: %d anchors (%s)", len(found), ANCHOR_PROMPT_VERSION)
+    return found
+
+
+
+
+# Judging lives in llm_judge.py — it reads finished candidates and
+# ranks them, where this module proposes them. Re-exported so
+# `from services.clipper.llm_select import judge` keeps working.
+from services.clipper.llm_judge import (  # noqa: E402,F401
+    JUDGE_PROMPT_VERSION, REJECT_REASONS, apply_ranking, judge,
+    judge_prompt,
+)

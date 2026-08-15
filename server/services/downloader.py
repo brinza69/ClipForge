@@ -13,7 +13,11 @@ Supported sources (actively tested):
   - Generic yt-dlp-supported sites (results vary)
 
 Known limitations:
-  - Login-required content needs yt-dlp cookie config (not in scope)
+  - Login-required and bot-checked content needs cookies: set
+    CLIPFORGE_YTDLP_COOKIES_FILE or CLIPFORGE_YTDLP_COOKIES_FROM_BROWSER.
+    Both blank by default, and blank behaves exactly as before.
+  - YouTube also needs a JS runtime to solve its `n` challenge, or it serves
+    storyboards only: CLIPFORGE_YTDLP_JS_RUNTIMES=node, plus `yt-dlp-ejs`.
   - DRM-protected content is not downloadable
   - Some geo-restricted content may fail
   - Live streams are not supported (only completed VODs)
@@ -43,9 +47,9 @@ _ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "This video is geo-restricted. Try using a VPN, or download the file manually and use local upload.",
     ),
     (
-        r"(sign in|log.?in|login.?required|cookies|members.only)",
+        r"(sign in|log.?in|login.?required|cookies|members.only|not a bot)",
         "login_required",
-        "This video requires authentication. Download it manually using yt-dlp with --cookies and then use local upload.",
+        "This video requires authentication. Set CLIPFORGE_YTDLP_COOKIES_FILE to a cookies.txt export, or CLIPFORGE_YTDLP_COOKIES_FROM_BROWSER to a browser name, then try again.",
     ),
     (
         r"(drm|widevine|fairplay|content protection|encrypted)",
@@ -170,6 +174,8 @@ def _extract_info_sync(url: str) -> dict[str, Any]:
     Synchronous yt-dlp metadata extraction.
     Runs in a thread executor to keep the event loop free.
     """
+    from config import settings
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -181,6 +187,10 @@ def _extract_info_sync(url: str) -> dict[str, Any]:
         # Pick best format to estimate filesize, but do not download
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
     }
+    # Metadata is gated by the same bot check as the download, so the cookies
+    # have to be here too — otherwise a source authenticates at download time
+    # having already failed validation.
+    ydl_opts.update(settings.ytdlp_opts)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -474,6 +484,7 @@ async def download_video(
     _ffmpeg_loc = settings.ffmpeg_location
     if _ffmpeg_loc:
         ydl_opts["ffmpeg_location"] = _ffmpeg_loc
+    ydl_opts.update(settings.ytdlp_opts)
     
     def _run():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

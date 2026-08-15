@@ -198,10 +198,146 @@ async def test_the_first_engine_that_answers_wins(monkeypatch):
         calls.append(engine)
         if engine == "ollama":
             raise RuntimeError("not running")
-        return '[{"id": 0, "score": 88}]'
+        return '[{"id": 0, "story_editor": "strong", "cold_viewer": "strong"}]'
 
     monkeypatch.setattr("services.descriptions._call_llm", fake)
     cands = [{"overall": 50.0, "text": "x", "start": 0.0}]
     assert await llm_select.judge(cands, engines=("ollama", "openai")) == 1
     assert calls == ["ollama", "openai"]
-    assert cands[0]["overall"] == 69.0
+    assert cands[0]["llm_rank"] == 1
+
+
+# ── comparative ranking ──────────────────────────────────────────────────────
+
+
+def test_ranking_uses_the_whole_scale_where_scoring_compressed_it():
+    """Measured on 46 real candidates, absolute scoring answered with eight
+    distinct values and, on a quiet source, everything between 5 and 30. A
+    forced ordering cannot compress."""
+    cands = [{"overall": 50.0} for _ in range(10)]
+    verdicts = [{"id": i} for i in range(10)]
+    assert llm_select.apply_ranking(cands, verdicts, weight=1.0) == 10
+    scores = [c["llm_score"] for c in cands]
+    assert scores[0] == 100.0 and scores[-1] == 0.0
+    assert max(scores) - min(scores) == 100.0
+
+
+def test_rank_order_survives_into_the_score():
+    cands = [{"overall": 50.0} for _ in range(4)]
+    # The model ranks candidate 3 best and candidate 0 worst.
+    llm_select.apply_ranking(cands, [{"id": 3}, {"id": 1}, {"id": 2}, {"id": 0}],
+                             weight=1.0)
+    assert cands[3]["overall"] > cands[1]["overall"] > cands[0]["overall"]
+    assert cands[3]["llm_rank"] == 1 and cands[0]["llm_rank"] == 4
+
+
+def test_a_cold_viewer_verdict_moves_a_clip_inside_its_neighbourhood():
+    """A short lives or dies on the cold viewer, so that perspective carries
+    more than the story editor's craft judgement."""
+    warm = [{"overall": 50.0}, {"overall": 50.0}]
+    cold = [{"overall": 50.0}, {"overall": 50.0}]
+    llm_select.apply_ranking(warm, [{"id": 0, "cold_viewer": "strong"},
+                                    {"id": 1}], weight=1.0)
+    llm_select.apply_ranking(cold, [{"id": 0, "cold_viewer": "weak"},
+                                    {"id": 1}], weight=1.0)
+    assert warm[0]["llm_score"] > cold[0]["llm_score"]
+
+
+def test_the_brutal_editor_costs_a_clip_but_cannot_veto_it():
+    """The ranking already saw the same clip; a reject reason is a second
+    opinion, not an override."""
+    cands = [{"overall": 50.0} for _ in range(3)]
+    llm_select.apply_ranking(cands, [
+        {"id": 0, "critic": ["no_payoff", "late_hook"]},
+        {"id": 1, "critic": []},
+        {"id": 2, "critic": ["made_up_reason"]},
+    ], weight=1.0)
+    assert cands[0]["llm_score"] < 100.0, "two reject reasons cost nothing"
+    assert cands[0]["llm_score"] > 0.0, "a reject reason must not be a veto"
+    assert cands[0]["llm_verdict"]["reject_reasons"] == ["no_payoff", "late_hook"]
+    assert cands[2]["llm_verdict"]["reject_reasons"] == [], "invented reason kept"
+
+
+def test_the_verdict_is_recorded_for_debugging():
+    cands = [{"overall": 50.0}]
+    llm_select.apply_ranking(cands, [{"id": 0, "story_editor": "strong",
+                                      "cold_viewer": "medium",
+                                      "critic": ["fans_only"],
+                                      "why": "needs the stream"}])
+    v = cands[0]["llm_verdict"]
+    assert v["story_editor"] == "strong" and v["cold_viewer"] == "medium"
+    assert v["prompt_version"] == llm_select.JUDGE_PROMPT_VERSION
+    assert cands[0]["llm_reason"] == "needs the stream"
+
+
+def test_a_candidate_the_judge_left_out_does_not_win_by_default():
+    """Measured: the model shortlisted 9 of 42 and the other 33 kept an
+    unblended heuristic around 58, so a candidate it declined to rank beat one
+    it had ranked fourth. Leaving one out IS a verdict."""
+    cands = [{"overall": 58.0} for _ in range(5)]
+    llm_select.apply_ranking(cands, [{"id": 0}, {"id": 1}], weight=0.7)
+    ranked_last = cands[1]["overall"]
+    for i in (2, 3, 4):
+        assert cands[i]["llm_score"] == 0.0
+        assert cands[i]["overall"] <= ranked_last
+
+
+def test_nothing_is_touched_when_the_judge_said_nothing_usable():
+    cands = [{"overall": 58.0} for _ in range(3)]
+    assert llm_select.apply_ranking(cands, [{"no_id": 1}]) == 0
+    assert all(c["overall"] == 58.0 for c in cands)
+    assert all("llm_score" not in c for c in cands)
+
+
+def test_an_out_of_range_id_is_ignored_not_crashed_on():
+    cands = [{"overall": 50.0}]
+    assert llm_select.apply_ranking(cands, [{"id": 7}, {"id": 0}]) == 1
+
+
+async def test_a_model_that_scores_instead_of_ranking_still_counts(monkeypatch):
+    """Falling back beats discarding the call."""
+    async def fake(engine, prompt, **kw):
+        return '[{"id": 0, "score": 88}]'
+
+    monkeypatch.setattr("services.descriptions._call_llm", fake)
+    cands = [{"overall": 50.0, "text": "x", "start": 0.0}]
+    assert await llm_select.judge(cands, engines=("openai",)) == 1
+    assert cands[0]["llm_score"] == 88.0
+
+
+async def test_the_judge_sees_the_best_candidates_not_the_earliest(monkeypatch):
+    """`cands` is in timeline order. Slicing it handed the judge the opening
+    minutes and nothing else: measured on a 4-hour stream with 925 candidates
+    it saw about the first twenty minutes, while everything later kept an
+    unjudged heuristic score and won on it."""
+    seen = {}
+
+    async def fake(engine, prompt, **kw):
+        seen["prompt"] = prompt
+        return "[]"
+
+    monkeypatch.setattr("services.descriptions._call_llm", fake)
+    from services.clipper import llm_judge
+
+    # Timeline order, with the good ones at the end.
+    cands = [{"start": float(i), "end": float(i) + 30.0, "text": f"clip {i}",
+              "overall": float(i)} for i in range(llm_judge.MAX_JUDGE_CLIPS + 40)]
+    await llm_judge.judge(cands, engines=("openai",))
+    assert f"clip {len(cands) - 1}" in seen["prompt"], "the best clip was not judged"
+    assert "clip 0" not in seen["prompt"], "the worst clip took a slot"
+
+
+def test_the_prompt_carries_only_the_rubrics_in_play():
+    """A FUNNY clip must not be marked down for lacking stakes, and a CLUTCH
+    one must not be excused for lacking them."""
+    prompt = llm_select.judge_prompt(
+        [{"text": "a", "start": 0.0, "story": {"archetypes": ["FUNNY"]}}], want=3)
+    assert "FUNNY: setup" in prompt
+    assert "CLUTCH" not in prompt
+    # Comparative, not absolute: the question is which of these deserve the
+    # slots, and leaving one out has to read as a verdict.
+    assert "only 3 of them could be published" in prompt
+    assert "IN RANK ORDER" in prompt
+    assert "leave out" in prompt
+    for word in ("story_editor", "cold_viewer", "critic"):
+        assert word in prompt

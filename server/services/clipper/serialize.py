@@ -66,6 +66,10 @@ def clip_to_dict(clip: ClipModel) -> dict[str, Any]:
         "dedupe_group": clip.dedupe_group,
         "is_alternative": _as_bool(clip.is_alternative),
         "rank_position": clip.rank_position,
+        # Why this clip exists — anchor, payoff, required context, archetype,
+        # which edit variant, what the judge said. The UI can stay unaware of
+        # it, but a bad pick has to be explainable without a debugger.
+        "reasoning": clip.reasoning or None,
         "ranker_version": clip.ranker_version,
         "status": clip.status,
         "export_path": clip.export_path,

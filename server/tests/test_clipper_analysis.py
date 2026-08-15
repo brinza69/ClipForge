@@ -124,6 +124,69 @@ def test_boundaries_never_land_mid_word(chain):
         assert not straddling, f"clip starts inside the word {straddling[:1]}"
 
 
+# ── the tail release ─────────────────────────────────────────────────────────
+#
+# Regression cover for a defect nothing measurable caught: all three clips of
+# the first export anyone watched ended on the exact millisecond of their final
+# word's timestamp, which a listener hears as a truncated sentence.
+
+
+def _spoken(times: list[tuple[float, float]]) -> list[dict]:
+    return [{"word": f"w{i}", "start": a, "end": b, "probability": 0.9}
+            for i, (a, b) in enumerate(times)]
+
+
+def test_release_pads_into_silence():
+    words = _spoken([(1.0, 1.5), (1.6, 2.0)])
+    out = candidate_boundaries._keep_release(2.0, words, ceiling=30.0, limit=30.0)
+    assert out == pytest.approx(2.0 + candidate_boundaries.TAIL_PAD_S)
+
+
+def test_release_never_crosses_the_next_word():
+    """When speech continues there is no silence to borrow."""
+    words = _spoken([(1.0, 1.5), (1.6, 2.0), (2.2, 2.6)])
+    out = candidate_boundaries._keep_release(2.0, words, ceiling=30.0, limit=30.0)
+    assert out == pytest.approx(2.2 - candidate_boundaries.RELEASE_GAP_S)
+    assert out < 2.2
+
+
+def test_release_respects_the_media_end_and_the_duration_cap():
+    words = _spoken([(1.0, 1.5), (1.6, 2.0)])
+    assert candidate_boundaries._keep_release(
+        2.0, words, ceiling=2.1, limit=30.0) == pytest.approx(2.1)
+    assert candidate_boundaries._keep_release(
+        2.0, words, ceiling=30.0, limit=2.15) == pytest.approx(2.15)
+
+
+def test_release_leaves_a_deliberate_pause_alone():
+    """`_trim_tail` may have chosen a longer tail; padding must not fight it."""
+    words = _spoken([(1.0, 1.5), (1.6, 2.0)])
+    end = 2.0 + candidate_boundaries.TAIL_PAD_S + 0.5
+    assert candidate_boundaries._keep_release(
+        end, words, ceiling=30.0, limit=30.0) == end
+
+
+def test_no_clip_ends_on_the_last_words_timestamp(chain):
+    """The defect itself: a cut landing exactly where Whisper stops hearing."""
+    words = segmentation.word_list(chain["transcript"])
+    # refine_boundaries takes its ceiling from the last word, so a clip that
+    # runs to the end of the transcript has nothing left to pad into.
+    ceiling = words[-1]["end"]
+    for cand in chain["candidates"]:
+        end = cand["end"]
+        if end >= ceiling - 1e-6:
+            continue
+        last = max((w["end"] for w in words if w["end"] <= end + 1e-6), default=None)
+        if last is None:
+            continue
+        following = next((w["start"] for w in words if w["start"] >= end - 1e-6), None)
+        room = (following - last) if following is not None else ceiling - last
+        if room < candidate_boundaries.TAIL_PAD_S + candidate_boundaries.RELEASE_GAP_S:
+            continue  # speech resumes too soon to pad; the cut is right where it is
+        assert end > last + 1e-3, (
+            f"clip ends on the timestamp of {last}s, truncating the final word")
+
+
 def test_refine_does_not_mutate_its_input(chain):
     cand = dict(chain["candidates"][0])
     before = (cand["start"], cand["end"])
@@ -283,6 +346,43 @@ def test_a_gaming_source_with_a_facecam_gets_the_split_layout():
     )
     assert plan["layout"] == "face_top_game_bottom", plan["layout"]
     assert plan["face_rect"], "a gaming split layout with no face band is the bug"
+
+
+def test_a_layout_plan_from_another_resolution_is_not_reused():
+    """A plan is crops in SOURCE pixels, valid only for the dimensions it was
+    computed against. Swap the source — a re-download, an HD replacement of a
+    proxy-resolution cut — and the old rects still apply cleanly and silently
+    produce nonsense: measured, a plan built for 854x480 used against
+    1920x1080 cropped the top-left corner as the facecam and a narrow strip as
+    the gameplay."""
+    from workers.clipper_render_jobs import _plan_fits
+
+    # The exact plan from the broken export: every rect sits comfortably
+    # inside a 1920x1080 frame, so a bounds check cannot tell it is wrong.
+    small = {"src_w": 854, "src_h": 480,
+             "face_rect": {"x": 0, "y": 0, "w": 216, "h": 134},
+             "game_rect": {"x": 218, "y": 0, "w": 414, "h": 480}}
+    assert _plan_fits(small, 854, 480)
+    assert not _plan_fits(small, 1920, 1080), (
+        "a 854x480 plan fits inside 1080p geometrically — only the recorded "
+        "frame can tell them apart"
+    )
+
+
+def test_a_plan_records_the_frame_it_was_measured_in():
+    plan = layout.plan_layout({"start": 0.0, "end": 30.0}, _regions(), [],
+                              1920, 1080, mode="auto")
+    assert plan["src_w"] == 1920 and plan["src_h"] == 1080
+
+
+def test_a_plan_from_before_the_frame_was_recorded_still_bounds_checks():
+    """Older stored plans carry no src_w/src_h; they must not all be thrown
+    away, but a plan larger than the source is still detectable."""
+    from workers.clipper_render_jobs import _plan_fits
+
+    legacy = {"game_rect": {"x": 492, "y": 0, "w": 934, "h": 1080}}
+    assert _plan_fits(legacy, 1920, 1080)
+    assert not _plan_fits(legacy, 854, 480)
 
 
 def test_the_pipeline_callers_pass_the_content_type():

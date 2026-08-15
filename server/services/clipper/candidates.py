@@ -9,13 +9,15 @@ found and `dedupe.py` collapses the rest anyway. It then flattens everything a
 scorer needs into FEATURE_KEYS: one flat dict of finite floats, the contract
 `scoring.py` and `ranker.py` share.
 
-Pass C is three files, split at real seams to stay under the repo's 500-line
+Pass C is four files, split at real seams to stay under the repo's 500-line
 limit. `candidate_terms.py` is the bottom layer — vocabularies, tuning
 constants, FEATURE_KEYS and the numeric guards. `candidate_boundaries.py`
-moves a candidate's two edges onto sentence boundaries. This file proposes the
-candidates and measures the finished ones. `refine_boundaries` is re-exported
-here, so `from services.clipper.candidates import refine_boundaries` keeps
-working.
+moves a candidate's two edges onto sentence boundaries.
+`candidate_proposals.py` converts proposals that came from OUTSIDE Pass B — a
+model naming a moment, or a story anchor — into the same shape. This file
+proposes candidates from windows and measures the finished ones.
+`refine_boundaries`, `merge_nominations` and `candidates_from_anchors` are
+re-exported here, so existing imports keep working.
 
 Pure arithmetic over plain dicts — no DB, no ffmpeg, no cv2, no network. Every
 function here will be handed 3-second sources, silent audio and transcripts
@@ -38,7 +40,7 @@ from services.clipper.candidate_terms import (
     _tokens, _words_for,
 )
 from services.clipper.segmentation import (
-    norm_token, overlap_seconds, points_in, series_slice, signal_view, word_list,
+    norm_token, overlap_seconds, points_in, series_slice, signal_view,
 )
 
 logger = logging.getLogger("clipforge.clipper.candidates")
@@ -126,57 +128,6 @@ def generate_candidates(windows: list[dict], signals: dict, *, min_s: float,
     out.sort(key=lambda c: (c["start"], c["end"]))
     logger.info("Pass C: %d candidates from %d windows", len(out), len(windows or []))
     return out
-
-
-# How much a nominated window may overlap an existing candidate before it is
-# the same proposal. Loose on purpose: the point of a second nominator is the
-# moments the first one MISSED, so only a near-identical span is redundant.
-_NOMINATION_OVERLAP = 0.75
-
-
-def merge_nominations(cands: list[dict], nominated: Sequence[dict],
-                      transcript: Any, *, min_s: float, max_s: float) -> list[dict]:
-    """Add nominated windows that the existing candidates do not already cover.
-
-    Union, not replacement. The two nominators fail differently — the scorer
-    finds what is loud and structurally clean, a language model finds what is
-    interesting — and keeping both is the whole reason for running the second
-    one. Nominations arrive as bare spans, so each gets its words and text
-    filled in here, the same shape generate_candidates emits.
-    """
-    lo, hi = _bounds(min_s, max_s)
-    words = word_list(transcript) if isinstance(transcript, dict) else []
-    merged = list(cands)
-
-    def covered(start: float, end: float) -> bool:
-        for existing in merged:
-            a, b = _num(existing.get("start")), _num(existing.get("end"))
-            shortest = min(b - a, end - start)
-            if shortest <= 0:
-                continue
-            overlap = min(b, end) - max(a, start)
-            if overlap > 0 and overlap / shortest > _NOMINATION_OVERLAP:
-                return True
-        return False
-
-    added = 0
-    for win in nominated or []:
-        start, end = _num(win.get("start")), _num(win.get("end"))
-        if not (lo <= end - start <= hi) or covered(start, end):
-            continue
-        inside, _b, _a = _neighbourhood(words, start, end)
-        merged.append({
-            "start": round(start, 3), "end": round(end, 3),
-            "text": _text_of(inside), "words": list(inside),
-            "reasons": list(win.get("reasons") or ["llm_nominated"]),
-            "llm_tag": win.get("llm_tag", ""),
-            "window_index": -1,
-        })
-        added += 1
-
-    merged.sort(key=lambda c: (_num(c.get("start")), _num(c.get("end"))))
-    logger.info("Pass C: %d of %d nominations were new", added, len(nominated or []))
-    return merged
 
 
 # --------------------------------------------------------------------------
@@ -455,6 +406,13 @@ def extract_features(cand: dict, transcript: dict, signals: dict,
     if (spoken := _spoken_ratio(inside, start, end, span)) is not None:
         raw["speech_ratio"] = spoken
 
+    # The story engine measured these against the anchor it built the window
+    # from; nothing else can. On the legacy path they stay 0.0, which reads as
+    # "nothing owed, opens on the hook" — the benign default scoring expects.
+    told = cand.get("story") if isinstance(cand.get("story"), dict) else {}
+    raw["context_debt"] = _clamp01(_num(told.get("context_debt")))
+    raw["hook_latency"] = max(0.0, _num(told.get("hook_latency")))
+
     # A reaction is loud audio AND someone still talking after the payoff.
     spoken_after = float(sum(1 for w in inside if _num(w["start"]) >= payoff_at))
     raw["reaction_score"] = _clamp01(0.6 * raw["payoff_energy_ratio"]
@@ -469,3 +427,10 @@ def extract_features(cand: dict, transcript: dict, signals: dict,
                                     - 0.30 * raw["starts_mid_sentence"])
 
     return {key: _num(raw.get(key, 0.0)) for key in FEATURE_KEYS}
+
+# Converting outside proposals into candidates lives in
+# candidate_proposals.py. Re-exported so
+# `from services.clipper.candidates import merge_nominations` keeps working.
+from services.clipper.candidate_proposals import (  # noqa: E402,F401
+    candidates_from_anchors, merge_nominations,
+)

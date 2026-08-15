@@ -6,6 +6,10 @@ pydantic-settings>=2.7.0,<3.0
 sqlalchemy[asyncio]>=2.0.36,<3.0
 aiosqlite>=0.21.0,<1.0
 yt-dlp>=2025.3.0
+# Solves YouTube's `n` challenge. Without it yt-dlp returns storyboards only on
+# a public VOD and the download dies with "Requested format is not available".
+# Needs a JS runtime too — set CLIPFORGE_YTDLP_JS_RUNTIMES=node.
+yt-dlp-ejs>=0.8.0
 httpx>=0.28.0,<1.0
 faster-whisper>=1.0.0
 pysubs2>=1.6.0

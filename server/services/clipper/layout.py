@@ -418,19 +418,25 @@ def plan_layout(cand: dict, regions: dict, faces: list[dict],
         subjects = ()
 
     zones = _safe_zones(layout, face_rect, game_rect, chat, hud, face_pct, subjects)
-    return _plan(layout, face_rect, game_rect, chat_rect, keyframes, warnings, face_pct, zones)
+    return _plan(layout, face_rect, game_rect, chat_rect, keyframes, warnings,
+                 face_pct, zones, src_w, src_h)
 
 
 def _plan(layout: str, face_rect: dict | None, game_rect: dict | None,
           chat_rect: dict | None, keyframes: list[dict], warnings: list[str],
-          face_pct: float, zones: dict) -> dict:
+          face_pct: float, zones: dict, src_w: int = 0, src_h: int = 0) -> dict:
     seen: list[str] = []
     for w in warnings:
         if w not in seen:
             seen.append(w)
     return {"layout": layout, "face_rect": face_rect, "game_rect": game_rect,
             "chat_rect": chat_rect, "keyframes": keyframes, "warnings": seen,
-            "face_pct": round(face_pct, 4), "safe_zones": zones}
+            "face_pct": round(face_pct, 4), "safe_zones": zones,
+            # The frame these crops were measured in. A plan is only valid for
+            # it: a 854x480 plan FITS inside a 1920x1080 frame, so a bounds
+            # check cannot tell they disagree, and the export silently crops
+            # the top-left corner as the facecam. Verified on a real export.
+            "src_w": int(src_w), "src_h": int(src_h)}
 
 
 
