@@ -47,6 +47,41 @@ def _source_path(project: ProjectModel) -> str:
     return src
 
 
+def _clip_words(clip: ClipModel) -> list[dict]:
+    """The clip's word timings, on the SOURCE clock.
+
+    `dynamic_edit` needs these and had never been given them: `_boundaries`
+    places its cuts on speech pauses and `_speech_ratio` decides whether the
+    streamer is talking in a shot, and both were reading an empty list on every
+    export. Measured on clip 6b34b8d37259: with words the planner cuts 11 shots
+    on the pauses, without them 9 on audio peaks and scene changes alone — and
+    the second is exactly what shipped.
+
+    `transcript_segments` is the obvious home for this and is NULL on every clip
+    the pipeline writes, so the words come from the caption plan, which carries
+    them because the word-highlight overlay needs them. That also keeps the cut
+    grid and the burned captions reading the same timings.
+
+    The caption plan's clock is clip-relative and `dynamic_edit` subtracts
+    `clip_start` from every word, so the offset has to go back on here.
+    """
+    plan = clip.caption_plan if isinstance(clip.caption_plan, dict) else None
+    if not plan:
+        return []
+    offset = float(clip.start_time or 0.0)
+    out: list[dict] = []
+    for chunk in plan.get("chunks") or []:
+        for word in (chunk or {}).get("words") or []:
+            try:
+                start = float(word["start"]) + offset
+                end = float(word.get("end", word["start"])) + offset
+            except (KeyError, TypeError, ValueError):
+                continue
+            out.append({"word": str(word.get("word") or ""),
+                        "start": start, "end": end})
+    return out
+
+
 def _candidate(clip: ClipModel) -> dict:
     """The shape the render/caption/layout helpers expect from a candidate."""
     return {
@@ -54,6 +89,7 @@ def _candidate(clip: ClipModel) -> dict:
         "end": float(clip.end_time or 0.0),
         "text": clip.transcript_text or "",
         "headline": clip.headline_text or "",
+        "words": _clip_words(clip),
     }
 
 
