@@ -70,3 +70,47 @@ def test_a_frozen_source_reports_stable_corners():
 def test_too_few_frames_is_not_an_error():
     assert _patch_motion([], W, H) == (1.0, 0.0)
     assert _patch_motion([np.zeros((H, W), dtype=np.uint8)], W, H) == (1.0, 0.0)
+
+
+# ── how many people are on screen ────────────────────────────────────────────
+#
+# `face_count` was the MODAL faces per frame. Measured on the labelled sources
+# it returns 1 or 0 everywhere — including 0 on the two Minecraft sources,
+# which demonstrably have two faces on screen — so `two_up` never fired and
+# `podcast` and `interview` could never win their own vote.
+
+
+def test_two_people_in_the_scene_let_an_interview_win():
+    from services.clipper.content_geom import classify_features
+
+    base = {"frame_count": 20, "speech_ratio": 0.9, "face_stability": 0.8,
+            "face_area": 0.2, "motion_mean": 0.1, "kw_interview": 0.2}
+    one = classify_features({**base, "face_count": 1})["content_type"]
+    two = classify_features({**base, "face_count": 2})["content_type"]
+    assert one != two, "the count has to change the answer or it decides nothing"
+    assert two in {"interview", "podcast"}
+
+
+def test_a_modal_count_could_never_have_said_two():
+    """The defect itself, stated as a property. `summarize_faces` takes the
+    commonest per-frame count, and on a source where the cascade misses often
+    the commonest answer is 0 or 1 however many people are there."""
+    from services.clipper.content_geom import summarize_faces
+
+    # Two faces in a third of frames, none in the rest — two people, plainly.
+    samples = []
+    for i in range(30):
+        samples.append({"t": float(i),
+                        "boxes": [[0, 0, 10, 10], [50, 0, 10, 10]] if i % 3 == 0 else []})
+    out = summarize_faces({"faces": samples}, 100, 100)
+    assert out["face_count"] == 0.0, (
+        "this is the behaviour that made podcast and interview unreachable")
+
+
+def test_unreadable_frames_leave_the_old_statistic_alone():
+    """None rather than zero: the caller must keep the modal count, not be told
+    there is nobody on screen."""
+    from services.clipper.content_type import _scene_faces
+
+    assert _scene_faces([]) is None
+    assert _scene_faces(["nope.jpg"]) is None

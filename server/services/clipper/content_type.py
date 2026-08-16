@@ -183,6 +183,51 @@ def frame_features(frames: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def _scene_faces(frames: Sequence[str]) -> int | None:
+    """How many people are in the SCENE, ignoring anyone in a facecam inset.
+
+    Replaces the modal faces-per-frame for the two-people question, and both
+    halves of that matter.
+
+    The MODAL count cannot answer it. Measured on the labelled sources it
+    returns 1 or 0 everywhere — including 0 on the two Minecraft sources, which
+    demonstrably have two faces on screen, because the cascade misses in enough
+    frames that zero is the commonest answer. `two_up` needs 2 or 3, so
+    `podcast` and `interview` could never win their own vote and never once did
+    on any source. Counting stable CLUSTERS instead is robust to per-frame
+    misses: it gets both Minecraft sources right, and an edited interview that
+    cuts between speakers reads as several clusters rather than one face.
+
+    Ignoring insets is the other half. Two people in facecam insets is a
+    co-stream, not two people sitting together, and counting clusters alone
+    turned the 12-minute Minecraft slice from `gaming` into `interview`.
+    Excluding clusters that sit inside a detected webcam rect fixes that
+    without touching the case it was added for.
+
+    Measured end to end on the eight labelled sources: modal 3/8, clusters
+    alone 3/8 (one fixed, one broken), clusters outside insets **4/8**.
+
+    None when the frames cannot be read, so the caller keeps the old statistic
+    rather than being told there is nobody on screen.
+    """
+    grays, _sat, fw, fh = _load_frames(frames or [])
+    if not grays or fw < 16 or fh < 16:
+        return None
+    faces = _face_boxes(grays)
+    total = max(1, len(faces))
+    cams, _confs = _find_webcams(grays, faces, fw, fh)
+    count = 0
+    for group in _face_groups(faces, fw, fh):
+        hits = len({i for i, _ in group})
+        if hits < _FACECAM_MIN_HITS or hits / total < _FACECAM_MIN_RATE:
+            continue
+        median = median_rect([b for _, b in group])
+        if median and any(rect_overlap_frac(median, cam) > 0.5 for cam in cams):
+            continue                      # this one is a facecam, not the scene
+        count += 1
+    return count
+
+
 def detect_content_type(frames: list[str], signals: dict,
                         transcript: dict) -> dict[str, Any]:
     """{'content_type','confidence' 0..1,'evidence':[str,..]}"""
@@ -192,6 +237,9 @@ def detect_content_type(frames: list[str], signals: dict,
     fh = int(features.get("frame_height") or signals.get("frame_height") or 0)
     features.update(summarize_motion(signals))
     features.update(summarize_faces(signals, fw, fh))
+    scene = _scene_faces(frames or [])
+    if scene is not None:
+        features["face_count"] = float(scene)
     features["speech_ratio"] = speech_ratio(signals)
     features.update(keyword_scores(transcript_text(transcript)))
     return classify_features(features)
