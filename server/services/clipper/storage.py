@@ -45,7 +45,7 @@ ARTIFACT_NAMES: frozenset[str] = frozenset(
     # produced it, so a re-run after a settings change recomputes instead of
     # silently reusing an answer the new configuration would never have given.
     {"signals", "faces", "regions", "segments", "candidates", "meta",
-     "promises", "atoms", "threads", "graph", "anchors"}
+     "promises", "atoms", "threads", "graph", "anchors", "segment_types"}
 )
 
 _SUBDIRS = (
@@ -144,6 +144,7 @@ def paths(project_id: str) -> dict[str, Path]:
         "threads": analysis / "threads.json",
         "graph": analysis / "graph.json",
         "anchors": analysis / "anchors.json",
+        "segment_types": analysis / "segment_types.json",
     }
 
 

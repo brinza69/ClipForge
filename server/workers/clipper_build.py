@@ -60,6 +60,39 @@ def _cache(project_id: str, name: str, stamp: dict, data: Any) -> None:
     storage.write_artifact(project_id, name, {"stamp": stamp, "data": data})
 
 
+def _segment_types(project_id: str, duration: float, transcript: dict) -> list[dict]:
+    """Per-stretch content types, checkpointed. [] when it cannot be worked out.
+
+    Never fatal: a source whose stretches cannot be classified scores exactly
+    as it did before this existed.
+    """
+    from services.clipper import segment_type as seg_type_mod
+
+    cached = storage.read_artifact(project_id, "segment_types")
+    if isinstance(cached, list) and cached:
+        return cached
+
+    paths = storage.paths(project_id)
+    frames = sorted(str(p) for p in paths["frames_dir"].glob("*.jpg"))
+    times = (storage.read_artifact(project_id, "faces") or {}).get("times") or []
+    signals = storage.read_artifact(project_id, "signals") or {}
+    if not frames or len(times) != len(frames) or duration <= 0:
+        return []
+    try:
+        out = seg_type_mod.classify_ranges(
+            frames, times, signals, transcript,
+            seg_type_mod.clock_ranges(duration))
+    except Exception:
+        logger.warning("clipper %s: per-stretch content typing failed; using "
+                       "the whole-file profile", project_id, exc_info=True)
+        return []
+    if out:
+        storage.write_artifact(project_id, "segment_types", out)
+        logger.info("clipper %s: %d stretches typed (%s)", project_id, len(out),
+                    ", ".join(sorted({str(s["content_type"]) for s in out})))
+    return out
+
+
 async def _fetch_transcript(project_id: str) -> dict[str, Any]:
     async with async_session() as session:
         result = await session.execute(
@@ -85,6 +118,8 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     from services.clipper import llm_select
     from services.clipper import promises as promises_mod
     from services.clipper import ranker, scoring, segmentation
+    from services.clipper import segment_type as seg_type_mod
+    from services.clipper.candidate_terms import _num
     from services.clipper import threads as threads_mod
 
     async with async_session() as session:
@@ -108,6 +143,16 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     regions = storage.read_artifact(project_id, "regions") or {}
     faces_blob = storage.read_artifact(project_id, "faces") or {}
     faces = faces_blob.get("samples") or []
+    # What each STRETCH of the source is, rather than what the file is. Every
+    # long live source labelled by hand runs two or three types in a row, so a
+    # single project-level answer is wrong for a third of the clips on them no
+    # matter how good the classifier gets. Measured on slice4h00test against
+    # the labels: the whole-file answer was right for 0 of 12 stretches, the
+    # per-stretch one for 9. Falls back to `profile` wherever a stretch is too
+    # short to classify, and the override still wins over everything.
+    seg_types: list[dict] = []
+    if not project.content_type_override:
+        seg_types = _segment_types(project_id, duration, transcript)
 
     # ── Pass B ──────────────────────────────────────────────────────────────
     await queue.update_progress(job_id, 0.05, "Building semantic segments")
@@ -220,7 +265,12 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
 
     for cand in refined:
         features = cand_mod.extract_features(cand, transcript, sig, duration)
-        scored = scoring.score_candidate(cand, features, profile=profile, platform=platform)
+        # The profile of the stretch this candidate sits in, at its midpoint.
+        here = seg_type_mod.type_at(
+            seg_types, (_num(cand.get("start")) + _num(cand.get("end"))) / 2.0,
+            profile)
+        cand["content_type"] = here
+        scored = scoring.score_candidate(cand, features, profile=here, platform=platform)
         cand["features"] = features
         cand["sub_scores"] = scored["sub_scores"]
         cand["reason"] = scored["reason"]
