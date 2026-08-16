@@ -232,6 +232,37 @@ Two things are visible without any switch, because neither changes a
 deliverable: the reasoning panel (the "why" button on a clip, §34) and the
 transcription progress message.
 
+## The first human judgement of a dynamic clip — 2026-08-16
+
+Someone watched one. Until now every property of the multi-shot edit had been
+measured and none had been judged.
+
+**Rhythm: good.** Nine cuts in eighteen seconds, and the shot grammar's
+1.80/3.00s rates hold up. Nothing to change.
+
+**Camera choice: nearly right.** The alternation between face and gameplay
+lands where it should.
+
+**The one fault: the gameplay shots crop away too much of the game.** This
+points at a specific constant. Both gameplay rungs are 9:16 slices of a 16:9
+frame, which is narrow by construction, but they differ:
+
+| rung | height | width from a 1920px frame |
+|---|---|---|
+| `game` (`game_height_pct` 0.86) | 86% | ~522px — 27% of the frame |
+| `game_tight` (`game_zoom` 0.64) | 64% | ~389px — 20% of the frame |
+
+The clip's plan was `fmgmGFmGg`; the two `G`s are `game_tight`, and that is
+almost certainly what was seen.
+
+**This is the one area where the nine references cannot help.** The recipe says
+so itself — none of them contains gameplay. So a viewer's judgement is the only
+evidence that exists for how tightly a game should be framed, and the style
+constants were never calibrated for it.
+
+NOT changed on one viewing. The cheap next step is an A/B: re-render the same
+clip with a wider `game_zoom` and compare, which costs twenty seconds.
+
 ## Known problems, in priority order
 
 ### 1. The dynamic editor is not wired in
