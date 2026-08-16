@@ -114,3 +114,44 @@ def test_a_candidate_outside_every_stretch_keeps_the_whole_file_answer():
 def test_a_stretch_too_short_to_classify_is_skipped():
     out = segment_type.classify_ranges(["a.jpg"], [1.0], {}, {}, [(0.0, 30.0)])
     assert out == []
+
+
+# ── regions per stretch ──────────────────────────────────────────────────────
+
+
+def test_a_stretch_with_too_few_frames_is_skipped():
+    """Below a handful of frames the face cluster cannot clear its own hit-rate
+    gate, and the answer would be "no facecam" for lack of evidence rather than
+    for lack of a facecam."""
+    from services.clipper.content_type import detect_regions_by_range
+
+    out = detect_regions_by_range(["a.jpg"] * 3, [1.0, 2.0, 3.0], [(0.0, 10.0)])
+    assert out == []
+
+
+def test_the_layout_at_a_time_beats_the_whole_file_answer(monkeypatch):
+    """A source whose arrangement changes has no single layout, and using the
+    averaged one crops a clip against a frame it was never in."""
+    from workers import clipper_render_jobs as jobs
+
+    disk = {
+        "regions_by_segment": [
+            {"start": 0.0, "end": 600.0, "webcam": None},
+            {"start": 600.0, "end": 1200.0, "webcam": {"x": 0, "y": 0, "w": 9, "h": 9}},
+        ],
+        "regions": {"webcam": {"x": 5, "y": 5, "w": 1, "h": 1}},
+    }
+    monkeypatch.setattr(jobs.storage, "read_artifact",
+                        lambda _pid, name: disk.get(name))
+    assert jobs._regions_for("p1", 300.0)["webcam"] is None
+    assert jobs._regions_for("p1", 900.0)["webcam"]["w"] == 9
+    # Outside every stretch, the whole-file answer is better than nothing.
+    assert jobs._regions_for("p1", 9999.0)["webcam"]["w"] == 1
+
+
+def test_no_per_stretch_regions_means_the_old_behaviour(monkeypatch):
+    from workers import clipper_render_jobs as jobs
+
+    monkeypatch.setattr(jobs.storage, "read_artifact",
+                        lambda _pid, name: {"webcam": "global"} if name == "regions" else None)
+    assert jobs._regions_for("p1", 5.0) == {"webcam": "global"}

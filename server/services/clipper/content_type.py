@@ -247,6 +247,10 @@ _FACECAM_PAD_W, _FACECAM_PAD_H = 2.6, 2.2
 # boundaries away from the frame run 6.0 to 71. 3.0 sits in the gap with room
 # on both sides.
 _FACECAM_EDGE_DOMINANCE = 3.0
+# Below this a stretch has too few frames for the face cluster to clear its own
+# hit-rate gate, and the answer would be "no facecam" for lack of evidence
+# rather than for lack of a facecam.
+_MIN_RANGE_FRAMES = 12
 
 
 def _step_profiles(grays: Sequence[Any]) -> tuple[Any, Any]:
@@ -501,6 +505,35 @@ def _find_hud(edges: Sequence[Any], diffs: Sequence[Any], fw: int, fh: int,
     rects = [r for r in (snap_rect(rect, fw, fh) for _, rect in top) if r]
     strength = clamp01(float(np.mean([s for s, _ in top])) / max(mean_edge * 2.5, 1e-6))
     return rects, round(strength, 3)
+
+
+def detect_regions_by_range(frames: Sequence[str], frame_times: Sequence[float],
+                            ranges: Sequence[tuple[float, float]]
+                            ) -> list[dict[str, Any]]:
+    """`detect_regions` per stretch of the stream, instead of once for the file.
+
+    Layout is detected ONCE for a whole source, and seven of the eleven sources
+    labelled by hand change layout part-way through. On slice4h00test the whole
+    file returns ONE facecam for a stream that demonstrably has two, because the
+    400 sampled frames are spread across four hours and the first 35 minutes are
+    a full-frame camera with no game in them. The detection blends two layouts
+    and fits neither.
+
+    Nothing about HOW a region is found changes here — the same function runs on
+    fewer frames at a time. The same source cut into 12-minute pieces already
+    finds both insets, which is what says the failure is the averaging.
+
+    Each entry is a regions blob with `start`/`end` added.
+    """
+    out: list[dict[str, Any]] = []
+    for start, end in ranges or []:
+        mine = [f for f, t in zip(frames, frame_times) if start <= t <= end]
+        if len(mine) < _MIN_RANGE_FRAMES:
+            continue
+        blob = detect_regions(mine)
+        blob["start"], blob["end"] = round(start, 2), round(end, 2)
+        out.append(blob)
+    return out
 
 
 def detect_regions(frames: list[str]) -> dict[str, Any]:

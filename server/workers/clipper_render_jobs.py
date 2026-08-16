@@ -124,6 +124,20 @@ def _plan_fits(plan: Any, src_w: int, src_h: int) -> bool:
     return True
 
 
+def _regions_for(project_id: str, t: float) -> dict:
+    """The on-screen layout at time `t`, falling back to the whole-file answer.
+
+    A source whose arrangement changes has no single layout, and using the
+    averaged one crops a clip against a frame it was never in.
+    """
+    for blob in (storage.read_artifact(project_id, "regions_by_segment") or []):
+        if not isinstance(blob, dict):
+            continue
+        if float(blob.get("start") or 0.0) <= t <= float(blob.get("end") or 0.0):
+            return blob
+    return storage.read_artifact(project_id, "regions") or {}
+
+
 def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
     """Use the stored plan; fall back to a centre crop if analysis never produced
     one (e.g. an alternative the user promoted by hand)."""
@@ -138,7 +152,8 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
             clip.id, src_w, src_h)
     from services.clipper import layout as layout_mod
 
-    regions = storage.read_artifact(project.id, "regions") or {}
+    regions = _regions_for(project.id, (float(clip.start_time or 0.0)
+                                       + float(clip.end_time or 0.0)) / 2.0)
     faces_blob = storage.read_artifact(project.id, "faces") or {}
     cfg = project.clipper_settings or {}
     return layout_mod.plan_layout(

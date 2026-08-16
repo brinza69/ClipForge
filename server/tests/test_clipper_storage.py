@@ -50,6 +50,7 @@ def test_paths_exposes_the_contract_keys(clipper):
         "promises", "atoms", "threads", "graph",
         "anchors",
         "segment_types",
+        "regions_by_segment",
     }
     assert p["proxy"].name == "proxy.mp4"
     assert p["audio"].name == "speech.wav"
