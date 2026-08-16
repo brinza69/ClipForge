@@ -186,6 +186,35 @@ def _speech_ratio(words: Sequence[dict], clip_start: float,
     return min(1.0, covered / span), " ".join(said).strip()
 
 
+def _merge_dead_cuts(shots: list[dict]) -> list[dict]:
+    """Join neighbours that crop the identical rectangle.
+
+    A cut is only a cut if the picture changes. Two adjacent shots on the same
+    rect give the viewer a beat where the edit claims something happened and
+    nothing did, which reads worse than not cutting at all.
+
+    This became reachable when the gameplay ladder collapsed: with
+    `game_height_pct` and `game_zoom` both at 1.00 the `game` and `game_tight`
+    rungs are the same rectangle, so a g->G step is a dead cut. Measured on the
+    18s reference clip, it removes exactly one cut at that setting and none at
+    the two wider ladders — this is not a general reshaping of the edit.
+
+    The later shot's `snap` goes with it: a snap exists to land a cut.
+    """
+    if len(shots) < 2:
+        return shots
+    out = [shots[0]]
+    for shot in shots[1:]:
+        last = out[-1]
+        if all(last["rect"][k] == shot["rect"][k] for k in ("x", "y", "w", "h")):
+            last["t1"] = shot["t1"]
+            continue
+        out.append(shot)
+    for i, shot in enumerate(out):
+        shot["index"] = i
+    return out
+
+
 def _rung(family: Sequence[str], energy: float,
           thresholds: Sequence[float]) -> str:
     """Which rung of a family this shot's energy earns, widest first.
@@ -436,6 +465,8 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             "speech": round(ratio, 3),
             "text": text[:120],
         })
+
+    shots = _merge_dead_cuts(shots)
 
     if not shots:
         warnings.append("The window was too short to cut; rendering it as one shot.")

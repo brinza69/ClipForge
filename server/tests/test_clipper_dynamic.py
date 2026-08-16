@@ -119,6 +119,35 @@ def test_adjacent_shots_never_share_a_camera():
         assert a["camera"] != b["camera"]
 
 
+def test_adjacent_shots_never_share_a_rect_either():
+    """The invariant above, checked on the geometry rather than the name.
+
+    The name check cannot see the case that actually shipped: with
+    `game_height_pct` and `game_zoom` both at 1.00 — the measured default since
+    the framing A/B — `game` and `game_tight` are two names for one rectangle,
+    so a g->G step passes the name check and cuts on nothing.
+    """
+    for style in ({}, {"game_height_pct": 1.0, "game_zoom": 1.0},
+                  {"game_height_pct": 0.86, "game_zoom": 0.64}):
+        shots = _plan(**style)["shots"]
+        for a, b in zip(shots, shots[1:]):
+            assert tuple(a["rect"][k] for k in ("x", "y", "w", "h")) != \
+                   tuple(b["rect"][k] for k in ("x", "y", "w", "h")), \
+                   f"a cut that changes nothing, at {b['t0']}s, style={style}"
+
+
+def test_merging_a_dead_cut_keeps_the_timeline_whole():
+    """Removing a cut must not remove any of the clip with it."""
+    merged = dynamic_edit._merge_dead_cuts([
+        {"index": 0, "t0": 0.0, "t1": 1.0, "rect": {"x": 0, "y": 0, "w": 10, "h": 20}},
+        {"index": 1, "t0": 1.0, "t1": 2.5, "rect": {"x": 0, "y": 0, "w": 10, "h": 20}},
+        {"index": 2, "t0": 2.5, "t1": 4.0, "rect": {"x": 8, "y": 0, "w": 10, "h": 20}},
+    ])
+    assert [s["index"] for s in merged] == [0, 1]
+    assert merged[0]["t0"] == 0.0 and merged[0]["t1"] == 2.5
+    assert merged[-1]["t1"] == 4.0
+
+
 def test_shot_lengths_stay_inside_the_configured_band():
     style = {"min_shot_s": 0.6, "target_shot_s": 1.25, "max_shot_s": 2.4}
     shots = _plan(**style)["shots"]

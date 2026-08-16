@@ -298,8 +298,32 @@ so itself — none of them contains gameplay. So a viewer's judgement is the onl
 evidence that exists for how tightly a game should be framed, and the style
 constants were never calibrated for it.
 
-NOT changed on one viewing. The cheap next step is an A/B: re-render the same
-clip with a wider `game_zoom` and compare, which costs twenty seconds.
+### The A/B, and what it settled — 2026-08-16
+
+Three renders of that same clip, identical shot list and captions, only the two
+framing keys moved:
+
+| | `game_height_pct` / `game_zoom` | tight rung | of frame width | what the viewer sees |
+|---|---|---|---|---|
+| A | 0.86 / 0.64 | 388px | 20.2% | no hotbar, no hearts |
+| B | 1.00 / 0.87 | 526px | 27.4% | the game HUD is in |
+| C | 1.00 / 1.00 | 606px | **31.6%** | all of it, plus a sliver of the stream's counter |
+
+**The owner chose C, and it is the default now.** 0.86 was there to skip the
+stream's top HUD and bottom bar and it did — along with the HUD of the GAME,
+which is the half a viewer needs to follow what is happening.
+
+**31.6% is a ceiling, not a setting.** At full frame height the width of a 9:16
+crop is fixed by the aspect ratio. If a gameplay shot still reads too tight,
+nothing in `DEFAULT_STYLE` will fix it — that needs a letterboxed game band,
+which is a different layout and a build rather than a tune.
+
+C also made a latent defect reachable: with both keys at 1.00 the `game` and
+`game_tight` rungs are the same rectangle, so a `g`->`G` step is a cut where the
+picture does not change. `test_adjacent_shots_never_share_a_camera` had asserted
+that invariant since the editor was written, but on the camera NAME, which
+cannot see two names for one rect. `_merge_dead_cuts` joins them.
+Measured: one cut removed at 1.00/1.00, none at either wider ladder.
 
 ## Facecam detection scored against the labels — 2026-08-16
 
