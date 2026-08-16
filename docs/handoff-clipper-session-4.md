@@ -1,15 +1,53 @@
-# Handoff — AI Stream Clipper, fourth session
+# Handoff — AI Stream Clipper, sessions 4 and 5
 
-Written 2026-08-14. Everything here was run on **this** machine and measured,
-not carried over. Supersedes `handoff-clipper-session-3.md`, which it corrects
-on one point (the branch had in fact been pushed).
+Session 4 written 2026-08-14, session 5 appended 2026-08-16. Everything here
+was run on **this** machine and measured, not carried over.
 
-Read `docs/story-engine.md` alongside this: it is the design document for the
-reasoning work, this is the state-of-the-world.
+**This is the state of the world.** For what every file is and where it lives,
+read `clipper-map.md` — it exists so nobody has to grep the tree again.
+
+## Contents
+
+**Current state**
+- [Built and OFF — the switches](#built-and-off--the-switches-and-what-is-behind-each) — three features exist and do nothing until turned on
+- [Session 5 — what shipped](#session-5--2026-08-16-what-shipped)
+- [What I would do next](#what-i-would-do-next--all-but-one-done-on-2026-08-16)
+- [Not built, from the upgrade spec](#not-built-from-the-upgrade-spec)
+
+**Known problems**, in priority order — [jump](#known-problems-in-priority-order)
+1. ~~The dynamic editor is not wired in~~ — FIXED
+2. Region detection is global — HALF FIXED, and the other half is understood
+3. Captions collide with in-game UI
+4. The facecam rect is too tall — measured
+5. Callback linking is validated only by mocks
+6. ~~Every clip ends on the last word~~ — FIXED
+7. ~~`context_debt` decided by one unverified string~~ — FIXED
+8. A portrait facecam cannot be detected — measured, six approaches failed
+9. The classifier called a gaming stream `talking_head` — improved, not solved
+10. Smaller
+
+**Measurements worth not repeating**
+- [The recurring lesson](#the-recurring-lesson-stated-once) — an absolute threshold on a busy source measures nothing
+- [The 4-hour run and the five faults it found](#the-4-hour-run-and-the-five-faults-it-found)
+- [Facecam detection scored against the labels](#facecam-detection-scored-against-the-labels--2026-08-16) — 7/8, and two more rules rejected
+- [The first human judgement of a dynamic clip](#the-first-human-judgement-of-a-dynamic-clip--2026-08-16)
+
+**Environment and traps**
+- [Environment](#environment) — including why the backend on 8420 is not yours
+- [Traps](#traps) — the things that will cost you an hour
+
+Older handoffs are history: `handoff-clipper-session-3.md`,
+`handoff-clipper-session-2.md`, `handoff-dynamic-edit.md`. They are still
+accurate about the code they describe.
 
 ---
 
-## The one thing to read first: the dynamic editor is not wired in
+## The one thing to read first: the dynamic editor is not wired in — FIXED 2026-08-16
+
+**Left as written because the diagnosis is the useful part.** It was fixed on
+2026-08-16: `dynamic_window.py` carries the per-window analysis into the
+pipeline and `handle_export` has a multi-shot branch, off by default. What
+follows is what the problem was.
 
 **You asked where the self-editing went. It was never connected.**
 

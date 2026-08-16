@@ -86,42 +86,56 @@ knowledge lives. Reformat over it and the next agent re-runs the same failed exp
 
 ## Key File Map
 
-Verified 2026-07-28. The old map listed `editor/[id]`, `routers/clips.py`, `scorer.py`,
-`exporter.py` and `workers/pipeline.py` — **none of those exist**; the clip-editor architecture was
-superseded by the remix/parallel pipelines. Don't trust a path here without checking it.
+**For the AI Stream Clipper, read `docs/clipper-map.md`.** It lists every file
+in the clipper, what it is for, and which document holds the reasoning — and it
+is verified against the tree rather than remembered. Four sessions in a row
+began by grepping to rediscover where things live.
+
+**When you add a clipper file, add it to that map in the same commit.** A map
+that is only mostly true is worse than none, because the next session trusts it
+and greps anyway. The map this replaced listed five files that did not exist.
+
+The rest of the app:
 
 ```
 clipforge/
 ├── src/
-│   ├── app/                         ← routes: remix, parallel, parallel-sheets, doodle,
-│   │   │                              tiktok, captions, transcript, tts, silence,
-│   │   │                              utilities, settings
+│   ├── app/                         ← routes: ai-stream-clipper, remix, parallel,
+│   │   │                              parallel-sheets, doodle, captions, transcript,
+│   │   │                              tts, silence, utilities, settings
 │   │   ├── doodle/[id]/page.tsx     ← wizard reference implementation
 │   │   └── tiktok/[id]/page.tsx     ← PLANNED, does not exist yet
 │   ├── components/
-│   │   ├── layout/sidebar.tsx       ← Nav items
-│   │   ├── doodle/                  ← wizard component patterns (progress-steps, actions)
+│   │   ├── layout/sidebar.tsx       ← nav items
+│   │   ├── clipper/                 ← see docs/clipper-map.md
+│   │   ├── doodle/                  ← wizard component patterns
 │   │   └── tiktok/                  ← PLANNED, does not exist yet
 │   ├── lib/api-error.ts             ← readApiError/errorDescription (use this everywhere)
-│   └── types/                       ← doodle.ts (tiktok.ts PLANNED; index.ts nearly empty)
+│   └── types/                       ← clipper.ts, doodle.ts (tiktok.ts PLANNED)
 ├── server/
 │   ├── models.py                    ← SQLAlchemy ORM + JobType enum
 │   ├── database.py                  ← DB setup + init_db() column migrations
 │   ├── job_queue.py                 ← JobQueue: register_handler/update_progress, 2 lanes
-│   ├── routers/                     ← jobs, utilities, doodle, remix, parallel, … (tiktok PLANNED)
+│   ├── routers/                     ← jobs, utilities, doodle, remix, parallel,
+│   │                                  clipper, clipper_clips (tiktok PLANNED)
 │   ├── services/
-│   │   ├── downloader.py            ← yt-dlp: validate_url/fetch_metadata/download_video
+│   │   ├── downloader.py            ← yt-dlp; cookies + JS runtime via CLIPFORGE_YTDLP_*
+│   │   ├── transcriber.py           ← faster-whisper in a killable worker
 │   │   ├── caption_overlays.py      ← LIVE ASS builder + preview frame + probe dims
 │   │   ├── captioner_presets.py     ← DEFAULT_PRESETS + 9:16 safe-zone constants
 │   │   ├── speed_match.py           ← compute_speed_plan (sync video to voice, 60 fps)
 │   │   ├── elevenlabs.py            ← synthesize() (speed clamped 0.7–1.2, returns MP3)
 │   │   ├── transcript_cleaner.py    ← multi-engine LLM + API-key storage
 │   │   ├── upscaler.py              ← Real-ESRGAN AI video upscale
+│   │   ├── clipper/                 ← see docs/clipper-map.md
 │   │   ├── doodle/                  ← storage.py (storyboard.json) + renderer
 │   │   └── tiktok_transform/        ← storage.py (project.json) + frames/vision/script/
 │   │                                  voice/subtitles/montage/thumbnails/description
-│   └── workers/                     ← remix_, parallel_, doodle_, utility_jobs (tiktok_ PLANNED)
-├── docs/clipforge-transformation-decisions.md  ← TikTok wizard contracts + decisions
+│   └── workers/                     ← clipper_pipeline, clipper_build,
+│                                       clipper_render_jobs, remix_, parallel_,
+│                                       doodle_, utility_jobs (tiktok_ PLANNED)
+├── docs/clipper-map.md              ← the clipper's file map — KEEP IT CURRENT
+├── docs/handoff-clipper-session-4.md ← state of the world, known problems, traps
 └── PRPs/                            ← Implementation blueprints for each feature batch
 ```
 
