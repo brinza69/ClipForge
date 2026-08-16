@@ -665,6 +665,21 @@ what the rest of the list was for.
 - The `game_zoom` crop, which a viewer said takes too much off the gameplay.
   One viewing is a start, not an answer; the A/B costs twenty seconds.
 
+**Session 6 — 2026-08-17**
+
+| | |
+|---|---|
+| The shot planner was never given the words | `_candidate()` passed four keys and `dynamic_edit` reads a fifth. `_boundaries` placed every cut on audio peaks and scene changes instead of speech pauses, and `_speech_ratio` reported the streamer silent in every shot of every clip ever exported. 11 shots with the words against the 9 that shipped. |
+| Gameplay framed as wide as the crop allows | `game_height_pct` and `game_zoom` both 1.00 after a three-way A/B. See the section above. |
+| Pass D, local half (§21–22) | `review.py`. Three checks, one per failure seen on a real export. Advisory, written to the export sidecar under `review`. |
+
+Pass D's own first run is the lesson worth keeping: **two of its three checks
+were wrong the first time they touched real data**, in ways no unit test would
+have caught. It compared proxy pixels to source pixels, and it judged the
+co-streamer's face against a crop framing the other person — reporting "100% of
+the face is outside the crop" on every clip it saw. Both are pinned by tests
+now. A checker needs checking.
+
 **Ground truth that now exists**
 
 `docs/source-labels.md` — eleven sources labelled by eye. Every threshold in

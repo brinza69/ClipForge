@@ -33,7 +33,7 @@ known problems live in `docs/handoff-clipper-session-4.md`.
 | | Semantic dedupe | Done |
 | | Hook latency | Done |
 | | Second efficiency | **Done** — `dead_air.py` (2026-08-16) |
-| **P2** | Multimodal Pass D | **Not built** |
+| **P2** | Multimodal Pass D | **Partial** — the local half is built (§21) |
 | | Diarization | **Not built** |
 | | Human pairwise feedback | **Not built** |
 | | Boundary learning dataset | **Not built** |
@@ -190,13 +190,50 @@ weighted higher; that is who decides a short.
 and shared words miss this. Diversity spreads across timeline, thread and
 archetype, all under one quality ceiling so it never rescues a weak clip.
 
-### §21 Pass D — multimodal review — **Not built**
-Nothing sees the *edited clip*. This is the largest remaining gap in the
-brief: a good moment can still be a bad clip because the payoff fell outside
-the crop or a subtitle covers the kill feed. Observed on a real export — a
-caption landed over the Minecraft inventory.
+### §21 Pass D — review — **Partial** (2026-08-17)
+`services/clipper/review.py`. Something looks at the CLIP now, not just the
+moment. Three checks, one per failure actually seen on an export: a caption
+sitting on a UI panel, a frame with nothing in it, and a crop that slices the
+head of the person it is framing.
 
-### §22 Pass D decisions (APPROVE / REJECT / REVISE) — **Not built**
+It runs BEFORE the encode, against the proxy. Reviewing the rendered file would
+be truer to the brief's wording, but a finding that arrives after a 12–24s
+render can only be reported and one that arrives before it can be acted on
+(§17). The geometry is exact either way — an output-frame strip maps back into
+the source crop by one scale factor.
+
+**Multimodal is the half still missing.** Nothing sends frames to a model, so
+"the payoff fell outside the crop" and "this is confusing" remain out of reach:
+they need a viewer, not a rule. The seam is `Finding` and `verdict` — a
+model-driven reviewer appends to the same list and nothing else changes. No
+vision engine is configured on this machine (`clipper_llm_engine` is empty).
+
+Measured on 12 real clips, 144 sampled frames: 6 APPROVE, 6 REVISE, and every
+check fires somewhere without any firing everywhere.
+
+Two limitations, both found by running it rather than reasoning about it:
+
+- **The UI-grey measure was validated at whole-frame scale, not on a strip.**
+  Flat mid-grey identifies a menu screen when a menu fills the frame; on a thin
+  caption band, grey stone terrain can reach the same share. One finding
+  inspected by eye is a true positive (the caption band over the stream's own
+  overlay bar), one is probably terrain. Raising the threshold does not fix it:
+  the true positive measured 0.29 and the suspected false one 0.29.
+- **The framing change is not the cause.** The full-height gameplay crop brings
+  the stream's bottom bar into frame, which looked like an obvious explanation
+  for caption/UI collisions. Measured: the OLD framing produces more of them
+  (6 against 4), so the hypothesis is refuted and recorded as refuted.
+
+### §22 Pass D decisions (APPROVE / REJECT / REVISE) — **Done, advisory**
+`review.verdict` over all findings, whoever produced them. REVISE means
+something can act on it — the caption can move; REJECT is for a clip that is
+mostly dead frames.
+
+**It reports, it does not block.** Whether a REJECT should stop an export is a
+product decision nobody has made, and a reviewer that silently swallowed clips
+would be a worse failure than the ones it catches. The verdict is written to the
+export sidecar under `review`, present even when clean — an absent key would be
+ambiguous between "reviewed and fine" and "never reviewed".
 
 ### §23 Speaker diarization — **Not built**
 Measured why the free path fails: mouth-region frame differencing at source
@@ -340,6 +377,8 @@ what a viewer must already know, reconstructs the earliest start that carries
 it, keeps the reaction, judges candidates against each other from three
 perspectives, and can explain every pick.
 
-What it still cannot do is **see**. Pass D is the missing half — a moment
-chosen perfectly can still ship as a bad clip, and nothing in the system
-currently looks at the rendered frame.
+What it still cannot do is **see** in the sense a person does. As of 2026-08-17
+something checks the clip before it ships (§21) — a caption on a UI panel, a
+blank frame, a sliced face — but those are rules over pixels. "The payoff
+happened outside the crop" and "this reads as confusing" need a viewer, and no
+vision model is configured. The seam for one is built and empty.

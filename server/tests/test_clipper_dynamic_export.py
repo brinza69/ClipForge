@@ -160,6 +160,29 @@ def test_a_clip_without_captions_still_plans():
     assert jobs._candidate(clip)["words"] == []
 
 
+def test_the_export_handler_reviews_the_cut():
+    """The assertion that catches the failure this repo has hit four times: a
+    structure that is built, tested, and read by nothing."""
+    import inspect
+
+    src = inspect.getsource(jobs.handle_export)
+    assert "_review" in src, "handle_export never reviews the cut it renders"
+    assert '"review"' in src, "the verdict never reaches the sidecar"
+
+
+async def test_the_face_track_never_reaches_the_sidecar(wired, monkeypatch):
+    """It rides on the plan so Pass D does not decode the window a second time,
+    and it is dozens of box coordinates that belong in no deliverable."""
+    dynamic_edit, _proxy = wired
+    monkeypatch.setattr(dynamic_edit, "plan_dynamic_edit", lambda *a, **k: {
+        "shots": [{"camera": "face"}, {"camera": "game"}], "warnings": []})
+
+    plan = await jobs._dynamic_plan(_Clip(), _Project(), 1920, 1080)
+    assert plan["_review_faces"], "the reviewer would have to decode again"
+    plan.pop("_review_faces", None)
+    assert all(not k.startswith("_") for k in plan)
+
+
 def test_the_multi_shot_path_is_off_by_default():
     """Every clip so far took the static path; turning this on changes what the
     deliverable looks like, so it is opted into."""

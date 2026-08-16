@@ -289,9 +289,37 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
     plan["src_w"], plan["src_h"] = src_w, src_h
     plan["band"] = list(window["band"])
     plan["faces_seen"] = dynamic_window.face_seen(window["faces"])
+    # Handed to Pass D so it does not decode the window a second time, and
+    # popped before the sidecar is written — the track is dozens of samples of
+    # box coordinates and belongs in neither the plan nor the deliverable.
+    plan["_review_faces"] = window["faces"]
     for warning in plan.get("warnings") or []:
         logger.info("clip %s dynamic edit: %s", clip.id, warning)
     return plan
+
+
+async def _review(clip: ClipModel, project: ProjectModel, plan: dict) -> dict:
+    """Pass D over the planned cut. Advisory: it reports, it does not block.
+
+    Whether a REJECT should stop an export is a product decision nobody has
+    made, and a reviewer that silently swallowed clips would be a worse failure
+    than the ones it catches. So the verdict is recorded on the sidecar and
+    logged, and the export proceeds.
+    """
+    import asyncio
+
+    from services.clipper import review as review_mod
+
+    paths = storage.paths(project.id)
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: review_mod.review_plan(
+            paths["proxy"], plan, clip.caption_plan,
+            clip_start=float(clip.start_time or 0.0),
+            faces=plan.get("_review_faces") or (),
+            src_w=int(project.width or 1920)),
+    )
 
 
 async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
@@ -348,6 +376,26 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
             logger.warning("clip %s: dynamic planning failed, falling back to "
                            "the static layout", clip.id, exc_info=True)
             dyn = None
+
+    # Pass D. It runs BEFORE the encode on purpose: a finding that arrives after
+    # a 12-24s render can only be reported, one that arrives before it can be
+    # acted on. Only the multi-shot path is reviewed, because that is the path
+    # that makes visual decisions nothing else checks.
+    review_result = None
+    if dyn:
+        await queue.update_progress(job_id, 0.15, "Reviewing the cut")
+        try:
+            review_result = await _review(clip, project, dyn)
+            if review_result["findings"]:
+                logger.info("clip %s: review says %s — %s", clip.id,
+                            review_result["verdict"],
+                            "; ".join(f["detail"] for f in review_result["findings"][:3]))
+        except Exception:
+            # Advisory, and it stays advisory: a reviewer that crashes must not
+            # cost the export it was meant to improve.
+            logger.warning("clip %s: review failed", clip.id, exc_info=True)
+        finally:
+            dyn.pop("_review_faces", None)
 
     out = storage.export_path(project_id, clip.id)
     try:
@@ -416,6 +464,11 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
                 # static layout_plan above is still written either way, because
                 # it is what a re-render falls back to.
                 "dynamic_plan": dyn,
+                # Pass D's verdict on this exact cut. Written whether or not it
+                # found anything: "APPROVE, twelve frames sampled" is a fact
+                # about the file, and an absent key would be ambiguous between
+                # "clean" and "never reviewed".
+                "review": review_result,
                 "caption_plan": clip.caption_plan,
                 "content_type": clip.content_type,
                 "analysis_version": project.analysis_version,

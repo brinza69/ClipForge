@@ -89,6 +89,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `dedupe.py` | overlap, text and same-payoff grouping; diversity across time, thread and archetype |
 | `ranker.py` | the learned ranker. Complete, dormant, needs 40 labelled clips |
 | `feedback.py` | recording what the user did with a clip |
+| `review.py` | Pass D (§21–22): what the CLIP looks like, checked before the encode |
 
 ### Models
 
@@ -170,6 +171,7 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_story.py` (story engine, promises, callbacks) ·
 `test_clipper_atoms.py` · `test_clipper_threads.py` · `test_clipper_episodes.py` ·
 `test_clipper_dead_air.py` · `test_clipper_segment_type.py` ·
+`test_clipper_review.py` ·
 `test_clipper_content_features.py` · `test_clipper_dynamic.py` ·
 `test_clipper_dynamic_export.py` · `test_clipper_llm_select.py` ·
 `test_clipper_ranker.py` · `test_clipper_render.py` · `test_clipper_signals.py` ·
