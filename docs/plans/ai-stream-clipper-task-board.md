@@ -96,7 +96,7 @@ Legend for dependencies: a task cannot start until everything in *Depends on* is
 | 10.1 | Unit + integration tests | Test & Security | done | all | `server/tests/test_clipper_*.py` | 8 files; 208 passing incl. 15 API integration tests |
 | 10.2 | `.env.example` + runbook + CLAUDE.md update | Docs & Release | done | all | root + `docs/` | Every new env var documented |
 | 10.3 | Quality gates | Lead | done | 10.1 | — | pytest 212 passed / 2 pre-existing failures · `tsc --noEmit` clean · eslint 0 errors · `next build` compiled in 71s with both routes emitted |
-| 10.4 | Commit, push, draft PR | Lead | **not done** | 10.3 | — | Committed locally on `claude/ai-stream-clipper`; **not pushed** |
+| 10.4 | Commit, push, draft PR | Lead | done | 10.3 | — | Pushed on `claude/ai-stream-clipper`. PR #27 merged 2026-08-10; PR #29 open since 2026-08-16 with everything after it. |
 
 ---
 

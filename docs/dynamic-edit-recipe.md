@@ -105,8 +105,9 @@ From `8cO8UWyjGyc` and `8-eCvn1gWIg` (the two that have them):
   clip uses cyan/pink/yellow to code who is speaking.
 - No fade. Cards swap instantly.
 
-Mapped to: `build_caption_plan(position="center", max_words=2)` — the
-`SAFE_CAPTION_CENTER` constant already puts the block at 43.75% of 1920 — and
+Mapped to: `build_caption_plan(position="center", max_words=2)` — which puts the
+block at `CLIPPER_CAPTION_CENTER_PCT`, **51%** of frame height since the full nine
+were measured (see §10) — and
 the `words` key added to each chunk, which makes `build_overlays_ass` emit one
 event per word with the active word recoloured and scaled to 112%.
 
@@ -220,8 +221,8 @@ Stated so nobody goes looking for it in the code:
 
 | key | value | why |
 |---|---|---|
-| `target_shot_s` | 1.25 | median shot of the two fast references is 1.08s |
-| `min_shot_s` / `max_shot_s` | 0.60 / 2.40 | p10-p90 of the fast references |
+| `target_shot_s` | 1.80 | was 1.25, from the two fast references alone; re-cut against all nine, whose real spread is 17-45 cuts/min |
+| `min_shot_s` / `max_shot_s` | 0.60 / 3.00 | max was 2.40 for the same reason |
 | `max_same_family` | 2 | the model clip never sits on one subject longer |
 | `flash_s` | 0.18 | `Cfpc04Tpc4k` measured 0.28s; shortened because ours fire on audio peaks, which are more frequent than its two transitions |
 | `saturation` / `contrast` | 1.16 / 1.07 | eyeballed against the references, NOT measured |
@@ -267,10 +268,13 @@ python scripts/render_dynamic_clip.py <project> --top 3 \
   off-screen at that moment. The three single-speaker clips use colour for emphasis
   instead. This is the house rule, not an idea — and it still needs diarisation,
   so it stays out of reach for now.
-- **Caption vertical position: 43% is wrong.** Seven measurements: 50.0 / 50.2 /
-  51.1 / 53 / 62.5 / 73.5 / 77.9% of frame height. Four of seven cluster at 50-53%.
-  `--caption-pos center` currently resolves to 43.75% via `SAFE_CAPTION_CENTER`,
-  above every reference. Nothing in the set supports it. Untested against retention.
+- ~~**Caption vertical position: 43% is wrong.**~~ Fixed on the clipper path.
+  Seven measurements: 50.0 / 50.2 / 51.1 / 53 / 62.5 / 73.5 / 77.9% of frame
+  height, four of seven clustering at 50-53%. `captions.CLIPPER_CAPTION_CENTER_PCT`
+  is now **0.51**. The shared `SAFE_CAPTION_CENTER` still yields 43.75% and is
+  unchanged — the legacy captioner and `layout_geom`'s reported `caption_center`
+  read it, so the two paths genuinely differ and the 43.75% you may find in the
+  code is not a leftover. Still untested against retention.
 - **Add a framing ladder.** The two locked-off stream references punch in on
   discrete steps of roughly 1.00 / 1.10 / 1.25 / 1.40x and never animate between
   them. `dynamic_edit.py` has no ladder concept.

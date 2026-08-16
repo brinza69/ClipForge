@@ -237,8 +237,14 @@ dominates at $10/1M against $2.50 input, which is why the judge is asked for
 scores and eight-word reasons, never prose.
 
 ### §30 Prompt versioning — **Done**
-`anchor_v1`, `judge_v2_comparative`, `promises_v1`, `story_v1`, `atoms_v1`,
-`threads_v1`. Persisted in the `reasoning` column.
+`anchor_v1`, `judge_v2_comparative`, `promises_v2`, `story_v1`, `atoms_v1`,
+`threads_v1`, `episodes_v1`, `segment_type_v1`. Persisted in the `reasoning`
+column.
+
+`promises_v2` is the version doing its job: v1 asked for statements that create
+an expectation and got goals — 8 of the 12 setups on the 4-hour run were "I'm
+going to the gym", which no one would clip. v2 requires a `stake` and quotes
+those false positives back at the model.
 
 ### §31 Structured output — **Done**
 JSON with a tolerant parser (code fences, prefaces) and per-field validation.
@@ -324,7 +330,7 @@ upgrade. They are in the session-4 handoff in full; briefly:
 
 ## Honest summary
 
-**P0 complete, P1 five of seven, P2 and P3 untouched.**
+**P0 complete, P1 seven of seven, P2 and P3 untouched.**
 
 Everything marked Done was verified by running it on a real source, except
 callback linking, which has only ever fired against mocks.
