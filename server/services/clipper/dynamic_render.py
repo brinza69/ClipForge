@@ -61,6 +61,22 @@ MIN_OUTPUT_BYTES = 1024
 LOUDNESS_I = -14.0
 LOUDNESS_TP = -1.5
 
+# Delivery sample rate. The source is 48 kHz and so is every platform; this
+# constant exists because loudnorm leaves the stream at its own internal rate
+# and something has to put it back.
+AUDIO_RATE = 48000
+
+# The ceiling loudnorm's TP argument only aims at. `alimiter` takes it linearly:
+# 0.84 is -1.51 dBFS, matching LOUDNESS_TP.
+#
+# `level=false` in the filter string is load-bearing and is NOT the default.
+# `alimiter` auto-levels its output back up to the ceiling unless told not to,
+# which means the default limiter does the opposite of limiting: measured on the
+# same 18s clip it returned a peak of +0.07 dBFS and dragged the integrated
+# loudness to -11.8 LUFS, undoing the loudnorm in front of it. With it off:
+# -1.47 dBFS and -13.3 LUFS.
+LIMITER_CEILING = 0.84
+
 
 # ---------------------------------------------------------------------------
 # geometry per shot
@@ -304,8 +320,26 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
         # That is a compressor doing most of the work, so normalising alone
         # would leave the clip sounding limp next to them; the compander runs
         # first and loudnorm just parks the result at the platform target.
+        #
+        # The two filters after loudnorm are not decoration. Measured on a
+        # delivered clip, the chain WITHOUT them produced a true peak of
+        # +0.2 dBFS against the -1.5 asked for, and a 96 kHz output:
+        #
+        #   * loudnorm in single pass is a DYNAMIC normaliser. Its TP argument
+        #     is a target it aims at over a lookahead window, not a ceiling it
+        #     guarantees, and on an 18s clip it missed by 1.7 dB. `alimiter` is
+        #     the guarantee. `limit` is linear, so 0.84 is about -1.5 dBFS.
+        #   * loudnorm also resamples internally to 192 kHz and does not
+        #     restore the input rate, so the encoder negotiated the highest
+        #     rate AAC accepts. 192 kbit/s then paid for a band nobody can
+        #     hear instead of the one they can, which is a quality LOSS
+        #     dressed as a bigger number. `aresample` puts it back to the
+        #     48 kHz the source and every platform use.
         cmd += ["-af", f"acompressor=threshold=-20dB:ratio=4:attack=5:release=120:makeup=2,"
-                       f"loudnorm=I={LOUDNESS_I}:TP={LOUDNESS_TP}:LRA=4"]
+                       f"loudnorm=I={LOUDNESS_I}:TP={LOUDNESS_TP}:LRA=4,"
+                       f"aresample={AUDIO_RATE},"
+                       f"alimiter=limit={LIMITER_CEILING}:level=false:"
+                       f"attack=5:release=50"]
     cmd += [
         "-c:v", "libx264",
         "-preset", str(preset),

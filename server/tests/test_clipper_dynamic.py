@@ -376,6 +376,28 @@ def test_audio_is_compressed_before_it_is_normalised():
     assert chain.index("acompressor") < chain.index("loudnorm")
 
 
+def test_the_delivered_rate_is_restored_after_loudnorm():
+    """loudnorm resamples internally to 192 kHz and does not put it back, so
+    the encoder negotiated the highest rate AAC accepts and 192 kbit/s paid for
+    a band nobody can hear. Every clip shipped at 96 kHz until this was
+    measured on a delivered file."""
+    chain = _cmd()[_cmd().index("-af") + 1]
+    assert f"aresample={dynamic_render.AUDIO_RATE}" in chain
+    assert chain.index("loudnorm") < chain.index("aresample")
+
+
+def test_the_limiter_is_the_ceiling_and_does_not_re_level():
+    """loudnorm's TP is a target it aims at, not a ceiling it guarantees — it
+    missed by 1.7 dB on an 18s clip and delivered +0.2 dBFS. And `alimiter`
+    auto-levels its output back UP by default, which measured +0.07 dBFS and
+    -11.8 LUFS: the default limiter undoes the normaliser in front of it."""
+    chain = _cmd()[_cmd().index("-af") + 1]
+    assert "alimiter" in chain
+    assert chain.index("loudnorm") < chain.index("alimiter")
+    assert "level=false" in chain, "alimiter auto-levels back to the ceiling"
+    assert f"limit={dynamic_render.LIMITER_CEILING}" in chain
+
+
 def test_hits_become_one_flash_term_each():
     plan = _plan()
     plan["hits"] = [1.0, 2.5, 4.0]
