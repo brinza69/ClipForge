@@ -342,6 +342,35 @@ tried and both are WORSE than doing nothing:
 So the aspect band is not the defect. It is the only thing currently rejecting
 runaway rects, which is why relaxing it costs more than it gains.
 
+### A second instance, with an identical signature — 2026-08-16
+
+Jynxzi's stream has a bottom-left inset (labelled by eye) and detection returns
+none, exactly like the EARLY STREAM source. Both fail the same way:
+
+| | EARLY STREAM | Jynxzi |
+|---|---|---|
+| cluster hits / rate | 32 of 40, **0.80** | 32 of 40, **0.80** |
+| rect from `_snap_inset` | (0, 12, 220, 256) | (0, 0, 158, 270) |
+| frame | 480x270 | 480x270 |
+| rejected by | area, aspect | area, aspect |
+
+**Two independent sources with the same signature is the new signal session 3
+asked for.** It is not a quirk of one stream: on both, the strongest face
+cluster this detector ever produces yields a rect spanning nearly the FULL
+FRAME HEIGHT.
+
+**A lead, and a measurement that was aimed at the wrong edge.** The bottom-edge
+search runs rows 212-270 and 219-270 with a peak-over-median of 1.75 and 1.92
+against the 3.0 `_FACECAM_EDGE_DOMINANCE` bar, so it falls through to the frame
+border. But these insets are BOTTOM-left: their bottom edge probably IS the
+frame bottom, which would make 270 the right answer and the TOP edge the one
+running away — it lands at y=0 and y=12 where the inset plausibly starts around
+y=130.
+
+So the next thing to measure is the BACKWARD (top) edge search, not the forward
+one. Recorded rather than guessed at, because the difference decides whether
+`_FACECAM_EDGE_DOMINANCE` is even involved.
+
 ### What the one remaining failure actually is
 
 On the EARLY STREAM gaming stretch the face cluster is as strong as this

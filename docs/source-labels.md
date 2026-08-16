@@ -81,8 +81,13 @@ decides the weights for everything else.
 ## The sources
 
 One block each. Replace the `?` lines; leave a block alone if you have not got
-to it. The last three are downloaded but not yet ingested — they are here
-because labelling them costs the same look.
+to it. All eleven are now processed; the last three finished on 2026-08-16 and their
+project ids are in their blocks.
+
+Scored against these labels, whole-file: content type is right on 3 of 11,
+facecam on 9 of 11. The two facecam misses — EARLY STREAM and Jynxzi — are the
+SAME defect with an identical signature, which is written up in the session-4
+handoff.
 
 ```
 39c89ae2e16e   IShowSpeed — EARLY STREAM, 4h24m, live
@@ -153,6 +158,7 @@ ee0e599b3ecb   Turul apartamentului — 42m, edited, Romanian
             `face_count` reads 1 and `two_up` never fires.
 
 7dcTiO0491E    Kai Cenat — Streamer University, 1h52m, live, 4K60
+  project   9a414e1f8a86  (ingested, transcribed, analysed 2026-08-16)
   content   0-112    irl / variety
   facecam   none for almost all of it — an inset appears around 94-98 min only
   changes   yes
@@ -166,6 +172,7 @@ ee0e599b3ecb   Turul apartamentului — 42m, edited, Romanian
             facecam — a face detector has dozens of small faces to trip on.
 
 4FfnxFDr1rE    IShowSpeed — IRL World Cup, 3h03m, live
+  project   e84693f38e2b  (ingested, transcribed, analysed 2026-08-16)
   content   0-183    irl
   facecam   fullscreen — a phone IRL stream; there is no inset, only the camera
   changes   no  — the place changes, the arrangement does not
@@ -174,6 +181,7 @@ ee0e599b3ecb   Turul apartamentului — 42m, edited, Romanian
             find nothing here, not invent an inset.
 
 bRnJmeYk6X4    Jynxzi — Late Night Stream, 3h33m, live
+  project   5f4c2770254d  (ingested, transcribed, analysed 2026-08-16)
   content   0-55     commentary
   content   55-80    talking_head   (two people on camera)
   content   80-205   gaming
