@@ -263,6 +263,60 @@ constants were never calibrated for it.
 NOT changed on one viewing. The cheap next step is an A/B: re-render the same
 clip with a wider `game_zoom` and compare, which costs twenty seconds.
 
+## Facecam detection scored against the labels — 2026-08-16
+
+With eleven sources labelled by eye there is finally a scoreboard. Restricted
+to the stretch where each source's truth is stable (a source whose camera
+changes mid-stream has no single correct answer for the whole file):
+
+| source | want | got | |
+|---|---|---|---|
+| IShowSpeed EARLY, gaming part | 1 | 0 | ✗ |
+| moistcr1tikal, left edge mid-height | 1 | 1 | ✓ |
+| Minecraft 4h, after the gym | 2 | **2** | ✓ |
+| Minecraft 12m | 2 | 2 | ✓ |
+| gym 12m, fullscreen | 0 | 0 | ✓ |
+| go ghost, edited | 0 | 0 | ✓ |
+| apartament, edited | 0 | 0 | ✓ |
+| Jensen Huang, edited | 0 | 0 | ✓ |
+
+**7 of 8, which is far better than this file assumed.** Two things it settles:
+
+- **The 4-hour source DOES give both facecams** when detection is confined to
+  the stretch that has them. Known problem #2 is a framing problem, not a
+  detector problem — and it is why the 20-minute stretches F1b uses are too
+  short here: 33 frames per stretch against 330 for the whole gaming run, and
+  the second cluster cannot clear its hit-rate gate on 33.
+- **The edited sources are right for the right reason.** `webcam: None` on all
+  three.
+
+### Two more rules scored and rejected
+
+Session 3 scored four edge-picking rules and told the next person not to
+re-litigate without a new signal. The labels are that signal. Two more were
+tried and both are WORSE than doing nothing:
+
+| rule | result |
+|---|---|
+| widen `_WEBCAM_ASPECT` to (0.55, 2.0) so a portrait inset can pass | **5/8** — does not fix the portrait source, and two edited sources start reporting invented insets of 188x182 and 134x188 |
+| try the edge search widest-first and keep the first reach whose rect is a plausible inset | **6/8** — does not fix it either, and adds a 200x168 false positive on moistcr1tikal |
+
+So the aspect band is not the defect. It is the only thing currently rejecting
+runaway rects, which is why relaxing it costs more than it gains.
+
+### What the one remaining failure actually is
+
+On the EARLY STREAM gaming stretch the face cluster is as strong as this
+detector ever gets — **32 hits in 40 frames, rate 0.80** — and `_snap_inset`
+grows it into **220x256**, 44% of the frame, against a real inset of about
+120x138. The rect is wrong before any gate sees it; the gates then reject it,
+and a facecam found with high confidence is reported as none.
+
+That is six approaches now that do not fix this edge, four from session 3 and
+two here. It needs something other than a better rule over the same gradient
+profile — the seed, or a different signal entirely. **Do not spend another
+session widening bounds.**
+
 ## Known problems, in priority order
 
 ### 1. The dynamic editor is not wired in
