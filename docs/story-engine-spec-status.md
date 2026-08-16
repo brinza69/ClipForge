@@ -27,12 +27,12 @@ known problems live in `docs/handoff-clipper-session-4.md`.
 | | Archetypes | Done |
 | | Candidate variants | Done |
 | **P1** | Comparative ranking | Done |
-| | Story memory | Partial — atoms + threads, no episode hierarchy |
+| | Story memory | **Done** — atoms + threads + episodes (2026-08-16) |
 | | Story threads | Done |
 | | Promises / callbacks | Done, mocks only |
 | | Semantic dedupe | Done |
 | | Hook latency | Done |
-| | Second efficiency | **Not built** |
+| | Second efficiency | **Done** — `dead_air.py` (2026-08-16) |
 | **P2** | Multimodal Pass D | **Not built** |
 | | Diarization | **Not built** |
 | | Human pairwise feedback | **Not built** |
@@ -41,7 +41,9 @@ known problems live in `docs/handoff-clipper-session-4.md`.
 | | Post-publish learning | **Not built** |
 | | Advanced learned ranker | Exists, dormant — needs 40 labels |
 
-**P0 is complete. P1 is 5 of 7.** P2 and P3 are untouched.
+**P0 is complete. P1 is 7 of 7 as of 2026-08-16** — story memory and second
+efficiency were the two open ones. P2 and P3 remain untouched apart from the
+frontend inspection panel (§34), which is built.
 
 ---
 
@@ -55,13 +57,22 @@ Boundaries are sentences, not a clock grid.
 
 Measured: 63 atoms over the 12-minute slice, none outside the length bound.
 
-### §2 Stream understanding — **Partial**
-Built: atoms, threads, and chunked prompting so no pass ever sees 12 hours at
-once.
+### §2 Stream understanding — **Done** (2026-08-16)
+Atoms, threads, chunked prompting, and now episodes: `episodes.py` cuts the
+stream into stretches on the clock and labels each with the words that tell it
+apart from the others, by TF-IDF over the buckets. `anchor_prompt` puts the
+stretches that CLOSED before the current chunk in front of the model as
+background, with the instruction not to clip from them.
 
-**Not built:** the micro-episode → episode → global-state hierarchy. There is
-no rolling summary. A candidate at hour 7 gets its local chunk plus the open
-promises plus its thread — not an episode summary.
+No model call — the threads and atoms already held everything a summary needs.
+
+Two designs failed first and both are recorded in the module: cutting episodes
+where no thread had run for two minutes gave TWO episodes for four hours, and
+labelling by "the words the most arcs share" returned "don't, it's, right,
+can't". Measured on the 4-hour source, the finished labels line up with what is
+known to be in it — minute 3-23 reads "control, failure, push, workout" over
+the gym segment, 203-223 reads "drown, grown, sense, bubbles" over the argument
+the two best clips were cut from.
 
 ### §3 Story threads — **Done**
 `services/clipper/threads.py`, by lexical chaining over atoms. Consumed by
@@ -138,10 +149,18 @@ Present: `hook_strength`, `hook_latency`, `setup_ratio`, `payoff_strength`,
 `information_density`, `quoteability`, `visual_legibility`, `visual_payoff`,
 `second_efficiency`. The two visual ones need Pass D.
 
-### §15 Second efficiency / dead-second detector — **Not built**
-The `LATEST COMPLETE START + EARLIEST SATISFYING END` principle *is*
-implemented at the variant level. Per-second trimming inside a chosen window
-is not.
+### §15 Second efficiency / dead-second detector — **Done** (2026-08-16)
+`dead_air.py`. A silence is cut only when it holds no words (Whisper's word
+timings veto the RMS floor), is longer than a beat (`PAUSE_KEEP_S`, reused
+rather than re-decided), and is not at an edge the boundary rules own. A beat
+survives on each side so the two sides do not sound spliced.
+
+Cut with select/aselect inside the SAME encode, and the captions are remapped
+because libass positions absolutely. Off by default (`trim_silence`, which had
+sat in the settings dict for months with nothing reading it).
+
+Measured on 920 candidates: 298 get a cut, ~3.1s each. A listener called the
+result "audible, but fine" — a jump cut rather than a splice.
 
 ### §16 Features as evidence — **Done**
 The ~60-key vector is kept and used for detection, filtering and confidence.
@@ -237,8 +256,15 @@ New `clips.reasoning` JSON column, exposed through the API, carrying the
 anchor, payoff, required context, archetype, edit variant, thread, context
 debt, hook latency, the three verdicts, reject reasons and prompt versions.
 
-### §34 Frontend inspection UI — **Not built**
-All the data exists in `clips.reasoning`; nothing displays it.
+### §34 Frontend inspection UI — **Done** (2026-08-16)
+`ReasoningPanel`, opened from a "why" button that appears only on clips that
+have reasoning. Shows the anchor, the payoff, what a cold viewer must already
+know, the archetype, the winning variant, the three verdicts and the prompt
+versions. Timestamps are on the source clock, which is what makes them useful.
+
+Looking at it caught a bug no type could: hook latency is in seconds and had to
+be scaled to fill a 0..1 bar, and the first version printed the scaled value
+with an "s" after it — a 5-second hook read "0.50s".
 
 ### §35 Testing — **Done**
 421 passing. New suites: `test_clipper_story.py`, `test_clipper_atoms.py`,
@@ -260,12 +286,12 @@ The *logical* separation and the checkpoints the brief asks for exist: atoms,
 promises, threads and graph are separate artifacts written before the next
 step reads them, and any of them can be reused on a re-run.
 
-**Not done:** they are not separate job types. `clipper_understand`,
-`clipper_propose`, `clipper_rank` and `clipper_review` do not exist; all of it
-runs inside `clipper_score`. The brief explicitly allows this ("Dacă
-arhitectura reală sugerează că unele dintre aceste faze trebuie să rămână
-într-un singur job, este acceptabil"), but a failure mid-way now re-runs the
-whole scoring stage rather than resuming.
+**Still one job**, which the brief explicitly allows. What changed on
+2026-08-16 is the part that actually cost anything: anchors are checkpointed
+with a fingerprint of the prompt version, reasoning mode, engines and source
+length, so a re-run reuses them and a configuration change recomputes them. The
+judge is not checkpointed — it mutates the candidate list in place and returns
+a count, so caching it means changing its contract rather than wrapping it.
 
 ### §39 Rules not to be broken — **Respected**
 Checkpoints per stage; expensive analysis reads the proxy; the original is

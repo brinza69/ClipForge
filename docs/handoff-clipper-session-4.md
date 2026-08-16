@@ -524,18 +524,61 @@ learned ranker.
 
 ---
 
-## What I would do next
+## What I would do next — all but one done on 2026-08-16
 
-1. **Wire the dynamic editor into export.** Biggest gap, and the work is
-   mostly moving `render_dynamic_clip.py`'s per-window analysis into the
-   pipeline.
-2. **Region detection per segment**, not once globally. A long stream changes
-   layout and nothing notices.
+1. ~~**Wire the dynamic editor into export.**~~ **DONE.** `dynamic_window.py`
+   carries the per-window analysis into the pipeline and `handle_export` has a
+   multi-shot branch. Verified on a real export: 9 shots, 6 hit flashes, 21s.
+   Off by default (`dynamic_edit`).
+2. ~~**Region detection per segment.**~~ **DONE.** `regions_by_segment`, with
+   `_regions_for` giving each clip the layout of the stretch it sits in. The
+   first 40 minutes of the 4-hour source now correctly report no facecam
+   instead of being handed a Minecraft inset rect.
 3. **Spatial `game_ui_ratio`** → caption keep-out, plus the missing 55–75%
-   clamp from the style spec.
-4. **Watch three clips.** Every measurable property has been checked; the
-   subjective ones — does the opening hold you, does the pace work — have not,
-   and no script can.
+   clamp from the style spec. **Still open** — the only one of the four not
+   done.
+4. ~~**Watch three clips.**~~ **DONE**, and it was worth more than the rest of
+   the list put together. Four defects came out of looking rather than
+   measuring: clips ending on the last word's timestamp, `context_debt` decided
+   by one unverified string, the caption panel printing a scaled value with an
+   "s" after it, and `-t` letting ffmpeg read past the window to refill trimmed
+   seconds. All four passed every test that existed.
+
+---
+
+## Session 5 — 2026-08-16, what shipped
+
+Sixteen commits. The order matters: the labels came in the middle and changed
+what the rest of the list was for.
+
+**Built and wired**
+
+| | |
+|---|---|
+| Multi-shot export | The dynamic editor reaches `handle_export`. Off by default. |
+| Dead-air trimming (§15) | Wordless silences cut out of the middle in the same encode, captions remapped. Off by default. Measured: 298 of 920 candidates get a cut, ~3.1s each. |
+| Episodes (§2) | A late chunk is told what the stream has been about. No model call — threads and atoms already held it. The last P1. |
+| Reasoning panel (§34) | `clips.reasoning` had been written and served since the story engine shipped and nothing displayed a field of it. |
+| `content_type` per stretch | 0 of 12 stretches right on the 4-hour source, to 9 of 12. |
+| Regions per stretch | See item 2 above. |
+| Anchors checkpointed | With a fingerprint, so a prompt change recomputes instead of silently reusing. |
+| yt-dlp auth | Cookies and a JS runtime; without both, a public VOD returns storyboards only. |
+| Transcribe progress | The worker's own message reaches the queue instead of a constant "Transcribing". |
+| Test database | The suite ran against the real `clipforge.db`. It does not now. |
+| `scripts/export_clipper_state.py` | Transcripts to disk plus a manifest of what is already done. |
+
+**Measured and deliberately NOT changed**
+
+- The facecam aspect band. Two more rules scored against the labels, both worse
+  than leaving it alone (5/8 and 6/8 against 7/8). See the scoreboard above.
+- The `game_zoom` crop, which a viewer said takes too much off the gameplay.
+  One viewing is a start, not an answer; the A/B costs twenty seconds.
+
+**Ground truth that now exists**
+
+`docs/source-labels.md` — eleven sources labelled by eye. Every threshold in
+the detectors had been fitted to one Minecraft co-stream, and there was no way
+to tell a correct rule from one that happened to fit. There is now.
 
 ---
 
