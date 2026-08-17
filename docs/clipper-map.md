@@ -165,6 +165,7 @@ operations). Split to stay under the 500-line limit.
 | `scripts/render_dynamic_clip.py` | drive the multi-shot renderer by hand |
 | `scripts/build_dynamic_review.py` | the review page for a project's `dynamic/` |
 | `scripts/prune_clipper.py` | reclaim disk from finished projects. Dry-run by default; never touches exports or analysis |
+| `scripts/score_contribution.py` | weight x sd per sub-score — which one actually orders the board. Found dead features twice, three sessions apart |
 | `scripts/score_content_type.py` | the content classifier scored against `source-labels.md` — 6/11 |
 | `scripts/facecam_dataset.py` | 68 labelled candidate rects + what each feature separates |
 | `scripts/facecam_train.py` | the classifier that lost to `corner_proximity`, leave-one-source-out |

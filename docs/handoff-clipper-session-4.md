@@ -764,10 +764,22 @@ were WRONG the first time they touched real data. The vision half is one model,
 one prompt, no versioned eval, judged on six clips, and non-deterministic.
 
 **7. Features that measure nothing look exactly like features that do.**
-`speech_ratio` is 0.90–1.00 on every source; `laughter_score` is 0 everywhere
-while `emotion` holds 8% of the gaming profile; callbacks fired 6 times in 927
-candidates. A score built from five live signals and three dead ones reads the
-same as one built from eight live ones.
+A score built from five live signals and three dead ones reads the same as one
+built from eight live ones, and nothing in the output says which it is.
+
+Three were dead and are not any more, all on 2026-08-17: `laughter_score` (a
+word list Whisper never satisfies → `vocal_bursts.py`), `speech_ratio` (the
+audio envelope, 0.863–1.000 on every source → the transcript, 0.276–0.918), and
+`platform_fit` (13% of all discrimination spent on duration → zero weight).
+
+**Still dead, with their measured contribution to the 16.22 points of spread
+the ranking has in total:** `technical` 0.10 and `safety` 0.24 — 4% of the
+profile between them for 2% of the work — and callbacks, which fired 6 times in
+927 candidates.
+
+Run `scripts/score_contribution.py` before believing any of this is current.
+It is weight × standard deviation per sub-score over real candidates, which is
+the measurement that found all three, twice, three sessions apart.
 
 **8. ~~Nothing prunes the disk~~ — CLOSED 2026-08-17.** `data/clipper` is past 56 GB and every project
 kept its source, proxy, audio, frames and exports forever. `scripts/prune_clipper.py`
@@ -1014,10 +1026,11 @@ Predicted before the run as one of three possible outcomes, and it is the worst
 of the three: a wrong answer given confidently enough to be used.
 
 ### 10. Smaller
-- `emotion` is flat (8% of the gaming profile, sd 4.1) because
-  `laughter_score` is 0 on every window — Whisper does not transcribe laughter
-  as "haha". Needs audio detection, not a word list. Do **not** drop the term:
-  that would reward its absence.
+- ~~`emotion` is flat because `laughter_score` is 0 on every window~~ —
+  FIXED 2026-08-17. It needed audio detection rather than a word list, and
+  dropping the term was never the answer because that rewards its absence.
+  `services/clipper/vocal_bursts.py`: loud, voiced, and wordless. emotion's sd
+  over 69 real candidates went 5.41 → 11.73.
 - The learned ranker is complete and dormant — it needs 40 labelled clips.
 - Real-ESRGAN: service written, binary not installed, not wired to the
   clipper. `unsharp` already took the cheap part of the gain.
