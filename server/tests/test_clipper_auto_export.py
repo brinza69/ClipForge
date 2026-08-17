@@ -129,3 +129,18 @@ def test_the_config_default_is_off():
     from config import Settings
 
     assert Settings().clipper_auto_export == 0
+
+
+def test_the_setting_survives_project_creation():
+    """`_normalise_settings` keeps only keys present in the defaults, so a key
+    added to the frontend and not to that dict is dropped in silence. This one
+    was — the checkbox posted `auto_export` and the API threw it away, and no
+    unit test of `_auto_export` could have shown it because the value never got
+    that far."""
+    from routers.clipper import _normalise_settings
+
+    assert _normalise_settings({"auto_export": 5})["auto_export"] == 5
+    assert _normalise_settings({})["auto_export"] == 0
+    # Clamped like clip_count: unattended render time needs a ceiling.
+    assert _normalise_settings({"auto_export": 999})["auto_export"] == 20
+    assert _normalise_settings({"auto_export": "nonsense"})["auto_export"] == 0
