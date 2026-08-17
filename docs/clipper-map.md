@@ -211,6 +211,7 @@ default. Full table in `handoff-clipper-session-4.md`.
 |---|---|---|
 | `dynamic_edit` | **ON** since 2026-08-17 | multi-shot export instead of one static split screen |
 | `trim_silence` | off | dead-air removal from inside a window (§15) |
+| `auto_export` | 0 (off) | render the top N as soon as scoring finishes, instead of stopping at the board. With the source form's "don't wait for me" box, a pasted link becomes finished files with no second visit |
 | `llm_select` + `reasoning_version: "story_v1"` | off | the story engine |
 
 `dynamic_edit` being on is what makes the rest of the multi-shot work reachable

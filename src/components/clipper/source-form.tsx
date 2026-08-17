@@ -102,6 +102,7 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
   const [lengthPreset, setLengthPreset] = useState<string>("standard");
   const [clipCount, setClipCount] = useState(8);
   const [rights, setRights] = useState(false);
+  const [handsOff, setHandsOff] = useState(false);
   const [advanced, setAdvanced] = useState(false);
 
   const [platform, setPlatform] = useState<TargetPlatform>("tiktok");
@@ -170,6 +171,8 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
       platform,
       language,
       layout_mode: layout,
+      // 0 keeps the old behaviour exactly: the run stops at the board.
+      auto_export: handsOff ? clipCount : 0,
     };
 
     setSubmitting(true);
@@ -192,6 +195,15 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
         return;
       }
       const project = (await r.json()) as { id: string };
+      // Hands-off means hands off. Making someone press "Start analysis" on the
+      // next screen is exactly the step this option exists to remove, and
+      // firing it here rather than on the project page keeps that page's
+      // behaviour unchanged for a normal run.
+      if (handsOff) {
+        await fetch(`${CLIPPER_API}/projects/${project.id}/analyze`, {
+          method: "POST",
+        }).catch(() => undefined);
+      }
       onCreated?.();
       router.push(`/ai-stream-clipper/${project.id}`);
     } catch (err) {
@@ -325,10 +337,34 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
             className="w-24"
           />
           <p className="text-[11px] text-muted-foreground">
-            The best {clipCount} moments, ranked. Nothing exports until you approve it.
+            The best {clipCount} moments, ranked.{" "}
+            {handsOff
+              ? "All of them render as soon as scoring finishes."
+              : "Nothing exports until you approve it."}
           </p>
         </div>
       </div>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border/50 p-3">
+        <input
+          type="checkbox"
+          checked={handsOff}
+          onChange={(e) => setHandsOff(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span className="space-y-1">
+          <span className="block text-xs font-medium">
+            Just make the clips — don&apos;t wait for me
+          </span>
+          <span className="block text-[11px] text-muted-foreground">
+            Starts the analysis immediately and renders the top {clipCount} the
+            moment scoring finishes, so a link turns into finished files with no
+            second visit. Off by default because rendering is the one stage that
+            costs real minutes and writes files — worth choosing rather than
+            being handed.
+          </span>
+        </span>
+      </label>
 
       <button
         type="button"

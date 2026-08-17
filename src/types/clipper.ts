@@ -112,6 +112,12 @@ export interface ClipperSettings {
   platform: TargetPlatform;
   fps: "source" | 30 | 60;
   language: string; // "auto" | "ro" | "en" | ...
+  /**
+   * Render the top N as soon as scoring finishes instead of stopping at the
+   * board. 0 is off and is the default — rendering costs minutes and writes
+   * files, so it is chosen rather than handed out.
+   */
+  auto_export: number;
 
   // Editing preferences
   caption_preset_id: string;
@@ -388,6 +394,7 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   platform: "tiktok",
   fps: 30,
   language: "auto",
+  auto_export: 0,
   caption_preset_id: "bold_impact",
   caption_position: "bottom",
   caption_highlight: true,

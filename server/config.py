@@ -149,6 +149,15 @@ class Settings(BaseSettings):
     # entirely and headlines fall back to deterministic extraction, so the
     # pipeline never fails just because an optional provider is missing.
     clipper_top_n_llm: int = 8
+    # Hands-off mode: render the top N clips as soon as scoring finishes,
+    # instead of stopping at the board and waiting for someone to pick.
+    #
+    # 0 = off, and off is the default because rendering is the one stage that
+    # costs real minutes and produces files on disk — doing that uninvited to
+    # someone who only wanted to see what the source contained is the wrong
+    # surprise. It is a per-project setting; the source form offers it up front,
+    # which is where a "paste a link and walk away" run is actually decided.
+    clipper_auto_export: int = 0
     clipper_llm_engine: str = ""
 
     # Export. crf 18 + slow is the single quality pass — crop, scale, stack and

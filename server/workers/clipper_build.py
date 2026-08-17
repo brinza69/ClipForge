@@ -21,7 +21,14 @@ from sqlalchemy import select, update
 from config import settings
 from database import async_session
 from job_queue import JobCancelledError
-from models import ClipModel, ClipStatus, ProjectModel, ProjectStatus, TranscriptModel
+from models import (
+    ClipModel,
+    ClipStatus,
+    JobType,
+    ProjectModel,
+    ProjectStatus,
+    TranscriptModel,
+)
 from services.clipper import storage
 from services.clipper.serialize import effective_content_type
 
@@ -396,11 +403,56 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         )
         await session.commit()
 
-    await queue.update_progress(job_id, 1.0, "Ready for review")
+    queued = await _auto_export(project_id, cfg, queue)
+    await queue.update_progress(
+        job_id, 1.0,
+        f"Rendering the top {queued}" if queued else "Ready for review")
     logger.info(
         f"clipper build for {project_id}: {len(winners)} candidates "
         f"({len(ranked) - len(winners)} alternatives), profile={profile}"
+        + (f", auto-exporting {queued}" if queued else "")
     )
+
+
+async def _auto_export(project_id: str, cfg: dict, queue) -> int:
+    """Queue renders for the best N clips, for a run nobody is watching.
+
+    The pipeline has always stopped here, and stopping here is right when a
+    person is going to look at the board: rendering is the one stage that costs
+    minutes and writes files, so doing it uninvited is the wrong surprise.
+
+    It is the wrong answer for the other use, which is pasting a link and
+    walking away. So the chain continues only when the project asked for it.
+
+    Alternatives are excluded. They exist so a human can compare two cuts of one
+    moment, and rendering both is exactly the duplication dedupe just removed.
+    """
+    try:
+        want = int(cfg.get("auto_export", settings.clipper_auto_export) or 0)
+    except (TypeError, ValueError):
+        want = 0
+    if want <= 0:
+        return 0
+
+    async with async_session() as session:
+        rows = await session.execute(
+            select(ClipModel.id)
+            .where(ClipModel.project_id == project_id,
+                   ClipModel.is_alternative.is_not(True),
+                   ClipModel.status == ClipStatus.candidate.value)
+            .order_by(ClipModel.overall_score.desc())
+            .limit(want)
+        )
+        clip_ids = [r[0] for r in rows]
+
+    for clip_id in clip_ids:
+        # One job each rather than one job for the batch: the export lane is
+        # bounded, a failed render should cost its own clip and not the rest,
+        # and the board fills in as they land instead of all at the end.
+        await queue.enqueue(project_id=project_id,
+                            job_type=JobType.clipper_export.value,
+                            clip_id=clip_id)
+    return len(clip_ids)
 
 
 async def _attach_headlines(winners: list[dict], cfg: dict, queue, job_id: str) -> None:

@@ -30,6 +30,13 @@ message and says so explicitly.
    the URL policy check and then yt-dlp metadata **without downloading**.
 2. Pick a clip length and a count, tick the rights box, **Create project**.
 3. **Start analysis** on the project page.
+
+   Or tick **"Just make the clips — don't wait for me"** in step 2 and skip
+   steps 3 and 5 entirely: the analysis starts on creation and the top N render
+   as soon as scoring finishes (`auto_export` in `clipper_settings`, 0 = off).
+   Everything still appears on the board; it is already rendered when you get
+   there. Alternatives are never auto-rendered — they exist so a person can
+   compare two cuts of one moment.
 4. Watch the stage list. Leaving the page is safe — progress lives in the
    `jobs` table, not in the browser.
 5. Review the ranked candidates, click a score to see the 16 sub-scores,
