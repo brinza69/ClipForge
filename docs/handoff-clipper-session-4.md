@@ -88,6 +88,19 @@ Unchanged from session 3 except where noted. `F:\ClipForge`, branch
 - **PR #27 was merged** on 2026-08-10. Everything since is unmerged on the
   branch; open a new PR.
 
+### A backend without `--reload` is running yesterday's code
+
+`.claude/launch.json` started uvicorn without `--reload` until 2026-08-17, and
+that cost the same twenty minutes twice in one session. Both times the symptom
+was a NEW setting arriving at the API as `None` — first `auto_export`, then
+`vision_review` — which looks exactly like the `_normalise_settings` whitelist
+bug that had just been fixed, and is not it. The server simply had no idea the
+key existed.
+
+`--reload` is in the config now. If a setting you just added comes back `None`,
+check that before touching the code: restarting the API is cheaper than
+re-diagnosing a bug you already fixed.
+
 ### The backend on port 8420 is not yours
 
 Two uvicorn processes claim it and the winner runs on the **system Python**,

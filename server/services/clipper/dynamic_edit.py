@@ -186,6 +186,12 @@ def _speech_ratio(words: Sequence[dict], clip_start: float,
     return min(1.0, covered / span), " ".join(said).strip()
 
 
+def _contains(rect: dict, x: float, y: float) -> bool:
+    """Is the point inside the rectangle."""
+    return (rect["x"] <= x <= rect["x"] + rect["w"]
+            and rect["y"] <= y <= rect["y"] + rect["h"])
+
+
 def _merge_dead_cuts(shots: list[dict]) -> list[dict]:
     """Join neighbours that crop the identical rectangle.
 
@@ -437,7 +443,20 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
         rect = dict(cams[camera])
         if camera in _FACE_CAMS:
             cx, cy = _centre_at(samples, t0, t1, fallback)
-            rect = _rect(0, rect["h"], cx, cy, CAMERAS[camera][1], src_w, src_h)
+            moved = _rect(0, rect["h"], cx, cy, CAMERAS[camera][1], src_w, src_h)
+            # A face shot whose crop does not contain the face is not a face
+            # shot. Re-centring per shot follows the subject, which is what it
+            # is for, but it follows THIS WINDOW'S detections — and the cluster
+            # centre is computed over the whole clip and is the stable one. When
+            # a window's detections are bad the crop walks off the inset the
+            # cluster had already located correctly.
+            #
+            # Found by Pass D on a real export, not by reading this: clip
+            # e8fa6b35ea66 shot 15 is `face_medium` at y=260 when the camera is
+            # at y=34 and the subject sits at cy=176. The frames are Minecraft
+            # dirt. Falling back to the camera rect is right because that rect
+            # is built around the cluster, which is the thing that was correct.
+            rect = moved if _contains(moved, face["cx"], face["cy"]) else dict(cams[camera])
         else:
             # Point the second camera at whatever actually moved in this shot,
             # falling back to the static action centre when nothing did.
