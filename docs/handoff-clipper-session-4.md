@@ -500,11 +500,59 @@ edge over the FOUND RECT instead, at bars from 1.3 to 1.7 and caps of 0.25 and
 0.30: **5/9, 5/9, 6/9, 4/9, 5/9, 6/9.** Never better than doing nothing.
 
 Eleven approaches have now failed on this edge, and the last two were the two
-best remaining ideas. **The next attempt should not be a rule over this gradient
-at all.** What has never been tried is a different signal: temporal stability of
-the rect itself across the source (an inset is pixel-locked, a phantom is not),
-or a small learned classifier over the candidate patch. Both are real work rather
-than a constant to tune, which is the honest reason neither has been attempted.
+best remaining ideas.
+
+### 8. THE ANSWER: those two facecams have no border — 2026-08-17
+
+Twelve approaches, and the reason all of them failed is not in any of them.
+
+The discriminator everything pointed at was the border: an inset is composited,
+so its edge exists all the way round and sits on the same pixels in every frame,
+where a rect grown around a face in an edited shot stops wherever some texture
+happened to be. Two measures were built and run before any gate was written —
+**coverage** (what fraction of the rect's perimeter is a gradient ridge) and
+**persistence** (in what share of frames the ridge is at that exact pixel):
+
+| rect | truth | coverage | persistence |
+|---|---|---|---|
+| Minecraft 12m | inset | 0.90 | 0.85 |
+| Minecraft 4h | inset | 0.91 | 0.72 |
+| moistcr1tikal | inset | 0.94 | 0.47 |
+| `go ghost` | none | 0.28 | 0.34 |
+| apartament | none | 0.67 | 0.73 |
+| **EARLY STREAM** | **inset** | **0.41** | **0.31** |
+| **Jynxzi** | **inset** | **0.44** | **0.84** |
+
+**The measure works.** Known insets score 0.90–0.94; a source with no facecam
+scores 0.28. It is not a bad signal.
+
+**The two failing sources score at phantom level.** Best case for any threshold
+over `coverage × persistence` is 10 of 13 rects, and the three it gets wrong are
+these two plus moistcr1tikal — 5 of 9 by source, below the 6 of 9 baseline.
+
+**Then look at the frames, which is what settles it.** Reproduce with
+`scratchpad/border_signal.py` or just crop the labelled rect out of a sampled
+frame. IShowSpeed's camera at that moment FILLS its region with chat composited
+straight over it, and Jynxzi's webcam sits on a game menu screen with **no drawn
+frame around it at all** — a borderless composite. Beside them the Minecraft
+inset has a hard rectangular edge you can see.
+
+**There is no border to find.** Every approach tried on this edge — four in
+session 3, two in session 5, six on 2026-08-17 — is a rule over a gradient, and
+on these two sources the gradient carries nothing, because nothing was drawn.
+That is not a tuning problem and no threshold reaches it.
+
+**So the correction to the entry above:** capping the reach appeared to "fix
+both failures outright" because the rects it produced landed in the right
+corner. Their border coverage is 0.41 and 0.44, at phantom level, so the edges
+were never on anything. That was position luck, not a fix.
+
+**What would actually work**, for whoever picks this up. A borderless facecam
+has to be found from the FACE, not from its frame: the cluster's own extent
+scaled by a factor, or a foreground/background separation over the region, or a
+small learned classifier on the candidate patch. All three are real work rather
+than a constant, and all three are more promising than a thirteenth rule over
+`gx`/`gy`. **Do not write another one.**
 
 ### What the one remaining failure actually is
 
