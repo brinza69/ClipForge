@@ -205,6 +205,17 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
             "track may be silent."
         )
 
+    # Chunks whisper could not finish. The transcriber has reported these since
+    # `_tolerant` stopped one bad chunk losing a whole 4-hour file, and nothing
+    # read them — so a transcript with holes went downstream looking complete,
+    # and every clip scored against a missing stretch was scored against silence
+    # that is not there. Recorded on the row and said out loud in the stage
+    # message, which is the only place a person is looking at this point.
+    failed_chunks = [int(c) for c in (result.get("failed_chunks") or [])]
+    if failed_chunks:
+        logger.warning("project %s: transcript is missing %d chunk(s): %s",
+                       project_id, len(failed_chunks), failed_chunks)
+
     async with async_session() as session:
         existing = await session.execute(
             select(TranscriptModel).where(TranscriptModel.project_id == project_id).limit(1)
@@ -219,6 +230,7 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
                     segments=segments,
                     full_text=result.get("full_text"),
                     word_count=result.get("word_count"),
+                    failed_chunks=failed_chunks or None,
                 )
             )
         else:
@@ -229,6 +241,7 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
                     segments=segments,
                     full_text=result.get("full_text"),
                     word_count=result.get("word_count"),
+                    failed_chunks=failed_chunks or None,
                 )
             )
         await session.execute(
@@ -238,7 +251,10 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
         )
         await session.commit()
 
-    await queue.update_progress(job_id, 1.0, "Transcribed")
+    await queue.update_progress(
+        job_id, 1.0,
+        f"Transcribed — {len(failed_chunks)} chunk(s) missing"
+        if failed_chunks else "Transcribed")
     await queue.enqueue(project_id=project_id, job_type=JobType.clipper_analyze.value)
     logger.info(
         f"clipper transcript for {project_id}: {len(segments)} segments, "
