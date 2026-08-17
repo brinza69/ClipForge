@@ -344,6 +344,12 @@ class ClipModel(Base):
     # this is, and what the LLM said. Without it a candidate is a bare score
     # and nothing about a bad pick can be explained after the fact.
     reasoning: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # What Pass D saw in the CUT, as opposed to `reasoning`, which is why the
+    # moment was chosen. Different producer, different stage — this is written
+    # at export, when a shot list and a caption position exist to be wrong.
+    # Kept out of `reasoning` for that reason: merging them would mean a
+    # re-score silently discarding a review, or the reverse.
+    review: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     ranker_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     preview_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 

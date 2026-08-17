@@ -37,10 +37,15 @@ from typing import Any, Sequence
 
 from services.clipper.dynamic_edit import ASPECT
 from services.clipper.ffmpeg_tools import (
+    AUDIO_RATE,
     FFmpegError,
+    LIMITER_CEILING,
+    LOUDNESS_I,
+    LOUDNESS_TP,
     escape_filter_path,
     even,
     ffmpeg_bin,
+    loudness_chain,
     run,
 )
 
@@ -58,8 +63,10 @@ MIN_OUTPUT_BYTES = 1024
 
 # Loudness target for vertical short-form. The reference edits are all pushed
 # hard and flat; a clip mastered at broadcast level sounds broken next to them.
-LOUDNESS_I = -14.0
-LOUDNESS_TP = -1.5
+# The loudness chain and its constants moved to `ffmpeg_tools` when the static
+# renderer needed the same one — the two had drifted, and a clip that fell back
+# to the static layout shipped un-normalised. Re-exported because the tests and
+# the recipe both name them here.
 
 
 # ---------------------------------------------------------------------------
@@ -299,13 +306,7 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
         "-map", "0:a?",
     ]
     if loudness:
-        # Measured on the references: integrated around -15 LUFS with a
-        # loudness range of only 2.5-3.1 LU and true peak at or over 0 dBFS.
-        # That is a compressor doing most of the work, so normalising alone
-        # would leave the clip sounding limp next to them; the compander runs
-        # first and loudnorm just parks the result at the platform target.
-        cmd += ["-af", f"acompressor=threshold=-20dB:ratio=4:attack=5:release=120:makeup=2,"
-                       f"loudnorm=I={LOUDNESS_I}:TP={LOUDNESS_TP}:LRA=4"]
+        cmd += ["-af", loudness_chain()]
     cmd += [
         "-c:v", "libx264",
         "-preset", str(preset),

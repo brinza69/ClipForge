@@ -27,13 +27,13 @@ known problems live in `docs/handoff-clipper-session-4.md`.
 | | Archetypes | Done |
 | | Candidate variants | Done |
 | **P1** | Comparative ranking | Done |
-| | Story memory | Partial — atoms + threads, no episode hierarchy |
+| | Story memory | **Done** — atoms + threads + episodes (2026-08-16) |
 | | Story threads | Done |
 | | Promises / callbacks | Done, mocks only |
 | | Semantic dedupe | Done |
 | | Hook latency | Done |
-| | Second efficiency | **Not built** |
-| **P2** | Multimodal Pass D | **Not built** |
+| | Second efficiency | **Done** — `dead_air.py` (2026-08-16) |
+| **P2** | Multimodal Pass D | **Partial** — the local half is built (§21) |
 | | Diarization | **Not built** |
 | | Human pairwise feedback | **Not built** |
 | | Boundary learning dataset | **Not built** |
@@ -41,7 +41,9 @@ known problems live in `docs/handoff-clipper-session-4.md`.
 | | Post-publish learning | **Not built** |
 | | Advanced learned ranker | Exists, dormant — needs 40 labels |
 
-**P0 is complete. P1 is 5 of 7.** P2 and P3 are untouched.
+**P0 is complete. P1 is 7 of 7 as of 2026-08-16** — story memory and second
+efficiency were the two open ones. P2 and P3 remain untouched apart from the
+frontend inspection panel (§34), which is built.
 
 ---
 
@@ -55,13 +57,22 @@ Boundaries are sentences, not a clock grid.
 
 Measured: 63 atoms over the 12-minute slice, none outside the length bound.
 
-### §2 Stream understanding — **Partial**
-Built: atoms, threads, and chunked prompting so no pass ever sees 12 hours at
-once.
+### §2 Stream understanding — **Done** (2026-08-16)
+Atoms, threads, chunked prompting, and now episodes: `episodes.py` cuts the
+stream into stretches on the clock and labels each with the words that tell it
+apart from the others, by TF-IDF over the buckets. `anchor_prompt` puts the
+stretches that CLOSED before the current chunk in front of the model as
+background, with the instruction not to clip from them.
 
-**Not built:** the micro-episode → episode → global-state hierarchy. There is
-no rolling summary. A candidate at hour 7 gets its local chunk plus the open
-promises plus its thread — not an episode summary.
+No model call — the threads and atoms already held everything a summary needs.
+
+Two designs failed first and both are recorded in the module: cutting episodes
+where no thread had run for two minutes gave TWO episodes for four hours, and
+labelling by "the words the most arcs share" returned "don't, it's, right,
+can't". Measured on the 4-hour source, the finished labels line up with what is
+known to be in it — minute 3-23 reads "control, failure, push, workout" over
+the gym segment, 203-223 reads "drown, grown, sense, bubbles" over the argument
+the two best clips were cut from.
 
 ### §3 Story threads — **Done**
 `services/clipper/threads.py`, by lexical chaining over atoms. Consumed by
@@ -138,10 +149,18 @@ Present: `hook_strength`, `hook_latency`, `setup_ratio`, `payoff_strength`,
 `information_density`, `quoteability`, `visual_legibility`, `visual_payoff`,
 `second_efficiency`. The two visual ones need Pass D.
 
-### §15 Second efficiency / dead-second detector — **Not built**
-The `LATEST COMPLETE START + EARLIEST SATISFYING END` principle *is*
-implemented at the variant level. Per-second trimming inside a chosen window
-is not.
+### §15 Second efficiency / dead-second detector — **Done** (2026-08-16)
+`dead_air.py`. A silence is cut only when it holds no words (Whisper's word
+timings veto the RMS floor), is longer than a beat (`PAUSE_KEEP_S`, reused
+rather than re-decided), and is not at an edge the boundary rules own. A beat
+survives on each side so the two sides do not sound spliced.
+
+Cut with select/aselect inside the SAME encode, and the captions are remapped
+because libass positions absolutely. Off by default (`trim_silence`, which had
+sat in the settings dict for months with nothing reading it).
+
+Measured on 920 candidates: 298 get a cut, ~3.1s each. A listener called the
+result "audible, but fine" — a jump cut rather than a splice.
 
 ### §16 Features as evidence — **Done**
 The ~60-key vector is kept and used for detection, filtering and confidence.
@@ -171,13 +190,50 @@ weighted higher; that is who decides a short.
 and shared words miss this. Diversity spreads across timeline, thread and
 archetype, all under one quality ceiling so it never rescues a weak clip.
 
-### §21 Pass D — multimodal review — **Not built**
-Nothing sees the *edited clip*. This is the largest remaining gap in the
-brief: a good moment can still be a bad clip because the payoff fell outside
-the crop or a subtitle covers the kill feed. Observed on a real export — a
-caption landed over the Minecraft inventory.
+### §21 Pass D — review — **Partial** (2026-08-17)
+`services/clipper/review.py`. Something looks at the CLIP now, not just the
+moment. Three checks, one per failure actually seen on an export: a caption
+sitting on a UI panel, a frame with nothing in it, and a crop that slices the
+head of the person it is framing.
 
-### §22 Pass D decisions (APPROVE / REJECT / REVISE) — **Not built**
+It runs BEFORE the encode, against the proxy. Reviewing the rendered file would
+be truer to the brief's wording, but a finding that arrives after a 12–24s
+render can only be reported and one that arrives before it can be acted on
+(§17). The geometry is exact either way — an output-frame strip maps back into
+the source crop by one scale factor.
+
+**Multimodal is the half still missing.** Nothing sends frames to a model, so
+"the payoff fell outside the crop" and "this is confusing" remain out of reach:
+they need a viewer, not a rule. The seam is `Finding` and `verdict` — a
+model-driven reviewer appends to the same list and nothing else changes. No
+vision engine is configured on this machine (`clipper_llm_engine` is empty).
+
+Measured on 12 real clips, 144 sampled frames: 6 APPROVE, 6 REVISE, and every
+check fires somewhere without any firing everywhere.
+
+Two limitations, both found by running it rather than reasoning about it:
+
+- **The UI-grey measure was validated at whole-frame scale, not on a strip.**
+  Flat mid-grey identifies a menu screen when a menu fills the frame; on a thin
+  caption band, grey stone terrain can reach the same share. One finding
+  inspected by eye is a true positive (the caption band over the stream's own
+  overlay bar), one is probably terrain. Raising the threshold does not fix it:
+  the true positive measured 0.29 and the suspected false one 0.29.
+- **The framing change is not the cause.** The full-height gameplay crop brings
+  the stream's bottom bar into frame, which looked like an obvious explanation
+  for caption/UI collisions. Measured: the OLD framing produces more of them
+  (6 against 4), so the hypothesis is refuted and recorded as refuted.
+
+### §22 Pass D decisions (APPROVE / REJECT / REVISE) — **Done, advisory**
+`review.verdict` over all findings, whoever produced them. REVISE means
+something can act on it — the caption can move; REJECT is for a clip that is
+mostly dead frames.
+
+**It reports, it does not block.** Whether a REJECT should stop an export is a
+product decision nobody has made, and a reviewer that silently swallowed clips
+would be a worse failure than the ones it catches. The verdict is written to the
+export sidecar under `review`, present even when clean — an absent key would be
+ambiguous between "reviewed and fine" and "never reviewed".
 
 ### §23 Speaker diarization — **Not built**
 Measured why the free path fails: mouth-region frame differencing at source
@@ -218,8 +274,14 @@ dominates at $10/1M against $2.50 input, which is why the judge is asked for
 scores and eight-word reasons, never prose.
 
 ### §30 Prompt versioning — **Done**
-`anchor_v1`, `judge_v2_comparative`, `promises_v1`, `story_v1`, `atoms_v1`,
-`threads_v1`. Persisted in the `reasoning` column.
+`anchor_v1`, `judge_v2_comparative`, `promises_v2`, `story_v1`, `atoms_v1`,
+`threads_v1`, `episodes_v1`, `segment_type_v1`. Persisted in the `reasoning`
+column.
+
+`promises_v2` is the version doing its job: v1 asked for statements that create
+an expectation and got goals — 8 of the 12 setups on the 4-hour run were "I'm
+going to the gym", which no one would clip. v2 requires a `stake` and quotes
+those false positives back at the model.
 
 ### §31 Structured output — **Done**
 JSON with a tolerant parser (code fences, prefaces) and per-field validation.
@@ -237,8 +299,15 @@ New `clips.reasoning` JSON column, exposed through the API, carrying the
 anchor, payoff, required context, archetype, edit variant, thread, context
 debt, hook latency, the three verdicts, reject reasons and prompt versions.
 
-### §34 Frontend inspection UI — **Not built**
-All the data exists in `clips.reasoning`; nothing displays it.
+### §34 Frontend inspection UI — **Done** (2026-08-16)
+`ReasoningPanel`, opened from a "why" button that appears only on clips that
+have reasoning. Shows the anchor, the payoff, what a cold viewer must already
+know, the archetype, the winning variant, the three verdicts and the prompt
+versions. Timestamps are on the source clock, which is what makes them useful.
+
+Looking at it caught a bug no type could: hook latency is in seconds and had to
+be scaled to fill a 0..1 bar, and the first version printed the scaled value
+with an "s" after it — a 5-second hook read "0.50s".
 
 ### §35 Testing — **Done**
 421 passing. New suites: `test_clipper_story.py`, `test_clipper_atoms.py`,
@@ -260,12 +329,12 @@ The *logical* separation and the checkpoints the brief asks for exist: atoms,
 promises, threads and graph are separate artifacts written before the next
 step reads them, and any of them can be reused on a re-run.
 
-**Not done:** they are not separate job types. `clipper_understand`,
-`clipper_propose`, `clipper_rank` and `clipper_review` do not exist; all of it
-runs inside `clipper_score`. The brief explicitly allows this ("Dacă
-arhitectura reală sugerează că unele dintre aceste faze trebuie să rămână
-într-un singur job, este acceptabil"), but a failure mid-way now re-runs the
-whole scoring stage rather than resuming.
+**Still one job**, which the brief explicitly allows. What changed on
+2026-08-16 is the part that actually cost anything: anchors are checkpointed
+with a fingerprint of the prompt version, reasoning mode, engines and source
+length, so a re-run reuses them and a configuration change recomputes them. The
+judge is not checkpointed — it mutates the candidate list in place and returns
+a count, so caching it means changing its contract rather than wrapping it.
 
 ### §39 Rules not to be broken — **Respected**
 Checkpoints per stage; expensive analysis reads the proxy; the original is
@@ -298,7 +367,7 @@ upgrade. They are in the session-4 handoff in full; briefly:
 
 ## Honest summary
 
-**P0 complete, P1 five of seven, P2 and P3 untouched.**
+**P0 complete, P1 seven of seven, P2 and P3 untouched.**
 
 Everything marked Done was verified by running it on a real source, except
 callback linking, which has only ever fired against mocks.
@@ -308,6 +377,8 @@ what a viewer must already know, reconstructs the earliest start that carries
 it, keeps the reaction, judges candidates against each other from three
 perspectives, and can explain every pick.
 
-What it still cannot do is **see**. Pass D is the missing half — a moment
-chosen perfectly can still ship as a bad clip, and nothing in the system
-currently looks at the rendered frame.
+What it still cannot do is **see** in the sense a person does. As of 2026-08-17
+something checks the clip before it ships (§21) — a caption on a UI panel, a
+blank frame, a sliced face — but those are rules over pixels. "The payoff
+happened outside the crop" and "this reads as confusing" need a viewer, and no
+vision model is configured. The seam for one is built and empty.

@@ -241,9 +241,29 @@ ANCHOR_PROMPT_VERSION = "anchor_v1"
 
 
 def anchor_prompt(lines: str, want: int,
-                  promises: Sequence[dict] | None = None) -> str:
+                  promises: Sequence[dict] | None = None,
+                  episodes: Sequence[dict] | None = None) -> str:
     """Payoff-first. The question is not where a window should start."""
     from services.clipper.story import ARCHETYPES
+
+    # What the stream has been about before this chunk (§2). Without it a
+    # moment at hour seven is read as though the stream started at hour seven:
+    # the model cannot tell that the fight it is watching has been going for
+    # forty minutes, or that an argument began long before these lines.
+    #
+    # Stated BEFORE the transcript rather than after, because it is context for
+    # reading what follows, not an extra instruction to remember.
+    so_far = ""
+    if episodes:
+        from services.clipper.episodes import to_lines as episode_lines
+
+        body = episode_lines(episodes)
+        if body:
+            so_far = ("WHAT THE STREAM HAS BEEN ABOUT SO FAR, before the lines "
+                      "below:\n" + body + "\n\nUse it to tell a moment that "
+                      "stands on its own from one that only makes sense to "
+                      "someone who has been watching. Do not clip from it — it "
+                      "is background, and none of it is in the window.\n\n")
 
     recall = ""
     if promises:
@@ -267,7 +287,8 @@ def anchor_prompt(lines: str, want: int,
               "matches.\n")
 
     return (
-        "Below is a livestream transcript, one line per segment, prefixed with "
+        so_far
+        + "Below is a livestream transcript, one line per segment, prefixed with "
         "its start time in seconds.\n\n"
         f"Find up to {want} moments that deserve a standalone short clip. For "
         "each one, work BACKWARDS from what happened:\n"
@@ -367,7 +388,8 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
                          engines: Sequence[str] = NOMINATE_ENGINES,
                          model: str | None = None,
                          promises: Sequence[dict] | None = None,
-                         atoms: Sequence[dict] | None = None) -> list[dict]:
+                         atoms: Sequence[dict] | None = None,
+                         threads: Sequence[dict] | None = None) -> list[dict]:
     """Anchors: a payoff, what a viewer must know for it to land, an archetype.
 
     The richer sibling of `nominate`, and the input to the story engine. Same
@@ -391,7 +413,12 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
         lines = transcript_lines(segments)
     if not lines:
         return []
+    from services.clipper import episodes as episode_mod
     from services.clipper import promises as promise_mod
+
+    # Built once for the whole stream, sliced per chunk. Free — no model call.
+    # Threads give the stretches; the atoms give the words that label them.
+    stream_episodes = episode_mod.build(threads or [], atoms or [])
 
     found: list[dict] = []
     for chunk in chunk_lines(lines):
@@ -409,7 +436,12 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
                               if line.startswith("[")) if t >= 0]
         first_t, last_t = (min(stamps), max(stamps)) if stamps else (0.0, 0.0)
         live = promise_mod.open_at(promises or [], last_t, span_from=first_t)
-        answer = await _ask(engines, anchor_prompt(chunk, per_chunk, live),
+        # Only what CLOSED before this chunk opens: an episode still running is
+        # partly in the window, and describing it as background would tell the
+        # model the moment it is reading is old news.
+        so_far = episode_mod.before(stream_episodes, first_t)
+        answer = await _ask(engines,
+                            anchor_prompt(chunk, per_chunk, live, so_far),
                             model=model)
         if answer is None:
             continue

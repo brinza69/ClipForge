@@ -1,15 +1,53 @@
-# Handoff — AI Stream Clipper, fourth session
+# Handoff — AI Stream Clipper, sessions 4 and 5
 
-Written 2026-08-14. Everything here was run on **this** machine and measured,
-not carried over. Supersedes `handoff-clipper-session-3.md`, which it corrects
-on one point (the branch had in fact been pushed).
+Session 4 written 2026-08-14, session 5 appended 2026-08-16. Everything here
+was run on **this** machine and measured, not carried over.
 
-Read `docs/story-engine.md` alongside this: it is the design document for the
-reasoning work, this is the state-of-the-world.
+**This is the state of the world.** For what every file is and where it lives,
+read `clipper-map.md` — it exists so nobody has to grep the tree again.
+
+## Contents
+
+**Current state**
+- [Built and OFF — the switches](#built-and-off--the-switches-and-what-is-behind-each) — three features exist and do nothing until turned on
+- [Session 5 — what shipped](#session-5--2026-08-16-what-shipped)
+- [What I would do next](#what-i-would-do-next--all-but-one-done-on-2026-08-16)
+- [Not built, from the upgrade spec](#not-built-from-the-upgrade-spec)
+
+**Known problems**, in priority order — [jump](#known-problems-in-priority-order)
+1. ~~The dynamic editor is not wired in~~ — FIXED
+2. Region detection is global — HALF FIXED, and the other half is understood
+3. Captions collide with in-game UI
+4. The facecam rect is too tall — measured
+5. Callback linking is validated only by mocks
+6. ~~Every clip ends on the last word~~ — FIXED
+7. ~~`context_debt` decided by one unverified string~~ — FIXED
+8. A portrait facecam cannot be detected — measured, six approaches failed
+9. The classifier called a gaming stream `talking_head` — improved, not solved
+10. Smaller
+
+**Measurements worth not repeating**
+- [The recurring lesson](#the-recurring-lesson-stated-once) — an absolute threshold on a busy source measures nothing
+- [The 4-hour run and the five faults it found](#the-4-hour-run-and-the-five-faults-it-found)
+- [Facecam detection scored against the labels](#facecam-detection-scored-against-the-labels--2026-08-16) — 7/8, and two more rules rejected
+- [The first human judgement of a dynamic clip](#the-first-human-judgement-of-a-dynamic-clip--2026-08-16)
+
+**Environment and traps**
+- [Environment](#environment) — including why the backend on 8420 is not yours
+- [Traps](#traps) — the things that will cost you an hour
+
+Older handoffs are history: `handoff-clipper-session-3.md`,
+`handoff-clipper-session-2.md`, `handoff-dynamic-edit.md`. They are still
+accurate about the code they describe.
 
 ---
 
-## The one thing to read first: the dynamic editor is not wired in
+## The one thing to read first: the dynamic editor is not wired in — FIXED 2026-08-16
+
+**Left as written because the diagnosis is the useful part.** It was fixed on
+2026-08-16: `dynamic_window.py` carries the per-window analysis into the
+pipeline and `handle_export` has a multi-shot branch, off by default. What
+follows is what the problem was.
 
 **You asked where the self-editing went. It was never connected.**
 
@@ -208,6 +246,230 @@ so it does **not** grow with duration.
 
 ---
 
+## Built and OFF — the switches, and what is behind each
+
+Everything here EXISTS, is tested, and does nothing until it is turned on.
+Written down because a feature that ships off is the easiest kind to forget,
+and this repo has lost work to exactly that six times over.
+
+All three are per-project keys in `clipper_settings`, each falling back to a
+`config.py` default:
+
+**One of the three is no longer off.** `dynamic_edit` was turned ON on
+2026-08-17 by the owner, after a viewer judged the edit and an A/B settled the
+one fault they named. The row below still describes what it does; only its
+default changed. The other two remain opt-in.
+
+| switch | config default | what it turns on |
+|---|---|---|
+| `dynamic_edit` | `clipper_dynamic_edit = True` (2026-08-17) | Multi-shot export. Plans a shot list and cuts between camera framings instead of rendering one fixed split screen. Verified on a real export: 9 shots, 6 hit flashes, 21s to render an 18s clip. Falls back to the static layout on a missing proxy, a plan with fewer than two shots, or any exception. |
+| `trim_silence` | `clipper_trim_silence = False` | §15 dead-air removal. Cuts wordless silences out of the MIDDLE of a chosen window, in the same encode, and moves the captions with them. Measured on 920 candidates: 298 get a cut, ~3.1s each. |
+| `llm_select` + `reasoning_version` | `False` / `"legacy"` | The story engine. Anchors reasoned back from the payoff, comparative ranking, three judge perspectives. |
+
+`trim_silence` deserves its own note: it sat in the settings dict from the day
+the clipper shipped with **nothing reading it**, defaulted to `True`, and every
+export ignored it. Its default is now `False` and it is wired — so the change
+that made it real also made it stop claiming to be on.
+
+Two things are visible without any switch, because neither changes a
+deliverable: the reasoning panel (the "why" button on a clip, §34) and the
+transcription progress message.
+
+## The first human judgement of a dynamic clip — 2026-08-16
+
+Someone watched one. Until now every property of the multi-shot edit had been
+measured and none had been judged.
+
+**Rhythm: good.** Nine cuts in eighteen seconds, and the shot grammar's
+1.80/3.00s rates hold up. Nothing to change.
+
+**Camera choice: nearly right.** The alternation between face and gameplay
+lands where it should.
+
+**The one fault: the gameplay shots crop away too much of the game.** This
+points at a specific constant. Both gameplay rungs are 9:16 slices of a 16:9
+frame, which is narrow by construction, but they differ:
+
+| rung | height | width from a 1920px frame |
+|---|---|---|
+| `game` (`game_height_pct` 0.86) | 86% | ~522px — 27% of the frame |
+| `game_tight` (`game_zoom` 0.64) | 64% | ~389px — 20% of the frame |
+
+The clip's plan was `fmgmGFmGg`; the two `G`s are `game_tight`, and that is
+almost certainly what was seen.
+
+**This is the one area where the nine references cannot help.** The recipe says
+so itself — none of them contains gameplay. So a viewer's judgement is the only
+evidence that exists for how tightly a game should be framed, and the style
+constants were never calibrated for it.
+
+### The A/B, and what it settled — 2026-08-16
+
+Three renders of that same clip, identical shot list and captions, only the two
+framing keys moved:
+
+| | `game_height_pct` / `game_zoom` | tight rung | of frame width | what the viewer sees |
+|---|---|---|---|---|
+| A | 0.86 / 0.64 | 388px | 20.2% | no hotbar, no hearts |
+| B | 1.00 / 0.87 | 526px | 27.4% | the game HUD is in |
+| C | 1.00 / 1.00 | 606px | **31.6%** | all of it, plus a sliver of the stream's counter |
+
+**The owner chose C, and it is the default now.** 0.86 was there to skip the
+stream's top HUD and bottom bar and it did — along with the HUD of the GAME,
+which is the half a viewer needs to follow what is happening.
+
+**31.6% is a ceiling, not a setting.** At full frame height the width of a 9:16
+crop is fixed by the aspect ratio. If a gameplay shot still reads too tight,
+nothing in `DEFAULT_STYLE` will fix it — that needs a letterboxed game band,
+which is a different layout and a build rather than a tune.
+
+C also made a latent defect reachable: with both keys at 1.00 the `game` and
+`game_tight` rungs are the same rectangle, so a `g`->`G` step is a cut where the
+picture does not change. `test_adjacent_shots_never_share_a_camera` had asserted
+that invariant since the editor was written, but on the camera NAME, which
+cannot see two names for one rect. `_merge_dead_cuts` joins them.
+Measured: one cut removed at 1.00/1.00, none at either wider ladder.
+
+## Facecam detection scored against the labels — 2026-08-16
+
+With eleven sources labelled by eye there is finally a scoreboard. Restricted
+to the stretch where each source's truth is stable (a source whose camera
+changes mid-stream has no single correct answer for the whole file):
+
+| source | want | got | |
+|---|---|---|---|
+| IShowSpeed EARLY, gaming part | 1 | 0 | ✗ |
+| moistcr1tikal, left edge mid-height | 1 | 1 | ✓ |
+| Minecraft 4h, after the gym | 2 | **2** | ✓ |
+| Minecraft 12m | 2 | 2 | ✓ |
+| gym 12m, fullscreen | 0 | 0 | ✓ |
+| go ghost, edited | 0 | 0 | ✓ |
+| apartament, edited | 0 | 0 | ✓ |
+| Jensen Huang, edited | 0 | 0 | ✓ |
+
+**7 of 8, which is far better than this file assumed.** Two things it settles:
+
+- **The 4-hour source DOES give both facecams** when detection is confined to
+  the stretch that has them. Known problem #2 is a framing problem, not a
+  detector problem — and it is why the 20-minute stretches F1b uses are too
+  short here: 33 frames per stretch against 330 for the whole gaming run, and
+  the second cluster cannot clear its hit-rate gate on 33.
+- **The edited sources are right for the right reason.** `webcam: None` on all
+  three.
+
+### Two more rules scored and rejected
+
+Session 3 scored four edge-picking rules and told the next person not to
+re-litigate without a new signal. The labels are that signal. Two more were
+tried and both are WORSE than doing nothing:
+
+| rule | result |
+|---|---|
+| widen `_WEBCAM_ASPECT` to (0.55, 2.0) so a portrait inset can pass | **5/8** — does not fix the portrait source, and two edited sources start reporting invented insets of 188x182 and 134x188 |
+| try the edge search widest-first and keep the first reach whose rect is a plausible inset | **6/8** — does not fix it either, and adds a 200x168 false positive on moistcr1tikal |
+
+So the aspect band is not the defect. It is the only thing currently rejecting
+runaway rects, which is why relaxing it costs more than it gains.
+
+### A second instance, with an identical signature — 2026-08-16
+
+Jynxzi's stream has a bottom-left inset (labelled by eye) and detection returns
+none, exactly like the EARLY STREAM source. Both fail the same way:
+
+| | EARLY STREAM | Jynxzi |
+|---|---|---|
+| cluster hits / rate | 32 of 40, **0.80** | 32 of 40, **0.80** |
+| rect from `_snap_inset` | (0, 12, 220, 256) | (0, 0, 158, 270) |
+| frame | 480x270 | 480x270 |
+| rejected by | area, aspect | area, aspect |
+
+**Two independent sources with the same signature is the new signal session 3
+asked for.** It is not a quirk of one stream: on both, the strongest face
+cluster this detector ever produces yields a rect spanning nearly the FULL
+FRAME HEIGHT.
+
+**A lead, and a measurement that was aimed at the wrong edge.** The bottom-edge
+search runs rows 212-270 and 219-270 with a peak-over-median of 1.75 and 1.92
+against the 3.0 `_FACECAM_EDGE_DOMINANCE` bar, so it falls through to the frame
+border. But these insets are BOTTOM-left: their bottom edge probably IS the
+frame bottom, which would make 270 the right answer and the TOP edge the one
+running away — it lands at y=0 and y=12 where the inset plausibly starts around
+y=130.
+
+So the next thing to measure is the BACKWARD (top) edge search, not the forward
+one. Recorded rather than guessed at, because the difference decides whether
+`_FACECAM_EDGE_DOMINANCE` is even involved.
+
+### The seed, measured properly — 2026-08-17. Three more approaches, all refuted
+
+Run `scripts/score_facecam.py` before believing anything here. It scores
+detection against `source-labels.md` and its baseline is **6 of 9**. Note it
+does NOT reproduce the "4-hour source gives both facecams" result above at any
+frame range — that measurement came from the per-segment path, which samples
+the proxy itself, and this one uses the sampled frames on disk. Treat the 4h row
+as a constant rather than a discriminator.
+
+**1. `_FACECAM_EDGE_DOMINANCE` is NOT involved, which settles the lead this file
+left.** The previous entry said the top edge was the one to measure and that the
+answer would decide whether the dominance bar mattered. Measured: on Jynxzi's
+main cluster the top search's peak-over-median is **21.73** against a bar of
+3.0, and on EARLY STREAM 3.92. Both sail through. The bar was never the gate.
+
+**2. The REACH is the mechanism.** `_FACECAM_OUTER = 4.0` is in multiples of the
+median face box, and the box wobbles — 22 to 62 px across eighths of one source.
+On Jynxzi the box is 50 px, so the top search runs rows **0 to 144** on a 270-row
+frame: more than half the picture. Inside a window that wide the strongest
+gradient is whatever the busiest thing in the frame is, and on both sources it is
+the stream's own top chrome.
+
+Capping the reach at a fraction of the FRAME instead fixes both failures
+outright, with rects that match the labels: EARLY STREAM `182x134@0,88` and
+Jynxzi `158x118@0,106`, both bottom-left as labelled.
+
+**3. And it costs more than it gains, for a reason worth knowing.** Score with
+the cap: **4 of 9**. The four edited sources, which were clean negatives, start
+reporting insets — `gym 12m`, `go ghost`, `apartament`, `Jensen Huang`.
+
+> **The detector's precision on edited sources is an artefact of its imprecision
+> on gaming ones.** The runaway rects are rejected by `_WEBCAM_AREA`, and that
+> rejection is the only thing keeping the edited sources clean. Improve the
+> geometry and the false positives appear, because nothing is discriminating —
+> the area gate was doing it by accident.
+
+That is why every approach to this edge trades one side for the other. It is the
+same shape as the aspect band, which this file already records as "the only thing
+currently rejecting runaway rects".
+
+**4. A border test restores the negatives and loses the targets.** Requiring all
+four sides of the snapped rect to be real steps (each clearing 1.8x its own
+neighbourhood) puts the four edited sources back to 0 — and rejects EARLY STREAM
+and Jynxzi too. **6 of 9 again, failing differently.**
+
+**5. Scene-cut rate does not separate edited from locked-off.** The obvious
+non-geometric discriminator, refuted in one measurement: insets run 1.50-3.92
+cuts/min, and the edited sources are 0.18, 7.67 and 9.67. `go ghost` sits BELOW
+every inset source, so no single threshold exists.
+
+**What this leaves.** The geometry fix is known and it works; what is missing is
+a discriminator that answers "is there an inset here at all", independent of how
+big the rect came out. Until something does that job on purpose, the area gate
+will keep doing it by accident and the reach cannot be fixed. Nine approaches
+have now failed on this edge. **Do not attempt a tenth without a discriminator
+first.**
+
+### What the one remaining failure actually is
+
+On the EARLY STREAM gaming stretch the face cluster is as strong as this
+detector ever gets — **32 hits in 40 frames, rate 0.80** — and `_snap_inset`
+grows it into **220x256**, 44% of the frame, against a real inset of about
+120x138. The rect is wrong before any gate sees it; the gates then reject it,
+and a facecam found with high confidence is reported as none.
+
+That is six approaches now that do not fix this edge, four from session 3 and
+two here. It needs something other than a better rule over the same gradient
+profile — the seed, or a different signal entirely. **Do not spend another
+session widening bounds.**
+
 ## Known problems, in priority order
 
 ### 1. The dynamic editor is not wired in
@@ -223,7 +485,34 @@ The 12-minute slice found both facecams correctly, so this is specifically a
 long-stream problem: **layout is detected once, globally, for a source whose
 layout changes.**
 
-### 3. Captions collide with in-game UI
+### 3. Captions collide with in-game UI — FIXED 2026-08-17, with one gap named
+
+`resolve_position` had implemented collision avoidance since the clipper
+shipped, and it avoided the rects in `keep_out`, which came from HUD detection.
+On this source `regions.hud` is `[]` — **the avoidance was working perfectly
+against an empty list.** The missing half was never the algorithm.
+
+`dynamic_window.ui_panels` supplies the list, per CLIP rather than per project,
+because a panel opens and closes and `regions.json` is measured once for a whole
+stream. PERSISTENCE is the whole design: a cell counts as UI only if it is flat
+mid-grey in half the sampled frames. That is what separates a panel from grey
+stone terrain, and it was confirmed by looking — a single-frame grey mask selects
+a hillside, the persistence map selects the subscriber counter and the BOSSES
+BEATEN box.
+
+**The first version of this detector found nothing on five real clips.**
+`PANEL_MIN_AREA = 0.015` was a guess, and the persistent UI on a real stream is
+not one big panel but a counter, a timer, a hotbar. At 0.002 they come back, at
+identical coordinates on three different clips — which is itself the evidence,
+because a stream's chrome does not move.
+
+**Still open:** a transient game menu. The Minecraft inventory that caused the
+original defect opens for a few seconds inside a 38-second clip and cannot clear
+a persistence bar set where terrain fails it. What is detected is the STATIC
+stream chrome, which is a real keep-out — Pass D's one verified true positive was
+a caption over the stream's own overlay bar — but it is not the whole of §21.
+
+The old text follows, because the diagnosis is still the useful part.
 A caption landed over the Minecraft inventory panel. `resolve_position` does
 implement collision avoidance, but `keep_out` comes from detected HUD/chat
 rects and HUD detection returned `[]` on this source.
@@ -346,7 +635,49 @@ five listed items still read as a real debt. Thin evidence — two clips, one
 viewing, one source — which is enough to stop an override that contradicted
 every other signal and not enough to tune on.
 
-### 8. Smaller
+### 8. A portrait facecam cannot be detected at all — measured 2026-08-15
+
+First result from a source that is not the Minecraft co-stream. `IShowSpeed —
+EARLY STREAM!`, 4h24m, a gaming stream with an obvious facecam bottom-left,
+chat down the left edge. `regions.json`: **`webcam: None`, `webcams: 0`.**
+
+Traced to the shape gate in `_find_webcams`. The real facecam cluster is found
+easily — **29 hits in 40 frames, rate 0.72**, centred at (65, 132), exactly
+where the eye puts it. It is then thrown away:
+
+```
+hits=29 rate=0.72 med=(65,132,64,64) -> rect=(0,12,150,256)
+                                        area=0.296 aspect=0.59  REJECT:aspect
+```
+
+`_WEBCAM_ASPECT = (1.1, 1.9)` — landscape only. The Minecraft insets measure
+122x68, aspect **1.79**, which sits just inside the top of that band. The band
+was drawn around one stream's layout, so **a portrait or square facecam is
+structurally undetectable**, no matter how confidently it is found.
+
+There is a second fault stacked on it: `_snap_inset` grew a ~120x138 inset to
+150x256, nearly the full 270px height of the proxy, because the chat column
+above the facecam leaves no horizontal edge to stop at. Even a perfect snap
+(aspect ~0.87) would still fail the gate, so the aspect bound is the primary
+cause and the runaway snap is the same seed problem as #4.
+
+**Do not just widen the band.** Fitting (1.1, 1.9) to one source is what caused
+this; refitting it to two sources is the same mistake with a bigger sample. The
+gate wants to express what a facecam actually is — a small, stable, face-
+containing inset near an edge — and `hits`, `rate` and `drift` already measure
+that far better than the aspect ratio does.
+
+### 9. The content classifier called a gaming stream `talking_head`
+
+Same source: `content_type = talking_head`, confidence **0.426**. It is a
+Fortnite/Minecraft stream. This is not cosmetic — `content_type` selects the
+weight row in `scoring.PROFILES`, so every clip from this source is scored
+against the wrong profile, silently. `plan_layout` reads it too.
+
+Predicted before the run as one of three possible outcomes, and it is the worst
+of the three: a wrong answer given confidently enough to be used.
+
+### 10. Smaller
 - `emotion` is flat (8% of the gaming profile, sd 4.1) because
   `laughter_score` is 0 on every window — Whisper does not transcribe laughter
   as "haha". Needs audio detection, not a word list. Do **not** drop the term:
@@ -373,18 +704,89 @@ learned ranker.
 
 ---
 
-## What I would do next
+## What I would do next — all but one done on 2026-08-16
 
-1. **Wire the dynamic editor into export.** Biggest gap, and the work is
-   mostly moving `render_dynamic_clip.py`'s per-window analysis into the
-   pipeline.
-2. **Region detection per segment**, not once globally. A long stream changes
-   layout and nothing notices.
-3. **Spatial `game_ui_ratio`** → caption keep-out, plus the missing 55–75%
-   clamp from the style spec.
-4. **Watch three clips.** Every measurable property has been checked; the
-   subjective ones — does the opening hold you, does the pace work — have not,
-   and no script can.
+1. ~~**Wire the dynamic editor into export.**~~ **DONE.** `dynamic_window.py`
+   carries the per-window analysis into the pipeline and `handle_export` has a
+   multi-shot branch. Verified on a real export: 9 shots, 6 hit flashes, 21s.
+   Off by default (`dynamic_edit`).
+2. ~~**Region detection per segment.**~~ **DONE.** `regions_by_segment`, with
+   `_regions_for` giving each clip the layout of the stretch it sits in. The
+   first 40 minutes of the 4-hour source now correctly report no facecam
+   instead of being handed a Minecraft inset rect.
+3. ~~**Spatial `game_ui_ratio`** → caption keep-out, plus the missing 55–75%
+   clamp from the style spec.~~ **DONE 2026-08-17.** `dynamic_window.ui_panels`
+   detects the panels per clip, `captions.panels_to_keep_out` maps them through
+   every shot's crop, and `resolve_position` searches for the widest clear band
+   inside the spec's 55–75% instead of trying six ±4% nudges. Verified on a real
+   export: the caption moved 0.75 → 0.554 in the burned .ass and Pass D went
+   from REVISE to APPROVE on the same clip.
+4. ~~**Watch three clips.**~~ **DONE**, and it was worth more than the rest of
+   the list put together. Four defects came out of looking rather than
+   measuring: clips ending on the last word's timestamp, `context_debt` decided
+   by one unverified string, the caption panel printing a scaled value with an
+   "s" after it, and `-t` letting ffmpeg read past the window to refill trimmed
+   seconds. All four passed every test that existed.
+
+---
+
+## Session 5 — 2026-08-16, what shipped
+
+Sixteen commits. The order matters: the labels came in the middle and changed
+what the rest of the list was for.
+
+**Built and wired**
+
+| | |
+|---|---|
+| Multi-shot export | The dynamic editor reaches `handle_export`. Off by default. |
+| Dead-air trimming (§15) | Wordless silences cut out of the middle in the same encode, captions remapped. Off by default. Measured: 298 of 920 candidates get a cut, ~3.1s each. |
+| Episodes (§2) | A late chunk is told what the stream has been about. No model call — threads and atoms already held it. The last P1. |
+| Reasoning panel (§34) | `clips.reasoning` had been written and served since the story engine shipped and nothing displayed a field of it. |
+| `content_type` per stretch | 0 of 12 stretches right on the 4-hour source, to 9 of 12. |
+| Regions per stretch | See item 2 above. |
+| Anchors checkpointed | With a fingerprint, so a prompt change recomputes instead of silently reusing. |
+| yt-dlp auth | Cookies and a JS runtime; without both, a public VOD returns storyboards only. |
+| Transcribe progress | The worker's own message reaches the queue instead of a constant "Transcribing". |
+| Test database | The suite ran against the real `clipforge.db`. It does not now. |
+| `scripts/export_clipper_state.py` | Transcripts to disk plus a manifest of what is already done. |
+
+**Measured and deliberately NOT changed**
+
+- The facecam aspect band. Two more rules scored against the labels, both worse
+  than leaving it alone (5/8 and 6/8 against 7/8). See the scoreboard above.
+- The `game_zoom` crop, which a viewer said takes too much off the gameplay.
+  One viewing is a start, not an answer; the A/B costs twenty seconds.
+
+**Session 6 — 2026-08-17**
+
+| | |
+|---|---|
+| The shot planner was never given the words | `_candidate()` passed four keys and `dynamic_edit` reads a fifth. `_boundaries` placed every cut on audio peaks and scene changes instead of speech pauses, and `_speech_ratio` reported the streamer silent in every shot of every clip ever exported. 11 shots with the words against the 9 that shipped. |
+| Gameplay framed as wide as the crop allows | `game_height_pct` and `game_zoom` both 1.00 after a three-way A/B. See the section above. |
+| Pass D, local half (§21–22) | `review.py`. Three checks, one per failure seen on a real export. Advisory, written to the export sidecar under `review`. |
+| The audio shipped clipped, at 96 kHz | `loudnorm` in single pass aims at its TP, it does not enforce it — +0.2 dBFS against −1.5 — and it leaves the stream at its own internal rate. Reported by ear, confirmed by measurement. |
+| Both renderers level the same way | The static path had NO loudness processing at all, so a clip that fell back to it shipped quieter than one that did not. One `loudness_chain()` in `ffmpeg_tools`, used by both. Verified on real renders: 48 kHz, −13.3 LUFS, −1.4 dBFS on each. |
+| `dynamic_edit` ON by default | See the switch table above. |
+
+**The thing that nearly made the whole session pointless:** every fix listed
+under session 6 lands on the multi-shot path, which was off by default. With
+stock settings an export touched none of it — not even the audio ceiling, which
+lives in `dynamic_render.py`. Worth checking, whenever a session ends, that the
+work is on a path something actually takes.
+
+Pass D's own first run is the lesson worth keeping: **two of its three checks
+were wrong the first time they touched real data**, in ways no unit test would
+have caught. It compared proxy pixels to source pixels, and it judged the
+co-streamer's face against a crop framing the other person — reporting "100% of
+the face is outside the crop" on every clip it saw. Both are pinned by tests
+now. A checker needs checking.
+
+**Ground truth that now exists**
+
+`docs/source-labels.md` — eleven sources labelled by eye. Every threshold in
+the detectors had been fitted to one Minecraft co-stream, and there was no way
+to tell a correct rule from one that happened to fit. There is now.
 
 ---
 

@@ -183,7 +183,13 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
         str(paths["audio"]),
         duration=float(project.duration or 0.0),
         is_cancelled=lambda: queue.is_cancelled(job_id),
-        on_progress=lambda p, m: queue.update_progress(job_id, max(0.02, p * 0.97), "Transcribing"),
+        # Pass the transcriber's own message through. It says "Transcribing...
+        # 1234.5s / 15826.0s (12%) [chunk 3/9]"; the constant "Transcribing"
+        # this used to send threw all of it away, and on a 4-hour source that
+        # leaves a 90-minute stage looking identical to a hung one for its
+        # whole duration. handle_export next door already passes `m`.
+        on_progress=lambda p, m: queue.update_progress(
+            job_id, max(0.02, p * 0.97), m or "Transcribing"),
         language=None if language in ("auto", "", None) else language,
         keep_punctuation=True,
     )
@@ -277,6 +283,24 @@ async def handle_analyze(job_id: str, project_id: str, clip_id, metadata, queue)
 
     regions = await loop.run_in_executor(None, lambda: ct.detect_regions(frames))
     storage.write_artifact(project_id, "regions", regions)
+    # ...and again per stretch. Layout is detected ONCE for a whole source, and
+    # seven of eleven labelled sources change layout part-way through. Measured
+    # on the 4-hour slice: the whole-file answer applies a Minecraft facecam
+    # rect to the first 35 minutes, which are a full-frame camera with no game
+    # in them at all; per stretch those minutes correctly report none.
+    # `regions` above is still written and is still the fallback.
+    from services.clipper import segment_type as seg_type_mod
+
+    try:
+        by_range = await loop.run_in_executor(
+            None, lambda: ct.detect_regions_by_range(
+                frames, times, seg_type_mod.clock_ranges(duration)))
+    except Exception:
+        logger.warning("clipper %s: per-stretch region detection failed; the "
+                       "whole-file regions stand", project_id, exc_info=True)
+        by_range = []
+    if by_range:
+        storage.write_artifact(project_id, "regions_by_segment", by_range)
     storage.write_artifact(
         project_id, "faces", {"samples": sig.get("faces") or [], "times": times}
     )

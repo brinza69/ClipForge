@@ -146,8 +146,29 @@ DEFAULT_STYLE: dict[str, Any] = {
     "contrast": 1.07,
     # Framing geometry.
     "chat_margin_pct": 0.09,     # right-hand strip the gameplay camera avoids
-    "game_height_pct": 0.86,     # skips the stream's own top HUD and bottom bar
-    "game_zoom": 0.64,           # game_tight height as a fraction of the frame
+    # Both gameplay rungs now take the full frame height, which is the widest a
+    # 9:16 crop of a 16:9 frame can ever be. Chosen by the owner off a three-way
+    # A/B on the one clip anyone has watched (13030.57s of slice4h00test, same
+    # shot list and captions in all three, only these two keys moved):
+    #
+    #   0.86 / 0.64   388px, 20.2% of frame width   no hotbar, no hearts
+    #   1.00 / 0.87   526px, 27.4%                  game HUD visible
+    #   1.00 / 1.00   606px, 31.6%                  all of it, plus a sliver of
+    #                                               the stream's own counter
+    #
+    # 0.86 was there to skip the stream's top HUD and bottom bar, and it did —
+    # along with the HUD of the GAME, which is the half a viewer needs. The
+    # stream's overlay coming back into frame is the accepted price.
+    #
+    # 31.6% is the ceiling, not a setting: at full height the width is fixed by
+    # the aspect ratio. If a gameplay shot still reads too tight, no value here
+    # fixes it — that needs a letterboxed game band, a different layout.
+    #
+    # These being equal makes `game` and `game_tight` the same rectangle, so the
+    # ladder has one rung and a g->G step would cut on nothing. `_merge_dead_cuts`
+    # in dynamic_edit.py is what handles that, and it exists for this.
+    "game_height_pct": 1.00,
+    "game_zoom": 1.00,
     "game_centre_y_pct": 0.47,
     # The reference edits never sit on one subject for long: after this many
     # consecutive shots the planner crosses to the other camera family whatever

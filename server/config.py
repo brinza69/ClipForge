@@ -149,6 +149,15 @@ class Settings(BaseSettings):
     # entirely and headlines fall back to deterministic extraction, so the
     # pipeline never fails just because an optional provider is missing.
     clipper_top_n_llm: int = 8
+    # Hands-off mode: render the top N clips as soon as scoring finishes,
+    # instead of stopping at the board and waiting for someone to pick.
+    #
+    # 0 = off, and off is the default because rendering is the one stage that
+    # costs real minutes and produces files on disk — doing that uninvited to
+    # someone who only wanted to see what the source contained is the wrong
+    # surprise. It is a per-project setting; the source form offers it up front,
+    # which is where a "paste a link and walk away" run is actually decided.
+    clipper_auto_export: int = 0
     clipper_llm_engine: str = ""
 
     # Export. crf 18 + slow is the single quality pass — crop, scale, stack and
@@ -159,6 +168,26 @@ class Settings(BaseSettings):
 
     # Gaming layout: default share of the 1080x1920 canvas given to the facecam.
     clipper_face_pct: float = 0.35
+    # Multi-shot export: plan a shot list and cut between cameras instead of
+    # rendering one fixed split screen for the whole clip.
+    #
+    # ON as of 2026-08-17, by the owner's decision, after it stopped being a
+    # thing only tests had seen: a viewer judged the rhythm and camera choice
+    # good, named the one fault (gameplay cropped too tight), and that was
+    # settled by an A/B. Everything measured since — cuts on speech pauses, the
+    # wide gameplay framing, Pass D, the audio ceiling — lands on this path and
+    # NOWHERE ELSE, so leaving it off meant none of it reached a clip.
+    #
+    # It still falls back to the static layout on a missing proxy, a plan with
+    # fewer than two shots, or any exception, so the old path remains the floor
+    # rather than becoming dead code.
+    clipper_dynamic_edit: bool = True
+    # Cut dead seconds out of the MIDDLE of a chosen window (brief §15). OFF by
+    # default: `trim_silence` has sat in the settings dict since the clipper
+    # shipped with nothing reading it, so no export has ever been trimmed and
+    # nobody's expectations depend on it. Turning it on by default would change
+    # every deliverable at once.
+    clipper_trim_silence: bool = False
 
     # 0 = never auto-purge project artifacts.
     clipper_retention_days: int = 0

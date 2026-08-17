@@ -42,6 +42,9 @@ does nothing.
 | Archetypes | `story.ARCHETYPES` + `ARCHETYPE_SHAPE` | 15, each with the shape it must satisfy |
 | Edit variants | `story.variants_from_anchor` | 2–4 per anchor, each carrying why it was cut that way |
 | Debuggability | `clips.reasoning` JSON column | anchor, payoff, context, archetype, variant, judge verdict |
+| Episodes (§2) | `episodes.py` | what the stream was about before this chunk, no model call |
+| Second efficiency (§15) | `dead_air.py` | wordless silences cut out of the middle, captions remapped |
+| Inspection panel (§34) | `reasoning-panel.tsx` | the "why" button on a clip |
 
 Both new properties reach the score: `context_completeness` gives
 `context_debt` the largest of its five terms, and `hook` ramps down on
@@ -103,28 +106,67 @@ clip the judge declined to rank beat one it ranked fourth.
   gave different orderings, and two runs of the full board gave different top
   threes. Any judgement about whether story_v1 is better needs several runs,
   not one.
-- **Validated on one source.** A 12-minute Minecraft slice, English, one
-  content type. Nothing here has met a podcast or an IRL stream.
-- **No episode/thread memory.** Anchors are found per chunk with no memory
-  across them, so a callback to something an hour earlier cannot be detected.
-  That is the P1 work.
+- **~~Validated on one source.~~** No longer true as of 2026-08-16: eleven
+  sources are on disk and labelled by eye — gaming, Just Chatting, IRL, an
+  interview, a Romanian vlog — and the detectors are scored against them in
+  `source-labels.md`. What has NOT been re-measured on them is the story engine
+  itself: every number in this file still comes from the Minecraft slices,
+  because scoring the others needs the LLM passes turned on and a run per
+  source.
+- **~~No episode/thread memory.~~** Built 2026-08-16. Threads (§3), then
+  episodes (§2): `anchor_prompt` now opens with what the stream has been about
+  before the current chunk. See "Episodes" below.
 
 ## Not built (from the upgrade spec)
 
-**P1** — stream memory and episodes, story threads, promises/callbacks,
-semantic dedupe, second-efficiency trimming. *(Comparative ranking is done.)*
+Rewritten 2026-08-16. `story-engine-spec-status.md` is the authority, section
+by section; this is the summary.
 
-**Unprioritised in the spec but not built** — event atoms as a first-class
-structure (§1). Anchors are found straight from the transcript, which works,
-but it means the event graph (§5) and timeline retrieval (§25) have no
-foundation to sit on. Also missing: a frontend inspection panel (§34) and
-golden cases (§36).
+**P1 — all seven done.** Stream memory and episodes, story threads,
+promises/callbacks, semantic dedupe, comparative ranking, hook latency, and
+second-efficiency trimming (`dead_air.py`, §15) were the last two to land.
 
-**P2** — multimodal Pass D over rendered previews, diarization, pairwise human
-feedback, the boundary-learning dataset.
+**Event atoms (§1) are built** and are what threads, retrieval and episodes sit
+on. The frontend inspection panel (§34) is built as well — the "why" button on
+a clip.
+
+**Still not built:** golden cases (§36).
+
+**P2** — multimodal Pass D over rendered previews (§21-22), diarization (§23),
+pairwise human feedback (§26), the boundary-learning dataset (§27). Pass D is
+the largest remaining gap in the whole brief and it grew: the multi-shot editor
+now makes visual decisions that nothing checks.
 
 **P3** — game-specific detectors, post-publish metrics, the advanced learned
 ranker.
+
+## Episodes (§2)
+
+`episodes.py` cuts the stream into stretches on the clock and labels each with
+the words that tell it apart from the others, by TF-IDF over the buckets.
+`anchor_prompt` puts the stretches that CLOSED before the current chunk in
+front of the model as background, with the instruction not to clip from them; a
+stretch the chunk is still inside is not offered, because calling a running
+episode "background" would tell the model the moment it is reading is old news.
+
+No model call. The threads and the atoms already held everything a summary
+needs, and §29 forbids paying per moment.
+
+Two designs failed first, both recorded in the module because each produced
+working code that summarised nothing:
+
+- Cutting an episode where no thread had run for two minutes gave **two**
+  episodes for four hours, one spanning minute 8 to minute 240. Threads on a
+  dense source overlap constantly, so there is no quiet moment to cut at.
+- Labelling by "the words the most arcs share" returned *"don't, it's, right,
+  can't, both, eight"*. The words every arc has identify nothing.
+
+Measured on the 4-hour source: 123 threads and 1536 atoms become 12 stretches,
+and the labels match what is known to be in it. Minute 3-23 reads "control,
+failure, push, workout" over the gym segment; 63-83 reads "heal, golem, witch,
+bell" and the iron-golem clip sits at minute 73; 203-223 reads "drown, grown,
+sense, bubbles" and the two best clips on the board were cut from that argument
+at minute 217.
 
 ## Semantic dedupe and archetype diversity (§20)
 

@@ -1,5 +1,10 @@
 # Handoff — AI Stream Clipper, second session
 
+> **History.** Superseded by `handoff-clipper-session-4.md` (the state of the
+> world) and `clipper-map.md` (what every file is). Still accurate about the
+> code it describes — read it for the reasoning behind a decision, not for
+> where things are now.
+
 Written 2026-08-10. Everything below was run on **this** machine and checked, not
 carried over from a previous document. The handoff this replaces
 (`handoff-dynamic-edit.md`) is still accurate about the code it describes but its

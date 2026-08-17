@@ -1,5 +1,10 @@
 # Handoff — dynamic multi-cam edit
 
+> **History.** Superseded by `handoff-clipper-session-4.md` (the state of the
+> world) and `clipper-map.md` (what every file is). Still accurate about the
+> code it describes — read it for the reasoning behind a decision, not for
+> where things are now.
+
 Paste the block in section 0 into a fresh Claude Code session (any account) to
 continue this work. Everything after it is the reference material that block
 points at.

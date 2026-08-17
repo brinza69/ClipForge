@@ -1,5 +1,10 @@
 # Handoff — AI Stream Clipper, third session
 
+> **History.** Superseded by `handoff-clipper-session-4.md` (the state of the
+> world) and `clipper-map.md` (what every file is). Still accurate about the
+> code it describes — read it for the reasoning behind a decision, not for
+> where things are now.
+
 Written 2026-08-10, mid-run: the session stopped on credits, not on a problem.
 Read `handoff-clipper-session-2.md` §Environment first — it is still correct
 about the machine, except where this file says otherwise.

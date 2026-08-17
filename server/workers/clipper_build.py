@@ -21,11 +21,83 @@ from sqlalchemy import select, update
 from config import settings
 from database import async_session
 from job_queue import JobCancelledError
-from models import ClipModel, ClipStatus, ProjectModel, ProjectStatus, TranscriptModel
+from models import (
+    ClipModel,
+    ClipStatus,
+    JobType,
+    ProjectModel,
+    ProjectStatus,
+    TranscriptModel,
+)
 from services.clipper import storage
 from services.clipper.serialize import effective_content_type
 
 logger = logging.getLogger("clipforge.clipper.build")
+
+
+def _anchor_stamp(cfg: dict, duration: float) -> dict:
+    """What a cached anchor set is only valid for.
+
+    A checkpoint without one is worse than no checkpoint: change the prompt,
+    the engine or the reasoning version, re-score, and the run silently reuses
+    answers the new configuration would never have produced. Everything here
+    changes what the model is asked or which model is asked.
+    """
+    from services.clipper import llm_select
+
+    return {
+        "prompt": llm_select.ANCHOR_PROMPT_VERSION,
+        "reasoning": str(cfg.get("reasoning_version")
+                         or settings.clipper_reasoning_version or "legacy"),
+        "engines": list(llm_select.NOMINATE_ENGINES),
+        "duration": round(float(duration or 0.0), 1),
+    }
+
+
+def _cached(project_id: str, name: str, stamp: dict) -> Any | None:
+    """A previous run's model output, or None when it cannot be trusted."""
+    blob = storage.read_artifact(project_id, name)
+    if not isinstance(blob, dict) or blob.get("stamp") != stamp:
+        return None
+    logger.info("clipper %s: reusing %s from a previous run", project_id, name)
+    return blob.get("data")
+
+
+def _cache(project_id: str, name: str, stamp: dict, data: Any) -> None:
+    storage.write_artifact(project_id, name, {"stamp": stamp, "data": data})
+
+
+def _segment_types(project_id: str, duration: float, transcript: dict) -> list[dict]:
+    """Per-stretch content types, checkpointed. [] when it cannot be worked out.
+
+    Never fatal: a source whose stretches cannot be classified scores exactly
+    as it did before this existed.
+    """
+    from services.clipper import segment_type as seg_type_mod
+
+    cached = storage.read_artifact(project_id, "segment_types")
+    if isinstance(cached, list) and cached:
+        return cached
+
+    paths = storage.paths(project_id)
+    frames = sorted(str(p) for p in paths["frames_dir"].glob("*.jpg"))
+    times = (storage.read_artifact(project_id, "faces") or {}).get("times") or []
+    signals = storage.read_artifact(project_id, "signals") or {}
+    if not frames or len(times) != len(frames) or duration <= 0:
+        return []
+    try:
+        out = seg_type_mod.classify_ranges(
+            frames, times, signals, transcript,
+            seg_type_mod.clock_ranges(duration))
+    except Exception:
+        logger.warning("clipper %s: per-stretch content typing failed; using "
+                       "the whole-file profile", project_id, exc_info=True)
+        return []
+    if out:
+        storage.write_artifact(project_id, "segment_types", out)
+        logger.info("clipper %s: %d stretches typed (%s)", project_id, len(out),
+                    ", ".join(sorted({str(s["content_type"]) for s in out})))
+    return out
 
 
 async def _fetch_transcript(project_id: str) -> dict[str, Any]:
@@ -53,6 +125,8 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     from services.clipper import llm_select
     from services.clipper import promises as promises_mod
     from services.clipper import ranker, scoring, segmentation
+    from services.clipper import segment_type as seg_type_mod
+    from services.clipper.candidate_terms import _num
     from services.clipper import threads as threads_mod
 
     async with async_session() as session:
@@ -76,6 +150,16 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     regions = storage.read_artifact(project_id, "regions") or {}
     faces_blob = storage.read_artifact(project_id, "faces") or {}
     faces = faces_blob.get("samples") or []
+    # What each STRETCH of the source is, rather than what the file is. Every
+    # long live source labelled by hand runs two or three types in a row, so a
+    # single project-level answer is wrong for a third of the clips on them no
+    # matter how good the classifier gets. Measured on slice4h00test against
+    # the labels: the whole-file answer was right for 0 of 12 stretches, the
+    # per-stretch one for 9. Falls back to `profile` wherever a stretch is too
+    # short to classify, and the override still wins over everything.
+    seg_types: list[dict] = []
+    if not project.content_type_override:
+        seg_types = _segment_types(project_id, duration, transcript)
 
     # ── Pass B ──────────────────────────────────────────────────────────────
     await queue.update_progress(job_id, 0.05, "Building semantic segments")
@@ -136,8 +220,17 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 if not isinstance(arcs, list):
                     arcs = threads_mod.build(atoms)
                     storage.write_artifact(project_id, "threads", arcs)
-                anchors = await llm_select.detect_anchors(
-                    segments, duration, promises=known, atoms=atoms)
+                # `arcs` also becomes the rolling summary (§2): a chunk at hour
+                # seven is told what the stream has been about before it, which
+                # is the one thing a per-chunk pass otherwise cannot know.
+                anchors = _cached(project_id, "anchors",
+                                  _anchor_stamp(cfg, duration))
+                if anchors is None:
+                    anchors = await llm_select.detect_anchors(
+                        segments, duration, promises=known, atoms=atoms,
+                        threads=arcs)
+                    _cache(project_id, "anchors",
+                           _anchor_stamp(cfg, duration), anchors)
                 storage.write_artifact(project_id, "graph",
                                        threads_mod.edges(arcs, known, anchors))
                 nominated = cand_mod.candidates_from_anchors(
@@ -179,7 +272,12 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
 
     for cand in refined:
         features = cand_mod.extract_features(cand, transcript, sig, duration)
-        scored = scoring.score_candidate(cand, features, profile=profile, platform=platform)
+        # The profile of the stretch this candidate sits in, at its midpoint.
+        here = seg_type_mod.type_at(
+            seg_types, (_num(cand.get("start")) + _num(cand.get("end"))) / 2.0,
+            profile)
+        cand["content_type"] = here
+        scored = scoring.score_candidate(cand, features, profile=here, platform=platform)
         cand["features"] = features
         cand["sub_scores"] = scored["sub_scores"]
         cand["reason"] = scored["reason"]
@@ -305,11 +403,56 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         )
         await session.commit()
 
-    await queue.update_progress(job_id, 1.0, "Ready for review")
+    queued = await _auto_export(project_id, cfg, queue)
+    await queue.update_progress(
+        job_id, 1.0,
+        f"Rendering the top {queued}" if queued else "Ready for review")
     logger.info(
         f"clipper build for {project_id}: {len(winners)} candidates "
         f"({len(ranked) - len(winners)} alternatives), profile={profile}"
+        + (f", auto-exporting {queued}" if queued else "")
     )
+
+
+async def _auto_export(project_id: str, cfg: dict, queue) -> int:
+    """Queue renders for the best N clips, for a run nobody is watching.
+
+    The pipeline has always stopped here, and stopping here is right when a
+    person is going to look at the board: rendering is the one stage that costs
+    minutes and writes files, so doing it uninvited is the wrong surprise.
+
+    It is the wrong answer for the other use, which is pasting a link and
+    walking away. So the chain continues only when the project asked for it.
+
+    Alternatives are excluded. They exist so a human can compare two cuts of one
+    moment, and rendering both is exactly the duplication dedupe just removed.
+    """
+    try:
+        want = int(cfg.get("auto_export", settings.clipper_auto_export) or 0)
+    except (TypeError, ValueError):
+        want = 0
+    if want <= 0:
+        return 0
+
+    async with async_session() as session:
+        rows = await session.execute(
+            select(ClipModel.id)
+            .where(ClipModel.project_id == project_id,
+                   ClipModel.is_alternative.is_not(True),
+                   ClipModel.status == ClipStatus.candidate.value)
+            .order_by(ClipModel.overall_score.desc())
+            .limit(want)
+        )
+        clip_ids = [r[0] for r in rows]
+
+    for clip_id in clip_ids:
+        # One job each rather than one job for the batch: the export lane is
+        # bounded, a failed render should cost its own clip and not the rest,
+        # and the board fills in as they land instead of all at the end.
+        await queue.enqueue(project_id=project_id,
+                            job_type=JobType.clipper_export.value,
+                            clip_id=clip_id)
+    return len(clip_ids)
 
 
 async def _attach_headlines(winners: list[dict], cfg: dict, queue, job_id: str) -> None:

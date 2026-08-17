@@ -112,6 +112,12 @@ export interface ClipperSettings {
   platform: TargetPlatform;
   fps: "source" | 30 | 60;
   language: string; // "auto" | "ro" | "en" | ...
+  /**
+   * Render the top N as soon as scoring finishes instead of stopping at the
+   * board. 0 is off and is the default — rendering costs minutes and writes
+   * files, so it is chosen rather than handed out.
+   */
+  auto_export: number;
 
   // Editing preferences
   caption_preset_id: string;
@@ -190,6 +196,67 @@ export interface SourceMetadata {
   suggestion?: string;
 }
 
+// Why a clip was picked, as the backend recorded it. Written by the story
+// engine (`reasoning_version = "story_v1"`); legacy clips carry only `reasons`
+// and the judge's verdict, and everything here is optional for that reason.
+export interface ClipStory {
+  anchor_t?: number;
+  payoff_t?: number;
+  hook_t?: number;
+  reaction_end?: number;
+  archetypes?: string[];
+  why?: string;
+  edit_reason?: string;
+  required_context?: { t?: number; fact?: string }[];
+  unresolved_refs?: { text?: string; resolved?: boolean }[];
+  context_debt?: number;
+  hook_latency?: number;
+  thread_id?: string;
+  story_version?: string;
+  callback_to?: { t?: number; text?: string; kind?: string } | null;
+  callback_debt?: number;
+}
+
+export interface ClipVerdict {
+  story_editor?: string;
+  cold_viewer?: string;
+  critic?: string;
+  reject_reasons?: string[];
+  prompt_version?: string;
+}
+
+export interface ClipReasoning {
+  reasons?: string[];
+  story?: ClipStory;
+  variant?: string;
+  llm_score?: number;
+  llm_rank?: number;
+  llm_reason?: string;
+  llm_verdict?: ClipVerdict;
+}
+
+// Pass D. `reasoning` says why the MOMENT was chosen; this says what is wrong
+// with the CUT, and it only exists after an export, because that is when there
+// is a shot list and a caption position to be wrong about.
+export interface ClipFinding {
+  kind: string;
+  /** "revise" — something can act on it. "reject" — the clip is mostly dead. */
+  severity: "revise" | "reject";
+  /** Seconds from the start of the clip, so the reader can jump to it. */
+  at: number;
+  detail: string;
+  value: number;
+}
+
+export interface ClipReview {
+  version: string;
+  verdict: "APPROVE" | "REVISE" | "REJECT";
+  findings: ClipFinding[];
+  /** How many frames were sampled. `0` means the review could not look. */
+  sampled: number;
+  warnings: string[];
+}
+
 export interface ClipperClip {
   id: string;
   project_id: string;
@@ -210,6 +277,8 @@ export interface ClipperClip {
   is_alternative: boolean;
   rank_position: number | null;
   ranker_version: string | null;
+  reasoning: ClipReasoning | null;
+  review: ClipReview | null;
   status: ClipStatus;
   export_path: string | null;
   preview_path: string | null;
@@ -325,6 +394,7 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   platform: "tiktok",
   fps: 30,
   language: "auto",
+  auto_export: 0,
   caption_preset_id: "bold_impact",
   caption_position: "bottom",
   caption_highlight: true,

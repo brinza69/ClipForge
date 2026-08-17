@@ -14,6 +14,8 @@ import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { CandidateCard } from "@/components/clipper/candidate-card";
+import { ClipEditor } from "@/components/clipper/clip-editor";
+import { ReasoningPanel } from "@/components/clipper/reasoning-panel";
 import { ScoreBreakdown } from "@/components/clipper/score-breakdown";
 import { Button } from "@/components/ui/button";
 import { errorDescription, readApiError } from "@/lib/api-error";
@@ -72,6 +74,8 @@ export function CandidateGrid({
   const [filter, setFilter] = useState<string>("all");
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [scoreClip, setScoreClip] = useState<ClipperClip | null>(null);
+  const [whyClip, setWhyClip] = useState<ClipperClip | null>(null);
+  const [editClip, setEditClip] = useState<ClipperClip | null>(null);
   const [bulk, setBulk] = useState(false);
 
   const winners = clips.filter((c) => !c.is_alternative);
@@ -195,6 +199,8 @@ export function CandidateGrid({
               clip={clip}
               onAction={act}
               onShowScore={setScoreClip}
+              onShowReasoning={setWhyClip}
+              onEdit={setEditClip}
             />
           ))}
         </div>
@@ -204,6 +210,22 @@ export function CandidateGrid({
         clip={scoreClip}
         open={scoreClip !== null}
         onOpenChange={(v) => !v && setScoreClip(null)}
+      />
+
+      <ReasoningPanel
+        clip={whyClip}
+        open={whyClip !== null}
+        onOpenChange={(v) => !v && setWhyClip(null)}
+      />
+
+      <ClipEditor
+        clip={editClip}
+        open={editClip !== null}
+        onOpenChange={(v) => !v && setEditClip(null)}
+        // The board re-derives from the server, never from local state: a trim
+        // changes the duration and drops the preview path, and both come back
+        // from the PATCH rather than being guessable here.
+        onSaved={onRefresh}
       />
     </div>
   );

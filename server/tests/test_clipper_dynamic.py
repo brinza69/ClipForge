@@ -119,6 +119,35 @@ def test_adjacent_shots_never_share_a_camera():
         assert a["camera"] != b["camera"]
 
 
+def test_adjacent_shots_never_share_a_rect_either():
+    """The invariant above, checked on the geometry rather than the name.
+
+    The name check cannot see the case that actually shipped: with
+    `game_height_pct` and `game_zoom` both at 1.00 — the measured default since
+    the framing A/B — `game` and `game_tight` are two names for one rectangle,
+    so a g->G step passes the name check and cuts on nothing.
+    """
+    for style in ({}, {"game_height_pct": 1.0, "game_zoom": 1.0},
+                  {"game_height_pct": 0.86, "game_zoom": 0.64}):
+        shots = _plan(**style)["shots"]
+        for a, b in zip(shots, shots[1:]):
+            assert tuple(a["rect"][k] for k in ("x", "y", "w", "h")) != \
+                   tuple(b["rect"][k] for k in ("x", "y", "w", "h")), \
+                   f"a cut that changes nothing, at {b['t0']}s, style={style}"
+
+
+def test_merging_a_dead_cut_keeps_the_timeline_whole():
+    """Removing a cut must not remove any of the clip with it."""
+    merged = dynamic_edit._merge_dead_cuts([
+        {"index": 0, "t0": 0.0, "t1": 1.0, "rect": {"x": 0, "y": 0, "w": 10, "h": 20}},
+        {"index": 1, "t0": 1.0, "t1": 2.5, "rect": {"x": 0, "y": 0, "w": 10, "h": 20}},
+        {"index": 2, "t0": 2.5, "t1": 4.0, "rect": {"x": 8, "y": 0, "w": 10, "h": 20}},
+    ])
+    assert [s["index"] for s in merged] == [0, 1]
+    assert merged[0]["t0"] == 0.0 and merged[0]["t1"] == 2.5
+    assert merged[-1]["t1"] == 4.0
+
+
 def test_shot_lengths_stay_inside_the_configured_band():
     style = {"min_shot_s": 0.6, "target_shot_s": 1.25, "max_shot_s": 2.4}
     shots = _plan(**style)["shots"]
@@ -345,6 +374,28 @@ def test_audio_is_compressed_before_it_is_normalised():
     # LRA of 2.5-3.1 LU in the references is a compressor, not a normaliser.
     chain = _cmd()[_cmd().index("-af") + 1]
     assert chain.index("acompressor") < chain.index("loudnorm")
+
+
+def test_the_delivered_rate_is_restored_after_loudnorm():
+    """loudnorm resamples internally to 192 kHz and does not put it back, so
+    the encoder negotiated the highest rate AAC accepts and 192 kbit/s paid for
+    a band nobody can hear. Every clip shipped at 96 kHz until this was
+    measured on a delivered file."""
+    chain = _cmd()[_cmd().index("-af") + 1]
+    assert f"aresample={dynamic_render.AUDIO_RATE}" in chain
+    assert chain.index("loudnorm") < chain.index("aresample")
+
+
+def test_the_limiter_is_the_ceiling_and_does_not_re_level():
+    """loudnorm's TP is a target it aims at, not a ceiling it guarantees — it
+    missed by 1.7 dB on an 18s clip and delivered +0.2 dBFS. And `alimiter`
+    auto-levels its output back UP by default, which measured +0.07 dBFS and
+    -11.8 LUFS: the default limiter undoes the normaliser in front of it."""
+    chain = _cmd()[_cmd().index("-af") + 1]
+    assert "alimiter" in chain
+    assert chain.index("loudnorm") < chain.index("alimiter")
+    assert "level=false" in chain, "alimiter auto-levels back to the ceiling"
+    assert f"limit={dynamic_render.LIMITER_CEILING}" in chain
 
 
 def test_hits_become_one_flash_term_each():

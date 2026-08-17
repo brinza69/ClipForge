@@ -118,19 +118,45 @@ def _load_frames(frames: Sequence[str]) -> tuple[list[Any], float, int, int]:
 
 
 def _patch_motion(grays: Sequence[Any], w: int, h: int) -> tuple[float, float]:
-    """(corner stability, centre motion), both 0..1. 0.08 mean abs diff is a
-    fully-changed patch in practice — brightness flicker sits well below it."""
+    """(corner stability, centre motion), both 0..1, both RELATIVE.
+
+    Each is measured against the same frame pair's own overall change, never
+    against a fixed amount of pixel difference.
+
+    The absolute version compared to 0.08, on the grounds that "0.08 mean abs
+    diff is a fully-changed patch in practice — brightness flicker sits well
+    below it". That is true of ADJACENT video frames, and these are not: the
+    frames handed to the classifier are sampled across the whole source, so on
+    a 4-hour VOD two consecutive ones are ~36 seconds apart and everything in
+    both patches has changed. Measured on five sources, `corner_stability` came
+    back 0.000 on four of them and `centre_motion` 1.000 on all five — so
+    `hud_signal = corner * centre` was 0 everywhere, and the 1.8-weight gaming
+    vote it feeds could never fire. `screen_like` died the same way.
+
+    Fifth time an absolute threshold has measured nothing here, after
+    audio_peak_ratio, audio_dynamic_range, game_ui_ratio and the atom marks.
+    Same fix every time: compare a thing to its own context.
+    """
     if len(grays) < 2 or w < 8 or h < 8:
         return 1.0, 0.0
     cw, ch = max(4, int(w * _CORNER_FRAC)), max(4, int(h * _CORNER_FRAC))
     boxes = [(0, 0), (w - cw, 0), (0, h - ch), (w - cw, h - ch)]
-    corner_d, centre_d = [], []
+    corner_d, centre_d, overall_d = [], [], []
     for a, b in zip(grays, grays[1:]):
         d = np.abs(a.astype(np.int16) - b.astype(np.int16))
         corner_d.append(float(np.mean([np.mean(d[y:y + ch, x:x + cw]) for x, y in boxes])) / 255.0)
         centre_d.append(float(np.mean(d[h // 4:h - h // 4, w // 4:w - w // 4])) / 255.0)
-    return (clamp01(1.0 - float(np.mean(corner_d)) / 0.08),
-            clamp01(float(np.mean(centre_d)) / 0.08))
+        overall_d.append(float(np.mean(d)) / 255.0)
+    corner = float(np.mean(corner_d))
+    centre = float(np.mean(centre_d))
+    overall = float(np.mean(overall_d))
+    if overall <= 1e-9:
+        return 1.0, 0.0  # nothing changed anywhere; no evidence either way
+    # Stability: how much LESS the corners change than the frame as a whole.
+    # Motion: how much MORE the middle changes than the border — which is the
+    # thing the HUD signal was always trying to say.
+    return (clamp01(1.0 - corner / overall),
+            clamp01(1.0 - corner / max(centre, 1e-9)))
 
 
 def frame_features(frames: Sequence[str]) -> dict[str, Any]:
@@ -157,6 +183,51 @@ def frame_features(frames: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def _scene_faces(frames: Sequence[str]) -> int | None:
+    """How many people are in the SCENE, ignoring anyone in a facecam inset.
+
+    Replaces the modal faces-per-frame for the two-people question, and both
+    halves of that matter.
+
+    The MODAL count cannot answer it. Measured on the labelled sources it
+    returns 1 or 0 everywhere — including 0 on the two Minecraft sources, which
+    demonstrably have two faces on screen, because the cascade misses in enough
+    frames that zero is the commonest answer. `two_up` needs 2 or 3, so
+    `podcast` and `interview` could never win their own vote and never once did
+    on any source. Counting stable CLUSTERS instead is robust to per-frame
+    misses: it gets both Minecraft sources right, and an edited interview that
+    cuts between speakers reads as several clusters rather than one face.
+
+    Ignoring insets is the other half. Two people in facecam insets is a
+    co-stream, not two people sitting together, and counting clusters alone
+    turned the 12-minute Minecraft slice from `gaming` into `interview`.
+    Excluding clusters that sit inside a detected webcam rect fixes that
+    without touching the case it was added for.
+
+    Measured end to end on the eight labelled sources: modal 3/8, clusters
+    alone 3/8 (one fixed, one broken), clusters outside insets **4/8**.
+
+    None when the frames cannot be read, so the caller keeps the old statistic
+    rather than being told there is nobody on screen.
+    """
+    grays, _sat, fw, fh = _load_frames(frames or [])
+    if not grays or fw < 16 or fh < 16:
+        return None
+    faces = _face_boxes(grays)
+    total = max(1, len(faces))
+    cams, _confs = _find_webcams(grays, faces, fw, fh)
+    count = 0
+    for group in _face_groups(faces, fw, fh):
+        hits = len({i for i, _ in group})
+        if hits < _FACECAM_MIN_HITS or hits / total < _FACECAM_MIN_RATE:
+            continue
+        median = median_rect([b for _, b in group])
+        if median and any(rect_overlap_frac(median, cam) > 0.5 for cam in cams):
+            continue                      # this one is a facecam, not the scene
+        count += 1
+    return count
+
+
 def detect_content_type(frames: list[str], signals: dict,
                         transcript: dict) -> dict[str, Any]:
     """{'content_type','confidence' 0..1,'evidence':[str,..]}"""
@@ -166,6 +237,9 @@ def detect_content_type(frames: list[str], signals: dict,
     fh = int(features.get("frame_height") or signals.get("frame_height") or 0)
     features.update(summarize_motion(signals))
     features.update(summarize_faces(signals, fw, fh))
+    scene = _scene_faces(frames or [])
+    if scene is not None:
+        features["face_count"] = float(scene)
     features["speech_ratio"] = speech_ratio(signals)
     features.update(keyword_scores(transcript_text(transcript)))
     return classify_features(features)
@@ -221,6 +295,10 @@ _FACECAM_PAD_W, _FACECAM_PAD_H = 2.6, 2.2
 # boundaries away from the frame run 6.0 to 71. 3.0 sits in the gap with room
 # on both sides.
 _FACECAM_EDGE_DOMINANCE = 3.0
+# Below this a stretch has too few frames for the face cluster to clear its own
+# hit-rate gate, and the answer would be "no facecam" for lack of evidence
+# rather than for lack of a facecam.
+_MIN_RANGE_FRAMES = 12
 
 
 def _step_profiles(grays: Sequence[Any]) -> tuple[Any, Any]:
@@ -475,6 +553,35 @@ def _find_hud(edges: Sequence[Any], diffs: Sequence[Any], fw: int, fh: int,
     rects = [r for r in (snap_rect(rect, fw, fh) for _, rect in top) if r]
     strength = clamp01(float(np.mean([s for s, _ in top])) / max(mean_edge * 2.5, 1e-6))
     return rects, round(strength, 3)
+
+
+def detect_regions_by_range(frames: Sequence[str], frame_times: Sequence[float],
+                            ranges: Sequence[tuple[float, float]]
+                            ) -> list[dict[str, Any]]:
+    """`detect_regions` per stretch of the stream, instead of once for the file.
+
+    Layout is detected ONCE for a whole source, and seven of the eleven sources
+    labelled by hand change layout part-way through. On slice4h00test the whole
+    file returns ONE facecam for a stream that demonstrably has two, because the
+    400 sampled frames are spread across four hours and the first 35 minutes are
+    a full-frame camera with no game in them. The detection blends two layouts
+    and fits neither.
+
+    Nothing about HOW a region is found changes here — the same function runs on
+    fewer frames at a time. The same source cut into 12-minute pieces already
+    finds both insets, which is what says the failure is the averaging.
+
+    Each entry is a regions blob with `start`/`end` added.
+    """
+    out: list[dict[str, Any]] = []
+    for start, end in ranges or []:
+        mine = [f for f, t in zip(frames, frame_times) if start <= t <= end]
+        if len(mine) < _MIN_RANGE_FRAMES:
+            continue
+        blob = detect_regions(mine)
+        blob["start"], blob["end"] = round(start, 2), round(end, 2)
+        out.append(blob)
+    return out
 
 
 def detect_regions(frames: list[str]) -> dict[str, Any]:
