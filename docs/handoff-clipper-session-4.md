@@ -400,6 +400,63 @@ So the next thing to measure is the BACKWARD (top) edge search, not the forward
 one. Recorded rather than guessed at, because the difference decides whether
 `_FACECAM_EDGE_DOMINANCE` is even involved.
 
+### The seed, measured properly — 2026-08-17. Three more approaches, all refuted
+
+Run `scripts/score_facecam.py` before believing anything here. It scores
+detection against `source-labels.md` and its baseline is **6 of 9**. Note it
+does NOT reproduce the "4-hour source gives both facecams" result above at any
+frame range — that measurement came from the per-segment path, which samples
+the proxy itself, and this one uses the sampled frames on disk. Treat the 4h row
+as a constant rather than a discriminator.
+
+**1. `_FACECAM_EDGE_DOMINANCE` is NOT involved, which settles the lead this file
+left.** The previous entry said the top edge was the one to measure and that the
+answer would decide whether the dominance bar mattered. Measured: on Jynxzi's
+main cluster the top search's peak-over-median is **21.73** against a bar of
+3.0, and on EARLY STREAM 3.92. Both sail through. The bar was never the gate.
+
+**2. The REACH is the mechanism.** `_FACECAM_OUTER = 4.0` is in multiples of the
+median face box, and the box wobbles — 22 to 62 px across eighths of one source.
+On Jynxzi the box is 50 px, so the top search runs rows **0 to 144** on a 270-row
+frame: more than half the picture. Inside a window that wide the strongest
+gradient is whatever the busiest thing in the frame is, and on both sources it is
+the stream's own top chrome.
+
+Capping the reach at a fraction of the FRAME instead fixes both failures
+outright, with rects that match the labels: EARLY STREAM `182x134@0,88` and
+Jynxzi `158x118@0,106`, both bottom-left as labelled.
+
+**3. And it costs more than it gains, for a reason worth knowing.** Score with
+the cap: **4 of 9**. The four edited sources, which were clean negatives, start
+reporting insets — `gym 12m`, `go ghost`, `apartament`, `Jensen Huang`.
+
+> **The detector's precision on edited sources is an artefact of its imprecision
+> on gaming ones.** The runaway rects are rejected by `_WEBCAM_AREA`, and that
+> rejection is the only thing keeping the edited sources clean. Improve the
+> geometry and the false positives appear, because nothing is discriminating —
+> the area gate was doing it by accident.
+
+That is why every approach to this edge trades one side for the other. It is the
+same shape as the aspect band, which this file already records as "the only thing
+currently rejecting runaway rects".
+
+**4. A border test restores the negatives and loses the targets.** Requiring all
+four sides of the snapped rect to be real steps (each clearing 1.8x its own
+neighbourhood) puts the four edited sources back to 0 — and rejects EARLY STREAM
+and Jynxzi too. **6 of 9 again, failing differently.**
+
+**5. Scene-cut rate does not separate edited from locked-off.** The obvious
+non-geometric discriminator, refuted in one measurement: insets run 1.50-3.92
+cuts/min, and the edited sources are 0.18, 7.67 and 9.67. `go ghost` sits BELOW
+every inset source, so no single threshold exists.
+
+**What this leaves.** The geometry fix is known and it works; what is missing is
+a discriminator that answers "is there an inset here at all", independent of how
+big the rect came out. Until something does that job on purpose, the area gate
+will keep doing it by accident and the reach cannot be fixed. Nine approaches
+have now failed on this edge. **Do not attempt a tenth without a discriminator
+first.**
+
 ### What the one remaining failure actually is
 
 On the EARLY STREAM gaming stretch the face cluster is as strong as this
