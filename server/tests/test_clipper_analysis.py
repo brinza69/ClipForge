@@ -888,3 +888,42 @@ def test_no_drop_when_the_next_word_follows_immediately():
 def test_the_minimum_duration_wins_over_a_tidy_ending():
     words = [_w("okay", 0.0, 0.4), _w("let's", 0.4, 0.7), _w("go", 9.0, 9.3)]
     assert candidate_boundaries._drop_dangling_tail(0.7, words, start=0.0, lo=0.6) == 0.7
+
+
+# ── duration must not outvote content ────────────────────────────────────────
+
+
+def test_platform_fit_carries_no_weight():
+    """It was the largest single contributor to how the board is ordered — 2.10
+    of 16.22 points of spread over 1073 real candidates, 13% of all
+    discrimination — and it is almost binary: 798 at 100, 120 at 0. What it
+    contributed was "is the duration in band", not a judgement about the clip.
+
+    Worse, the generator and the band disagreed: `clipper_max_clip_s` is 90 s
+    against a TikTok band ending at 45, so 26% of candidates were produced
+    exactly as asked and then docked for it. A 50 s clip lost 6 points to a 44 s
+    one while `payoff` contributes 1.14 in total.
+    """
+    from services.clipper.scoring import PROFILES
+
+    for name, weights in PROFILES.items():
+        assert weights.get("platform_fit", 0) == 0, (
+            f"{name} still lets duration outvote content")
+
+
+def test_platform_fit_is_still_computed_and_reported():
+    """Zeroed, not deleted. "60s, TikTok prefers under 45" is worth showing in
+    the breakdown; it just does not get a vote."""
+    from services.clipper.scoring import SUB_SCORES, platform_fit_score
+
+    assert "platform_fit" in SUB_SCORES
+    assert platform_fit_score(30.0, "tiktok") > platform_fit_score(80.0, "tiktok")
+
+
+def test_the_freed_weight_is_redistributed_rather_than_lost():
+    """`_normalise()` divides by the real sum, so zeroing one row entry spreads
+    its share proportionally instead of shrinking every score."""
+    from services.clipper.scoring import PROFILES
+
+    for name, weights in PROFILES.items():
+        assert abs(sum(weights.values()) - 1.0) < 1e-6, name

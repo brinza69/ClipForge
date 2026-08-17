@@ -93,7 +93,7 @@ Everything is `CLIPFORGE_`-prefixed; see `.env.example` for the annotated list.
 | Symptom | Setting |
 | --- | --- |
 | "Source is 6.3 h long, the limit is …" | `CLIPPER_MAX_SOURCE_DURATION_S` (default 12 h) |
-| Clips too short/long | the length preset in the form, or `CLIPPER_MIN_CLIP_S` / `_MAX_CLIP_S` |
+| Clips too short/long | the length preset in the form, or `CLIPPER_MIN_CLIP_S` / `_MAX_CLIP_S`. **This is the only lever.** `platform_fit` used to dock long clips 6 points and carries zero weight since 2026-08-17 — length is decided when candidates are generated, not by punishing them afterwards. |
 | Too many near-identical clips | lower `CLIPPER_OVERLAP_THRESHOLD` / `CLIPPER_TEXT_SIMILARITY_THRESHOLD` |
 | Analysis too slow on a long VOD | lower `CLIPPER_PROXY_WIDTH` / `CLIPPER_MAX_SAMPLED_FRAMES` |
 | Facecam detection wrong | override the layout per clip, or the content type on the project |
