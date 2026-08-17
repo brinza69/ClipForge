@@ -755,6 +755,28 @@ def _cam(x, y, w=158, h=158):
     return {"x": x, "y": y, "w": w, "h": h}
 
 
+def test_counting_people_does_not_borrow_the_facecam_bar():
+    """Two questions, two constants, and they were one until they diverged.
+
+    `_FACECAM_MIN_RATE` asks "is this rectangle part of the layout", where a
+    long sample legitimately dilutes the rate. `_SCENE_MIN_RATE` asks "is
+    somebody there", where it does not. Lowering the first from 0.15 to 0.10 —
+    right on its own terms, 8/9 to 9/9 on the facecam scoreboard — moved the
+    second with it, and on the SAME artifacts with only the code changed
+    Jynxzi's scene count went 0 to 1, the source flipped `gaming` to
+    `talking_head`, and the content classifier went 6/11 to 5/11.
+    """
+    import inspect
+
+    from services.clipper import content_type
+
+    assert content_type._SCENE_MIN_RATE == 0.15
+    src = inspect.getsource(content_type._scene_faces)
+    assert "_SCENE_MIN_RATE" in src
+    assert "_FACECAM_MIN_RATE" not in src, (
+        "counting people in the scene is reading the facecam gate again")
+
+
 def test_a_facecam_seen_in_one_stretch_of_many_is_content_not_a_camera():
     from services.clipper.content_type import _drop_transient_webcams
 

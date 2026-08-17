@@ -185,6 +185,23 @@ def frame_features(frames: Sequence[str]) -> dict[str, Any]:
     }
 
 
+# How often a cluster has to appear to count as A PERSON IN THE SCENE. It is
+# not the facecam bar and must not follow it: the facecam one asks "is this
+# rectangle part of the layout", where a long sample legitimately dilutes the
+# rate, and this one asks "is somebody there", where it does not.
+#
+# They were the same constant until 2026-08-17, and lowering the facecam bar
+# from 0.15 to 0.10 — correct on its own terms, 8/9 to 9/9 — silently moved
+# this one too. Measured on the same artifacts with only the code changed:
+# Jynxzi's scene count went 0 to 1 and the source flipped from `gaming` to
+# `talking_head`, taking the classifier from 6/11 to 5/11. moistcr1tikal and
+# gym moved 1 to 2 and changed their (already wrong) answers.
+#
+# 0.15 is the value `_scene_faces` was measured at — clusters outside insets,
+# 4 of 8 — so it stays here, pinned, with its own name.
+_SCENE_MIN_RATE = 0.15
+
+
 def _scene_faces(frames: Sequence[str]) -> int | None:
     """How many people are in the SCENE, ignoring anyone in a facecam inset.
 
@@ -221,7 +238,7 @@ def _scene_faces(frames: Sequence[str]) -> int | None:
     count = 0
     for group in _face_groups(faces, fw, fh):
         hits = len({i for i, _ in group})
-        if hits < _FACECAM_MIN_HITS or hits / total < _FACECAM_MIN_RATE:
+        if hits < _FACECAM_MIN_HITS or hits / total < _SCENE_MIN_RATE:
             continue
         median = median_rect([b for _, b in group])
         if median and any(rect_overlap_frac(median, cam) > 0.5 for cam in cams):
