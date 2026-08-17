@@ -591,6 +591,64 @@ already records as penalised by corner proximity. Re-run
 **Still wrong: EARLY STREAM, and Minecraft 4h gives one facecam of two.** Both
 are the borderless case above, which no gate reaches.
 
+### 10. Half of that was wrong, and it was not geometry at all — 2026-08-17
+
+**Minecraft 4h is not the borderless case.** Printing the whole funnel instead
+of the survivors settles it in one line: the second cluster is found at 42 hits
+in 340 frames and dropped by the HIT-RATE gate at 0.12 against a bar of 0.15.
+It never reaches `_snap_inset`, so no property of its border is involved.
+
+The bar is `hits / frames` over the whole sampled range, which means it
+measures how often a Haar cascade caught the co-streamer facing his camera —
+and a longer sample averages in every minute he looked away. Same stream, same
+camera, same layout: **0.33 over the 12-minute slice, 0.12 over the 4-hour
+one.** A sixth instance of the lesson at the top of this file.
+
+Swept against the labels: 7/9 at 0.15 and 0.13, then **8/9 flat from 0.12 down
+to 0.05** — a plateau six times wider than the `corner_proximity` one, with
+nothing else moving anywhere on it, because the geometry gates below do the
+rejecting and this one was only ever costing recall. Set to **0.10**, which
+leaves margin under the 0.12 true positive without sitting on its edge.
+`IRL World Cup` (3 h, fullscreen, the set's clean negative) and Kai Cenat both
+still report zero. Pinned by two tests in `test_clipper_content_features.py`.
+
+**This also refines what the 12m-versus-4h contrast is evidence FOR.** Both
+this file and `source-labels.md` cite it as the cleanest case for per-segment
+region detection. It is not, or not only: `score_facecam.py` already restricts
+the 4-hour source to the stretch after the gym, so the segment was controlled
+for and it still failed. Per-segment detection narrows the range; a 205-minute
+gaming stretch is still seventeen times the 12-minute slice, and the rate bar
+bit anyway. Two separate faults wore one symptom.
+
+**What is left on this edge is EARLY STREAM alone, and it is a real tie.** The
+cluster is found at rate 0.82 and snapped to `182x134@0,88` — a plausible
+bottom-left inset — then rejected for `corner_proximity` 0.47 against 0.48. The
+reason the bar cannot simply move: `gym 12m`, a fullscreen IRL camera with no
+inset at all, scores 0.479. **Two rects one hundredth apart with opposite
+truth**, which is why the plateau is 0.08 wide and why lowering the bar trades
+EARLY for gym one-for-one rather than gaining anything.
+
+**And the independence measure was tried and is not the answer either.** The
+idea the entry above proposes — an inset is a second camera, so its content
+varies independently of the frame around it — was measured on all thirteen
+candidate rects before any gate was written, three ways: std of the region's
+mean luminance interior-over-exterior, the Pearson correlation of the two
+series, and the per-pixel temporal std ratio.
+
+| | insets | phantoms | best cut |
+|---|---|---|---|
+| `lum_ratio` | 0.10–0.93 | 0.67–2.30 | 12/13 |
+| `corr` | −0.02–0.92 | 0.42–0.80 | 10/13 |
+| `pix_ratio` | 0.52–1.14 | 0.90–1.50 | 11/13 |
+
+`lum_ratio` scores 12 of 13 — and `corner_proximity` alone also scores 12 of 13
+on the same rects, so it buys nothing, and its best cut lands exactly on
+Jynxzi's 0.93 with `go ghost` at 0.67 inside the inset range. A separator whose
+margin is zero on the sources it was fitted to is a coincidence with a
+threshold on it. **Not built.** The mechanism is sound and the reason it fails
+here is visible in the numbers: IShowSpeed's camera has chat composited over
+it, so its region is as busy as the game beside it.
+
 ### What the one remaining failure actually is
 
 On the EARLY STREAM gaming stretch the face cluster is as strong as this
@@ -626,7 +684,7 @@ or listening to a file and saying it was wrong.
 | The clip editor | Phase 9.6. Trim, headline, caption preset and height over a server-rendered still. |
 | Hands-off mode | `auto_export`: paste a link, come back to rendered files. |
 | Three silent failure modes | Settings parity, `failed_chunks` surfaced, disk pruning. |
-| Facecam 6/9 → 7/9 | Reach capped at 0.30 of the frame, gated on `corner_proximity >= 0.48`. |
+| Facecam 6/9 → 8/9 | Reach capped at 0.30 of the frame, gated on `corner_proximity >= 0.48`, and the hit-rate bar dropped from 0.15 to 0.10 — it was measuring sample length, not layout. |
 | Duration stopped outvoting content | `platform_fit` zeroed in all ten profiles. |
 | `emotion` measures something | `vocal_bursts.py` — laughter and shouting from the audio. |
 | `speech_ratio` measures speech | From the transcript, not the envelope. |
@@ -724,10 +782,17 @@ entry has a measurement behind it.
 is an ARTEFACT of its imprecision on gaming ones — the runaway rects are
 rejected by `_WEBCAM_AREA`, and that rejection is the only thing keeping the
 edited sources clean. Demonstrated: fix the geometry and four false positives
-appear. Nothing is discriminating; a gate is doing it by accident. 6 of 9 on the
-labelled sources, eleven approaches failed, and every failure trades one side
-for the other. A wrong answer here silently picks the wrong layout for every
-clip in the source.
+appear. Nothing is discriminating; a gate is doing it by accident. **8 of 9 on
+the labelled sources** since 2026-08-17, and the two gains behind that number do
+not change this entry: `corner_proximity` as a gate, and a hit-rate bar that was
+costing recall on long sources. Fourteen approaches to the underlying problem
+have failed and every one of them trades one side for the other. A wrong answer
+here silently picks the wrong layout for every clip in the source.
+
+The single remaining failure is the sharpest statement of it: EARLY STREAM's
+real inset scores `corner_proximity` 0.47 and the gym's non-existent one scores
+0.479. **One hundredth apart, opposite truth** — no setting of that constant
+separates them, and the plateau being 0.08 wide is that fact seen from the side.
 
 **2. ~~The settings whitelist~~ — CLOSED 2026-08-17.**
 `_normalise_settings` keeps only keys already present in `_default_settings()`,

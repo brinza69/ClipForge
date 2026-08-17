@@ -39,6 +39,15 @@ Minecraft slice gets BOTH insets while the 4-hour source of the same stream
 gets one — the cleanest evidence that the failure is global detection over a
 changing stream rather than the detector.
 
+**Half of that reading was wrong, corrected 2026-08-17.** Restrict the 4-hour
+source to the stretch AFTER the gym — controlling for the layout change — and
+it still gets one. The second facecam was being dropped by the hit-rate gate at
+0.12 against a bar of 0.15, because that bar is hits over the frames sampled
+across the whole range and a longer sample averages in every minute the
+co-streamer looked away. Same camera, same layout: 0.33 over twelve minutes,
+0.12 over four hours. Two faults wore one symptom, and this pair of sources is
+evidence for both. The 4-hour source gets both insets now.
+
 Contact sheets are in the conversation that produced this file: twenty-four
 frames per source, stamped with the minute, and for the eight ingested ones
 they are the SAME frames the detector sees.
@@ -125,6 +134,9 @@ slice4h00test  IShowSpeed Minecraft — the 4h slice
             BOTH insets on this short slice and only one on the 4-hour source —
             the cleanest possible evidence that the problem is global detection
             over a changing stream, not the detector itself.
+            REVISED 2026-08-17: it was also the hit-rate gate, which reads
+            0.33 here and 0.12 on the 4-hour source for the same camera. See
+            the top of this file. Both insets are found on both now.
 
 0c9685df852b   IShowSpeed — 12 min, the gym segment
   content   0-12     irl

@@ -274,8 +274,24 @@ def _face_boxes(grays: Sequence[Any]) -> list[list[dict]]:
 # co-stream's 40 sampled frames, the two real facecams landed 14 and 13 hits;
 # the busiest false position landed 1. The old gate wanted half the frames,
 # which neither real facecam could ever have cleared.
+#
+# 0.15 -> 0.10 on 2026-08-17, and the reason is the recurring one. The rate is
+# hits over the frames sampled from the WHOLE range, so it measures how often
+# the streamer faced his camera across that span — not whether there is an
+# inset. On the 12-minute Minecraft slice the co-streamer's facecam clears the
+# bar at 0.33; on the 4-hour source of the SAME STREAM, same camera, same
+# layout, it reads 0.12 and was dropped. That is the one this file blamed on
+# the borderless case, and it is not: it is a bar fitted to a 12-minute sample
+# failing on a 4-hour one.
+#
+# Swept against the labels: 7/9 at 0.15 and 0.13, then 8/9 flat from 0.12 all
+# the way to 0.05 — a plateau wide enough that the exact value does not matter,
+# because the geometry gates below do the rejecting and this one was only ever
+# costing recall. 0.10 leaves margin under the 0.12 true positive without
+# sitting on the edge. `IRL World Cup` (3 h, fullscreen, the set's clean
+# negative) and Kai Cenat both still report zero.
 _FACECAM_MIN_HITS = 3
-_FACECAM_MIN_RATE = 0.15
+_FACECAM_MIN_RATE = 0.10
 # Faces whose centres sit this close, as a frame fraction, are one person.
 _FACECAM_TOL = 0.12
 # Where the inset's edge is looked for, as multiples of the median face box.
