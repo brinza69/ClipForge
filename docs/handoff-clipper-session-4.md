@@ -125,6 +125,26 @@ class StubQueue:
 await clipper_pipeline.handle_analyze("stub", pid, None, {}, StubQueue())
 ```
 
+**Call `init_db()` first, before importing the handler.** Running a stage
+in-process skips application startup, and startup is the ONLY thing that
+applies the `ALTER TABLE` migrations — so the handler runs against whatever
+schema the DB had when the backend was last started. On 2026-08-17 all four
+re-analysis runs died on `no such column: transcripts.failed_chunks`, a column
+added the previous day in `287bb3d`: SQLAlchemy selects every mapped column, so
+a model that is one migration ahead of the file breaks EVERY read of that
+table, not the one field. `clips.review` from the same session was present,
+which is what makes this confusing — the DB is not uniformly stale, it is
+frozen at the last startup.
+
+```python
+from database import init_db
+await init_db()          # idempotent; do this before importing the worker
+```
+
+It self-heals if you restart the backend, which is exactly why it stays hidden
+from anyone who works through the API and bites anyone who follows the advice
+in this section.
+
 **On Windows this script MUST have `if __name__ == "__main__":`.** The
 transcriber spawns its whisper worker with `mp.get_context("spawn")`, which
 re-imports the calling module in the child. Without the guard the child re-ran
@@ -730,6 +750,77 @@ covered part of a room. Fix the geometry first and re-measure on the corrected
 rects and the same three numbers separate cleanly, with a 0.45-wide gap. A
 measurement over inputs that are themselves wrong answers a different question
 than the one asked, and it took looking at a frame to notice. See entry 11.
+
+### 12. And then it had to reach the product — 2026-08-17
+
+9/9 on the scoreboard is not 9/9 in the app, and re-running `clipper_analyze`
+on the real projects is what showed the difference. Three things came out of
+it, in the order they appeared.
+
+**The artifacts on disk are not updated by fixing the code.** Obvious, and
+still worth writing: EARLY and Jynxzi held `webcam: None` in `regions.json`
+until analysis re-ran. Any measurement taken from a project's stored artifacts
+is a measurement of the code that last ran, which session 3 also learned about
+`faces.json`.
+
+**`detect_regions` was reading 40 frames of 400.** `_MAX_FRAMES = 40` is right
+for the CLASSIFIER, which asks how stable a layout is, and wrong for region
+detection, which asks whether a particular inset exists. On the 4-hour
+co-stream the second facecam lands 3 of those 40 — rate 0.075, under any usable
+bar. **Not rare, under-sampled.** `_pick` takes every step-th frame, so at a
+budget of 40 it keeps one in ten and whatever falls between the strides does
+not exist.
+
+| frames looked at | Minecraft 4h (wants 2) | every labelled negative |
+|---|---|---|
+| 40 / 100 / 200 | 1 | 0 |
+| **400** | **2** | **0** |
+
+`_REGION_FRAMES = 400`, and the cost is face detection at 0.052 s a frame: 21 s
+against 2 s, inside a stage that takes five minutes on a source that long.
+Capped rather than unbounded so raising `clipper_max_sampled_frames` cannot
+silently slow analysis down. **All ten labelled sources now come back correct
+from `detect_regions` itself**, which is the function the pipeline calls —
+`score_facecam.py` exercises `_find_webcams` and had been proving something
+narrower than it looked.
+
+**Per-stretch detection costs one false positive, and it is the closest call in
+the corpus.** On Jynxzi's 60–80 minute stretch he reacts to videos, and a video
+of somebody else's webcam is reported as an inset: `240x136@240,0`, clearing
+`scene_independence` at **0.96** against the 1.0 bar. Every real inset in the
+set sits at 0.89 or below, so tightening the bar to 0.90 would drop it — and
+put the boundary one hundredth above **his own real camera at 0.89**. That is
+the zero-margin fit the constant was chosen to avoid, and doing it would have
+undone the reasoning in entry 11 an hour after writing it. The measure is not
+misbehaving, either: a video of a webcam genuinely IS a second camera. The
+definition disagrees, which is the same shape as the `irl` classifier problem.
+
+`_drop_transient_webcams` uses the property the detector already rests on — an
+inset is always in the same place — across stretches instead of across frames:
+
+```
+Jynxzi        x~0 y~120 in 7 stretches of 11, the phantom in 1
+Minecraft 4h  x~0 y~0   in 10 of 12, the second facecam in 5
+EARLY STREAM  one position in 9 of 13, wandering by 26 px
+```
+
+Only a position seen in a SINGLE stretch is dropped, and only when another has
+established itself in three or more. Both halves are load-bearing: 1-against-5
+would take Minecraft's real second camera, and a source whose only facecam is
+brief has nothing to be outvoted by. **Run over all eleven sources and all 71
+stretches, it changes exactly one thing** — the phantom. Kai Cenat's lone
+stretch survives, which is the guard working: `max < 3` returns early.
+
+**Cluster by centre distance, not by rounding.** EARLY's rect wanders 26 px
+across its nine stretches, and bucketing the coordinates split one camera into
+three positions — two of which would then have looked transient.
+
+**Known limit, stated rather than discovered later.** Kai Cenat now reports a
+facecam in the 20–40 minute stretch, and his labelled inset is at 94–98. That
+is a phantom this rule cannot reach, because it is the only one in the source
+and nothing dominates it. Protecting the brief-real-inset case and rejecting
+the brief-phantom case are the same test with opposite answers; the corpus
+contains one of each and no signal yet separates them.
 
 ### What the one remaining failure actually was — CLOSED by entry 11
 

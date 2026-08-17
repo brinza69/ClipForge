@@ -734,6 +734,97 @@ def test_a_facecam_flush_to_the_frame_reaches_the_frame():
     assert rects and rects[0]["x"] == 0 and rects[0]["y"] == 0
 
 
+# ── a layout is only a layout if it lasts ────────────────────────────────────
+#
+# Detecting regions per stretch buys the second facecam on a source whose
+# camera changes, and costs this: a stretch where the streamer reacts to a
+# video containing a webcam reports that video as an inset. Measured on
+# Jynxzi's 60-80 minute stretch, where it clears `scene_independence` at 0.96
+# against a 1.0 bar — the closest call in the corpus, and one that cannot be
+# fixed by moving the bar, because his REAL camera sits at 0.89.
+
+
+def _stretch(idx, cams):
+    return {"start": idx * 1200.0, "end": (idx + 1) * 1200.0,
+            "frame_width": 480, "frame_height": 270,
+            "webcam": cams[0] if cams else None, "webcams": list(cams),
+            "confidence": {"webcam": 0.7 if cams else 0.0}}
+
+
+def _cam(x, y, w=158, h=158):
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def test_a_facecam_seen_in_one_stretch_of_many_is_content_not_a_camera():
+    from services.clipper.content_type import _drop_transient_webcams
+
+    ranges = [_stretch(i, [_cam(0, 110 + i)]) for i in range(6)]
+    ranges[3]["webcams"].append(_cam(240, 0, 240, 136))
+    _drop_transient_webcams(ranges)
+
+    assert [len(r["webcams"]) for r in ranges] == [1, 1, 1, 1, 1, 1]
+    assert ranges[3]["webcams"][0]["x"] == 0
+    assert ranges[3]["webcam"]["x"] == 0, "the best-of pointer went stale"
+
+
+def test_a_second_facecam_on_half_the_stretches_survives():
+    """Minecraft's co-streamer is on camera for five stretches of twelve. One
+    against five is a co-stream, not a phantom — only a SINGLE appearance is
+    treated as content."""
+    from services.clipper.content_type import _drop_transient_webcams
+
+    ranges = [_stretch(i, [_cam(0, 0, 122, 78)]) for i in range(10)]
+    for i in (1, 3, 5, 7, 9):
+        ranges[i]["webcams"].append(_cam(370, 0, 80, 68))
+    _drop_transient_webcams(ranges)
+
+    assert sum(len(r["webcams"]) for r in ranges) == 15
+
+
+def test_a_brief_facecam_with_nothing_to_outvote_it_is_kept():
+    """Kai Cenat's inset exists for four minutes of 112. A source whose only
+    facecam is brief has no settled layout for it to contradict, and dropping
+    it would be the rule deciding a source has no camera because it looked
+    away."""
+    from services.clipper.content_type import _drop_transient_webcams
+
+    ranges = [_stretch(i, []) for i in range(6)]
+    ranges[2]["webcams"] = [_cam(0, 0, 186, 134)]
+    ranges[2]["webcam"] = ranges[2]["webcams"][0]
+    _drop_transient_webcams(ranges)
+
+    assert ranges[2]["webcams"], "the only facecam in the source was dropped"
+
+
+def test_region_detection_looks_at_more_frames_than_the_classifier(tmp_path):
+    """`_MAX_FRAMES = 40` answers "how stable is this layout", which a handful
+    of frames can settle. It cannot answer "is there an inset here", which is
+    what region detection asks.
+
+    Measured on the 4-hour co-stream: 400 frames sampled, 40 looked at, and the
+    co-streamer's facecam landed 3 of those 40 — rate 0.075, under any usable
+    bar. Not rare, under-sampled. `_pick` takes every step-th frame, so at 400
+    frames and a budget of 40 it keeps one in ten and whatever falls between
+    the strides does not exist. One facecam at 40, 100 and 200 frames; both at
+    400.
+    """
+    import cv2
+    import numpy as np
+
+    from services.clipper import content_type
+
+    assert content_type._REGION_FRAMES > content_type._MAX_FRAMES
+
+    paths = []
+    for i in range(120):
+        p = tmp_path / f"f{i:04d}.jpg"
+        cv2.imwrite(str(p), np.full((270, 480, 3), 40 + i % 5, dtype=np.uint8))
+        paths.append(str(p))
+
+    assert len(content_type._load_frames(paths)[0]) == content_type._MAX_FRAMES
+    assert len(content_type._load_frames(paths, content_type._REGION_FRAMES)[0]) == 120
+
+
 def test_a_facecam_flush_to_the_BOTTOM_reaches_the_bottom():
     """The same rule downward, which is where it was silently switched off.
 

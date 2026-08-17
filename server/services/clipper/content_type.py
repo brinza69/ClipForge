@@ -91,7 +91,8 @@ def _pick(items: Sequence[str], limit: int) -> list[str]:
     return [items[int(i * step)] for i in range(limit)]
 
 
-def _load_frames(frames: Sequence[str]) -> tuple[list[Any], float, int, int]:
+def _load_frames(frames: Sequence[str], limit: int = _MAX_FRAMES
+                 ) -> tuple[list[Any], float, int, int]:
     """(grayscale frames, mean saturation, width, height). Never raises."""
     cv = _cv()
     grays: list[Any] = []
@@ -99,7 +100,7 @@ def _load_frames(frames: Sequence[str]) -> tuple[list[Any], float, int, int]:
     w = h = 0
     if cv is None:
         return grays, 0.0, 0, 0
-    for path in _pick(frames, _MAX_FRAMES):
+    for path in _pick(frames, limit):
         try:
             img = cv.imread(str(path), cv.IMREAD_COLOR)
         except Exception:
@@ -672,7 +673,98 @@ def detect_regions_by_range(frames: Sequence[str], frame_times: Sequence[float],
         blob = detect_regions(mine)
         blob["start"], blob["end"] = round(start, 2), round(end, 2)
         out.append(blob)
+    _drop_transient_webcams(out)
     return out
+
+
+# A layout is only a layout if it lasts. Cutting the stream into stretches buys
+# the second facecam on a source whose camera changes, and it costs this: a
+# stretch where the streamer reacts to a video containing a webcam gets that
+# video reported as an inset.
+#
+# Measured on Jynxzi's 60-80 minute stretch, and it is the closest call in the
+# whole corpus — `240x136@240,0` passes `scene_independence` at 0.96 against a
+# 1.0 bar, where every real inset in the set sits at 0.89 or below. Tightening
+# the bar to 0.90 would drop it and put the boundary one hundredth above his
+# REAL camera at 0.89, which is the zero-margin fit that constant was chosen to
+# avoid. The measure is not misbehaving either: a video of somebody else's
+# webcam genuinely is a second camera. The definition is what disagrees.
+#
+# So this uses the property the detector already rests on — AN INSET IS ALWAYS
+# IN THE SAME PLACE — across stretches instead of across frames:
+#
+#   Jynxzi        x~0 y~120 in 7 stretches of 11, the phantom in 1
+#   Minecraft 4h  x~0 y~0   in 10 of 12, the second facecam in 5
+#   EARLY STREAM  one position in 9 of 13, wandering by 26 px
+#
+# Only a position seen in a SINGLE stretch is dropped, and only when another
+# has established itself in `_LAYOUT_MIN_DOMINANT`. Both halves matter: 1
+# against 5 would take Minecraft's real second camera, and a source whose only
+# facecam is brief has nothing to be outvoted by — Kai Cenat's inset exists for
+# four minutes of 112 and is in the corpus as exactly that case.
+_LAYOUT_MIN_DOMINANT = 3
+
+
+def _drop_transient_webcams(ranges: list[dict[str, Any]]) -> None:
+    """Remove one-off facecams from a source that has a settled layout."""
+    groups: list[dict[str, Any]] = []
+    for i, blob in enumerate(ranges):
+        fw = blob.get("frame_width") or 0
+        fh = blob.get("frame_height") or 0
+        for cam in blob.get("webcams") or []:
+            cx, cy = rect_centre(cam)
+            for g in groups:
+                gx = sum(c[0] for c in g["centres"]) / len(g["centres"])
+                gy = sum(c[1] for c in g["centres"]) / len(g["centres"])
+                if (abs(cx - gx) <= _FACECAM_TOL * fw
+                        and abs(cy - gy) <= _FACECAM_TOL * fh):
+                    g["centres"].append((cx, cy))
+                    g["where"].add(i)
+                    break
+            else:
+                groups.append({"centres": [(cx, cy)], "where": {i}})
+
+    if not groups:
+        return
+    if max(len(g["where"]) for g in groups) < _LAYOUT_MIN_DOMINANT:
+        return
+
+    doomed = [g for g in groups if len(g["where"]) == 1]
+    for g in doomed:
+        i = next(iter(g["where"]))
+        blob = ranges[i]
+        cx, cy = g["centres"][0]
+        fw = blob.get("frame_width") or 0
+        fh = blob.get("frame_height") or 0
+        kept = [c for c in (blob.get("webcams") or [])
+                if abs(rect_centre(c)[0] - cx) > _FACECAM_TOL * fw
+                or abs(rect_centre(c)[1] - cy) > _FACECAM_TOL * fh]
+        if len(kept) == len(blob.get("webcams") or []):
+            continue
+        blob["webcams"] = kept
+        blob["webcam"] = kept[0] if kept else None
+        if not kept:
+            blob.setdefault("confidence", {})["webcam"] = 0.0
+
+
+# Region detection gets the whole sample; `_MAX_FRAMES = 40` is right for the
+# CLASSIFIER, which asks how stable a layout is and can answer that from a
+# handful, and wrong here, where the question is whether a particular inset
+# exists at all.
+#
+# Measured on the 4-hour co-stream: 400 frames sampled, 40 looked at, and the
+# co-streamer's facecam lands 3 of those 40 — rate 0.075, under any usable bar.
+# It is not rare, it is under-sampled. At 40, 100 and 200 frames the source
+# returns one facecam; at 400 it returns both. Every labelled negative returns
+# zero at every budget, including `IRL World Cup`, three hours of one camera at
+# the full 400.
+#
+# The cost is face detection, measured at 0.052 s a frame on this rig: 21 s
+# against 2 s, inside a stage that takes five minutes on a source that long.
+# Capped rather than unbounded on purpose — raising
+# `clipper_max_sampled_frames` past this should not silently make analysis
+# slower, and nothing measured needs more.
+_REGION_FRAMES = 400
 
 
 def detect_regions(frames: list[str]) -> dict[str, Any]:
@@ -683,7 +775,7 @@ def detect_regions(frames: list[str]) -> dict[str, Any]:
     one per person, and a layout that only knows about the first will frame the
     second as though it were the game.
     """
-    grays, _sat, fw, fh = _load_frames(frames or [])
+    grays, _sat, fw, fh = _load_frames(frames or [], _REGION_FRAMES)
     out: dict[str, Any] = {
         "webcam": None, "webcams": [], "gameplay": None, "chat": None, "hud": [],
         "confidence": {"webcam": 0.0, "gameplay": 0.0, "chat": 0.0, "hud": 0.0},
