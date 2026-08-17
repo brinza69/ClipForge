@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from services.captioner_events import _group_words
 from services.captioner_presets import (
@@ -44,8 +44,22 @@ MAX_LINES = 2
 CAPTION_BOX_H_PCT = 0.10
 CAPTION_BOX_W_PCT = 0.80
 
-NUDGE_STEP_PCT = 0.04
-MAX_NUDGE_TRIES = 5
+# How finely `resolve_position` scans for a clear band. 1% of frame height is
+# ~19px at 1920 — finer than any keep-out rect's edge is meaningful, and 60-odd
+# evaluations of a handful of rectangles costs nothing.
+#
+# This replaced a ladder of six ±4% nudges. The ladder had two faults a scan
+# does not: 4% is wider than a gap can be, so it could step over a clear slot
+# and land on the far side still covered; and it accepted the FIRST y that
+# scored zero, which can be a pixel from a rect's edge.
+SCAN_STEP_PCT = 0.01
+
+# The style spec's clamp, applied only when something has to be avoided:
+# "clamped to 55-75% of frame height". It is a guard rail on the band search,
+# not a claim about where captions look best — three of the spec's own seven
+# reference measurements (50.0, 50.2, 51.1) sit below it, and an unobstructed
+# caption is left at its preset position for that reason.
+SPEC_BAND_LO, SPEC_BAND_HI = 0.55, 0.75
 
 # Where "center" actually puts the block, as a fraction of frame height.
 # Measured on all seven captioned references (docs/refs/): 50.0, 50.2, 51.1, 53,
@@ -306,26 +320,86 @@ def resolve_position(
     if not rects:
         return (0.5, round(base, 4))
 
-    offsets = [0.0]
-    for k in range(1, MAX_NUDGE_TRIES + 1):
-        offsets.append(-NUDGE_STEP_PCT * ((k + 1) // 2) if k % 2 else NUDGE_STEP_PCT * (k // 2))
-    # -> 0, -4%, +4%, -8%, +8%, -12%
+    if _overlap_area(base, rects) <= 0.0:
+        # Nothing in the way. The preset position is a measurement in its own
+        # right, so it is not moved to satisfy a rule meant for avoidance.
+        return (0.5, round(base, 4))
 
-    best_y, best_cost = base, None
-    seen: set[float] = set()
-    for off in offsets:
-        y = round(min(max(base + off, lo), hi), 4)
-        if y in seen:
-            continue
-        seen.add(y)
-        cost = _overlap_area(y, rects)
-        if cost <= 0.0:
-            return (0.5, y)
-        if best_cost is None or cost < best_cost:
-            best_y, best_cost = y, cost
+    # Something is in the way, so the style spec's rule applies: "place the text
+    # centre in the largest vertical band that contains neither the facecam
+    # subject's head box nor the top of the game HUD, clamped to 55-75% of frame
+    # height". The clamp is not a claim about where captions look best — three
+    # of the spec's own seven measurements sit below 55% — it is the guard rail
+    # that stops a largest-band search wandering to the top of the frame.
+    #
+    # This replaces six fixed nudges of ±4%. A ladder can step over a clear gap
+    # narrower than its own step and land on the far side still covered, and it
+    # has no notion of how much room a position has around it: it took the first
+    # y that scored zero, which can be one pixel from a rect's edge.
+    grid = [round(lo + i * SCAN_STEP_PCT, 4)
+            for i in range(int((hi - lo) / SCAN_STEP_PCT) + 1)]
+    clear = [y for y in grid if _overlap_area(y, rects) <= 0.0]
 
+    inside = [y for y in clear if SPEC_BAND_LO <= y <= SPEC_BAND_HI]
+    centre = _widest_band(inside or clear)
+    if centre is not None:
+        return (0.5, round(centre, 4))
+
+    # Nothing is clear anywhere. Least covered wins, and among equals the one
+    # nearest the preset — a caption that has to sit on something should at
+    # least sit where it was asked to.
+    best_y = min(grid, key=lambda y: (round(_overlap_area(y, rects), 6), abs(y - base)))
     logger.debug("caption placement: no clear slot, least-overlap y=%.4f", best_y)
-    return (0.5, best_y)
+    return (0.5, round(best_y, 4))
+
+
+def panels_to_keep_out(panels: Sequence[dict], shots: Sequence[dict],
+                       out_h: int = 1920) -> list[dict[str, int]]:
+    """Where detected UI panels land in the OUTPUT frame, across every shot.
+
+    A static keep-out is ill-defined for a multi-shot edit: each shot crops a
+    different rectangle out of the source, so one panel lands somewhere
+    different in each. The caption is burned once for the whole clip, though, so
+    it has to clear the panel in EVERY shot the panel is visible in — hence the
+    union rather than a per-shot answer.
+
+    Only the vertical extent is honest here. The crop is 9:16 out of a 16:9
+    frame, so horizontal position survives the mapping poorly and the caption is
+    centred and nearly full width anyway; `_overlap_area` treats the caption as
+    a full-width strip, which is what makes the y the only part that decides.
+    """
+    out: list[dict[str, int]] = []
+    for shot in shots or []:
+        rect = (shot or {}).get("rect") or {}
+        rh, ry = _f(rect.get("h")), _f(rect.get("y"))
+        if rh <= 0:
+            continue
+        scale = out_h / rh
+        for panel in panels or []:
+            py, ph = _f(panel.get("y")), _f(panel.get("h"))
+            top = (py - ry) * scale
+            bottom = (py + ph - ry) * scale
+            if bottom <= 0 or top >= out_h:
+                continue                      # outside this shot's crop
+            out.append({"x": 0, "y": int(max(0.0, top)),
+                        "w": 1080, "h": int(min(out_h, bottom) - max(0.0, top)),
+                        "kind": "game_ui"})
+    return out
+
+
+def _widest_band(clear: list[float]) -> float | None:
+    """Centre of the longest run of consecutive clear positions."""
+    if not clear:
+        return None
+    best = run = [clear[0]]
+    for y in clear[1:]:
+        if y - run[-1] <= SCAN_STEP_PCT * 1.5:
+            run.append(y)
+        else:
+            run = [y]
+        if len(run) > len(best):
+            best = run
+    return (best[0] + best[-1]) / 2.0
 
 
 # ---------------------------------------------------------------------------

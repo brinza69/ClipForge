@@ -93,8 +93,40 @@ def _candidate(clip: ClipModel) -> dict:
     }
 
 
+def _caption_y(clip: ClipModel, dyn: dict | None) -> float | None:
+    """Where the caption should sit given the UI panels THIS cut exposes.
+
+    The stored `y_pct` was resolved at score time against `regions.json`, whose
+    `hud` list is empty on the source where a caption demonstrably landed on the
+    game UI. The panels are detected per clip and the shot list says where each
+    one lands in the output frame, so both halves only exist here, at export.
+
+    Returns None when there is nothing new to say, and the stored position
+    stands.
+    """
+    panels = (dyn or {}).get("_panels") or []
+    if not panels or not clip.caption_plan:
+        return None
+    try:
+        from services.clipper.captions import panels_to_keep_out, resolve_position
+
+        keep = panels_to_keep_out(panels, (dyn or {}).get("shots") or [])
+        if not keep:
+            return None
+        existing = ((clip.layout_plan or {}).get("safe_zones") or {}).get("keep_out") or []
+        _x, y = resolve_position(
+            str((clip.caption_plan or {}).get("position") or "bottom"),
+            {"safe_zones": {"keep_out": list(existing) + keep}})
+        return y
+    except Exception:
+        logger.warning("clip %s: could not re-place the caption around the UI "
+                       "panels; keeping the stored position", clip.id, exc_info=True)
+        return None
+
+
 def _write_ass(clip: ClipModel, out_dir: Path,
-               drop_spans: Sequence[tuple[float, float]] | None = None) -> str | None:
+               drop_spans: Sequence[tuple[float, float]] | None = None,
+               y_pct: float | None = None) -> str | None:
     """Render the stored caption plan to an .ass file. Returns None when the
     clip has no captions, which is a legitimate state (the user can turn them
     off) — the render then simply skips the subtitles filter.
@@ -103,14 +135,24 @@ def _write_ass(clip: ClipModel, out_dir: Path,
     overlays have to move with them: libass positions against absolute times,
     so a caption left on the untrimmed clock drifts further out of sync with
     every second cut.
+
+    `y_pct` overrides the stored caption height when the export found game UI
+    the score-time plan could not have known about. The plan itself is left
+    alone: it is a record of what was decided then, and a re-score would
+    recompute it anyway.
     """
     from services.caption_overlays import build_overlays_ass
     from services.clipper.captions import caption_plan_to_overlays
 
     if not clip.caption_plan:
         return None
+    plan = clip.caption_plan
+    if y_pct is not None and abs(float(plan.get("y_pct") or 0.0) - y_pct) > 1e-4:
+        logger.info("clip %s: caption moved %.3f -> %.3f to clear detected game UI",
+                    clip.id, float(plan.get("y_pct") or 0.0), y_pct)
+        plan = {**plan, "y_pct": y_pct}
     try:
-        overlays = caption_plan_to_overlays(clip.caption_plan)
+        overlays = caption_plan_to_overlays(plan)
     except Exception:
         logger.warning("could not turn the caption plan into overlays", exc_info=True)
         return None
@@ -293,12 +335,14 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
     # popped before the sidecar is written — the track is dozens of samples of
     # box coordinates and belongs in neither the plan nor the deliverable.
     plan["_review_faces"] = window["faces"]
+    plan["_panels"] = window.get("panels") or []
     for warning in plan.get("warnings") or []:
         logger.info("clip %s dynamic edit: %s", clip.id, warning)
     return plan
 
 
-async def _review(clip: ClipModel, project: ProjectModel, plan: dict) -> dict:
+async def _review(clip: ClipModel, project: ProjectModel, plan: dict,
+                  caption_y: float | None = None) -> dict:
     """Pass D over the planned cut. Advisory: it reports, it does not block.
 
     Whether a REJECT should stop an export is a product decision nobody has
@@ -311,13 +355,17 @@ async def _review(clip: ClipModel, project: ProjectModel, plan: dict) -> dict:
     from services.clipper import review as review_mod
 
     paths = storage.paths(project.id)
+    caption_plan = clip.caption_plan
+    if caption_y is not None and caption_plan:
+        caption_plan = {**caption_plan, "y_pct": caption_y}
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
         lambda: review_mod.review_plan(
-            paths["proxy"], plan, clip.caption_plan,
+            paths["proxy"], plan, caption_plan,
             clip_start=float(clip.start_time or 0.0),
             faces=plan.get("_review_faces") or (),
+            panels=plan.get("_panels") or (),
             src_w=int(project.width or 1920)),
     )
 
@@ -354,7 +402,6 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         logger.info("clip %s: cutting %d dead span(s), %.1fs total",
                     clip.id, len(drop), removed_seconds(drop))
 
-    ass_path = _write_ass(clip, paths["exports_dir"], drop)
     plan = _layout_plan(clip, project)
 
     fps = cfg.get("fps")
@@ -365,6 +412,11 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # The multi-shot path. Opt-in, and it falls back to the static layout on any
     # failure — the two renderers take the same source, the same window and the
     # same .ass, so nothing else in this handler changes.
+    #
+    # It runs BEFORE the .ass is written, which it did not use to. The shot list
+    # is what says where a detected UI panel lands in the output frame, and the
+    # caption has to be placed knowing that — the whole point of detecting the
+    # panels. Writing the captions first meant placing them blind.
     dyn = None
     if bool(cfg.get("dynamic_edit", settings.clipper_dynamic_edit)):
         await queue.update_progress(job_id, 0.10, "Planning the shot list")
@@ -377,6 +429,13 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
                            "the static layout", clip.id, exc_info=True)
             dyn = None
 
+    # Resolved once and given to BOTH the .ass and the review. Computing it
+    # twice, or letting the review read the stored plan, means Pass D judging a
+    # caption position the render did not use — it would go on reporting a
+    # caption it had already caused to move.
+    caption_y = _caption_y(clip, dyn)
+    ass_path = _write_ass(clip, paths["exports_dir"], drop, caption_y)
+
     # Pass D. It runs BEFORE the encode on purpose: a finding that arrives after
     # a 12-24s render can only be reported, one that arrives before it can be
     # acted on. Only the multi-shot path is reviewed, because that is the path
@@ -385,7 +444,7 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     if dyn:
         await queue.update_progress(job_id, 0.15, "Reviewing the cut")
         try:
-            review_result = await _review(clip, project, dyn)
+            review_result = await _review(clip, project, dyn, caption_y)
             if review_result["findings"]:
                 logger.info("clip %s: review says %s — %s", clip.id,
                             review_result["verdict"],
@@ -396,6 +455,7 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
             logger.warning("clip %s: review failed", clip.id, exc_info=True)
         finally:
             dyn.pop("_review_faces", None)
+            dyn.pop("_panels", None)
 
     out = storage.export_path(project_id, clip.id)
     try:

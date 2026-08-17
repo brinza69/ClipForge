@@ -170,17 +170,23 @@ def test_the_export_handler_reviews_the_cut():
     assert '"review"' in src, "the verdict never reaches the sidecar"
 
 
-async def test_the_face_track_never_reaches_the_sidecar(wired, monkeypatch):
-    """It rides on the plan so Pass D does not decode the window a second time,
-    and it is dozens of box coordinates that belong in no deliverable."""
+async def test_the_working_signals_never_reach_the_sidecar(wired, monkeypatch):
+    """The face track and the UI panels ride on the plan so Pass D and the
+    caption placer do not decode the window again. They are working data, not
+    deliverable, and every one of them has to be popped — this test exists to
+    fail when a new one is added and forgotten, which it has already done once."""
     dynamic_edit, _proxy = wired
     monkeypatch.setattr(dynamic_edit, "plan_dynamic_edit", lambda *a, **k: {
         "shots": [{"camera": "face"}, {"camera": "game"}], "warnings": []})
 
     plan = await jobs._dynamic_plan(_Clip(), _Project(), 1920, 1080)
     assert plan["_review_faces"], "the reviewer would have to decode again"
-    plan.pop("_review_faces", None)
-    assert all(not k.startswith("_") for k in plan)
+    assert "_panels" in plan, "the caption placer has nothing to avoid"
+
+    import inspect
+    popped = inspect.getsource(jobs.handle_export)
+    for key in [k for k in plan if k.startswith("_")]:
+        assert f'pop("{key}"' in popped, f"{key} would be written to the sidecar"
 
 
 def test_the_multi_shot_path_is_what_ships():

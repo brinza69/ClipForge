@@ -204,3 +204,45 @@ def test_an_unreadable_proxy_is_a_warning_not_a_crash(tmp_path):
         None, clip_start=0.0)
     assert out["verdict"] == "APPROVE"
     assert out["warnings"]
+
+
+# ── panels instead of a grey share ───────────────────────────────────────────
+#
+# The share measured on a strip cannot separate an inventory panel from grey
+# stone terrain: both are flat mid-grey, and on the test slice the two measured
+# 0.29 and 0.29. A detected panel has survived a persistence test across the
+# whole window, which terrain fails because it moves with the camera.
+
+
+def _band_shot(rect):
+    return {"t0": 0.0, "t1": 5.0, "camera": "game", "rect": rect}
+
+
+def test_a_panel_under_the_caption_is_reported():
+    # Crop is the full 1080 tall source mapped to a 1920 output: scale 1.78.
+    shots = [_band_shot({"x": 0, "y": 0, "w": 606, "h": 1080})]
+    panel = [{"x": 0, "y": 800, "w": 300, "h": 120}]      # -> 1422..1636 out
+    findings = review.check_caption_over_panels((1400.0, 1500.0), panel, shots, 1920)
+    assert [f.kind for f in findings] == ["caption_over_ui"]
+
+
+def test_a_panel_the_caption_clears_is_not_reported():
+    shots = [_band_shot({"x": 0, "y": 0, "w": 606, "h": 1080})]
+    panel = [{"x": 0, "y": 100, "w": 300, "h": 60}]       # near the top
+    assert review.check_caption_over_panels((1400.0, 1500.0), panel, shots, 1920) == []
+
+
+def test_a_panel_outside_this_shots_crop_is_not_reported():
+    """A panel at the bottom of the source is not in a shot that crops the top,
+    and reporting it would be reporting something the viewer cannot see."""
+    shots = [_band_shot({"x": 0, "y": 0, "w": 300, "h": 400})]
+    panel = [{"x": 0, "y": 900, "w": 300, "h": 100}]
+    assert review.check_caption_over_panels((1400.0, 1500.0), panel, shots, 1920) == []
+
+
+def test_one_caption_gets_one_finding():
+    """There is a single caption position for the whole clip, so twenty shots
+    agreeing it is covered is one problem, not twenty."""
+    shots = [_band_shot({"x": 0, "y": 0, "w": 606, "h": 1080}) for _ in range(20)]
+    panel = [{"x": 0, "y": 800, "w": 300, "h": 120}]
+    assert len(review.check_caption_over_panels((1400.0, 1500.0), panel, shots, 1920)) == 1

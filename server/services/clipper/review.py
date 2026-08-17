@@ -199,6 +199,41 @@ def _shot_at(shots: Sequence[dict], t: float) -> dict | None:
     return shots[-1] if shots else None
 
 
+def check_caption_over_panels(band: tuple[float, float], panels: Sequence[dict],
+                              shots: Sequence[dict], out_h: int) -> list[Finding]:
+    """The same question as `check_caption_occlusion`, asked of a RECTANGLE.
+
+    Preferred over the grey-share check whenever panels were detected, and the
+    reason is written into the other function's limitation: a share measured on
+    a thin strip cannot separate an inventory panel from grey stone terrain,
+    because both are flat mid-grey. A detected panel has survived a persistence
+    test across the whole window, which terrain does not — measured on the test
+    slice, a single-frame grey mask selects a hillside and the persistence map
+    selects the subscriber counter and the BOSSES BEATEN box.
+    """
+    from services.clipper.captions import panels_to_keep_out
+
+    if not panels or band[1] <= band[0]:
+        return []
+    out: list[Finding] = []
+    for shot, rect in ((s, (s or {}).get("rect") or {}) for s in shots or []):
+        covered = panels_to_keep_out(panels, [shot], out_h)
+        for box in covered:
+            top, bottom = float(box["y"]), float(box["y"] + box["h"])
+            overlap = min(band[1], bottom) - max(band[0], top)
+            if overlap <= 0:
+                continue
+            share = overlap / (band[1] - band[0])
+            if share >= 0.25:
+                out.append(Finding(
+                    "caption_over_ui", "revise", _f(shot.get("t0")),
+                    f"{share:.0%} of the caption sits on detected game UI", share))
+                break
+        if out:
+            break                    # one finding per clip: it is one caption
+    return out
+
+
 def check_caption_occlusion(samples: Iterable[tuple[float, float]]
                             ) -> list[Finding]:
     """A caption sitting on a menu panel, from (time, ui share) pairs.
@@ -302,8 +337,8 @@ def check_faces_intact(shots: Sequence[dict], faces: Sequence[dict],
 
 def review_plan(proxy: Path | str, plan: dict, caption_plan: dict | None,
                 *, clip_start: float, faces: Sequence[dict] = (),
-                src_w: int = 1920, out_h: int = 1920,
-                samples: int = 12) -> dict[str, Any]:
+                panels: Sequence[dict] = (), src_w: int = 1920,
+                out_h: int = 1920, samples: int = 12) -> dict[str, Any]:
     """Sample the clip's own frames and report what is wrong with it.
 
     Reads the PROXY, like every other analysis pass — §39. The crop rects are in
@@ -378,7 +413,12 @@ def review_plan(proxy: Path | str, plan: dict, caption_plan: dict | None,
     finally:
         cap.release()
 
-    findings = (check_caption_occlusion(ui_samples)
+    # Rectangles when we have them, the grey share only when we do not. The
+    # share is the measure with the known false positive; a detected panel has
+    # already survived a persistence test that terrain fails.
+    caption_findings = (check_caption_over_panels(band, panels, shots, out_h)
+                        if panels else check_caption_occlusion(ui_samples))
+    findings = (caption_findings
                 + check_dead_frames(flat_samples)
                 + check_faces_intact(shots, faces, clip_start,
                                      (plan.get("subject") or {}).get("face"),

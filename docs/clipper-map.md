@@ -117,7 +117,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `captions.py` | the caption plan and its overlays |
 | `dynamic_edit.py` | the multi-shot planner: where to cut, which camera, where the subject is |
 | `dynamic_cameras.py` | the camera rungs and the action band |
-| `dynamic_window.py` | the per-window signals the planner needs — dense face track, motion inside the game region |
+| `dynamic_window.py` | the per-window signals the planner needs — dense face track, motion inside the game region, and `ui_panels`, the per-clip UI rectangles the caption keeps out of |
 | `dynamic_render.py` | the shot list as one `-filter_complex` with `sendcmd` |
 | `serialize.py` | DB rows to API dicts, and `effective_content_type` |
 

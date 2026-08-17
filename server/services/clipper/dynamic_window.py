@@ -129,6 +129,86 @@ def region_motion(window: Path | str, hop: float,
         cap.release()
 
 
+# The spatial half of the same measure. `region_motion` answers "is a menu on
+# screen"; this answers WHERE, which is what a caption has to keep out of.
+PANEL_COLS, PANEL_ROWS = 96, 54     # ~20px cells on a 1920-wide source
+PANEL_PERSISTENCE = 0.5             # share of frames a cell must be grey in
+# Of the frame. Swept against the test slice, and 0.015 was a guess that found
+# NOTHING on five real clips — the first version of this detector measured
+# nothing at all, which is this codebase's most repeated failure. The persistent
+# UI on a real stream is not one big panel: it is a subscriber counter, a
+# BOSSES BEATEN box, a timer, a hotbar. At 0.002 (about ten cells) those come
+# back, on three different clips, at identical coordinates — which is itself the
+# evidence, because a stream's chrome does not move.
+PANEL_MIN_AREA = 0.002
+PANEL_HOP_S = 0.5
+
+
+def ui_panels(window: Path | str, src_w: int, src_h: int,
+              hop: float = PANEL_HOP_S) -> list[dict[str, int]]:
+    """Rectangles of game UI — inventory, crafting, menus — in SOURCE pixels.
+
+    Why this exists at all: `resolve_position` has implemented caption collision
+    avoidance since the clipper shipped, and it avoids the rects in `keep_out`,
+    which come from HUD detection. On the source where a caption demonstrably
+    landed on the Minecraft inventory, `regions.hud` is `[]` — so the avoidance
+    was working perfectly against an empty list. This supplies the list.
+
+    PERSISTENCE is the whole design, and it is the same lesson the facecam
+    detector learned: what makes a rectangle a UI panel is not that it looked
+    grey once but that it IS THERE. A single frame of grey stone reads exactly
+    like an inventory; twenty seconds of it in the same cells does not. Cells
+    must be grey in half the sampled frames to count.
+
+    Detection is per CLIP, not per project, because a panel opens and closes —
+    `regions.json` is measured once for a whole stream and cannot express that.
+    """
+    import cv2
+    import numpy as np
+
+    cap = cv2.VideoCapture(str(window))
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) or 10.0
+        step = max(1, int(round(fps * hop)))
+        hits = np.zeros((PANEL_ROWS, PANEL_COLS), dtype=np.int32)
+        frames = 0
+        index = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if index % step == 0:
+                small = cv2.resize(frame, (PANEL_COLS, PANEL_ROWS),
+                                   interpolation=cv2.INTER_AREA).astype(np.int16)
+                spread = small.max(axis=2) - small.min(axis=2)
+                lum = small.mean(axis=2)
+                hits += ((spread < UI_SPREAD_MAX)
+                         & (lum > UI_LUM_MIN) & (lum < UI_LUM_MAX)).astype(np.int32)
+                frames += 1
+            index += 1
+    finally:
+        cap.release()
+
+    if frames == 0:
+        return []
+
+    mask = ((hits / frames) >= PANEL_PERSISTENCE).astype(np.uint8)
+    if not mask.any():
+        return []
+
+    count, _labels, stats, _cent = cv2.connectedComponentsWithStats(mask, 8)
+    cell_w, cell_h = src_w / PANEL_COLS, src_h / PANEL_ROWS
+    out: list[dict[str, int]] = []
+    for i in range(1, count):                       # 0 is the background
+        x, y, w, h, area = (int(stats[i, k]) for k in range(5))
+        if area / float(PANEL_COLS * PANEL_ROWS) < PANEL_MIN_AREA:
+            continue
+        out.append({"x": int(x * cell_w), "y": int(y * cell_h),
+                    "w": max(1, int(w * cell_w)), "h": max(1, int(h * cell_h))})
+    out.sort(key=lambda r: -(r["w"] * r["h"]))
+    return out
+
+
 def analyse_window(proxy: Path | str, start: float, duration: float,
                    band: tuple[float, float, float, float] | None,
                    src_w: int) -> dict[str, Any]:
@@ -163,8 +243,12 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
             band = action_band(samples, int(info.get("width") or 0),
                                int(info.get("height") or 0))
         totals, focus, detail, ui = region_motion(window, FACE_HOP_S, band, src_w)
+        info = video_info(str(window))
+        src_h = int(src_w * (int(info.get("height") or 0) or 1)
+                    / max(1, int(info.get("width") or 0) or 1))
         return {"faces": faces, "motion": totals, "focus": focus,
                 "detail": detail, "ui": ui, "band": tuple(band),
+                "panels": ui_panels(window, src_w, src_h),
                 "hop": FACE_HOP_S}
     finally:
         shutil.rmtree(work, ignore_errors=True)

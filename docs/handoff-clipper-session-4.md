@@ -428,7 +428,34 @@ The 12-minute slice found both facecams correctly, so this is specifically a
 long-stream problem: **layout is detected once, globally, for a source whose
 layout changes.**
 
-### 3. Captions collide with in-game UI
+### 3. Captions collide with in-game UI — FIXED 2026-08-17, with one gap named
+
+`resolve_position` had implemented collision avoidance since the clipper
+shipped, and it avoided the rects in `keep_out`, which came from HUD detection.
+On this source `regions.hud` is `[]` — **the avoidance was working perfectly
+against an empty list.** The missing half was never the algorithm.
+
+`dynamic_window.ui_panels` supplies the list, per CLIP rather than per project,
+because a panel opens and closes and `regions.json` is measured once for a whole
+stream. PERSISTENCE is the whole design: a cell counts as UI only if it is flat
+mid-grey in half the sampled frames. That is what separates a panel from grey
+stone terrain, and it was confirmed by looking — a single-frame grey mask selects
+a hillside, the persistence map selects the subscriber counter and the BOSSES
+BEATEN box.
+
+**The first version of this detector found nothing on five real clips.**
+`PANEL_MIN_AREA = 0.015` was a guess, and the persistent UI on a real stream is
+not one big panel but a counter, a timer, a hotbar. At 0.002 they come back, at
+identical coordinates on three different clips — which is itself the evidence,
+because a stream's chrome does not move.
+
+**Still open:** a transient game menu. The Minecraft inventory that caused the
+original defect opens for a few seconds inside a 38-second clip and cannot clear
+a persistence bar set where terrain fails it. What is detected is the STATIC
+stream chrome, which is a real keep-out — Pass D's one verified true positive was
+a caption over the stream's own overlay bar — but it is not the whole of §21.
+
+The old text follows, because the diagnosis is still the useful part.
 A caption landed over the Minecraft inventory panel. `resolve_position` does
 implement collision avoidance, but `keep_out` comes from detected HUD/chat
 rects and HUD detection returned `[]` on this source.
@@ -630,9 +657,13 @@ learned ranker.
    `_regions_for` giving each clip the layout of the stretch it sits in. The
    first 40 minutes of the 4-hour source now correctly report no facecam
    instead of being handed a Minecraft inset rect.
-3. **Spatial `game_ui_ratio`** → caption keep-out, plus the missing 55–75%
-   clamp from the style spec. **Still open** — the only one of the four not
-   done.
+3. ~~**Spatial `game_ui_ratio`** → caption keep-out, plus the missing 55–75%
+   clamp from the style spec.~~ **DONE 2026-08-17.** `dynamic_window.ui_panels`
+   detects the panels per clip, `captions.panels_to_keep_out` maps them through
+   every shot's crop, and `resolve_position` searches for the widest clear band
+   inside the spec's 55–75% instead of trying six ±4% nudges. Verified on a real
+   export: the caption moved 0.75 → 0.554 in the burned .ass and Pass D went
+   from REVISE to APPROVE on the same clip.
 4. ~~**Watch three clips.**~~ **DONE**, and it was worth more than the rest of
    the list put together. Four defects came out of looking rather than
    measuring: clips ending on the last word's timestamp, `context_debt` decided
