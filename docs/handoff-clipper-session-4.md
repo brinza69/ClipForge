@@ -27,7 +27,7 @@ read `clipper-map.md` — it exists so nobody has to grep the tree again.
 5. Callback linking is validated only by mocks
 6. ~~Every clip ends on the last word~~ — FIXED
 7. ~~`context_debt` decided by one unverified string~~ — FIXED
-8. A portrait facecam cannot be detected — measured, six approaches failed
+8. ~~A portrait facecam cannot be detected~~ — FIXED, and not by widening the band
 9. The classifier called a gaming stream `talking_head` — improved, not solved
 10. Smaller
 
@@ -628,7 +628,83 @@ inset at all, scores 0.479. **Two rects one hundredth apart with opposite
 truth**, which is why the plateau is 0.08 wide and why lowering the bar trades
 EARLY for gym one-for-one rather than gaining anything.
 
-**And the independence measure was tried and is not the answer either.** The
+### 11. 8/9 → 9/9. The discriminator was "is there a second camera here"
+
+**Every earlier approach asked the border a question it could not answer.**
+Fourteen rules over the gradient, and on the two sources that fail there is no
+gradient because nothing was drawn: IShowSpeed's camera is keyed straight over
+Fortnite, Jynxzi's sits on a menu screen with no frame around it. This entry is
+what happened when the question changed.
+
+**Looking at the frames is what changed it.** The rect the detector produces on
+EARLY STREAM stops at row 222 of a 270-row proxy, and in the picture the
+streamer's body plainly continues below it. That is not a scoring artefact:
+
+**`_FACECAM_REACH_CAP` had silently switched off the frame-border branch.**
+`_snap_edge` concludes "the inset runs into the frame, there is nothing drawn
+there" only when its search window REACHES the limit, and the cap truncates the
+window to 0.30 of the frame. So for any facecam whose face centre sits further
+than that from the edge it is flush to, the branch cannot fire. Measured: on
+both bottom-left sources the uncapped reach would have crossed the frame bottom
+(428 and 416 rows of 270) and the capped one stops at 245 and 260. **Both were
+detected 25 and 46 rows short — 100 to 184 px on a 1080p source, the
+streamer's torso sliced out of the face band.** Jynxzi passed the scoreboard
+anyway, so the score never showed it.
+
+Restoring the branch in all four directions is wrong, and measuring it is the
+only way to know: the uncapped reach is 4× the face box, which on a 66px face
+is ±264 rows of a 270-row frame, so every direction qualifies and `go ghost`
+comes back as the whole picture. **An inset sits in a corner**; the seed's own
+position says which one, and that is the only pair of directions where "the
+frame" is a possible answer. With that, EARLY and Jynxzi snap to `182x180@0,88`
+and `158x162@0,106` — the rects the owner picked by eye from two drawn on a
+frame.
+
+They are then **square**, and `_WEBCAM_ASPECT` was landscape-only. Widening it
+was measured and rejected twice before, because the band was the only thing
+rejecting runaway rects. So the geometry could not be fixed until something
+rejected them on purpose, which is what this file has said for three sessions.
+
+**`scene_independence` is that thing, and it does not look at the border at
+all.** An inset is a SECOND CAMERA: its own lighting, its own subject, so its
+brightness holds still while the game behind it swings from a cave to daylight
+to a menu. A rect grown around a face in a single-camera shot is a window onto
+the same picture and moves with it. Std over frames of the region's mean
+luminance, over the same for everything outside it, on all 14 candidate rects
+from all 11 labelled sources:
+
+```
+insets    0.10 0.15 0.17 0.30 0.40 0.65 0.89
+phantoms                            1.06 1.09 1.10 1.34 1.38 1.39 1.51
+```
+
+**1.0 sits inside that gap and means something** — below 1 the region varies
+less than its surroundings, which is what a separate camera does. It is not
+fitted, and that is load-bearing: fit it instead as the midpoint of the
+observed gap and leave-one-source-out **flips Jynxzi**, the tightest positive
+at 0.89, because holding it out shrinks the positive range and drags the
+midpoint to 0.855. At a fixed 1.0 every source is correct in every fold. A
+future misread will look like Jynxzi.
+
+**The aspect band then stops mattering: 9/9 at every lower bound from 0.95 down
+to 0.4.** That is what a gate looks like when it has stopped doing another
+gate's job, and it is the same shape as the entry above about the area bound.
+Set to `(0.55, 2.0)` — the value session 5 named as what a portrait inset
+needs, safe now. **Known problem 8 is closed by that**, not by a wider band.
+
+**Two fixture faults came out of it, both worth keeping.** The synthetic scene
+in `test_clipper_analysis.py` built "gameplay" as pure noise, and noise over
+129,600 pixels averages to the same number every frame — so the game held
+perfectly still and the inset was the only thing moving, the exact inverse of a
+real source. Every facecam test read as a phantom until the scene got a
+per-frame level. And `test_a_wide_shot_with_people_in_it_is_not_a_facecam`
+built its wide shot by COMPOSITING a still rectangle where the people were,
+which is the one thing a wide shot does not contain; it passed because the rect
+came out too big, not because it was not an inset. Split in two: one case for
+the area bound on a genuine composite, one for a continuous scene, which is
+what the test always claimed to be about.
+
+**And the independence measure was tried on the wrong rects first.** The
 idea the entry above proposes — an inset is a second camera, so its content
 varies independently of the frame around it — was measured on all thirteen
 candidate rects before any gate was written, three ways: std of the region's
@@ -645,11 +721,17 @@ series, and the per-pixel temporal std ratio.
 on the same rects, so it buys nothing, and its best cut lands exactly on
 Jynxzi's 0.93 with `go ghost` at 0.67 inside the inset range. A separator whose
 margin is zero on the sources it was fitted to is a coincidence with a
-threshold on it. **Not built.** The mechanism is sound and the reason it fails
-here is visible in the numbers: IShowSpeed's camera has chat composited over
-it, so its region is as busy as the game beside it.
+threshold on it. **Not built** — on that reading.
 
-### What the one remaining failure actually is
+**And the reading was wrong, which is the most useful thing in this entry.**
+The measure was run on the rects the detector produced, and those rects were
+TRUNCATED by the reach cap: EARLY's covered his head and not his camera, gym's
+covered part of a room. Fix the geometry first and re-measure on the corrected
+rects and the same three numbers separate cleanly, with a 0.45-wide gap. A
+measurement over inputs that are themselves wrong answers a different question
+than the one asked, and it took looking at a frame to notice. See entry 11.
+
+### What the one remaining failure actually was — CLOSED by entry 11
 
 On the EARLY STREAM gaming stretch the face cluster is as strong as this
 detector ever gets — **32 hits in 40 frames, rate 0.80** — and `_snap_inset`
@@ -684,7 +766,7 @@ or listening to a file and saying it was wrong.
 | The clip editor | Phase 9.6. Trim, headline, caption preset and height over a server-rendered still. |
 | Hands-off mode | `auto_export`: paste a link, come back to rendered files. |
 | Three silent failure modes | Settings parity, `failed_chunks` surfaced, disk pruning. |
-| Facecam 6/9 → 8/9 | Reach capped at 0.30 of the frame, gated on `corner_proximity >= 0.48`, and the hit-rate bar dropped from 0.15 to 0.10 — it was measuring sample length, not layout. |
+| Facecam 6/9 → **9/9** | Reach capped at 0.30 of the frame, gated on `corner_proximity >= 0.48`; the hit-rate bar dropped from 0.15 to 0.10, which was measuring sample length rather than layout; the frame-border conclusion restored toward the corner the inset sits in, which the reach cap had switched off; and `scene_independence` — is there a second camera in this rect — which is the discriminator three sessions looked for and the only one that does not need a border. |
 | Duration stopped outvoting content | `platform_fit` zeroed in all ten profiles. |
 | `emotion` measures something | `vocal_bursts.py` — laughter and shouting from the audio. |
 | `speech_ratio` measures speech | From the transcript, not the envelope. |
@@ -778,21 +860,28 @@ to be WRONG WITHOUT SAYING SO, ranked by how much a failure costs before anyone
 notices. Written after three sessions of running it on real sources, and every
 entry has a measurement behind it.
 
-**1. Facecam detection, and it is not close.** Its precision on edited sources
-is an ARTEFACT of its imprecision on gaming ones — the runaway rects are
-rejected by `_WEBCAM_AREA`, and that rejection is the only thing keeping the
-edited sources clean. Demonstrated: fix the geometry and four false positives
-appear. Nothing is discriminating; a gate is doing it by accident. **8 of 9 on
-the labelled sources** since 2026-08-17, and the two gains behind that number do
-not change this entry: `corner_proximity` as a gate, and a hit-rate bar that was
-costing recall on long sources. Fourteen approaches to the underlying problem
-have failed and every one of them trades one side for the other. A wrong answer
-here silently picks the wrong layout for every clip in the source.
+**1. ~~Facecam detection, and it is not close~~ — the mechanism is fixed,
+2026-08-17. 9 of 9 on the labelled sources.** Kept, because the diagnosis is
+what the fix came from and because the entry names the trap.
 
-The single remaining failure is the sharpest statement of it: EARLY STREAM's
-real inset scores `corner_proximity` 0.47 and the gym's non-existent one scores
-0.479. **One hundredth apart, opposite truth** — no setting of that constant
-separates them, and the plateau being 0.08 wide is that fact seen from the side.
+What it said: precision on edited sources was an ARTEFACT of imprecision on
+gaming ones — the runaway rects were rejected by `_WEBCAM_AREA`, and that
+rejection was the only thing keeping the edited sources clean, so fixing the
+geometry produced four false positives. **Nothing was discriminating; two gates
+were doing it by accident.** Fifteen approaches failed and every one traded one
+side for the other, because all fifteen were rules over the border and two
+sources have no border.
+
+`scene_independence` ends it by asking a different question — is there a SECOND
+CAMERA in this rect — and the sign that it is the right one is that the two
+accidental gates immediately stopped mattering: 9/9 at every aspect lower bound
+from 0.95 to 0.4. Entry 11 above has the numbers.
+
+**What is still fragile here is the sample, not the mechanism.** Nine sources,
+one owner, one afternoon of labelling. The threshold is unfitted, which is the
+best defence available, and leave-one-source-out says a future misread will
+look like Jynxzi at 0.89. A wrong answer still silently picks the wrong layout
+for every clip in the source, so this stays near the top of the list.
 
 **2. ~~The settings whitelist~~ — CLOSED 2026-08-17.**
 `_normalise_settings` keeps only keys already present in `_default_settings()`,
@@ -1048,7 +1137,21 @@ five listed items still read as a real debt. Thin evidence — two clips, one
 viewing, one source — which is enough to stop an override that contradicted
 every other signal and not enough to tune on.
 
-### 8. A portrait facecam cannot be detected at all — measured 2026-08-15
+### 8. A portrait facecam cannot be detected at all — FIXED 2026-08-17
+
+**Closed, and NOT by widening the band**, which is the part worth reading. The
+text below is right that `_WEBCAM_ASPECT` was the primary cause and right that
+refitting it to two sources would be the same mistake with a bigger sample —
+and it was measured twice more and rejected twice more for exactly that.
+
+What changed is that the band stopped being load-bearing. Once
+`scene_independence` rejects phantoms on purpose, the score is 9/9 at every
+lower bound from 0.95 down to 0.4, so the band can express what a facecam
+actually is instead of standing in for a discriminator. It is `(0.55, 2.0)`
+now. The paragraph below asked for a gate built on "hits, rate and drift"
+rather than aspect; the gate that arrived measures something else again, and
+the reasoning it gives for wanting one was correct. Original follows.
+
 
 First result from a source that is not the Minecraft co-stream. `IShowSpeed —
 EARLY STREAM!`, 4h24m, a gaming stream with an obvious facecam bottom-left,

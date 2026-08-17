@@ -35,7 +35,18 @@ _MAX_FRAMES = 40            # enough to judge stability; more only costs time
 _WORK_WIDTH = 480           # frames already come from the 480p analysis proxy
 _EDGE_LO, _EDGE_HI = 80, 200
 _CORNER_FRAC = 0.22         # side of the four corner patches, as a frame fraction
-_WEBCAM_ASPECT = (1.1, 1.9)
+# (1.1, 1.9) until 2026-08-17, and landscape-only was the reason a portrait or
+# square facecam could not be detected however confidently it was found — known
+# problem 8 in the session-4 handoff. Widening it was measured twice before and
+# rejected both times, because the band was the only thing rejecting runaway
+# rects and relaxing it invented insets on the edited sources.
+#
+# `scene_independence` now rejects those on purpose, and the band stops
+# mattering: 9/9 on the source scoreboard at every lower bound from 0.95 down
+# to 0.4, which is what a gate looks like when it has stopped doing someone
+# else's job. 0.55 is the value the earlier session named as what a portrait
+# inset needs; it is safe now.
+_WEBCAM_ASPECT = (0.55, 2.0)
 _WEBCAM_AREA = (0.015, 0.30)
 _TRACK_IOU = 0.7            # same box across two frames
 _CHAT_ASPECT_MAX = 0.6
@@ -145,6 +156,56 @@ def corner_proximity(rect: dict | None, fw: int, fh: int) -> float:
     best = min(math.hypot(cx - x, cy - y)
                for x in (0.0, float(fw)) for y in (0.0, float(fh)))
     return clamp01(1.0 - best / half_diag)
+
+
+def scene_independence(stack, rect: dict | None) -> float:
+    """How much the rect's own picture varies over time, against the frame's.
+
+    THE THING THAT SAYS WHETHER THERE IS AN INSET HERE AT ALL. Every earlier
+    approach to this question was a rule over the gradient at the rect's
+    border, and two of the labelled sources have no border to find: IShowSpeed's
+    camera is keyed straight over Fortnite and Jynxzi's sits on a menu screen
+    with nothing drawn around it. Fourteen rules over that gradient failed.
+
+    This does not look at the border. An inset is a SECOND CAMERA, with its own
+    lighting and its own subject, so its brightness holds still while the game
+    behind it swings from a cave to daylight to a menu. A rect grown around a
+    face in a single-camera shot is a window onto the same picture, and when
+    that picture changes the window changes with it.
+
+    So: std over frames of the region's mean luminance, over the same for
+    everything outside it. Measured on 14 candidate rects from all 11 labelled
+    sources, and the separation is clean --
+
+        insets    0.10 0.15 0.17 0.30 0.40 0.65 0.89
+        phantoms                            1.06 1.09 1.10 1.34 1.38 1.39 1.51
+
+    -- with 1.0 sitting inside the gap and MEANING something: below 1 the
+    region varies less than its surroundings, which is what a separate camera
+    does. The threshold is not fitted, which matters. Fit it instead as the
+    midpoint of the observed gap and leave-one-source-out flips Jynxzi, the
+    tightest positive at 0.89: holding it out shrinks the positive range and
+    drags the midpoint to 0.855. At a fixed 1.0 every source is correct in
+    every fold. If a future source is misread, expect it to look like Jynxzi.
+
+    `stack` is (frames, h, w) float32 -- the same grays the gradient profiles
+    are built from, so this costs one more pass over an array already in hand.
+    """
+    if rect is None or getattr(stack, "size", 0) == 0 or len(stack) < 2:
+        return 1.0
+    x0, y0 = int(rect["x"]), int(rect["y"])
+    x1, y1 = x0 + int(rect["w"]), y0 + int(rect["h"])
+    inside = stack[:, y0:y1, x0:x1]
+    mask = np.ones(stack.shape[1:], dtype=bool)
+    mask[y0:y1, x0:x1] = False
+    outside = stack[:, mask]
+    if inside.size == 0 or outside.size == 0:
+        return 1.0
+    spread_out = float(outside.mean(axis=1).std())
+    if spread_out <= 1e-6:
+        return 1.0
+    spread_in = float(inside.reshape(len(stack), -1).mean(axis=1).std())
+    return spread_in / spread_out
 
 
 def track_stability(rects: Sequence[dict], min_iou: float = _TRACK_IOU) -> float:

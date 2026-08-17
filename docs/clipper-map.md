@@ -106,7 +106,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | file | what |
 |---|---|
 | `content_type.py` | the parts that need a decoded image: frame features, face boxes, region detection |
-| `content_geom.py` | the pure half — rect maths, signal summaries, and the classifier itself |
+| `content_geom.py` | the pure half — rect maths, signal summaries, the classifier itself, and `scene_independence`: whether a candidate rect holds a second camera or a piece of the same picture. That is what says a facecam is there when it has no border to find |
 | `segment_type.py` | content type per stretch rather than per file, and the signal slicing that allows it |
 | `layout.py` | plan one 9:16 frame: which layout, which rects, which safe zones |
 | `layout_geom.py` | the rect arithmetic behind it |
@@ -170,7 +170,7 @@ operations). Split to stay under the 500-line limit.
 | `scripts/facecam_dataset.py` | 68 labelled candidate rects + what each feature separates |
 | `scripts/facecam_train.py` | the classifier that lost to `corner_proximity`, leave-one-source-out |
 | `scripts/measure_inset_border.py` | border coverage and persistence per candidate rect — the measurement that showed two facecams have no border at all |
-| `scripts/score_facecam.py` | facecam detection scored against `source-labels.md`. Run it before believing any change to the seed — baseline 8/9 |
+| `scripts/score_facecam.py` | facecam detection scored against `source-labels.md`. Run it before believing any change to the seed — baseline **9/9** |
 
 ## Tests
 

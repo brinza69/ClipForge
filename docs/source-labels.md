@@ -19,6 +19,12 @@ Four things, and each of them changes what is worth building:
    row in `scoring.PROFILES`, so a perfect classifier would still be wrong for
    a third of the clips on these. The granularity is the bug.
 
+   **All nine scored sources are correct as of 2026-08-17** — the detector
+   reads 9/9 on `scripts/score_facecam.py`. What closed the last two was not a
+   better rule over the border: both are keyed composites with no border, and
+   `scene_independence` asks instead whether the rect holds a second camera.
+   The labels below are what made that measurable.
+
 3. **The facecam is in a different place in every single source that has one**:
    bottom-left, two in the top corners, left edge at mid-height, fullscreen,
    none, cut-to-cut, and one that exists for four minutes out of 112.

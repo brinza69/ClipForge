@@ -51,6 +51,7 @@ from services.clipper.content_geom import (
     rect_aspect,
     rect_centre,
     rect_overlap_frac,
+    scene_independence,
     snap_rect,
     speech_ratio,
     summarize_faces,
@@ -332,6 +333,12 @@ _FACECAM_PAD_W, _FACECAM_PAD_H = 2.6, 2.2
 # boundaries away from the frame run 6.0 to 71. 3.0 sits in the gap with room
 # on both sides.
 _FACECAM_EDGE_DOMINANCE = 3.0
+# Below this the rect's own picture varies less over time than the frame around
+# it, which is what a separate camera does and what a window onto the same
+# scene cannot. NOT FITTED — 1.0 is the natural boundary of the ratio, and that
+# is the point: see `content_geom.scene_independence` for the measured
+# separation and for what leave-one-source-out says about fitting it instead.
+_FACECAM_INDEPENDENCE_MAX = 1.0
 # Below this a stretch has too few frames for the face cluster to clear its own
 # hit-rate gate, and the answer would be "no facecam" for lack of evidence
 # rather than for lack of a facecam.
@@ -354,9 +361,16 @@ def _step_profiles(grays: Sequence[Any]) -> tuple[Any, Any]:
 
 
 def _snap_edge(profile: Any, seed: float, inner: float, outer: float,
-               limit: int, forward: bool) -> int:
+               limit: int, forward: bool, at_frame: bool = False) -> int:
     """The inset's edge on one axis: the strongest step between the face and
-    the game, or the frame border when the facecam runs into it."""
+    the game, or the frame border when the facecam runs into it.
+
+    `at_frame` says the caller already knows this direction points at a frame
+    border the facecam is plausibly flush to. It exists because
+    `_FACECAM_REACH_CAP` truncates the window and the border test below needs
+    the window to REACH the limit — so the cap silently switched the branch
+    off. See `_snap_inset`.
+    """
     lo = int(round(seed + inner)) if forward else int(round(seed - inner))
     hi = int(round(seed + outer)) if forward else int(round(seed - outer))
     lo, hi = (lo, min(limit, hi)) if forward else (max(0, hi), lo)
@@ -368,7 +382,7 @@ def _snap_edge(profile: Any, seed: float, inner: float, outer: float,
     at = lo + int(np.argmax(window))
 
     touches_frame = (hi >= limit - 1) if forward else (lo <= 1)
-    if touches_frame:
+    if touches_frame or at_frame:
         median = float(np.median(window))
         dominant = median > 1e-6 and float(window.max()) / median >= _FACECAM_EDGE_DOMINANCE
         if not dominant:
@@ -394,13 +408,37 @@ def _snap_inset(seed: dict, gx: Any, gy: Any, fw: int, fh: int) -> dict:
     row_prof = gy[:, cols].mean(axis=1) if gy.size else np.zeros(0)
 
     inner_x, inner_y = half_w * _FACECAM_INNER * 2, half_h * _FACECAM_INNER * 2
-    outer_x = min(half_w * _FACECAM_OUTER * 2, fw * _FACECAM_REACH_CAP)
-    outer_y = min(half_h * _FACECAM_OUTER * 2, fh * _FACECAM_REACH_CAP)
+    reach_x, reach_y = half_w * _FACECAM_OUTER * 2, half_h * _FACECAM_OUTER * 2
+    outer_x = min(reach_x, fw * _FACECAM_REACH_CAP)
+    outer_y = min(reach_y, fh * _FACECAM_REACH_CAP)
 
-    x0 = _snap_edge(col_prof, cx, inner_x, outer_x, fw, forward=False)
-    x1 = _snap_edge(col_prof, cx, inner_x, outer_x, fw, forward=True)
-    y0 = _snap_edge(row_prof, cy, inner_y, outer_y, fh, forward=False)
-    y1 = _snap_edge(row_prof, cy, inner_y, outer_y, fh, forward=True)
+    # WHICH EDGES THIS FACECAM IS FLUSH TO, and only those. `_snap_edge` can
+    # conclude "the inset runs into the frame, there is nothing drawn there"
+    # only when its window reaches the limit, and _FACECAM_REACH_CAP truncates
+    # the window — so the cap turned that branch off for every facecam whose
+    # face centre sits further than 0.30 of the frame from the edge it is
+    # against. Both bottom-left sources are exactly that: the uncapped reach
+    # would have crossed the frame bottom (428 and 416 rows of 270) and the
+    # capped one stops at 245 and 260, so their bottom edge came back 25 and 46
+    # px short on the proxy — 100 to 184 px on a 1080p source, the streamer's
+    # torso sliced out of the face band.
+    #
+    # Restoring it in ALL FOUR directions is wrong and was measured: the
+    # uncapped reach is 4x the face box, so on a 66px face it is +-264 rows of
+    # a 270-row frame and every direction qualifies. `go ghost` came back as
+    # 480x270 — the whole picture — which is the runaway the cap was added to
+    # stop. An inset sits in a CORNER, the seed's own position says which one,
+    # and that is the only pair of directions where the answer can be the
+    # frame. The dominance test still has to agree.
+    left, top = cx < fw / 2.0, cy < fh / 2.0
+    x0 = _snap_edge(col_prof, cx, inner_x, outer_x, fw, False,
+                    left and cx - reach_x <= 1)
+    x1 = _snap_edge(col_prof, cx, inner_x, outer_x, fw, True,
+                    not left and cx + reach_x >= fw - 1)
+    y0 = _snap_edge(row_prof, cy, inner_y, outer_y, fh, False,
+                    top and cy - reach_y <= 1)
+    y1 = _snap_edge(row_prof, cy, inner_y, outer_y, fh, True,
+                    not top and cy + reach_y >= fh - 1)
 
     if x1 - x0 < seed["w"] or y1 - y0 < seed["h"]:
         return make_rect(cx - seed["w"] * _FACECAM_PAD_W / 2.0,
@@ -452,6 +490,7 @@ def _find_webcams(grays: Sequence[Any], faces: Sequence[Sequence[dict]],
     """
     frames = max(1, len(faces))
     gx, gy = _step_profiles(grays)
+    stack = np.stack([g.astype(np.float32) for g in grays]) if grays else np.zeros(0)
 
     scored: list[tuple[float, dict]] = []
     for group in _face_groups(faces, fw, fh):
@@ -480,6 +519,14 @@ def _find_webcams(grays: Sequence[Any], faces: Sequence[Sequence[dict]],
         # rects plausible enough that the area gate stopped rejecting phantoms
         # by accident, so something has to reject them on purpose.
         if corner_proximity(snapped, fw, fh) < _FACECAM_CORNER_MIN:
+            continue
+        # IS THERE AN INSET HERE AT ALL — the gate this file spent three
+        # sessions looking for, and the one every other rule was standing in
+        # for by accident. It asks whether the rect holds a SECOND CAMERA
+        # rather than a piece of the same picture, which is a question the
+        # border cannot answer on a keyed facecam because there is no border.
+        # Full reasoning and the 14-rect separation in `scene_independence`.
+        if scene_independence(stack, snapped) >= _FACECAM_INDEPENDENCE_MAX:
             continue
         # Spread of the cluster's centres, as a share of its own size: a real
         # inset holds still, a false positive drifts with the game camera.

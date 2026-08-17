@@ -614,13 +614,22 @@ def _scene(insets, fw=480, fh=270, frames=20):
 
     A real inset differs from its surroundings in both level and how much it
     changes frame to frame, which is what the edge search keys on.
+
+    THE GAMEPLAY'S PER-FRAME LEVEL IS LOAD-BEARING. Without it this scene is
+    the opposite of a real one: pure noise over 129,600 pixels averages to the
+    same number every frame, so the "game" here held perfectly still while the
+    inset was the only thing that moved. A real game swings from a cave to
+    daylight to a menu and a locked-off webcam does not, which is the whole
+    basis of `scene_independence`. Drop the level and every facecam in this
+    file reads as a phantom — the fixture would be testing itself.
     """
     import numpy as np
 
     rng = np.random.default_rng(7)
     out = []
     for _ in range(frames):
-        frame = (rng.integers(0, 60, size=(fh, fw))).astype("uint8")
+        level = int(rng.integers(0, 120))
+        frame = (rng.integers(0, 60, size=(fh, fw)) + level).astype("uint8")
         for x, y, w, h in insets:
             patch = np.full((h, w), 190, dtype="uint8")
             patch[h // 4:h // 2, w // 4:w // 2] = rng.integers(150, 230)
@@ -678,16 +687,39 @@ def test_a_face_that_flashes_past_is_not_a_facecam():
     assert not rects, "two sightings are noise, not an inset"
 
 
-def test_a_wide_shot_with_people_in_it_is_not_a_facecam():
-    """The gym-camera project has no inset at all: one wide IRL camera with
-    people in frame. Deriving a rect from the faces reported its own right
-    half as a facecam, area 0.36 and aspect 0.78 — outside both bounds."""
+def test_a_composited_rect_covering_half_the_frame_is_still_too_big():
+    """The area bound, on the FINAL rect — the fallback padding would sail
+    through a check made on the seed. This case is genuinely a composite; it is
+    rejected for its size, which is the only thing wrong with it."""
     from services.clipper import content_type
 
-    huge = [(286, 0, 192, 246)]
+    huge = [(240, 0, 240, 270)]
     rects, _ = content_type._find_webcams(
         _scene(huge), _face_at(huge, seen=[18]), 480, 270)
     assert not rects, "a region covering a third of the frame is not an inset"
+
+
+def test_a_wide_shot_with_people_in_it_is_not_a_facecam():
+    """The gym-camera project has no inset at all: one wide IRL camera with
+    people in frame. Deriving a rect from the faces reported its own right half
+    as a facecam, area 0.36 and aspect 0.78 — outside both bounds.
+
+    This test used to build that case by COMPOSITING a still rectangle where
+    the people were, which is the one thing a wide shot does not contain, and
+    it passed because the rect came out too big rather than because it was not
+    an inset. Widen the aspect band — which the labelled sources needed — and
+    it would have started passing a phantom. So the scene here has no
+    composite at all: one continuous picture, faces in part of it. What
+    rejects it is `scene_independence`, on purpose.
+    """
+    from services.clipper import content_type
+    from services.clipper.content_geom import make_rect
+
+    frames = _scene([])
+    boxes = [[make_rect(353, 74, 58, 86)] if i < 18 else [] for i in range(20)]
+    rects, _ = content_type._find_webcams(frames, boxes, 480, 270)
+    assert not rects, (
+        f"a window onto one continuous scene is not a second camera: {rects}")
 
 
 def test_a_facecam_flush_to_the_frame_reaches_the_frame():
@@ -700,6 +732,26 @@ def test_a_facecam_flush_to_the_frame_reaches_the_frame():
     rects, _ = content_type._find_webcams(
         _scene(insets), _face_at(insets, seen=[14]), 480, 270)
     assert rects and rects[0]["x"] == 0 and rects[0]["y"] == 0
+
+
+def test_a_facecam_flush_to_the_BOTTOM_reaches_the_bottom():
+    """The same rule downward, which is where it was silently switched off.
+
+    `_snap_edge` concludes "the inset runs into the frame" only when its window
+    reaches the limit, and `_FACECAM_REACH_CAP` truncates the window — so a
+    facecam whose face sits further than 0.30 of the frame from the edge it is
+    against never got that answer. Both labelled bottom-left sources lost 25
+    and 46 rows of a 270-row proxy to it, which is 100 to 184 px of the
+    streamer's torso on a 1080p source, cut out of the face band.
+    """
+    from services.clipper import content_type
+
+    insets = [(0, 88, 182, 182)]
+    rects, _ = content_type._find_webcams(
+        _scene(insets), _face_at(insets, seen=[16]), 480, 270)
+    assert rects, "a bottom-left inset was not found at all"
+    assert rects[0]["y"] + rects[0]["h"] >= 269, (
+        f"the bottom edge stopped short of the frame: {rects[0]}")
 
 
 def test_one_face_detector_not_two():
