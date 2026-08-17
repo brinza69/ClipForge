@@ -518,6 +518,32 @@ The 12-minute slice found both facecams correctly, so this is specifically a
 long-stream problem: **layout is detected once, globally, for a source whose
 layout changes.**
 
+### 2b. A face shot can frame no face — found by Pass D, 2026-08-17
+
+The first thing Pass D caught that nothing else was looking for, on the first
+run with the vision half on. Worth reading as evidence that the pass earns its
+place, and as a defect in its own right.
+
+Clip `e8fa6b35ea66` of project `547301635e54`, shot 15, `face_medium`,
+31.07–33.49s. The frames show Minecraft dirt. No face.
+
+The camera is correct: `face_medium` is `y=34 h=334`, and the subject cluster
+sits at `cy=176`, inside it. The SHOT's rect is `y=260 h=334` — 226 px lower,
+below the facecam entirely.
+
+`plan_dynamic_edit` re-centres each face shot on `_centre_at(samples, t0, t1)`,
+the median of the detections **inside that shot's window**. The cluster centre
+is computed over the whole clip and is stable; a single window's detections are
+not, and when they are bad the crop walks off the inset that the cluster had
+found correctly.
+
+This is the seed-wobble family from problem #4 showing up somewhere new: there
+the unstable face box moved the EDGE SEARCH, here it moves the CROP. The
+obvious guard is to clamp the per-shot centre to within the cluster's own
+tolerance of the subject centre — `_dominant` already computes that tolerance
+for exactly this reason. Not done: it changes framing on every dynamic export
+and wants its own before/after.
+
 ### 3. Captions collide with in-game UI — FIXED 2026-08-17, with one gap named
 
 `resolve_position` had implemented collision avoidance since the clipper
