@@ -136,7 +136,11 @@ def test_the_render_command_is_unchanged_when_nothing_is_cut():
     empty = build_render_cmd("s.mp4", _cand(), {}, None, "o.mp4",
                              drop_spans=[], **args)
     assert plain == empty
-    assert "0:a?" in plain, "audio should still be mapped straight from the input"
+    # The audio is taken straight from the input rather than through a select.
+    # It still passes the loudness chain — that is not a cut, and it is applied
+    # to every render on both paths.
+    graph = plain[plain.index("-filter_complex") + 1]
+    assert ";[0:a]" in graph and "aselect" not in graph
 
 
 def test_the_render_command_cuts_and_closes_the_gaps():
@@ -150,7 +154,10 @@ def test_the_render_command_cuts_and_closes_the_gaps():
     assert "aselect='not(between(t,10.000,14.000))'" in graph
     # Without the setpts pair the removed seconds come back as freezes.
     assert "setpts=N/FRAME_RATE/TB" in graph and "asetpts=N/SR/TB" in graph
-    assert "[acut]" in cmd and "0:a?" not in cmd
+    # The CUT audio is what reaches the output: [acut] feeds the loudness chain
+    # and the untouched input is not mapped at all.
+    assert ";[acut]" in graph and "0:a?" not in cmd
+    assert "[aout]" in [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
 
 
 def test_the_output_duration_shrinks_by_what_was_cut():

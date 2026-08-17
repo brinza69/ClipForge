@@ -201,13 +201,19 @@ done. Regenerate it with `scripts/export_clipper_state.py`.
 
 ---
 
-## Switches that exist and ship OFF
+## Switches
 
 Per-project keys in `clipper_settings`, each falling back to a `config.py`
 default. Full table in `handoff-clipper-session-4.md`.
 
-| switch | turns on |
-|---|---|
-| `dynamic_edit` | multi-shot export instead of one static split screen |
-| `trim_silence` | dead-air removal from inside a window (§15) |
-| `llm_select` + `reasoning_version: "story_v1"` | the story engine |
+| switch | default | turns on |
+|---|---|---|
+| `dynamic_edit` | **ON** since 2026-08-17 | multi-shot export instead of one static split screen |
+| `trim_silence` | off | dead-air removal from inside a window (§15) |
+| `llm_select` + `reasoning_version: "story_v1"` | off | the story engine |
+
+`dynamic_edit` being on is what makes the rest of the multi-shot work reachable
+— cuts on speech pauses, the wide gameplay framing, Pass D and the audio
+ceiling all live on that path and nowhere else. It still falls back to the
+static layout on a missing proxy, a plan with fewer than two shots, or any
+exception.

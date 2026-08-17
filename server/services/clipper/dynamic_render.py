@@ -37,10 +37,15 @@ from typing import Any, Sequence
 
 from services.clipper.dynamic_edit import ASPECT
 from services.clipper.ffmpeg_tools import (
+    AUDIO_RATE,
     FFmpegError,
+    LIMITER_CEILING,
+    LOUDNESS_I,
+    LOUDNESS_TP,
     escape_filter_path,
     even,
     ffmpeg_bin,
+    loudness_chain,
     run,
 )
 
@@ -58,24 +63,10 @@ MIN_OUTPUT_BYTES = 1024
 
 # Loudness target for vertical short-form. The reference edits are all pushed
 # hard and flat; a clip mastered at broadcast level sounds broken next to them.
-LOUDNESS_I = -14.0
-LOUDNESS_TP = -1.5
-
-# Delivery sample rate. The source is 48 kHz and so is every platform; this
-# constant exists because loudnorm leaves the stream at its own internal rate
-# and something has to put it back.
-AUDIO_RATE = 48000
-
-# The ceiling loudnorm's TP argument only aims at. `alimiter` takes it linearly:
-# 0.84 is -1.51 dBFS, matching LOUDNESS_TP.
-#
-# `level=false` in the filter string is load-bearing and is NOT the default.
-# `alimiter` auto-levels its output back up to the ceiling unless told not to,
-# which means the default limiter does the opposite of limiting: measured on the
-# same 18s clip it returned a peak of +0.07 dBFS and dragged the integrated
-# loudness to -11.8 LUFS, undoing the loudnorm in front of it. With it off:
-# -1.47 dBFS and -13.3 LUFS.
-LIMITER_CEILING = 0.84
+# The loudness chain and its constants moved to `ffmpeg_tools` when the static
+# renderer needed the same one — the two had drifted, and a clip that fell back
+# to the static layout shipped un-normalised. Re-exported because the tests and
+# the recipe both name them here.
 
 
 # ---------------------------------------------------------------------------
@@ -315,31 +306,7 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
         "-map", "0:a?",
     ]
     if loudness:
-        # Measured on the references: integrated around -15 LUFS with a
-        # loudness range of only 2.5-3.1 LU and true peak at or over 0 dBFS.
-        # That is a compressor doing most of the work, so normalising alone
-        # would leave the clip sounding limp next to them; the compander runs
-        # first and loudnorm just parks the result at the platform target.
-        #
-        # The two filters after loudnorm are not decoration. Measured on a
-        # delivered clip, the chain WITHOUT them produced a true peak of
-        # +0.2 dBFS against the -1.5 asked for, and a 96 kHz output:
-        #
-        #   * loudnorm in single pass is a DYNAMIC normaliser. Its TP argument
-        #     is a target it aims at over a lookahead window, not a ceiling it
-        #     guarantees, and on an 18s clip it missed by 1.7 dB. `alimiter` is
-        #     the guarantee. `limit` is linear, so 0.84 is about -1.5 dBFS.
-        #   * loudnorm also resamples internally to 192 kHz and does not
-        #     restore the input rate, so the encoder negotiated the highest
-        #     rate AAC accepts. 192 kbit/s then paid for a band nobody can
-        #     hear instead of the one they can, which is a quality LOSS
-        #     dressed as a bigger number. `aresample` puts it back to the
-        #     48 kHz the source and every platform use.
-        cmd += ["-af", f"acompressor=threshold=-20dB:ratio=4:attack=5:release=120:makeup=2,"
-                       f"loudnorm=I={LOUDNESS_I}:TP={LOUDNESS_TP}:LRA=4,"
-                       f"aresample={AUDIO_RATE},"
-                       f"alimiter=limit={LIMITER_CEILING}:level=false:"
-                       f"attack=5:release=50"]
+        cmd += ["-af", loudness_chain()]
     cmd += [
         "-c:v", "libx264",
         "-preset", str(preset),

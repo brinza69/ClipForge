@@ -29,6 +29,18 @@ def _graph(cmd):
     return cmd[cmd.index("-filter_complex") + 1]
 
 
+def _video_branch(graph):
+    """The graph up to where the audio chain starts.
+
+    Several tests used to assert `graph.endswith("[vout]")` as a way of saying
+    "the video chain terminates there". Once audio filtering was added they were
+    really asserting that video comes LAST, which none of them meant."""
+    for marker in (";[0:a]", ";[acut]"):
+        if marker in graph:
+            return graph.split(marker)[0]
+    return graph
+
+
 # --------------------------------------------------------------------------
 # Seeking and trimming
 # --------------------------------------------------------------------------
@@ -79,7 +91,10 @@ def test_captions_are_burned_inside_the_same_filter_complex():
     assert "-vf" not in cmd
     # The caption filter must extend the layout chain's [v] pad, not open a new one.
     assert ";[v]subtitles=" in graph
-    assert graph.endswith("[vout]")
+    # The VIDEO branch ends at [vout]. Not the graph — the loudness chain is
+    # appended after it, and asserting on the graph's last character made this
+    # test a statement about filter ORDER, which it never meant to be.
+    assert _video_branch(graph).endswith("[vout]")
     assert cmd[cmd.index("-map") + 1] == "[vout]"
 
 
@@ -92,7 +107,7 @@ def test_without_captions_the_layout_pad_is_mapped_directly():
     cmd = _cmd()
     graph = _graph(cmd)
     assert "subtitles=" not in graph
-    assert graph.endswith("[v]")
+    assert _video_branch(graph).endswith("[v]")
     assert cmd[cmd.index("-map") + 1] == "[v]"
 
 
@@ -100,10 +115,26 @@ def test_without_captions_the_layout_pad_is_mapped_directly():
 # Mapping and encoder settings
 # --------------------------------------------------------------------------
 
-def test_audio_is_mapped_optionally_so_a_silent_source_still_renders():
-    cmd = _cmd()
+def test_a_silent_source_still_renders():
+    """`-map 0:a?` used to carry this on its own. It cannot any more: the
+    loudness chain takes the audio as a FILTERGRAPH input, and `[0:a]` on a file
+    with no audio track fails the whole render rather than being skipped. So the
+    caller probes, and with no audio the optional map is what is left."""
+    cmd = _cmd(has_audio=False)
     maps = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
     assert "0:a?" in maps
+    assert "loudnorm" not in _graph(cmd)
+
+
+def test_audio_is_levelled_the_same_way_the_multi_shot_path_levels_it():
+    """The two renderers had drifted: the multi-shot path normalised and this
+    one shipped whatever level the source had, so a clip that FELL BACK to the
+    static layout came out quieter than one that did not."""
+    from services.clipper.ffmpeg_tools import loudness_chain
+
+    graph = _graph(_cmd())
+    assert loudness_chain() in graph
+    assert graph.endswith("[aout]")
 
 
 def test_encoder_settings():
@@ -222,7 +253,7 @@ def test_missing_plan_falls_back_to_a_centre_crop_fill():
     graph = _graph(_cmd(plan={}))
     assert graph.startswith("[0:v]")
     assert "crop=1080:1920" in graph
-    assert graph.endswith("[v]")
+    assert _video_branch(graph).endswith("[v]")
 
 
 def test_layout_filtergraph_is_used_verbatim(monkeypatch):

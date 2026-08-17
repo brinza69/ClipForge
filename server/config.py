@@ -160,10 +160,19 @@ class Settings(BaseSettings):
     # Gaming layout: default share of the 1080x1920 canvas given to the facecam.
     clipper_face_pct: float = 0.35
     # Multi-shot export: plan a shot list and cut between cameras instead of
-    # rendering one fixed split screen for the whole clip. OFF by default —
-    # every clip the pipeline has ever produced took the static path, and this
-    # changes what the deliverable looks like, so it is opted into per project.
-    clipper_dynamic_edit: bool = False
+    # rendering one fixed split screen for the whole clip.
+    #
+    # ON as of 2026-08-17, by the owner's decision, after it stopped being a
+    # thing only tests had seen: a viewer judged the rhythm and camera choice
+    # good, named the one fault (gameplay cropped too tight), and that was
+    # settled by an A/B. Everything measured since — cuts on speech pauses, the
+    # wide gameplay framing, Pass D, the audio ceiling — lands on this path and
+    # NOWHERE ELSE, so leaving it off meant none of it reached a clip.
+    #
+    # It still falls back to the static layout on a missing proxy, a plan with
+    # fewer than two shots, or any exception, so the old path remains the floor
+    # rather than becoming dead code.
+    clipper_dynamic_edit: bool = True
     # Cut dead seconds out of the MIDDLE of a chosen window (brief §15). OFF by
     # default: `trim_silence` has sat in the settings dict since the clipper
     # shipped with nothing reading it, so no export has ever been trimmed and

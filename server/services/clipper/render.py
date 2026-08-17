@@ -24,6 +24,7 @@ from services.clipper.ffmpeg_tools import (
     escape_filter_path,
     even,
     ffmpeg_bin,
+    loudness_chain,
     run,
     video_info,
 )
@@ -212,6 +213,22 @@ def _window(cand: dict) -> tuple[float, float]:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
+def _has_audio(src: str) -> bool:
+    """Whether the source carries an audio track at all.
+
+    Probed rather than assumed because the loudness chain is a filtergraph
+    input: `-map 0:a?` tolerates a silent source and `[0:a]` does not. A probe
+    that fails answers True, which is the pre-existing behaviour — a render that
+    dies on a missing audio track is a clearer failure than one that silently
+    drops the sound.
+    """
+    try:
+        return bool(video_info(src).get("has_audio", True))
+    except Exception:
+        logger.warning("could not probe %s for audio; assuming it has some", src)
+        return True
+
+
 def build_render_cmd(
     src: str,
     cand: dict,
@@ -226,6 +243,7 @@ def build_render_cmd(
     out_h: int = 1920,
     watermark: str = "",
     drop_spans: Sequence[tuple[float, float]] | None = None,
+    has_audio: bool = True,
 ) -> list[str]:
     """One ffmpeg argv list for one clip. Pure — builds, runs nothing.
 
@@ -264,6 +282,18 @@ def build_render_cmd(
         vlabel = "[vcut]"
         graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
         alabel = "[acut]"
+
+    if has_audio:
+        # The same chain the multi-shot renderer runs. It goes INSIDE the
+        # filtergraph rather than in `-af` because when dead air is trimmed the
+        # audio already comes out of one, and ffmpeg will not filter a stream
+        # that a complex graph produced.
+        #
+        # `has_audio` is why this needs a flag at all: `-map 0:a?` tolerates a
+        # silent source, and a filtergraph input cannot — `[0:a]` on a file with
+        # no audio track fails the whole render.
+        graph += f";[{alabel.strip('[]').rstrip('?')}]{loudness_chain()}[aout]"
+        alabel = "[aout]"
 
     return [
         ffmpeg_bin(), "-y", "-loglevel", "error",
@@ -307,6 +337,7 @@ async def render_clip(
         src, cand, plan, ass_path, out,
         fps=fps, crf=crf, preset=preset, watermark=watermark,
         drop_spans=drop_spans,
+        has_audio=bool(_has_audio(src)),
     )
     _, duration = _window(cand)
     if drop_spans:
@@ -344,6 +375,10 @@ async def render_preview(
         src, window, plan, ass_path, out,
         fps=PREVIEW_FPS, crf=PREVIEW_CRF, preset=PREVIEW_PRESET,
         out_w=PREVIEW_W, out_h=PREVIEW_H,
+        # A preview is what a decision gets made on, so it is levelled the same
+        # way the export will be. Judging a quiet draft of a loud deliverable
+        # is judging the wrong file.
+        has_audio=bool(_has_audio(src)),
     )
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     await _in_thread(lambda: run(cmd, timeout=PREVIEW_TIMEOUT, what="clip preview"))

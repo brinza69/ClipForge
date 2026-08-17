@@ -183,9 +183,14 @@ async def test_the_face_track_never_reaches_the_sidecar(wired, monkeypatch):
     assert all(not k.startswith("_") for k in plan)
 
 
-def test_the_multi_shot_path_is_off_by_default():
-    """Every clip so far took the static path; turning this on changes what the
-    deliverable looks like, so it is opted into."""
+def test_the_multi_shot_path_is_what_ships():
+    """Turned on 2026-08-17 by the owner, after a viewer judged the edit and an
+    A/B settled the one fault they named.
+
+    Kept as a test because the value is a decision, not an accident: everything
+    measured since — cuts on speech pauses, the wide gameplay framing, Pass D,
+    the audio ceiling — lands on this path and NOWHERE else, so flipping it back
+    silently would strand all of it."""
     from config import Settings
 
-    assert Settings().clipper_dynamic_edit is False
+    assert Settings().clipper_dynamic_edit is True

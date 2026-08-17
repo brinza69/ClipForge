@@ -255,9 +255,14 @@ and this repo has lost work to exactly that six times over.
 All three are per-project keys in `clipper_settings`, each falling back to a
 `config.py` default:
 
+**One of the three is no longer off.** `dynamic_edit` was turned ON on
+2026-08-17 by the owner, after a viewer judged the edit and an A/B settled the
+one fault they named. The row below still describes what it does; only its
+default changed. The other two remain opt-in.
+
 | switch | config default | what it turns on |
 |---|---|---|
-| `dynamic_edit` | `clipper_dynamic_edit = False` | Multi-shot export. Plans a shot list and cuts between camera framings instead of rendering one fixed split screen. Verified on a real export: 9 shots, 6 hit flashes, 21s to render an 18s clip. Falls back to the static layout on a missing proxy, a plan with fewer than two shots, or any exception. |
+| `dynamic_edit` | `clipper_dynamic_edit = True` (2026-08-17) | Multi-shot export. Plans a shot list and cuts between camera framings instead of rendering one fixed split screen. Verified on a real export: 9 shots, 6 hit flashes, 21s to render an 18s clip. Falls back to the static layout on a missing proxy, a plan with fewer than two shots, or any exception. |
 | `trim_silence` | `clipper_trim_silence = False` | §15 dead-air removal. Cuts wordless silences out of the MIDDLE of a chosen window, in the same encode, and moves the captions with them. Measured on 920 candidates: 298 get a cut, ~3.1s each. |
 | `llm_select` + `reasoning_version` | `False` / `"legacy"` | The story engine. Anchors reasoned back from the payoff, comparative ranking, three judge perspectives. |
 
@@ -672,6 +677,15 @@ what the rest of the list was for.
 | The shot planner was never given the words | `_candidate()` passed four keys and `dynamic_edit` reads a fifth. `_boundaries` placed every cut on audio peaks and scene changes instead of speech pauses, and `_speech_ratio` reported the streamer silent in every shot of every clip ever exported. 11 shots with the words against the 9 that shipped. |
 | Gameplay framed as wide as the crop allows | `game_height_pct` and `game_zoom` both 1.00 after a three-way A/B. See the section above. |
 | Pass D, local half (§21–22) | `review.py`. Three checks, one per failure seen on a real export. Advisory, written to the export sidecar under `review`. |
+| The audio shipped clipped, at 96 kHz | `loudnorm` in single pass aims at its TP, it does not enforce it — +0.2 dBFS against −1.5 — and it leaves the stream at its own internal rate. Reported by ear, confirmed by measurement. |
+| Both renderers level the same way | The static path had NO loudness processing at all, so a clip that fell back to it shipped quieter than one that did not. One `loudness_chain()` in `ffmpeg_tools`, used by both. Verified on real renders: 48 kHz, −13.3 LUFS, −1.4 dBFS on each. |
+| `dynamic_edit` ON by default | See the switch table above. |
+
+**The thing that nearly made the whole session pointless:** every fix listed
+under session 6 lands on the multi-shot path, which was off by default. With
+stock settings an export touched none of it — not even the audio ceiling, which
+lives in `dynamic_render.py`. Worth checking, whenever a session ends, that the
+work is on a path something actually takes.
 
 Pass D's own first run is the lesson worth keeping: **two of its three checks
 were wrong the first time they touched real data**, in ways no unit test would
