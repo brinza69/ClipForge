@@ -30,11 +30,13 @@ export function CandidateCard({
   onAction,
   onShowScore,
   onShowReasoning,
+  onEdit,
 }: {
   clip: ClipperClip;
   onAction: (clip: ClipperClip, action: "approve" | "reject" | "export" | "preview") => Promise<void>;
   onShowScore: (clip: ClipperClip) => void;
   onShowReasoning: (clip: ClipperClip) => void;
+  onEdit: (clip: ClipperClip) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -74,6 +76,17 @@ export function CandidateCard({
               chain carries no reasoning, and an button that opens an empty
               dialog is worse than no button. A review counts as something: an
               exported clip can carry findings without ever having had a story. */}
+          {/* Always available: unlike "why", there is always something to edit,
+              and a clip you cannot adjust is one you can only accept or throw
+              away. */}
+          <button
+            type="button"
+            onClick={() => onEdit(clip)}
+            title="Trim the clip, change the headline or move the captions"
+            className="rounded-lg border border-border/50 px-2 py-1 text-xs text-muted-foreground transition-opacity hover:opacity-70"
+          >
+            edit
+          </button>
           {(clip.reasoning || clip.review) && (
             <button
               type="button"

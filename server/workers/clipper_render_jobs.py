@@ -107,6 +107,12 @@ def _caption_y(clip: ClipModel, dyn: dict | None) -> float | None:
     panels = (dyn or {}).get("_panels") or []
     if not panels or not clip.caption_plan:
         return None
+    if (clip.caption_plan or {}).get("y_pct_manual"):
+        # Somebody moved it in the editor. Re-placing it around detected UI is
+        # right when nobody has expressed a preference and wrong the moment
+        # somebody has — an edit that the next export silently undoes is worse
+        # than no editor at all.
+        return None
     try:
         from services.clipper.captions import panels_to_keep_out, resolve_position
 

@@ -150,6 +150,7 @@ operations). Split to stay under the 500-line limit.
 | `src/components/clipper/project-card.tsx` | one project in the list |
 | `src/components/clipper/candidate-grid.tsx` | the board: sort, filter, bulk actions |
 | `src/components/clipper/candidate-card.tsx` | one clip, with its actions |
+| `src/components/clipper/clip-editor.tsx` | trim, headline, caption preset and height, over a server-rendered still |
 | `src/components/clipper/score-breakdown.tsx` | the 16 sub-scores behind the number |
 | `src/components/clipper/reasoning-panel.tsx` | why this clip — anchor, payoff, verdicts (§34) |
 | `src/types/clipper.ts` | every clipper type, including `ClipReasoning` |

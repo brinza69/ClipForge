@@ -22,6 +22,11 @@ class _Clip:
     transcript_text = "hello there"
     headline_text = ""
     caption_plan: dict | None = None
+    # Present because the model has it. Left off, `_caption_y` raised, was
+    # swallowed by its own never-lose-the-export guard, and returned None — the
+    # same answer it gives when there is nothing to do, so a test could "pass"
+    # while proving nothing.
+    layout_plan: dict | None = None
 
 
 class _Project:
@@ -158,6 +163,24 @@ def test_a_clip_without_captions_still_plans():
     clip = _Clip()
     clip.caption_plan = {"chunks": [{"text": "no timings"}]}
     assert jobs._candidate(clip)["words"] == []
+
+
+def test_a_hand_placed_caption_is_not_moved_by_the_export():
+    """The export re-places the caption around the game UI it detects in the
+    cut. That is right when nobody has expressed a preference and wrong the
+    moment somebody has — an edit the next export silently undoes is worse than
+    having no editor at all."""
+    clip = _Clip()
+    clip.caption_plan = {"chunks": [{"text": "x"}], "y_pct": 0.62,
+                         "y_pct_manual": True}
+    dyn = {"_panels": [{"x": 0, "y": 800, "w": 300, "h": 120}],
+           "shots": [{"rect": {"x": 0, "y": 0, "w": 606, "h": 1080}}]}
+    assert jobs._caption_y(clip, dyn) is None
+
+    # Without the flag the same clip IS re-placed, or the check above proves
+    # nothing about the flag.
+    clip.caption_plan = {"chunks": [{"text": "x"}], "y_pct": 0.62}
+    assert jobs._caption_y(clip, dyn) is not None
 
 
 def test_the_export_handler_reviews_the_cut():

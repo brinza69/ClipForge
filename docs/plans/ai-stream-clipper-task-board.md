@@ -87,7 +87,7 @@ Legend for dependencies: a task cannot start until everything in *Depends on* is
 | 9.3 | Project list + source form | Frontend Editor | done | 9.1 | `src/app/ai-stream-clipper/page.tsx`, `components/clipper/source-form.tsx` | Metadata preview before analysis; simplified to 3 above-the-fold decisions |
 | 9.4 | Progress screen (SSE + poll fallback) | Frontend Editor | done | 9.3 | `components/clipper/analysis-progress.tsx` | Stage list derived from the job message; survives reload |
 | 9.5 | Candidate dashboard: sort, filter, batch | Frontend Editor | done | 9.4 | `components/clipper/candidate-grid.tsx`, `candidate-card.tsx`, `score-breakdown.tsx` | Sort/filter/reveal-alternatives/bulk-approve |
-| 9.6 | Clip editor: trim, captions, crop, headline | Frontend Editor | **not built** | 9.5 | `clip-editor.tsx`, `crop-editor.tsx`, `caption-controls.tsx` | **Backend is complete and reachable** (`PATCH /clips/{id}`, `/regenerate`, `/preview-frame`); the UI for it is not written. Editing is currently API-only. |
+| 9.6 | Clip editor: trim, captions, headline | Frontend Editor | done | 9.5 | `clip-editor.tsx` | Trim, headline, caption preset and height over a server-rendered still. **Drag-to-crop deliberately not built**: editing layout rects by hand is a canvas tool of its own, and the honest fix for a bad layout is better detection. `layout_plan` stays patchable over the API. |
 
 ## Phase 10 — Hardening & delivery
 
