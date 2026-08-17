@@ -14,8 +14,10 @@ read `clipper-map.md` — it exists so nobody has to grep the tree again.
 - [What I would do next](#what-i-would-do-next--all-but-one-done-on-2026-08-16)
 - [Not built, from the upgrade spec](#not-built-from-the-upgrade-spec)
 
+- [Session 6 — mostly measurement](#session-6--2026-08-17-and-it-was-mostly-measurement)
+  — 25 commits, the numbers not to measure again, and five wrong turns
 - [What is fragile](#what-is-fragile--2026-08-17) — where it is most likely to be
-  wrong without saying so, ranked
+  wrong without saying so, ranked. Three of nine closed on 2026-08-17.
 
 **Known problems**, in priority order — [jump](#known-problems-in-priority-order)
 1. ~~The dynamic editor is not wired in~~ — FIXED
@@ -602,6 +604,115 @@ two here. It needs something other than a better rule over the same gradient
 profile — the seed, or a different signal entirely. **Do not spend another
 session widening bounds.**
 
+## Session 6 — 2026-08-17, and it was mostly measurement
+
+Twenty-five commits. The pattern is worth naming before the list: almost
+nothing here was found by reading code. It was found by running the thing on
+real sources, looking at the output, and — three times — by the owner watching
+or listening to a file and saying it was wrong.
+
+### What shipped
+
+| | |
+|---|---|
+| The shot planner was never given the words | `_candidate()` passed four keys and `dynamic_edit` reads a fifth. Every dynamic export ever made cut on audio peaks alone and believed the streamer silent throughout. 11 shots with the words against the 9 that shipped. |
+| Gameplay framed as wide as the crop allows | A three-way A/B, the owner chose 1.00/1.00. `_merge_dead_cuts` came with it: at that setting `game` and `game_tight` are one rectangle, so a g→G step cut on nothing. |
+| The audio shipped clipped, at 96 kHz | True peak +0.2 dBFS against a −1.5 target. `loudnorm` single-pass AIMS at TP, it does not enforce it, and it leaves the stream at its own internal rate. Reported by ear. |
+| Both renderers level the same way | The static path had no loudness processing at all, so a clip that FELL BACK to it shipped quieter. One `loudness_chain()` in `ffmpeg_tools`. |
+| `dynamic_edit` ON by default | Everything measured over two sessions landed on a path a stock export never took. |
+| Pass D, both halves | `review.py` checks what a rule can state; `review_vision.py` asks a model what it cannot. Advisory, never rejects. |
+| The verdict reaches the board | `clips.review`, the panel, and a count on the card. |
+| The caption gets out of the way | `ui_panels` per clip, mapped through every shot's crop, and a widest-clear-band search replacing six ±4% nudges. |
+| The clip editor | Phase 9.6. Trim, headline, caption preset and height over a server-rendered still. |
+| Hands-off mode | `auto_export`: paste a link, come back to rendered files. |
+| Three silent failure modes | Settings parity, `failed_chunks` surfaced, disk pruning. |
+| Facecam 6/9 → 7/9 | Reach capped at 0.30 of the frame, gated on `corner_proximity >= 0.48`. |
+| Duration stopped outvoting content | `platform_fit` zeroed in all ten profiles. |
+| `emotion` measures something | `vocal_bursts.py` — laughter and shouting from the audio. |
+| `speech_ratio` measures speech | From the transcript, not the envelope. |
+
+### Numbers not to measure again
+
+**The ranking has 16.22 points of spread**, over 1073 real candidates with the
+gaming weights. That is the whole budget every sub-score competes for.
+`platform_fit` was taking 2.10 of it — 13% — for answering "is the duration in
+band", while `payoff` contributes 1.14. Duration outweighed content five to
+one, and the generator (15–90 s) disagreed with the TikTok band (15–45) so 26%
+of candidates were made as configured and then docked for it. Zeroed: clips
+over 45 s in the top 20 went from 0 to 8.
+
+**`emotion` was a constant.** 76% of candidates scored exactly 10/100 while it
+held 8% of the profile. `laughter_score` was a word list and Whisper does not
+write "haha". With audio detection: sd 5.41 → 11.73.
+
+**Aggregation mattered more than the detector there.** Averaging the burst
+timeline across a window asks "what fraction of this clip is laughter" — 0.02
+for a 35 s clip with one real laugh — and moved emotion's sd from 5.41 to 5.27.
+Peak scaled sub-linearly by duration: 11.73. Bare `max` scores 13.58 and was
+NOT chosen: it makes a half-second yelp identical to a three-second howl, and
+picking the formulation with the largest variance is optimising for spread
+rather than meaning.
+
+**`speech_ratio` from the envelope ran 0.863–1.000** across all eleven sources,
+range 0.137. From the transcript: 0.276–0.918, and edited talking content
+(0.86–0.92) separates cleanly from live streams (0.28–0.64). It did **not**
+improve the classifier — 6/11 either way.
+
+**The content classifier is 6/11, not the 3/11 this file used to say.**
+`scripts/score_content_type.py` is the scoreboard. Four of the five errors are
+`irl`, and it is a definition mismatch rather than a weight: the LABEL's `irl`
+means "real world, not gaming" and the classifier's vote means "handheld,
+nothing on screen stays put". Kai Cenat sits at a desk. Adding a speech term to
+that vote at three weights changed nothing: 6/11, 6/11, 6/11.
+
+**Pass D's vision half costs 0.4 cents a clip** on `gpt-5.6-terra`, measured on
+real exports: ~1170 input and ~170 output tokens each, low detail, six frames.
+`gpt-4o` is no longer on OpenAI's pricing page and `clipper_llm_judge_model`
+still names it.
+
+**Local vision models cannot do Pass D on this rig.** `qwen3-vl:4b-instruct`
+answered APPROVE to a clip whose caption covered 66% of the game UI, to one
+where 65% of the framed face was outside the crop, and to a clean clip — the
+same answer three times. The thinking variant discriminated by reading the
+captions and failed the good clip. `8b` does not fit in 8 GB (20%/80%
+CPU/GPU) and timed out past ten minutes a clip. Ollama is installed at
+`F:\ollama` with `OLLAMA_MODELS` on F:; the models are kept for `local-agents`
+text work, where a small model is the right tool.
+
+**48 GB of the disk was duplicate copies**, hash-verified, with every source
+still present. `create_project` MOVES a staged upload into the project and
+`_ingest_local` then COPIED it to `source.mp4`; `_uploads/batch/` held a third.
+Fixed at the source. `data/clipper` went 86.6 GB → 38.6 GB.
+
+### Wrong turns, so nobody walks them again
+
+Five, and each cost real time:
+
+- **`content_type` as the facecam discriminator.** The idea that the classifier
+  already knows which sources are edited dies on one lookup: `talking_head` is
+  the answer for three sources WITH insets and two that are edited. Its
+  categories describe content; the question is form.
+- **"Capping the reach fixes both failures."** It produced rects in the right
+  corner, so it looked like a fix. Their border coverage is 0.41 and 0.44
+  against 0.90+ for real insets — the edges were never on anything. Position
+  luck.
+- **"Five dead classifier inputs."** `frame_features` returns 8 keys and the
+  classifier reads several it does not produce, which looks damning until you
+  read `detect_content_type`: `summarize_motion` and `summarize_faces` fill
+  them. There is a test asserting that path now.
+- **The GPU-contention argument against a local vision model.** The transcriber
+  runs whisper in a spawned process that exits, so the VRAM is freed; the owner
+  caught this. The capability argument stands on its own and did not need it.
+- **`burst_share` as a mean.** See above.
+
+### The rule that keeps being right
+
+Every fix this session that mattered came from one of two places: running the
+pipeline end to end on a real source, or a person looking at the output. The
+audio was reported by ear. The gameplay crop was reported by eye. Pass D's own
+first run found a face shot framing Minecraft dirt. A vision model disagreed
+with my caption checker and was right. **Tests were green through all of it.**
+
 ## What is fragile — 2026-08-17
 
 Not a bug list; the bug list is below. This is where the system is most likely
@@ -618,23 +729,31 @@ labelled sources, eleven approaches failed, and every failure trades one side
 for the other. A wrong answer here silently picks the wrong layout for every
 clip in the source.
 
-**2. The settings whitelist is a systemic trap, not an incident.**
+**2. ~~The settings whitelist~~ — CLOSED 2026-08-17.**
 `_normalise_settings` keeps only keys already present in `_default_settings()`,
 so a key added to the frontend and forgotten there is discarded in silence —
 and every unit test of the feature stays green, because the value never
 arrives. It bit twice in one day: `auto_export`, then `vision_review`. The cheap
 guard is a test that compares the TypeScript `DEFAULT_SETTINGS` against the
-Python defaults and fails when they diverge.
+Python defaults and fails when they diverge. `test_settings_parity.py` does
+that, and found a second one on its first run: `DEFAULT_SETTINGS` is posted
+WHOLESALE on create and said `trim_silence: true` against a config default of
+`false`, so every project made in the browser had dead-air trimming on while
+three documents said it ships off. It compares VALUES as well as keys now,
+because that failure is the quieter of the two — the feature runs, it just runs
+in a mode nobody chose.
 
 **3. Hands-off made concurrency normal.** `max_concurrent_jobs = 2` and both
 `clipper_transcribe` and `clipper_export` sit in the heavy lane, so pasting
 three links now means whisper on the GPU while another project renders. That
 used to be an exotic case; the auto-export switch made it the ordinary one.
 
-**4. A partial transcript passes as a whole one.** `_tolerant` stopped one bad
+**4. ~~A partial transcript passes as a whole one~~ — CLOSED 2026-08-17.** `_tolerant` stopped one bad
 chunk losing a 4-hour file, and the result now carries `failed_chunks` — which
-NOTHING downstream reads. A transcript with holes scores and clips as if it
-were complete.
+NOTHING downstream reads. Now on the `transcripts` row and in the stage
+message, on both the insert and the update path — a project transcribed twice
+takes the update branch, which is exactly the re-run somebody does BECAUSE the
+first attempt looked wrong.
 
 **5. The dynamic editor's framing rides on per-window detections.** The guard
 added on 2026-08-17 catches the catastrophe (a face shot whose crop excludes the
@@ -650,8 +769,11 @@ while `emotion` holds 8% of the gaming profile; callbacks fired 6 times in 927
 candidates. A score built from five live signals and three dead ones reads the
 same as one built from eight live ones.
 
-**8. Nothing prunes the disk.** `data/clipper` is past 56 GB and every project
-keeps its source, proxy, audio, frames and exports forever. C: has 10 GB free.
+**8. ~~Nothing prunes the disk~~ — CLOSED 2026-08-17.** `data/clipper` is past 56 GB and every project
+kept its source, proxy, audio, frames and exports forever. `scripts/prune_clipper.py`
+now reclaims it; `--duplicates` freed 48 GB with every source still on disk and
+`--sources` is available but warns, because the eleven labelled sources are the
+detectors' test corpus rather than clutter. C: still has 10 GB free.
 
 **9. Documentation drift is a measured rate, not a worry.** Five stale claims
 and two byte-identical duplicate files found in a single reading pass on
