@@ -158,6 +158,19 @@ class Settings(BaseSettings):
     # surprise. It is a per-project setting; the source form offers it up front,
     # which is where a "paste a link and walk away" run is actually decided.
     clipper_auto_export: int = 0
+
+    # Pass D's second half: a vision model looks at the RENDERED clip and says
+    # whether the moment it was cut for is actually on screen. OFF by default —
+    # it is the only part of the pipeline that spends money, so it is opted
+    # into, and it needs an OpenAI key in Settings before it does anything.
+    #
+    # Measured on three real clips: ~1230 input and ~230 output tokens each at
+    # low detail, about four cents for a project of eight. `gpt-4o` is NOT the
+    # default here even though clipper_llm_judge_model still says so — that
+    # model is no longer on OpenAI's pricing page.
+    clipper_vision_review: bool = False
+    clipper_vision_model: str = "gpt-5.6-terra"
+    clipper_vision_frames: int = 6
     clipper_llm_engine: str = ""
 
     # Export. crf 18 + slow is the single quality pass — crop, scale, stack and

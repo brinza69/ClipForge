@@ -376,6 +376,58 @@ async def _review(clip: ClipModel, project: ProjectModel, plan: dict,
     )
 
 
+def _what_happens(clip: ClipModel) -> str:
+    """What the clip is about, in the most event-like words available.
+
+    The order matters and was set by watching the first real answer. Handed the
+    headline — which is extracted FROM the transcript — the model reviewed text
+    against text: "captions do not show the stated phrase". That is not the
+    question. The story engine's `why` describes the moment as something that
+    HAPPENS, which is what a picture can be compared against.
+
+    The headline is the fallback rather than the default because it is what
+    exists when `llm_select` is off, which is most of the time.
+    """
+    story = ((clip.reasoning or {}).get("story") or {}) if isinstance(clip.reasoning, dict) else {}
+    for candidate in (story.get("why"), clip.headline_text, clip.title,
+                      clip.transcript_text):
+        text = " ".join(str(candidate or "").split())
+        if len(text) >= 8:
+            return text
+    return ""
+
+
+async def _vision_review(clip: ClipModel, cfg: dict, rendered: Path,
+                         review: dict) -> dict:
+    """Ask a vision model about the finished file and fold the answer in.
+
+    Returns the review unchanged when no key is configured. That is not a
+    failure worth logging loudly: the switch can be on in a project's settings
+    long before anyone pastes a key, and an export must not care.
+    """
+    from services.clipper import review_vision
+    from services.transcript_cleaner import get_openai_key
+
+    key = get_openai_key()
+    if not key:
+        return review
+
+    about = _what_happens(clip)
+    result = await review_vision.review_rendered(
+        rendered, about,
+        model=str(cfg.get("vision_model") or settings.clipper_vision_model),
+        api_key=key,
+        frames=int(cfg.get("vision_frames") or settings.clipper_vision_frames),
+    )
+    merged = review_vision.merge(review, result)
+    usage = result.get("usage") or {}
+    if result["findings"] or usage:
+        logger.info("clip %s: vision review %s — %d finding(s), %s in / %s out",
+                    clip.id, result.get("model"), len(result["findings"]),
+                    usage.get("prompt_tokens"), usage.get("completion_tokens"))
+    return merged
+
+
 async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Full-quality 1080x1920 deliverable."""
     import asyncio
@@ -505,6 +557,19 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
             )
             await session.commit()
         raise
+
+    # Pass D's second half, and the only part of the pipeline that spends money.
+    # It runs AFTER the encode where the local half runs before it, and the
+    # asymmetry is deliberate: the local half can still change the caption
+    # position, so arriving early is worth something; this one is advisory, so
+    # it is worth more seeing exactly what ships — captions burned, crop
+    # applied — than a reconstruction of it.
+    if review_result is not None and bool(
+            cfg.get("vision_review", settings.clipper_vision_review)):
+        try:
+            review_result = await _vision_review(clip, cfg, out, review_result)
+        except Exception:
+            logger.warning("clip %s: vision review failed", clip.id, exc_info=True)
 
     # A sidecar with everything needed to reproduce this file — source
     # timestamps, scores, the layout and caption plans, and the model versions

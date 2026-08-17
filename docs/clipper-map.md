@@ -90,6 +90,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `ranker.py` | the learned ranker. Complete, dormant, needs 40 labelled clips |
 | `feedback.py` | recording what the user did with a clip |
 | `review.py` | Pass D (§21–22): what the CLIP looks like, checked before the encode |
+| `review_vision.py` | Pass D's second half: a vision model on the RENDERED clip. Off by default, needs an OpenAI key |
 
 ### Models
 
@@ -212,6 +213,7 @@ default. Full table in `handoff-clipper-session-4.md`.
 |---|---|---|
 | `dynamic_edit` | **ON** since 2026-08-17 | multi-shot export instead of one static split screen |
 | `trim_silence` | off | dead-air removal from inside a window (§15) |
+| `vision_review` | off | a vision model judges the rendered clip — the only part of the pipeline that spends money (~0.4 cents/clip on gpt-5.6-terra) |
 | `auto_export` | 0 (off) | render the top N as soon as scoring finishes, instead of stopping at the board. With the source form's "don't wait for me" box, a pasted link becomes finished files with no second visit |
 | `llm_select` + `reasoning_version: "story_v1"` | off | the story engine |
 
