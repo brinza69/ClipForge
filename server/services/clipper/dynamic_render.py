@@ -380,6 +380,44 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
     return cmd
 
 
+def render_dynamic_preview(src: str, plan: dict, out: str, *, start: float,
+                           work_dir: str | Path, ass_path: str | None = None,
+                           src_w: int = 1920, src_h: int = 1080,
+                           max_seconds: float = 12.0, **kwargs: Any
+                           ) -> dict[str, Any]:
+    """The same shot list at preview resolution.
+
+    The editor used to preview through the STATIC renderer while the export
+    took the multi-shot path, so a person approved a fixed split screen and
+    received an edit with a dozen cuts in it. Same plan, same .ass, same
+    options — only the resolution and the encode settings differ, which is the
+    rule `render_preview` already states for the static pair.
+
+    The preview is capped at `max_seconds`, so sendcmd entries past the cap
+    simply never fire and the clip shows its opening shots. `-t` is what
+    enforces it; the plan is not rewritten, because a truncated plan is a
+    different edit and this is meant to be a window onto the real one.
+    """
+    from services.clipper.render import (
+        PREVIEW_CRF, PREVIEW_FPS, PREVIEW_H, PREVIEW_PRESET, PREVIEW_W,
+    )
+
+    capped = min(float(plan.get("duration") or 0.0), max(0.1, float(max_seconds)))
+    if kwargs.get("drop_spans"):
+        from services.clipper.dead_air import spans_within
+
+        # Same reason as the static preview: `-t` is shortened by every second
+        # it is handed, so a span past the cap steals time from a window it was
+        # never inside.
+        kwargs["drop_spans"] = spans_within(kwargs["drop_spans"], capped)
+
+    return render_dynamic_clip(
+        src, {**plan, "duration": capped}, out, start=start, work_dir=work_dir,
+        ass_path=ass_path, src_w=src_w, src_h=src_h,
+        fps=PREVIEW_FPS, crf=PREVIEW_CRF, preset=PREVIEW_PRESET,
+        out_w=PREVIEW_W, out_h=PREVIEW_H, **kwargs)
+
+
 def render_dynamic_clip(src: str, plan: dict, out: str, *, start: float,
                         work_dir: str | Path, ass_path: str | None = None,
                         src_w: int = 1920, src_h: int = 1080,

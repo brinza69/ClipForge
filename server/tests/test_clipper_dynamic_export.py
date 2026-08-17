@@ -93,14 +93,28 @@ async def test_a_zero_length_window_is_refused(wired, monkeypatch):
     assert await jobs._dynamic_plan(clip, _Project(), 1920, 1080) is None
 
 
-def test_the_export_handler_reaches_the_dynamic_renderer():
-    """The assertion that would have caught the whole gap: the export path has
-    to name the dynamic renderer, not merely have one available in the tree."""
+def test_both_handlers_reach_the_dynamic_renderer():
+    """The assertion that would have caught the whole gap: a render path has to
+    NAME the dynamic renderer, not merely have one available in the tree.
+
+    Widened to the preview on 2026-08-17. It took the static renderer
+    unconditionally while the export could take the multi-shot one, so a person
+    approved a fixed split screen and received an edit with a dozen cuts in it.
+    The shot list is planned once now, in `_decide_render`, and both handlers
+    consume the same answer — which is why this checks the decision function
+    rather than either handler's body.
+    """
     import inspect
 
-    src = inspect.getsource(jobs.handle_export)
-    assert "dynamic_render" in src, "handle_export cannot reach the multi-shot renderer"
-    assert "_dynamic_plan" in src, "handle_export never plans a shot list"
+    decide = inspect.getsource(jobs._decide_render)
+    assert "_dynamic_plan" in decide, "nothing plans a shot list"
+
+    for handler in (jobs.handle_export, jobs.handle_preview):
+        src = inspect.getsource(handler)
+        assert "_decide_render" in src, (
+            f"{handler.__name__} decides what to render on its own again")
+        assert "dynamic_render" in src, (
+            f"{handler.__name__} cannot reach the multi-shot renderer")
 
 
 # ── the words the planner cuts on ────────────────────────────────────────────

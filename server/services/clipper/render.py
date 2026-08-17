@@ -361,20 +361,33 @@ async def render_preview(
     out: str,
     *,
     max_seconds: float = 12.0,
+    watermark: str = "",
+    drop_spans: Sequence[tuple[float, float]] | None = None,
 ) -> dict[str, Any]:
     """Render a short, low-res proxy of the same graph for the editor.
 
     Deliberately the SAME filtergraph as the export: a preview that composes
-    differently from the final render is worse than no preview.
+    differently from the final render is worse than no preview. `watermark` and
+    `drop_spans` are here for the same reason — the promise was only ever kept
+    for the parts of the render the caller happened to pass on.
     """
     start, duration = _window(cand)
     capped = min(duration, max(0.1, float(max_seconds)))
     window = {"start": start, "end": start + capped}
 
+    if drop_spans:
+        from services.clipper.dead_air import spans_within
+
+        # Only the spans this preview actually covers: `build_render_cmd`
+        # shortens `-t` by every second it is given, so a span past the cap
+        # would take time out of a window it was never in.
+        drop_spans = spans_within(drop_spans, capped)
+
     cmd = build_render_cmd(
         src, window, plan, ass_path, out,
         fps=PREVIEW_FPS, crf=PREVIEW_CRF, preset=PREVIEW_PRESET,
         out_w=PREVIEW_W, out_h=PREVIEW_H,
+        watermark=watermark, drop_spans=drop_spans,
         # A preview is what a decision gets made on, so it is levelled the same
         # way the export will be. Judging a quiet draft of a loud deliverable
         # is judging the wrong file.

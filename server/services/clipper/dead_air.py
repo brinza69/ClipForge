@@ -148,6 +148,26 @@ def remap_overlays(overlays: Sequence[dict],
     return out
 
 
+def spans_within(spans: Sequence[tuple[float, float]],
+                 limit: float) -> list[tuple[float, float]]:
+    """The spans that fall inside the first `limit` seconds, clipped to it.
+
+    For previews, which show the opening of a clip rather than all of it. Both
+    renderers shorten their `-t` by the TOTAL removed seconds, so handing a
+    12-second preview a span that sits at t=20 makes it 2.4s short of a window
+    that span was never in.
+    """
+    out: list[tuple[float, float]] = []
+    for start, end in spans or []:
+        start, end = _num(start), _num(end)
+        if start >= limit:
+            continue
+        end = min(end, limit)
+        if end > start:
+            out.append((start, end))
+    return out
+
+
 def select_expr(spans: Sequence[tuple[float, float]]) -> str:
     """The ffmpeg `select` expression that keeps everything except `spans`.
 

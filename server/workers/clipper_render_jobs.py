@@ -428,21 +428,27 @@ async def _vision_review(clip: ClipModel, cfg: dict, rendered: Path,
     return merged
 
 
-async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
-    """Full-quality 1080x1920 deliverable."""
-    import asyncio
+async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
+    """Everything that decides WHAT a render contains, for either consumer.
 
-    from services.clipper.render import _has_audio, render_clip
+    One decision, two callers, and that is the entire reason this exists rather
+    than being inlined twice. Until 2026-08-17 `handle_preview` took the static
+    renderer unconditionally while `handle_export` could take the multi-shot
+    one, so a person approved a fixed split screen and received an edit with a
+    dozen cuts in it — and the preview also ignored `trim_silence`, the
+    watermark, and the caption height the export would resolve. A preview that
+    composes differently from the final render is worse than no preview;
+    `render_preview` says so in its own docstring about the static pair, and
+    the multi-shot path quietly broke the promise.
 
-    if not clip_id:
-        raise RuntimeError("export job started without a clip id")
-
-    clip, project = await _load(clip_id)
-    src = _source_path(project)
+    Returns the shot plan (or None), the static layout, the dead-air spans, the
+    .ass written on the trimmed clock, and the options both renderers take.
+    """
     cfg = project.clipper_settings or {}
-    paths = storage.paths(project_id)
 
-    await queue.update_progress(job_id, 0.05, "Rendering export")
+    async def stage(pct: float, message: str) -> None:
+        if on_stage is not None:
+            await on_stage(pct, message)
 
     # §15: seconds inside the window that carry nothing. Computed before the
     # .ass, because the captions have to be written on the trimmed clock.
@@ -467,9 +473,9 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         fps or settings.clipper_export_fps
     )
 
-    # The multi-shot path. Opt-in, and it falls back to the static layout on any
-    # failure — the two renderers take the same source, the same window and the
-    # same .ass, so nothing else in this handler changes.
+    # The multi-shot path. It falls back to the static layout on any failure —
+    # the two renderers take the same source, the same window and the same
+    # .ass, so nothing else downstream changes.
     #
     # It runs BEFORE the .ass is written, which it did not use to. The shot list
     # is what says where a detected UI panel lands in the output frame, and the
@@ -477,7 +483,7 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # panels. Writing the captions first meant placing them blind.
     dyn = None
     if bool(cfg.get("dynamic_edit", settings.clipper_dynamic_edit)):
-        await queue.update_progress(job_id, 0.10, "Planning the shot list")
+        await stage(0.10, "Planning the shot list")
         try:
             dyn = await _dynamic_plan(clip, project,
                                       int(project.width or 1920),
@@ -492,7 +498,43 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # caption position the render did not use — it would go on reporting a
     # caption it had already caused to move.
     caption_y = _caption_y(clip, dyn)
-    ass_path = _write_ass(clip, paths["exports_dir"], drop, caption_y)
+    return {
+        "cfg": cfg,
+        "drop": drop,
+        "plan": plan,
+        "dyn": dyn,
+        "fps": fps,
+        "caption_y": caption_y,
+        "ass_path": _write_ass(clip, out_dir, drop, caption_y),
+        "watermark": str(cfg.get("watermark_text") or ""),
+    }
+
+
+async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
+    """Full-quality 1080x1920 deliverable."""
+    import asyncio
+
+    from services.clipper.render import _has_audio, render_clip
+
+    if not clip_id:
+        raise RuntimeError("export job started without a clip id")
+
+    clip, project = await _load(clip_id)
+    src = _source_path(project)
+    paths = storage.paths(project_id)
+
+    await queue.update_progress(job_id, 0.05, "Rendering export")
+
+    decision = await _decide_render(
+        clip, project, paths["exports_dir"],
+        on_stage=lambda p, m: queue.update_progress(job_id, p, m))
+    cfg = decision["cfg"]
+    drop = decision["drop"]
+    plan = decision["plan"]
+    dyn = decision["dyn"]
+    fps = decision["fps"]
+    caption_y = decision["caption_y"]
+    ass_path = decision["ass_path"]
 
     # Pass D. It runs BEFORE the encode on purpose: a finding that arrives after
     # a 12-24s render can only be reported, one that arrives before it can be
@@ -657,7 +699,9 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
     preview is scratch, and treating it as a deliverable would pollute both the
     export list and the feedback labels.
     """
-    from services.clipper.render import render_preview
+    import asyncio
+
+    from services.clipper.render import _has_audio, render_preview
 
     if not clip_id:
         raise RuntimeError("preview job started without a clip id")
@@ -667,11 +711,37 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
     paths = storage.paths(project_id)
 
     await queue.update_progress(job_id, 0.10, "Generating previews")
-    ass_path = _write_ass(clip, paths["previews_dir"])
-    plan = _layout_plan(clip, project)
+
+    # The SAME decision the export will make. It used to take the static
+    # renderer unconditionally, so with `dynamic_edit` on — the default since
+    # 2026-08-17 — the editor showed a fixed split screen for a clip that ships
+    # with a dozen cuts, and ignored the trim, the watermark and the resolved
+    # caption height as well.
+    decision = await _decide_render(clip, project, paths["previews_dir"])
     out = storage.preview_path(project_id, clip.id)
 
-    await render_preview(src, _candidate(clip), plan, ass_path, str(out))
+    if decision["dyn"]:
+        from services.clipper import dynamic_render
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: dynamic_render.render_dynamic_preview(
+                src, decision["dyn"], str(out),
+                start=float(clip.start_time or 0.0),
+                work_dir=paths["previews_dir"], ass_path=decision["ass_path"],
+                src_w=int(project.width or 1920),
+                src_h=int(project.height or 1080),
+                watermark=decision["watermark"],
+                drop_spans=decision["drop"],
+                has_audio=_has_audio(src),
+                is_cancelled=lambda: queue.is_cancelled(job_id)),
+        )
+    else:
+        await render_preview(src, _candidate(clip), decision["plan"],
+                             decision["ass_path"], str(out),
+                             watermark=decision["watermark"],
+                             drop_spans=decision["drop"])
 
     async with async_session() as session:
         await session.execute(
