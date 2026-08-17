@@ -246,3 +246,22 @@ def test_one_caption_gets_one_finding():
     shots = [_band_shot({"x": 0, "y": 0, "w": 606, "h": 1080}) for _ in range(20)]
     panel = [{"x": 0, "y": 800, "w": 300, "h": 120}]
     assert len(review.check_caption_over_panels((1400.0, 1500.0), panel, shots, 1920)) == 1
+
+
+def test_a_face_shot_contributes_no_game_ui_keep_out():
+    """A face shot crops around the streamer's head — the game UI is not in it.
+
+    Mapping a panel through one is arithmetic with no referent, and a face crop
+    is 240-360px tall against a 1920 output, so the 5-8x scale turns a 60px
+    panel into a 300-480px band. That shipped: the reviewer reported "66% of the
+    caption sits on detected game UI" for a clip whose captions sit on the
+    streamer's hoodie, well clear of the counter below them.
+    """
+    from services.clipper.captions import panels_to_keep_out
+
+    panels = [{"x": 100, "y": 860, "w": 120, "h": 60}]
+    face = [{"camera": "face_medium", "rect": {"x": 0, "y": 700, "w": 205, "h": 364}}]
+    game = [{"camera": "game", "rect": {"x": 0, "y": 0, "w": 606, "h": 1080}}]
+
+    assert panels_to_keep_out(panels, face) == []
+    assert panels_to_keep_out(panels, game), "a gameplay shot still has to report it"

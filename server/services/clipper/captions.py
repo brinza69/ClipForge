@@ -370,6 +370,19 @@ def panels_to_keep_out(panels: Sequence[dict], shots: Sequence[dict],
     """
     out: list[dict[str, int]] = []
     for shot in shots or []:
+        # A face shot is a crop around the streamer's head; the game UI is not
+        # in it at all. Mapping a panel through one is arithmetic with no
+        # referent, and because a face crop is 240-360px tall against a 1920
+        # output the scale factor is 5-8x, so a 60px panel becomes a 300-480px
+        # band placed by that arithmetic rather than by anything a viewer sees.
+        #
+        # This is not a theory. It shipped, and it made the reviewer report "66%
+        # of the caption sits on detected game UI" for a clip whose captions sit
+        # on the streamer's hoodie, well clear of the counter below them. Caught
+        # by a vision model disagreeing with it and confirmed by looking at the
+        # frames.
+        if str((shot or {}).get("camera", "")).startswith("face"):
+            continue
         rect = (shot or {}).get("rect") or {}
         rh, ry = _f(rect.get("h")), _f(rect.get("y"))
         if rh <= 0:
