@@ -37,6 +37,11 @@ message and says so explicitly.
    Everything still appears on the board; it is already rendered when you get
    there. Alternatives are never auto-rendered — they exist so a person can
    compare two cuts of one moment.
+
+   The second box, **"Have a model look at each finished clip"**, turns on Pass
+   D's vision half (`vision_review`). It is the only setting in ClipForge that
+   spends money — about 0.4¢ a clip on `gpt-5.6-terra` — and it is disabled
+   until an OpenAI key is saved in Settings. It reports; it never deletes.
 4. Watch the stage list. Leaving the page is safe — progress lives in the
    `jobs` table, not in the browser.
 5. Review the ranked candidates, click a score to see the 16 sub-scores,

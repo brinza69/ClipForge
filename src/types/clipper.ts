@@ -118,6 +118,12 @@ export interface ClipperSettings {
    * files, so it is chosen rather than handed out.
    */
   auto_export: number;
+  /**
+   * Have a vision model look at the rendered clip and say whether the moment it
+   * was cut for is actually on screen. The only setting that spends money, and
+   * it needs an OpenAI key in Settings before it does anything.
+   */
+  vision_review: boolean;
 
   // Editing preferences
   caption_preset_id: string;
@@ -395,6 +401,7 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   fps: 30,
   language: "auto",
   auto_export: 0,
+  vision_review: false,
   caption_preset_id: "bold_impact",
   caption_position: "bottom",
   caption_highlight: true,
