@@ -62,11 +62,90 @@ def projects() -> list[Path]:
                   key=lambda p: p.stat().st_mtime, reverse=True)
 
 
+def content_signature(path: Path, window: int = 4 * 1024 * 1024) -> str:
+    """First and last few MB plus the exact size.
+
+    Hashing 48 GB to prove a duplicate would cost more than the duplicate does.
+    Two video files that agree on their first 4 MB, their last 4 MB and their
+    byte count are the same file; nothing else produces that by accident.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        digest.update(handle.read(window))
+        if size > 2 * window:
+            handle.seek(-window, 2)
+            digest.update(handle.read(window))
+    digest.update(str(size).encode())
+    return digest.hexdigest()
+
+
+def prune_duplicates(*, apply: bool) -> int:
+    """Extra copies of a source that is already on disk. Loses nothing.
+
+    Two of them exist on this rig and both are accidents of how a project is
+    made rather than anything anyone chose:
+
+      * `create_project` MOVES a staged upload into the project's source dir,
+        and `_ingest_local` then COPIED it to `source.mp4` — so every project
+        held its source twice. Fixed at the source on 2026-08-17; this clears
+        what the old path already wrote.
+      * `_uploads/batch/` keeps the download that was copied into the project,
+        so a batch-created project has a third copy.
+
+    `source.mp4` is the one kept, because that is the name the pipeline writes
+    and every other name is a leftover.
+    """
+    freed = 0
+    print("--- redundant copies (identical content, one kept) ---")
+    for project in projects():
+        source_dir = project / "source"
+        canonical = next((f for f in source_dir.glob("source.*") if f.is_file()), None)
+        if canonical is None:
+            continue
+        keep = content_signature(canonical)
+        for extra in sorted(source_dir.iterdir()):
+            if not extra.is_file() or extra == canonical:
+                continue
+            if content_signature(extra) != keep:
+                print(f"  {project.name:14s} {extra.name:26s} DIFFERENT — kept")
+                continue
+            freed += extra.stat().st_size
+            print(f"  {project.name:14s} {extra.name:26s} "
+                  f"{human(extra.stat().st_size):>9s}  duplicate of {canonical.name}")
+            if apply:
+                extra.unlink()
+
+        # And the staging copy, matched against this project's own source.
+        for staged in sorted((DATA / "_uploads" / "batch").glob("*")):
+            if not staged.is_file():
+                continue
+            if content_signature(staged) == keep:
+                freed += staged.stat().st_size
+                print(f"  {project.name:14s} _uploads/{staged.name:17s} "
+                      f"{human(staged.stat().st_size):>9s}  duplicate of {canonical.name}")
+                if apply:
+                    staged.unlink()
+
+    print(f"\n{'freed' if apply else 'would free'}: {human(freed)} "
+          f"— every source still on disk")
+    if not apply:
+        print("nothing was deleted. Add --apply.")
+    return freed
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--duplicates", action="store_true",
+                    help="remove byte-identical extra copies of a source, keeping "
+                         "one. Loses nothing. Start here.")
     ap.add_argument("--sources", action="store_true",
-                    help="remove the original downloads (92%% of the space)")
+                    help="remove the original downloads (92%% of the space). NOTE: "
+                         "the eleven labelled sources are the detectors' test "
+                         "corpus — see docs/source-labels.md before using this.")
     ap.add_argument("--proxies", action="store_true",
                     help="also remove proxies — only where the source remains")
     ap.add_argument("--frames", action="store_true", help="also remove sampled frames")
@@ -76,6 +155,12 @@ def main() -> None:
     ap.add_argument("--apply", action="store_true",
                     help="actually delete. Without this it only reports.")
     args = ap.parse_args()
+
+    if args.duplicates:
+        prune_duplicates(apply=args.apply)
+        if not (args.sources or args.proxies or args.frames):
+            return
+        print()
 
     wanted = [k for k, on in (("frames", args.frames), ("proxy", args.proxies),
                               ("source", args.sources)) if on]

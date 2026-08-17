@@ -105,3 +105,79 @@ def test_keep_recent_protects_the_newest(tmp_path, monkeypatch):
 
     assert (tmp_path / "new000000000" / "source").exists()
     assert not (tmp_path / "old000000000" / "source").exists()
+
+
+# ── duplicate copies ─────────────────────────────────────────────────────────
+#
+# Measured on this rig: 48 GB of byte-identical duplication, from two accidents
+# nobody chose. `create_project` MOVES a staged upload into the project's source
+# dir and `_ingest_local` then COPIED it to source.mp4, so every project held
+# its source twice; and `_uploads/batch/` keeps the download that was copied in,
+# so a batch-made project has a third. The first is fixed at the source now.
+
+
+def _project(tmp_path, name="abc123456789", *, extra_name="original.mp4",
+             same=True):
+    src = tmp_path / name / "source"
+    src.mkdir(parents=True)
+    body = b"video-bytes" * 500
+    (src / "source.mp4").write_bytes(body)
+    (src / extra_name).write_bytes(body if same else body + b"different")
+    return tmp_path / name
+
+
+def test_a_duplicate_is_removed_and_the_canonical_copy_kept(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    monkeypatch.setattr(prune, "DATA", tmp_path)
+
+    freed = prune.prune_duplicates(apply=True)
+
+    assert (project / "source" / "source.mp4").exists()
+    assert not (project / "source" / "original.mp4").exists()
+    assert freed > 0
+
+
+def test_a_file_that_only_looks_like_a_duplicate_is_kept(tmp_path, monkeypatch):
+    """Same directory, different bytes. Deleting on a name or a size would lose
+    a file; the signature covers the head, the tail and the exact length."""
+    project = _project(tmp_path, same=False)
+    monkeypatch.setattr(prune, "DATA", tmp_path)
+
+    prune.prune_duplicates(apply=True)
+
+    assert (project / "source" / "original.mp4").exists()
+
+
+def test_a_dry_run_removes_no_duplicates(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    monkeypatch.setattr(prune, "DATA", tmp_path)
+
+    prune.prune_duplicates(apply=False)
+
+    assert (project / "source" / "original.mp4").exists()
+
+
+def test_the_staging_copy_goes_too(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    batch = tmp_path / "_uploads" / "batch"
+    batch.mkdir(parents=True)
+    (batch / "dl.mp4").write_bytes((project / "source" / "source.mp4").read_bytes())
+    monkeypatch.setattr(prune, "DATA", tmp_path)
+
+    prune.prune_duplicates(apply=True)
+
+    assert not (batch / "dl.mp4").exists()
+    assert (project / "source" / "source.mp4").exists()
+
+
+def test_a_project_with_no_canonical_source_is_left_alone(tmp_path, monkeypatch):
+    """Nothing to compare against means nothing is provably redundant."""
+    src = tmp_path / "abc123456789" / "source"
+    src.mkdir(parents=True)
+    (src / "a.mp4").write_bytes(b"x" * 100)
+    (src / "b.mp4").write_bytes(b"x" * 100)
+    monkeypatch.setattr(prune, "DATA", tmp_path)
+
+    prune.prune_duplicates(apply=True)
+
+    assert len(list(src.iterdir())) == 2
