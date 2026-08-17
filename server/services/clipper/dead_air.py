@@ -120,16 +120,31 @@ def remap_overlays(overlays: Sequence[dict],
     Called before the .ass is written, never after: libass positions against
     absolute times, so an overlay left on the untrimmed clock drifts further
     out of sync with every second removed.
+
+    THE KEYS ARE `start_t`/`end_t` AND THAT IS NOT COSMETIC. This function read
+    `start`/`end` until 2026-08-17 — keys that `caption_plan_to_overlays` has
+    never produced and `build_overlays_ass` has never consumed. Every overlay
+    therefore remapped to (0, 0), was dropped by the check below as "wholly
+    inside removed time", and `_write_ass` returned None for an empty list. So
+    turning `trim_silence` on did not drift the captions, it removed ALL of
+    them: the clip rendered with no subtitles at all, on both the static and
+    the multi-shot path, and the stale .ass from a previous export stayed on
+    disk looking like proof that one had been written.
+
+    Its three unit tests passed throughout, because they were written against
+    `start`/`end` as well — the function and its tests agreed with each other
+    and with nothing else. `test_the_overlay_shape_is_the_one_the_captioner_emits`
+    exists so that cannot happen again.
     """
     if not spans:
         return list(overlays or [])
     out: list[dict] = []
     for ov in overlays or []:
-        start = remap_time(_num(ov.get("start")), spans)
-        end = remap_time(_num(ov.get("end")), spans)
+        start = remap_time(_num(ov.get("start_t")), spans)
+        end = remap_time(_num(ov.get("end_t")), spans)
         if end <= start:
             continue                      # wholly inside removed time
-        out.append({**ov, "start": start, "end": end})
+        out.append({**ov, "start_t": start, "end_t": end})
     return out
 
 

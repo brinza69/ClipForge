@@ -223,3 +223,86 @@ def test_the_multi_shot_path_is_what_ships():
     from config import Settings
 
     assert Settings().clipper_dynamic_edit is True
+
+
+# ── the two paths take the same options ──────────────────────────────────────
+#
+# `dynamic_edit` became the default on 2026-08-17 and the dynamic call site was
+# never given `watermark`, `drop_spans`, `has_audio` or `is_cancelled` — four
+# arguments the static call beside it had always had. So the watermark silently
+# vanished from every export, `trim_silence` did nothing, and a queued
+# cancellation was ignored.
+#
+# Verified on a real render before these were written: same clip, options off
+# then on, 35.83s -> 33.43s with the captions shifted by exactly the 2.40s
+# removed, and "ClipForge" burned across the bottom.
+
+
+def _plan():
+    return {"duration": 30.0, "hits": [],
+            "shots": [{"rect": {"x": 0, "y": 0, "w": 608, "h": 1080}}]}
+
+
+def _cmd(**kw):
+    from services.clipper.dynamic_render import build_dynamic_cmd
+
+    return build_dynamic_cmd("src.mp4", _plan(), "c.txt", None, "out.mp4",
+                             start=10.0, duration=30.0, src_w=1920, src_h=1080,
+                             **kw)
+
+
+def test_the_dynamic_renderer_burns_the_watermark():
+    graph = _cmd(watermark="ClipForge")[_cmd(watermark="ClipForge").index("-filter_complex") + 1]
+    assert "drawtext" in graph and "ClipForge" in graph
+    assert "drawtext" not in _cmd()[_cmd().index("-filter_complex") + 1]
+
+
+def test_the_dynamic_renderer_cuts_dead_air_and_shortens_the_output():
+    """`-t` sits after `-i`, so it is an OUTPUT duration: left at the window
+    length ffmpeg reads PAST the window to refill the seconds `select` dropped,
+    and the dead air comes back as whatever followed it."""
+    cmd = _cmd(drop_spans=[(5.0, 8.5)])
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "select=" in graph and "setpts=" in graph
+    assert float(cmd[cmd.index("-t") + 1]) == pytest.approx(26.5)
+    assert float(_cmd()[_cmd().index("-t") + 1]) == pytest.approx(30.0)
+
+
+def test_a_silent_source_survives_a_trim():
+    """`-map 0:a?` tolerates a file with no audio track; `[0:a]` inside a
+    filtergraph does not, and would fail the whole render."""
+    cmd = _cmd(drop_spans=[(5.0, 8.5)], has_audio=False)
+    assert "[0:a]" not in cmd[cmd.index("-filter_complex") + 1]
+    assert "0:a?" in cmd
+
+
+def test_loudness_moves_into_the_graph_only_when_the_audio_was_filtered():
+    """ffmpeg will not run `-af` on a stream a complex graph produced, so with
+    dead air removed the chain has to go inside. With no drops the command is
+    exactly what it was before the option existed."""
+    trimmed = _cmd(drop_spans=[(5.0, 8.5)])
+    assert "-af" not in trimmed
+    assert "loudnorm" in trimmed[trimmed.index("-filter_complex") + 1]
+    assert "-af" in _cmd()
+
+
+def test_a_cancelled_export_does_not_start_the_encode():
+    from services.clipper.dynamic_render import render_dynamic_clip
+
+    with pytest.raises(Exception) as caught:
+        render_dynamic_clip("src.mp4", _plan(), "out.mp4", start=0.0,
+                            work_dir=".", is_cancelled=lambda: True)
+    assert "cancel" in type(caught.value).__name__.lower() + str(caught.value).lower()
+
+
+def test_the_export_handler_passes_all_four_to_the_dynamic_call():
+    """The regression that mattered was at the CALL SITE, not in the renderer:
+    every option above existed on the static side and simply was not handed
+    over."""
+    import inspect
+
+    src = inspect.getsource(jobs.handle_export)
+    dynamic_call = src[src.index("render_dynamic_clip("):]
+    dynamic_call = dynamic_call[:dynamic_call.index("else:")]
+    for arg in ("watermark=", "drop_spans=", "has_audio=", "is_cancelled="):
+        assert arg in dynamic_call, f"the dynamic call lost {arg}"

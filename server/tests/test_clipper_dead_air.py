@@ -95,23 +95,56 @@ def test_remapping_never_reorders_captions():
     assert out == sorted(out), out
 
 
+# These three used `start`/`end` until 2026-08-17 and passed for months while
+# the feature they cover removed every caption from the clip. The captioner
+# emits `start_t`/`end_t` and `remap_overlays` read `start`/`end`, so every
+# overlay remapped to (0, 0), was dropped as "wholly inside removed time", and
+# `_write_ass` returned None for the empty list. The function and its tests
+# agreed with each other and with nothing else.
+
+
 def test_overlays_move_with_the_cut():
-    overlays = [{"start": 2.0, "end": 4.0, "text": "a"},
-                {"start": 20.0, "end": 22.0, "text": "b"}]
+    overlays = [{"start_t": 2.0, "end_t": 4.0, "text": "a"},
+                {"start_t": 20.0, "end_t": 22.0, "text": "b"}]
     out = dead_air.remap_overlays(overlays, [(10.0, 14.0)])
-    assert out[0]["start"] == 2.0 and out[0]["end"] == 4.0
-    assert out[1]["start"] == 16.0 and out[1]["end"] == 18.0
+    assert out[0]["start_t"] == 2.0 and out[0]["end_t"] == 4.0
+    assert out[1]["start_t"] == 16.0 and out[1]["end_t"] == 18.0
     assert out[1]["text"] == "b", "the rest of the overlay must survive"
 
 
 def test_an_overlay_wholly_inside_removed_time_is_dropped():
-    out = dead_air.remap_overlays([{"start": 11.0, "end": 12.0}], [(10.0, 14.0)])
+    out = dead_air.remap_overlays([{"start_t": 11.0, "end_t": 12.0}],
+                                  [(10.0, 14.0)])
     assert out == []
 
 
 def test_no_spans_leaves_the_overlays_untouched():
-    overlays = [{"start": 2.0, "end": 4.0}]
+    overlays = [{"start_t": 2.0, "end_t": 4.0}]
     assert dead_air.remap_overlays(overlays, []) == overlays
+
+
+def test_the_overlay_shape_is_the_one_the_captioner_emits():
+    """The guard the three tests above needed. It asserts the CONTRACT rather
+    than the shape this module happens to use: whatever
+    `caption_plan_to_overlays` produces has to survive a remap, and the keys
+    `build_overlays_ass` reads have to be the keys that moved.
+    """
+    from services.clipper.captions import caption_plan_to_overlays
+
+    plan = {
+        "chunks": [{"start": 1.0, "end": 3.0, "text": "before the cut"},
+                   {"start": 20.0, "end": 22.0, "text": "after the cut"}],
+        "template_id": "bold_impact", "y_pct": 0.6,
+    }
+    overlays = caption_plan_to_overlays(plan)
+    assert overlays, "the fixture no longer produces overlays"
+    assert "start_t" in overlays[0] and "end_t" in overlays[0]
+
+    out = dead_air.remap_overlays(overlays, [(10.0, 14.0)])
+    assert len(out) == len(overlays), (
+        f"remapping wiped {len(overlays) - len(out)} of {len(overlays)} "
+        f"overlays — it is reading keys the captioner does not emit")
+    assert out[-1]["start_t"] == overlays[-1]["start_t"] - 4.0
 
 
 # ── the ffmpeg expression ────────────────────────────────────────────────────

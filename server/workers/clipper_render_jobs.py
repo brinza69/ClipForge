@@ -432,7 +432,7 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     """Full-quality 1080x1920 deliverable."""
     import asyncio
 
-    from services.clipper.render import render_clip
+    from services.clipper.render import _has_audio, render_clip
 
     if not clip_id:
         raise RuntimeError("export job started without a clip id")
@@ -531,7 +531,18 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
                     src_w=int(project.width or 1920),
                     src_h=int(project.height or 1080),
                     fps=fps, crf=int(settings.clipper_export_crf),
-                    preset=settings.clipper_export_preset),
+                    preset=settings.clipper_export_preset,
+                    # The four the static call below has always had, and this
+                    # one never did. `dynamic_edit` became the default on
+                    # 2026-08-17, so the options were live on a path nothing
+                    # took: the watermark vanished, `trim_silence` did nothing,
+                    # and — because `_write_ass` above applies `drop` either
+                    # way — the captions were shifted for cuts that were never
+                    # made.
+                    watermark=str(cfg.get("watermark_text") or ""),
+                    drop_spans=drop,
+                    has_audio=_has_audio(src),
+                    is_cancelled=lambda: queue.is_cancelled(job_id)),
             )
         else:
             result = await render_clip(

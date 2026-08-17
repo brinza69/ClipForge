@@ -285,16 +285,76 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
                       out: str, *, start: float, duration: float,
                       src_w: int, src_h: int, fps: int = 30, crf: int = 18,
                       preset: str = "medium", out_w: int = 1080,
-                      out_h: int = 1920, loudness: bool = True) -> list[str]:
+                      out_h: int = 1920, loudness: bool = True,
+                      watermark: str = "",
+                      drop_spans: Sequence[tuple[float, float]] | None = None,
+                      has_audio: bool = True) -> list[str]:
     """One ffmpeg argv list for one dynamically-edited clip. Pure.
 
     `-ss` before `-i` so the seek is by keyframe index; on a 6-hour VOD that is
     seconds instead of twenty minutes. It also re-bases output timestamps to
     zero, which is what lets every time in the plan — and every sendcmd entry —
     be clip-relative.
+
+    `watermark`, `drop_spans` and `has_audio` exist here so that this path and
+    the static one take the same options. They did not until 2026-08-17, and
+    `dynamic_edit` has been the DEFAULT since the day before: every export was
+    silently losing the watermark and ignoring `trim_silence`. Worse, the
+    caption file is built with the drop spans applied either way, so with
+    trimming on the subtitles were shifted for cuts this renderer never made
+    and drifted out of sync by the whole trimmed duration.
     """
     graph, vlabel = build_dynamic_filtergraph(
         plan, cmd_path, ass_path, src_w=src_w, src_h=src_h, out_w=out_w, out_h=out_h)
+
+    if watermark and watermark.strip():
+        # Imported from the static renderer rather than reimplemented: the two
+        # paths drawing their own watermark is how they came to disagree in the
+        # first place, and `_watermark_filter` carries two measured gotchas
+        # (`expansion=none`, and a None return meaning "no usable font").
+        from services.clipper.render import _watermark_filter
+
+        mark = _watermark_filter(watermark, even(out_w), even(out_h))
+        if mark:
+            graph = f"{graph};[{vlabel.strip('[]')}]{mark}[vmark]"
+            vlabel = "[vmark]"
+
+    alabel = "0:a?"
+    if drop_spans:
+        from services.clipper.dead_air import removed_seconds, select_expr
+
+        # `-t` is an OUTPUT duration because it sits after `-i`, so leaving it
+        # at the window length makes ffmpeg read PAST the window to refill the
+        # seconds `select` just dropped. The static renderer learned this on a
+        # real clip; the arithmetic is the same here.
+        duration = max(0.1, duration - removed_seconds(drop_spans))
+        keep = select_expr(drop_spans)
+        # `sendcmd` is the first filter in the chain and fires on INPUT
+        # timestamps, so every surviving frame still carries the crop its shot
+        # asked for; dropping frames afterwards cannot desynchronise the
+        # camera work. What it does change is shot LENGTH — a shot with dead
+        # air inside it gets shorter — so the measured cut rhythm is not what
+        # the planner laid out. That is the honest cost of combining §15 with
+        # the multi-shot edit, and it is why `trim_silence` stays off by
+        # default.
+        graph = (f"{graph};[{vlabel.strip('[]')}]select='{keep}',"
+                 f"setpts=N/FRAME_RATE/TB[vcut]")
+        vlabel = "[vcut]"
+        if has_audio:
+            graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
+            alabel = "[acut]"
+
+    # Loudness goes INSIDE the graph once the audio has been through `aselect`:
+    # ffmpeg will not run `-af` on a stream a complex graph produced. Without
+    # trimming it stays on `-af`, so a command with no drop spans is exactly
+    # what it was before this option existed.
+    af: list[str] = []
+    if loudness and has_audio:
+        if drop_spans:
+            graph += f";[{alabel.strip('[]')}]{loudness_chain()}[aout]"
+            alabel = "[aout]"
+        else:
+            af = ["-af", loudness_chain()]
 
     cmd = [
         ffmpeg_bin(), "-y", "-loglevel", "error",
@@ -303,10 +363,9 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
         "-t", f"{max(0.1, duration):.3f}",
         "-filter_complex", graph,
         "-map", vlabel,
-        "-map", "0:a?",
+        "-map", alabel,
     ]
-    if loudness:
-        cmd += ["-af", loudness_chain()]
+    cmd += af
     cmd += [
         "-c:v", "libx264",
         "-preset", str(preset),
@@ -323,9 +382,24 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
 
 def render_dynamic_clip(src: str, plan: dict, out: str, *, start: float,
                         work_dir: str | Path, ass_path: str | None = None,
-                        src_w: int = 1920, src_h: int = 1080, **kwargs: Any
+                        src_w: int = 1920, src_h: int = 1080,
+                        is_cancelled: Any = None, **kwargs: Any
                         ) -> dict[str, Any]:
-    """Write the sendcmd script, run the one encode, verify it produced bytes."""
+    """Write the sendcmd script, run the one encode, verify it produced bytes.
+
+    `is_cancelled` is checked once, before the encode starts, which is exactly
+    what the static path does — an export that has already been cancelled
+    should not spend two minutes of GPU on a file nobody will open. Neither
+    path can interrupt ffmpeg mid-encode.
+    """
+    if is_cancelled is not None and is_cancelled():
+        # The static path's own helper, so both raise the SAME exception and
+        # the queue treats a cancelled dynamic export the way it already
+        # treats a cancelled static one.
+        from services.clipper.render import _raise_if_cancelled
+
+        _raise_if_cancelled(is_cancelled)
+
     work = Path(work_dir)
     cmd_path = write_sendcmd(plan, src_w, src_h, work / f"{Path(out).stem}.cmd.txt")
 
