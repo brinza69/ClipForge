@@ -84,6 +84,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `candidate_boundaries.py` | where a clip starts and ends. Sentence snapping, reaction keep, tail release |
 | `candidate_proposals.py` | turning anchors into candidate windows |
 | `candidate_terms.py` | the frozen feature vector, the word lists, and the boundary constants |
+| `vocal_bursts.py` | laughter and shouting from the audio — what `laughter_score` reads now that the word list never fired |
 | `dead_air.py` | dead seconds inside a chosen window, and the arithmetic of removing them (§15) |
 | `scoring.py` | the sub-scores and the ten weight profiles |
 | `dedupe.py` | overlap, text and same-payoff grouping; diversity across time, thread and archetype |

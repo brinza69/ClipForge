@@ -33,6 +33,7 @@ from typing import Any, Iterator, Sequence
 from services.clipper.candidate_boundaries import (
     _first_tokens, _payoff_time, _sentence_from, refine_boundaries,
 )
+from services.clipper import vocal_bursts
 from services.clipper.candidate_terms import (
     FEATURE_KEYS, PAUSE_KEEP_S, PAYOFF_WINDOW_S, _CLOSERS, _CUES, _EMOTION, _FILLER, _HOOK,
     _LAUGH, _LEAD_IN, _PROFANITY, _SENTIMENT, _bounds, _clamp01, _clean_words,
@@ -412,6 +413,22 @@ def extract_features(cand: dict, transcript: dict, signals: dict,
     told = cand.get("story") if isinstance(cand.get("story"), dict) else {}
     raw["context_debt"] = _clamp01(_num(told.get("context_debt")))
     raw["hook_latency"] = max(0.0, _num(told.get("hook_latency")))
+
+    # Laughter and shouting, from the audio rather than from words that are
+    # never transcribed. The word list stays as a floor — somebody who actually
+    # says "lol" still counts — but on every source measured it contributed
+    # nothing, so the max is in practice the burst share.
+    #
+    # This is what took `emotion` from a constant to a measurement: 76% of 1073
+    # candidates scored exactly 10/100 on it while it held 8% of the gaming
+    # profile. See services/clipper/vocal_bursts.py for what "burst" means and
+    # how it was verified — by a person listening to the six strongest hits.
+    bursts = (signals or {}).get("vocal_bursts") or []
+    if bursts:
+        raw["laughter_score"] = max(
+            raw["laughter_score"],
+            vocal_bursts.burst_share(bursts, start, end),
+        )
 
     # A reaction is loud audio AND someone still talking after the payoff.
     spoken_after = float(sum(1 for w in inside if _num(w["start"]) >= payoff_at))

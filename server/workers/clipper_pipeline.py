@@ -265,12 +265,30 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
 # ── Stage 3: analyze ────────────────────────────────────────────────────────
 
 
+async def _transcript_words(project_id: str) -> list[dict]:
+    """Every word with a timing, flattened. [] when there is no transcript yet.
+
+    Only used to answer "was anything transcribed here", so a missing transcript
+    degrades the vocal-burst detector to "every loud voiced moment counts"
+    rather than breaking the stage.
+    """
+    async with async_session() as session:
+        row = (await session.execute(
+            select(TranscriptModel)
+            .where(TranscriptModel.project_id == project_id).limit(1)
+        )).scalar_one_or_none()
+    segments = (row.segments if row else None) or []
+    if not isinstance(segments, list):
+        return []
+    return [w for s in segments if isinstance(s, dict) for w in (s.get("words") or [])]
+
+
 async def handle_analyze(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Pass A + content-type/region detection. Reads only the proxy."""
     import asyncio
 
     from services.clipper import content_type as ct
-    from services.clipper import ingest, signals
+    from services.clipper import ingest, signals, vocal_bursts
 
     project = await _load_project(project_id)
     paths = storage.paths(project_id)
@@ -285,6 +303,25 @@ async def handle_analyze(job_id: str, project_id: str, clip_id, metadata, queue)
         None,
         lambda: signals.build_signals(project_id, str(paths["proxy"]), str(paths["audio"]), duration),
     )
+    _guard(queue, job_id)
+
+    # Laughter and shouting, which the transcript cannot carry: Whisper does not
+    # write "haha", so the word list `laughter_score` was built on read 0 on
+    # every window of every source while holding 30% of `emotion` and 20% of
+    # `reaction`. This needs the WORDS as well as the audio — a loud voiced
+    # moment matters precisely when no word was transcribed for it — so it runs
+    # here, after transcription, rather than inside build_signals.
+    await queue.update_progress(job_id, 0.40, "Listening for reactions")
+    words = await _transcript_words(project_id)
+    sig["vocal_bursts"] = await loop.run_in_executor(
+        None,
+        lambda: vocal_bursts.vocal_burst_timeline(paths["audio"], words),
+    )
+    storage.write_artifact(project_id, "signals", sig)
+    found = vocal_bursts.summarise(sig["vocal_bursts"])
+    logger.info("project %s: %d vocal-burst frames of %d (%.1f%%)",
+                project_id, found["burst_frames"], found["frames"],
+                100.0 * found["share"])
     _guard(queue, job_id)
 
     # Sample frames on a stride that keeps the count bounded no matter how long
