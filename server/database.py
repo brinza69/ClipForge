@@ -198,6 +198,7 @@ async def init_db() -> None:
             ("rank_position", "INTEGER"),
             ("feature_vector", "TEXT"),
             ("reasoning", "TEXT"),
+            ("review", "TEXT"),
             ("ranker_version", "VARCHAR(20)"),
             ("preview_path", "TEXT"),
         ]

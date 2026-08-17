@@ -174,6 +174,28 @@ def test_a_plan_with_no_shots_cannot_block_an_export():
     assert out["warnings"]
 
 
+def test_the_verdict_reaches_the_api():
+    """The failure this repo has hit five times now, the last one on the day it
+    was warned about: the review shipped to the export sidecar and the log, and
+    nothing in the API or the UI could read a file on disk."""
+    from services.clipper.serialize import clip_to_dict
+
+    class _Clip:
+        def __getattr__(self, name):        # every other column is None
+            return None
+        id = "c1"
+        project_id = "p1"
+        start_time = 0.0
+        end_time = 10.0
+        duration = 10.0
+        review = {"verdict": "REVISE", "findings": [{"kind": "caption_over_ui"}],
+                  "sampled": 12}
+
+    out = clip_to_dict(_Clip())
+    assert out["review"]["verdict"] == "REVISE"
+    assert out["review"]["findings"][0]["kind"] == "caption_over_ui"
+
+
 def test_an_unreadable_proxy_is_a_warning_not_a_crash(tmp_path):
     broken = tmp_path / "broken.mp4"
     broken.write_bytes(b"not a video")

@@ -72,15 +72,22 @@ export function CandidateCard({
         <div className="flex shrink-0 items-start gap-1.5">
           {/* Only when there is something to show — a clip scored by the legacy
               chain carries no reasoning, and an button that opens an empty
-              dialog is worse than no button. */}
-          {clip.reasoning && (
+              dialog is worse than no button. A review counts as something: an
+              exported clip can carry findings without ever having had a story. */}
+          {(clip.reasoning || clip.review) && (
             <button
               type="button"
               onClick={() => onShowReasoning(clip)}
-              title="Why this clip, and why these boundaries"
-              className="rounded-lg border border-border/50 px-2 py-1 text-xs text-muted-foreground transition-opacity hover:opacity-70"
+              title="Why this clip, and what the review found in the cut"
+              className={`rounded-lg border px-2 py-1 text-xs transition-opacity hover:opacity-70 ${
+                clip.review?.verdict === "REJECT"
+                  ? "border-rose-500/40 bg-rose-500/10 text-rose-500"
+                  : clip.review?.findings?.length
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-500"
+                    : "border-border/50 text-muted-foreground"
+              }`}
             >
-              why
+              {clip.review?.findings?.length ? `why · ${clip.review.findings.length}` : "why"}
             </button>
           )}
           <button

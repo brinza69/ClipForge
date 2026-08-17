@@ -229,6 +229,28 @@ export interface ClipReasoning {
   llm_verdict?: ClipVerdict;
 }
 
+// Pass D. `reasoning` says why the MOMENT was chosen; this says what is wrong
+// with the CUT, and it only exists after an export, because that is when there
+// is a shot list and a caption position to be wrong about.
+export interface ClipFinding {
+  kind: string;
+  /** "revise" — something can act on it. "reject" — the clip is mostly dead. */
+  severity: "revise" | "reject";
+  /** Seconds from the start of the clip, so the reader can jump to it. */
+  at: number;
+  detail: string;
+  value: number;
+}
+
+export interface ClipReview {
+  version: string;
+  verdict: "APPROVE" | "REVISE" | "REJECT";
+  findings: ClipFinding[];
+  /** How many frames were sampled. `0` means the review could not look. */
+  sampled: number;
+  warnings: string[];
+}
+
 export interface ClipperClip {
   id: string;
   project_id: string;
@@ -250,6 +272,7 @@ export interface ClipperClip {
   rank_position: number | null;
   ranker_version: string | null;
   reasoning: ClipReasoning | null;
+  review: ClipReview | null;
   status: ClipStatus;
   export_path: string | null;
   preview_path: string | null;

@@ -484,10 +484,15 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     )
 
     async with async_session() as session:
+        # The review goes on the row as well as the sidecar. Sidecar-only was
+        # how it shipped first, and nothing in the API or the UI could read a
+        # file on disk — which is this repo's oldest failure, a structure
+        # nobody reads, committed again on the day it was warned about.
         await session.execute(
             update(ClipModel)
             .where(ClipModel.id == clip.id)
-            .values(status=ClipStatus.exported.value, export_path=str(out))
+            .values(status=ClipStatus.exported.value, export_path=str(out),
+                    review=review_result)
         )
         await session.commit()
 

@@ -12,7 +12,7 @@
 // show what it has rather than a wall of blanks.
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { ClipperClip, ClipStory } from "@/types/clipper";
+import type { ClipperClip, ClipReview, ClipStory } from "@/types/clipper";
 
 // Timestamps are stored on the SOURCE clock, which is what makes them useful:
 // they point into the original VOD, not into the cut.
@@ -37,12 +37,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 function Chip({ children, tone = "neutral" }: {
   children: React.ReactNode;
-  tone?: "neutral" | "good" | "bad";
+  tone?: "neutral" | "good" | "bad" | "warn";
 }) {
   const tones = {
     neutral: "border-border/50 bg-muted/30 text-foreground/80",
     good: "border-emerald-500/30 bg-emerald-500/10 text-emerald-500",
     bad: "border-rose-500/30 bg-rose-500/10 text-rose-500",
+    warn: "border-amber-500/30 bg-amber-500/10 text-amber-500",
   };
   return (
     <span className={`inline-block rounded border px-1.5 py-0.5 text-[10px] ${tones[tone]}`}>
@@ -71,6 +72,54 @@ function Cost({ label, fill, shown }: { label: string; fill: number; shown: stri
           style={{ width: `${Math.max(2, pct)}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+// Pass D. Everything above this line explains why the MOMENT was chosen; this
+// is the only part that says anything about the CUT that was made of it.
+//
+// Its timestamps are clip-relative, unlike the story's — a finding is something
+// to go and look at in the exported file, not in the VOD.
+function ReviewBlock({ review }: { review: ClipReview }) {
+  const tone = { APPROVE: "good", REVISE: "warn", REJECT: "bad" } as const;
+  const blind = review.sampled === 0;
+
+  return (
+    <div className="space-y-2.5 rounded-lg border border-border/40 bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] text-muted-foreground">What the review saw in the cut</p>
+        <Chip tone={tone[review.verdict]}>{review.verdict}</Chip>
+      </div>
+
+      {blind ? (
+        <p className="text-xs text-muted-foreground">
+          Nothing was sampled, so this verdict is a default rather than a
+          judgement{review.warnings?.length ? ` — ${review.warnings[0]}` : ""}.
+        </p>
+      ) : review.findings.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {review.sampled} frames checked for a caption over game UI, a blank
+          frame, and a crop cutting the speaker&apos;s face. None of the three.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          {review.findings.map((f, i) => (
+            <div key={`${f.kind}-${i}`} className="flex gap-2 text-xs">
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                +{f.at.toFixed(1)}s
+              </span>
+              <span className="min-w-0 flex-1">{f.detail}</span>
+              {f.severity === "reject" && <Chip tone="bad">reject</Chip>}
+            </div>
+          ))}
+          <p className="pt-1 text-[11px] text-muted-foreground">
+            Advisory — the clip was exported anyway. The caption check reads flat
+            mid-grey as game UI and can call grey terrain a panel, so look before
+            you act on one.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -173,6 +222,15 @@ export function ReasoningPanel({
         <DialogHeader>
           <DialogTitle className="text-base">Why this clip</DialogTitle>
         </DialogHeader>
+
+        {/* Outside the `!r` branch on purpose: a clip exported by the legacy
+            chain has no reasoning and can still carry a review, and that is
+            exactly the clip whose findings someone wants to see. */}
+        {clip.review && (
+          <div className="mb-4">
+            <ReviewBlock review={clip.review} />
+          </div>
+        )}
 
         {!r ? (
           <p className="rounded-lg border border-border/40 bg-muted/20 p-3 text-xs text-muted-foreground">

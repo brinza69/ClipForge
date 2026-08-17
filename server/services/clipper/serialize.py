@@ -70,6 +70,9 @@ def clip_to_dict(clip: ClipModel) -> dict[str, Any]:
         # which edit variant, what the judge said. The UI can stay unaware of
         # it, but a bad pick has to be explainable without a debugger.
         "reasoning": clip.reasoning or None,
+        # What Pass D found in the rendered cut. Present only after an export,
+        # because that is when there is a cut to look at.
+        "review": clip.review or None,
         "ranker_version": clip.ranker_version,
         "status": clip.status,
         "export_path": clip.export_path,
