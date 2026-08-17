@@ -313,6 +313,18 @@ async def handle_analyze(job_id: str, project_id: str, clip_id, metadata, queue)
     # here, after transcription, rather than inside build_signals.
     await queue.update_progress(job_id, 0.40, "Listening for reactions")
     words = await _transcript_words(project_id)
+
+    # How much of this source is somebody TALKING, from the transcript rather
+    # than from the audio envelope. The envelope reads 0.863-1.000 on every one
+    # of the eleven labelled sources — a range of 0.137 — because on a stream
+    # with game audio under a voice almost everything clears the silence floor.
+    # The transcript reads 0.276-0.918 on the same eleven and separates edited
+    # talking content from live streams, which is what the classifier wanted it
+    # for. See content_geom.speech_ratio.
+    if words and duration > 0:
+        spoken = sum(max(0.0, float(w.get("end", 0.0)) - float(w.get("start", 0.0)))
+                     for w in words)
+        sig["speech_coverage"] = round(min(1.0, spoken / duration), 4)
     sig["vocal_bursts"] = await loop.run_in_executor(
         None,
         lambda: vocal_bursts.vocal_burst_timeline(paths["audio"], words),

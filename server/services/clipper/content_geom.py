@@ -312,8 +312,29 @@ def summarize_faces(signals: dict | None, fw: int = 0, fh: int = 0) -> dict[str,
 
 def speech_ratio(signals: dict | None) -> float:
     """Share of the timeline carrying speech. Accepts a ready-made float, or
-    speech spans plus a duration to divide by."""
+    speech spans plus a duration to divide by.
+
+    `speech_coverage` wins when it is there, and it is what the analyse stage
+    now writes. The spans below come from the AUDIO ENVELOPE — anything above
+    the silence floor — and on a stream carrying game audio, music and a voice
+    at once, that is nearly everything. Measured across all eleven labelled
+    sources it ran 0.863 to 1.000, a range of 0.137: it could not tell a
+    Minecraft stream from an interview, which is the only thing the classifier
+    wanted it for.
+
+    From the transcript instead, the same eleven run 0.276 to 0.918 — 4.7x the
+    spread — and they separate on the axis that matters: edited talking content
+    sits at 0.86-0.92 and live streams at 0.28-0.64.
+
+    The per-candidate path has done exactly this since session 3
+    (`candidates._spoken_ratio`, which overwrites the envelope value with one
+    derived from the words in the window). The classifier was simply never
+    given the same fix.
+    """
     signals = signals or {}
+    coverage = signals.get("speech_coverage")
+    if isinstance(coverage, (int, float)):
+        return clamp01(float(coverage))
     raw = signals.get("speech")
     if isinstance(raw, (int, float)):
         return clamp01(float(raw))
