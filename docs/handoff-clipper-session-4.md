@@ -453,9 +453,42 @@ every inset source, so no single threshold exists.
 **What this leaves.** The geometry fix is known and it works; what is missing is
 a discriminator that answers "is there an inset here at all", independent of how
 big the rect came out. Until something does that job on purpose, the area gate
-will keep doing it by accident and the reach cannot be fixed. Nine approaches
-have now failed on this edge. **Do not attempt a tenth without a discriminator
-first.**
+will keep doing it by accident and the reach cannot be fixed.
+
+**6. `content_type` is not that discriminator, and cannot become one.** The
+attractive idea — the classifier already knows which sources are edited, so skip
+inset detection on those and the reach cap becomes safe — dies on one lookup:
+
+| source | truth | classified |
+|---|---|---|
+| EARLY STREAM | inset | `talking_head` |
+| moistcr1tikal | inset | `talking_head` |
+| Jynxzi | inset | `talking_head` |
+| go ghost | EDITED | `talking_head` |
+| Jensen Huang | EDITED | `talking_head` |
+| gym 12m | fullscreen | `commentary` |
+| apartament | EDITED | `commentary` |
+
+`talking_head` sits on both sides of the line and so does `commentary`. The
+classifier's categories describe CONTENT — one person talking — and the question
+here is FORM: edited versus locked off. Fixing the classifier would not help,
+because it is not measuring this axis at all. Worth knowing before someone files
+"the classifier is wrong" and "the facecam is missed" as one problem again.
+
+**7. Judging the edges over the rect's own extent does not do it either.** The
+sharpest remaining idea, and different in kind from the rest: `_snap_inset`
+builds its column profile from the rows spanned by the FACE BOX — a band a
+fraction of the inset tall — so a short coincidence and a full-height border are
+indistinguishable to it. An inset's border runs the whole side. Re-measuring each
+edge over the FOUND RECT instead, at bars from 1.3 to 1.7 and caps of 0.25 and
+0.30: **5/9, 5/9, 6/9, 4/9, 5/9, 6/9.** Never better than doing nothing.
+
+Eleven approaches have now failed on this edge, and the last two were the two
+best remaining ideas. **The next attempt should not be a rule over this gradient
+at all.** What has never been tried is a different signal: temporal stability of
+the rect itself across the source (an inset is pixel-locked, a phantom is not),
+or a small learned classifier over the candidate patch. Both are real work rather
+than a constant to tune, which is the honest reason neither has been attempted.
 
 ### What the one remaining failure actually is
 
