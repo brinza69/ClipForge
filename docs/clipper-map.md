@@ -164,6 +164,8 @@ operations). Split to stay under the 500-line limit.
 | `scripts/render_dynamic_clip.py` | drive the multi-shot renderer by hand |
 | `scripts/build_dynamic_review.py` | the review page for a project's `dynamic/` |
 | `scripts/prune_clipper.py` | reclaim disk from finished projects. Dry-run by default; never touches exports or analysis |
+| `scripts/facecam_dataset.py` | 68 labelled candidate rects + what each feature separates |
+| `scripts/facecam_train.py` | the classifier that lost to `corner_proximity`, leave-one-source-out |
 | `scripts/measure_inset_border.py` | border coverage and persistence per candidate rect — the measurement that showed two facecams have no border at all |
 | `scripts/score_facecam.py` | facecam detection scored against `source-labels.md`. Run it before believing any change to the seed — baseline 6/9 |
 

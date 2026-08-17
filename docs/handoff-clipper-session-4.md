@@ -550,9 +550,44 @@ were never on anything. That was position luck, not a fix.
 **What would actually work**, for whoever picks this up. A borderless facecam
 has to be found from the FACE, not from its frame: the cluster's own extent
 scaled by a factor, or a foreground/background separation over the region, or a
-small learned classifier on the candidate patch. All three are real work rather
-than a constant, and all three are more promising than a thirteenth rule over
-`gx`/`gy`. **Do not write another one.**
+small learned classifier on the candidate patch.
+
+### 9. 6/9 → 7/9, and the discriminator was already in the file
+
+The learned classifier was built and it lost. `scripts/facecam_dataset.py`
+generates 68 labelled candidates over 6 windows of each of the 9 sources — 30
+facecam, 38 phantom — and `scripts/facecam_train.py` fits a pure-numpy logistic
+over nine features, **validated leave-one-source-out**, because candidates from
+one stream share a layout and a camera and scoring on rows held out at random
+measures how well a model recognises sources it has already seen.
+
+| | mean over sources |
+|---|---|
+| logistic over 9 features | 84% |
+| **`corner_proximity` alone** | **91%** |
+
+A model that loses to one existing feature is not worth its inference, so there
+is no model. But building it answered the question it was built to answer: of
+nine features, `corner_proximity` separates 93% of candidates with a single
+threshold against 73% for the next best, and it carries the largest weight in
+the fit.
+
+**It was already in this file — as 25% of the confidence score, where it could
+be outvoted.** Three sessions looked for a discriminator past something that was
+computed on every candidate already.
+
+So: cap the reach at 0.30 of the frame, and gate on `corner_proximity >= 0.48`.
+**7 of 9, the first improvement in thirteen attempts.** Jynxzi goes 0 → 1 with
+`158x118@0,106`, bottom-left as labelled, and nothing else moves.
+
+**Read the sensitivity before touching it.** 7/9 holds from 0.44 to 0.52 and
+falls to 5/9 at 0.55. That plateau is 0.08 wide on nine sources, which is thin,
+and the cliff is moistcr1tikal — the left-edge mid-height inset this file
+already records as penalised by corner proximity. Re-run
+`scripts/score_facecam.py` before changing the number.
+
+**Still wrong: EARLY STREAM, and Minecraft 4h gives one facecam of two.** Both
+are the borderless case above, which no gate reaches.
 
 ### What the one remaining failure actually is
 
