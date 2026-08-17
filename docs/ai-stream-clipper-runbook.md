@@ -149,8 +149,14 @@ it beats the heuristic on held-out NDCG@5. Until then `ranker_version` reads
 
 ## 8. Privacy and limits
 
-* Everything runs locally. The only outbound calls are yt-dlp fetching the
-  source and, if you configure one, your own LLM for headlines.
+* Everything runs locally **except what you switch on**. Outbound calls, in
+  full:
+  * yt-dlp fetching the source;
+  * an LLM for headlines, if `CLIPPER_LLM_ENGINE` is set — sends transcript text;
+  * the anchor and judge passes, if `llm_select` is on — sends transcript text;
+  * **the vision review, if `vision_review` is on — sends six JPEG frames OF
+    YOUR VIDEO to OpenAI per exported clip.** That is the only setting that
+    uploads picture rather than text, and it is off by default.
 * Full transcripts are never logged.
 * There is **no authentication anywhere in ClipForge** — it is a single-user
   local studio bound to `localhost:3000` via CORS. Do not expose port 8420 to a
