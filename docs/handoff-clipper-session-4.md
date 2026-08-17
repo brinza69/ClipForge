@@ -14,6 +14,9 @@ read `clipper-map.md` — it exists so nobody has to grep the tree again.
 - [What I would do next](#what-i-would-do-next--all-but-one-done-on-2026-08-16)
 - [Not built, from the upgrade spec](#not-built-from-the-upgrade-spec)
 
+- [What is fragile](#what-is-fragile--2026-08-17) — where it is most likely to be
+  wrong without saying so, ranked
+
 **Known problems**, in priority order — [jump](#known-problems-in-priority-order)
 1. ~~The dynamic editor is not wired in~~ — FIXED
 2. Region detection is global — HALF FIXED, and the other half is understood
@@ -515,6 +518,62 @@ That is six approaches now that do not fix this edge, four from session 3 and
 two here. It needs something other than a better rule over the same gradient
 profile — the seed, or a different signal entirely. **Do not spend another
 session widening bounds.**
+
+## What is fragile — 2026-08-17
+
+Not a bug list; the bug list is below. This is where the system is most likely
+to be WRONG WITHOUT SAYING SO, ranked by how much a failure costs before anyone
+notices. Written after three sessions of running it on real sources, and every
+entry has a measurement behind it.
+
+**1. Facecam detection, and it is not close.** Its precision on edited sources
+is an ARTEFACT of its imprecision on gaming ones — the runaway rects are
+rejected by `_WEBCAM_AREA`, and that rejection is the only thing keeping the
+edited sources clean. Demonstrated: fix the geometry and four false positives
+appear. Nothing is discriminating; a gate is doing it by accident. 6 of 9 on the
+labelled sources, eleven approaches failed, and every failure trades one side
+for the other. A wrong answer here silently picks the wrong layout for every
+clip in the source.
+
+**2. The settings whitelist is a systemic trap, not an incident.**
+`_normalise_settings` keeps only keys already present in `_default_settings()`,
+so a key added to the frontend and forgotten there is discarded in silence —
+and every unit test of the feature stays green, because the value never
+arrives. It bit twice in one day: `auto_export`, then `vision_review`. The cheap
+guard is a test that compares the TypeScript `DEFAULT_SETTINGS` against the
+Python defaults and fails when they diverge.
+
+**3. Hands-off made concurrency normal.** `max_concurrent_jobs = 2` and both
+`clipper_transcribe` and `clipper_export` sit in the heavy lane, so pasting
+three links now means whisper on the GPU while another project renders. That
+used to be an exotic case; the auto-export switch made it the ordinary one.
+
+**4. A partial transcript passes as a whole one.** `_tolerant` stopped one bad
+chunk losing a 4-hour file, and the result now carries `failed_chunks` — which
+NOTHING downstream reads. A transcript with holes scores and clips as if it
+were complete.
+
+**5. The dynamic editor's framing rides on per-window detections.** The guard
+added on 2026-08-17 catches the catastrophe (a face shot whose crop excludes the
+face) and fires on 6% of face shots. It does not catch drift, only collapse.
+
+**6. Both halves of Pass D are young.** Two of the local half's three checks
+were WRONG the first time they touched real data. The vision half is one model,
+one prompt, no versioned eval, judged on six clips, and non-deterministic.
+
+**7. Features that measure nothing look exactly like features that do.**
+`speech_ratio` is 0.90–1.00 on every source; `laughter_score` is 0 everywhere
+while `emotion` holds 8% of the gaming profile; callbacks fired 6 times in 927
+candidates. A score built from five live signals and three dead ones reads the
+same as one built from eight live ones.
+
+**8. Nothing prunes the disk.** `data/clipper` is past 56 GB and every project
+keeps its source, proxy, audio, frames and exports forever. C: has 10 GB free.
+
+**9. Documentation drift is a measured rate, not a worry.** Five stale claims
+and two byte-identical duplicate files found in a single reading pass on
+2026-08-17. The map-and-handoff discipline is the mitigation and it only works
+if the next person keeps it.
 
 ## Known problems, in priority order
 
