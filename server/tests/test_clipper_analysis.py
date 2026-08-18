@@ -387,10 +387,18 @@ def test_a_plan_from_before_the_frame_was_recorded_still_bounds_checks():
 
 def test_the_pipeline_callers_pass_the_content_type():
     """Both call sites, asserted by name — the failure above is invisible at
-    runtime, so it has to be caught here."""
-    from workers import clipper_build, clipper_render_jobs
+    runtime, so it has to be caught here.
 
-    for mod in (clipper_build, clipper_render_jobs):
+    Follows the code rather than the file: layout planning moved from
+    `clipper_render_jobs` to `clipper_render_plan` in the 2026-08-18 split, and
+    this test failed on the move while the behaviour it protects was untouched.
+    Third time in one day that an `inspect.getsource` assertion broke on a
+    refactor — the technique is worth keeping for wires that are invisible at
+    runtime, and it costs a false alarm every time the wire is rerouted.
+    """
+    from workers import clipper_build, clipper_render_plan
+
+    for mod in (clipper_build, clipper_render_plan):
         src = inspect.getsource(mod)
         assert "plan_layout(" in src, f"{mod.__name__} no longer plans layouts"
         call = src[src.index("plan_layout("):]

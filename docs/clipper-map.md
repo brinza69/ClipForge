@@ -105,7 +105,8 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 
 | file | what |
 |---|---|
-| `content_type.py` | the parts that need a decoded image: frame features, face boxes, region detection |
+| `content_type.py` | the parts that need a decoded image: frame features, face boxes, chat/HUD/gameplay regions |
+| `content_facecam.py` | finding the facecam, and the only place its constants live. Four sessions and sixteen approaches are in the comments; `scripts/score_facecam.py` is the scoreboard. Read them before changing a number. **Patch THIS module when sweeping a constant** — `content_type` re-exports them, and assigning there binds a copy the detector never reads |
 | `content_geom.py` | the pure half — rect maths, signal summaries, the classifier itself, and `scene_independence`: whether a candidate rect holds a second camera or a piece of the same picture. That is what says a facecam is there when it has no border to find |
 | `segment_type.py` | content type per stretch rather than per file, and the signal slicing that allows it |
 | `layout.py` | plan one 9:16 frame: which layout, which rects, which safe zones |
@@ -131,7 +132,8 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 |---|---|
 | `clipper_pipeline.py` | ingest, transcribe, analyze; registers all six handlers |
 | `clipper_build.py` | the scoring stage end to end |
-| `clipper_render_jobs.py` | export and preview, static and multi-shot |
+| `clipper_render_plan.py` | WHAT a render will contain: window, shot list, layout, caption file, dead-air spans. `_decide_render` is the entry point and both handlers consume its one answer |
+| `clipper_render_jobs.py` | the export and preview jobs themselves: one ffmpeg encode each, plus Pass D |
 
 Not clipper: `remix_pipeline.py`, `parallel_pipeline.py`, `doodle_pipeline.py`,
 `utility_jobs.py`.
