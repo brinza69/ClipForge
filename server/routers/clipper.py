@@ -208,6 +208,42 @@ async def upload_source(file: UploadFile = File(...)) -> dict:
 # ── Projects ────────────────────────────────────────────────────────────────
 
 
+def _staged_upload(raw: str) -> Path:
+    """Resolve a client-supplied upload reference to a file we actually staged.
+
+    `create_project` used to take `upload_path` as a PATH, check only that it
+    existed, and then `.replace()` it into the project directory. That is a
+    move of any file the server process can reach — the client picked the
+    source, the server carried it out. There is no authentication anywhere in
+    ClipForge, so this was not privilege escalation over an already-open
+    perimeter; it was still a filesystem primitive handed out for free, and the
+    fix is small enough that arguing about its priority costs more than doing
+    it.
+
+    Only the NAME is taken from the client, never the location. `Path(...).name`
+    strips every directory component, so `..`, an absolute path and a UNC share
+    all collapse to a bare filename that is then looked up in the staging dir
+    this server wrote it to. The containment re-check after `resolve()` is
+    belt and braces: it also catches a symlink planted inside staging, which
+    resolves outward.
+    """
+    name = Path(raw).name
+    if not name or name in (".", ".."):
+        raise _err(400, "missing_upload", "Upload the video file first.")
+    if Path(name).suffix.lower() not in _ALLOWED_UPLOAD_SUFFIXES:
+        raise _err(400, "unsupported_upload",
+                   "That file type is not a supported video container.")
+
+    staging = (settings.clipper_dir / "_uploads").resolve()
+    candidate = (staging / name).resolve()
+    if not candidate.is_relative_to(staging):
+        raise _err(400, "missing_upload", "Upload the video file first.")
+    if not candidate.is_file():
+        raise _err(400, "missing_upload", "Upload the video file first.",
+                   "The staged file is gone — upload it again.")
+    return candidate
+
+
 @router.post("/projects")
 async def create_project(payload: dict, session: AsyncSession = Depends(get_session)) -> dict:
     """Create a clipper project. Does NOT start analysis — the client calls
@@ -236,8 +272,9 @@ async def create_project(payload: dict, session: AsyncSession = Depends(get_sess
             raise _err(400, exc.code, exc.message, exc.suggestion) from exc
         source_type = checked["source_type"]
     elif source_kind == "upload":
-        if not upload_path or not Path(upload_path).exists():
+        if not upload_path:
             raise _err(400, "missing_upload", "Upload the video file first.")
+        staged = _staged_upload(upload_path)
         source_type = "local"
     else:
         raise _err(
@@ -263,9 +300,9 @@ async def create_project(payload: dict, session: AsyncSession = Depends(get_sess
     storage.ensure_dirs(project.id)
     # The staged upload moves under the project so cleanup is a single rmtree.
     if source_kind == "upload" and upload_path:
-        dest = storage.paths(project.id)["source_dir"] / Path(upload_path).name
+        dest = storage.paths(project.id)["source_dir"] / staged.name
         try:
-            Path(upload_path).replace(dest)
+            staged.replace(dest)
             project.video_path = str(dest)
             await session.commit()
         except OSError:

@@ -30,6 +30,23 @@ def clipper_tmp(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _stage(clipper_tmp, name: str):
+    """Put a file where POST /upload would have put it.
+
+    These tests used to write into the artifact root and post the ABSOLUTE
+    path, which is exactly what `create_project` stopped accepting on
+    2026-08-17: it took any path the client named and `.replace()`d it into
+    the project, a file-move primitive handed out for free. The client
+    supplies a NAME now and the server looks it up in its own staging dir,
+    so staging here is what models the real two-call flow.
+    """
+    staging = clipper_tmp / "_uploads"
+    staging.mkdir(parents=True, exist_ok=True)
+    path = staging / name
+    path.write_bytes(bytes(2048))   # never decoded: analysis is not started
+    return path
+
+
 # ── Read-only surface ────────────────────────────────────────────────────────
 
 
@@ -125,8 +142,7 @@ async def test_upload_rejects_a_non_video_extension(client):
 
 async def test_project_round_trip(client, clipper_tmp):
     """create → read → patch settings/override → delete, against the real DB."""
-    staged = clipper_tmp / "staged.mp4"
-    staged.write_bytes(b"\x00" * 2048)  # never decoded: analysis is not started
+    staged = _stage(clipper_tmp, "staged.mp4")
 
     created = await client.post(
         "/api/clipper/projects",
@@ -178,8 +194,7 @@ async def test_content_type_override_triggers_a_rescore_when_there_is_analysis(
     there are cached candidates to re-score."""
     from services.clipper import storage
 
-    staged = clipper_tmp / "override.mp4"
-    staged.write_bytes(b"\x00" * 2048)
+    staged = _stage(clipper_tmp, "override.mp4")
     created = await client.post(
         "/api/clipper/projects",
         json={"source_kind": "upload", "upload_path": str(staged), "rights_confirmed": True},
@@ -209,8 +224,7 @@ async def test_content_type_override_triggers_a_rescore_when_there_is_analysis(
 async def test_settings_are_clamped_not_trusted(client, clipper_tmp):
     """An out-of-range value from a hand-rolled API call must never reach the
     pipeline — a 10-hour max_clip_s would try to encode the whole VOD."""
-    staged = clipper_tmp / "staged2.mp4"
-    staged.write_bytes(b"\x00" * 2048)
+    staged = _stage(clipper_tmp, "staged2.mp4")
 
     created = await client.post(
         "/api/clipper/projects",
@@ -242,8 +256,7 @@ async def test_settings_are_clamped_not_trusted(client, clipper_tmp):
 async def test_artifact_name_is_allowlisted(client, clipper_tmp):
     """The artifacts endpoint is reachable over HTTP, so a traversal attempt
     must be refused by name, not by luck."""
-    staged = clipper_tmp / "staged3.mp4"
-    staged.write_bytes(b"\x00" * 2048)
+    staged = _stage(clipper_tmp, "staged3.mp4")
     created = await client.post(
         "/api/clipper/projects",
         json={"source_kind": "upload", "upload_path": str(staged), "rights_confirmed": True},
@@ -256,3 +269,65 @@ async def test_artifact_name_is_allowlisted(client, clipper_tmp):
         assert missing.status_code == 404, "no analysis has run yet"
     finally:
         await client.delete(f"/api/clipper/projects/{pid}")
+
+
+# ── the upload path is a name, not a location ────────────────────────────────
+#
+# `create_project` took `upload_path` as a PATH, checked only that it existed,
+# and then `.replace()`d it into the project directory: a move of any file the
+# server process could reach, with the client choosing which. There is no
+# authentication anywhere in ClipForge, so this was not privilege escalation
+# over an already-open perimeter — it was still a filesystem primitive given
+# away, and the fix is a few lines.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attempt", [
+    "F:/ClipForge/server/config.py",           # somewhere else entirely
+    "../../../config.py",                      # traversal
+    "..",                                      # degenerate
+    "//server/share/movie.mp4",                # UNC
+])
+async def test_a_file_outside_staging_cannot_be_named_as_an_upload(
+        client, clipper_tmp, attempt):
+    r = await client.post(
+        "/api/clipper/projects",
+        json={"source_kind": "upload", "upload_path": attempt,
+              "title": "nope", "rights_confirmed": True},
+    )
+    assert r.status_code == 400, r.text
+    assert "upload" in r.text
+
+
+@pytest.mark.asyncio
+async def test_traversal_that_lands_on_a_real_staged_file_is_still_a_name(
+        client, clipper_tmp):
+    """The check is not "does this resolve inside staging" applied to what the
+    client sent — it is "take the name, ignore the rest". A path dressed up to
+    look like it escapes and come back still reduces to its basename."""
+    staged = _stage(clipper_tmp, "real.mp4")
+    r = await client.post(
+        "/api/clipper/projects",
+        json={"source_kind": "upload",
+              "upload_path": f"/etc/passwd/../../{staged.name}",
+              "title": "basename", "rights_confirmed": True},
+    )
+    assert r.status_code == 200, r.text
+    assert not staged.exists(), "the staged file should have moved into the project"
+
+
+@pytest.mark.asyncio
+async def test_a_staged_file_with_a_disallowed_suffix_is_refused(client, clipper_tmp):
+    """The allowlist is enforced on upload; enforcing it here too means a file
+    that reached staging some other way cannot become a source."""
+    staging = clipper_tmp / "_uploads"
+    staging.mkdir(parents=True, exist_ok=True)
+    (staging / "payload.exe").write_bytes(bytes(16))
+
+    r = await client.post(
+        "/api/clipper/projects",
+        json={"source_kind": "upload", "upload_path": "payload.exe",
+              "title": "exe", "rights_confirmed": True},
+    )
+    assert r.status_code == 400, r.text
+    assert "unsupported_upload" in r.text
