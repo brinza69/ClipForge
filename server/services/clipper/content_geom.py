@@ -14,6 +14,7 @@ content_type.py re-exports these, so an existing
 
 from __future__ import annotations
 
+from collections import defaultdict
 import logging
 import math
 import unicodedata
@@ -441,14 +442,30 @@ def classify_features(features: dict[str, Any]) -> dict[str, Any]:
     speech = clamp01(g("speech_ratio"))
 
     scores = {t: 0.0 for t in CONTENT_TYPES}
-    evidence: dict[str, list[str]] = {t: [] for t in CONTENT_TYPES}
+
+    # A reason is shown to a person, so it has to be a reason. The 0.01 floor
+    # below is right for the SCORE — a small contribution is still a
+    # contribution — and far too low for the explanation: measured on the
+    # labelled corpus, `IRL World Cup` is reported as gaming with "gaming
+    # vocabulary in the transcript" at the top of its evidence, and its
+    # kw_gaming is 0.017 against a kw_sports of 0.157. The term put 0.034 into
+    # a winning score of about 0.5 and got the credit for it. That misreading
+    # cost real time on 2026-08-18: the evidence sent me looking at the word
+    # lists, which turned out to be behaving correctly.
+    #
+    # So terms are collected with their weights and filtered at the end, once
+    # the total for that kind is known. Two votes already did this by hand with
+    # `if g("kw_...") > 0.1 else ""`, which is the same instinct without the
+    # denominator.
+    EVIDENCE_SHARE = 0.15
+    parts: dict[str, list[tuple[float, str]]] = defaultdict(list)
 
     def vote(kind: str, weight: float, why: str = "") -> None:
         if weight <= 0.01:
             return
         scores[kind] += weight
-        if why and why not in evidence[kind]:
-            evidence[kind].append(why)
+        if why:
+            parts[kind].append((weight, why))
 
     # Synthetic game art: saturated, edge-dense, full of long straight runs.
     synthetic = clamp01(0.5 * edges_n + 0.3 * lines + 0.2 * sat_n)
@@ -521,6 +538,8 @@ def classify_features(features: dict[str, Any]) -> dict[str, Any]:
     margin = (top - second) / top
     strength = min(1.0, top / 3.0)
     confidence = round(clamp01(0.15 + 0.5 * margin * strength + 0.35 * strength), 3)
-    reasons = evidence[best][:4] or ["no single content type stood out"]
+    reasons = [why for w, why in parts[best]
+               if w >= EVIDENCE_SHARE * top][:4] or [
+        "no single content type stood out"]
     return {"content_type": best, "confidence": confidence, "evidence": reasons}
 

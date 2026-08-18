@@ -211,3 +211,45 @@ def test_the_rate_gate_still_rejects_a_handful_of_stray_detections():
     grays, faces = _inset_source(100, 50)
     faces = [boxes if i < 2 else [] for i, boxes in enumerate(faces)]
     assert ct._find_webcams(grays, faces, W, H)[0] == []
+
+
+# ── a reason shown to a person has to be a reason ────────────────────────────
+#
+# `vote()` records a term's explanation whenever its weight clears 0.01, which
+# is right for the SCORE and far too low for the EXPLANATION. Measured on the
+# labelled corpus, `IRL World Cup` came back as gaming with "gaming vocabulary
+# in the transcript" at the top of its evidence — kw_gaming 0.017 against a
+# kw_sports of 0.157, contributing 0.034 to a winning score near 0.5.
+#
+# That is not cosmetic: it cost real time on 2026-08-18, because the evidence
+# sent the reader to the word lists, which were behaving correctly. The actual
+# cause was the `synthetic` term, and it is a much more interesting finding.
+
+
+def test_a_term_that_barely_contributed_is_not_offered_as_the_reason():
+    from services.clipper.content_geom import classify_features
+
+    # Edge-dense and saturated: `synthetic` carries this decision. The gaming
+    # vocabulary is present but negligible, exactly as on the real source.
+    verdict = classify_features({
+        "edge_density": 0.14, "saturation": 0.55, "line_ratio": 0.5,
+        "motion_mean": 0.30, "corner_stability": 0.2, "face_stability": 0.1,
+        "face_count": 0.0, "face_count_mean": 0.0, "face_area": 0.0,
+        "speech_ratio": 0.5, "kw_gaming": 0.017, "kw_sports": 0.0,
+    })
+    joined = " ".join(verdict["evidence"])
+    assert "vocabulary" not in joined, (
+        f"a 0.017 keyword score is being reported as the reason: {joined}")
+
+
+def test_the_term_that_did_decide_is_still_named():
+    from services.clipper.content_geom import classify_features
+
+    verdict = classify_features({
+        "edge_density": 0.02, "saturation": 0.10, "line_ratio": 0.05,
+        "motion_mean": 0.05, "corner_stability": 0.9, "face_stability": 0.9,
+        "face_count": 1.0, "face_count_mean": 1.0, "face_area": 0.10,
+        "speech_ratio": 0.8, "kw_gaming": 0.9,
+    })
+    assert verdict["evidence"], "a decision with a dominant term explained nothing"
+    assert verdict["evidence"] != ["no single content type stood out"]
