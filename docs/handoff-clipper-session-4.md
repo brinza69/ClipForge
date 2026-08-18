@@ -1,7 +1,11 @@
-# Handoff — AI Stream Clipper, sessions 4 and 5
+# Handoff — AI Stream Clipper, sessions 4 to 7
 
-Session 4 written 2026-08-14, session 5 appended 2026-08-16. Everything here
-was run on **this** machine and measured, not carried over.
+Session 4 written 2026-08-14; sessions 5, 6 and 7 appended through 2026-08-18.
+Everything here was run on **this** machine and measured, not carried over.
+
+**Newest first if you are short of time:** session 7 is the contracts between
+components and is the one with the reusable lesson; session 6 is the
+measurement work behind the detectors.
 
 **This is the state of the world.** For what every file is and where it lives,
 read `clipper-map.md` — it exists so nobody has to grep the tree again.
@@ -14,6 +18,8 @@ read `clipper-map.md` — it exists so nobody has to grep the tree again.
 - [What I would do next](#what-i-would-do-next--all-but-one-done-on-2026-08-16)
 - [Not built, from the upgrade spec](#not-built-from-the-upgrade-spec)
 
+- [Session 7 — the contracts between components](#session-7--2026-08-18-the-contracts-between-components)
+  — 14 commits, a uniform corpus at last, and the one sentence eleven of them share
 - [Session 6 — mostly measurement](#session-6--2026-08-17-and-it-was-mostly-measurement)
   — 25 commits, the numbers not to measure again, and five wrong turns
 - [What is fragile](#what-is-fragile--2026-08-17) — where it is most likely to be
@@ -957,6 +963,156 @@ pipeline end to end on a real source, or a person looking at the output. The
 audio was reported by ear. The gameplay crop was reported by eye. Pass D's own
 first run found a face shot framing Minecraft dirt. A vision model disagreed
 with my caption checker and was right. **Tests were green through all of it.**
+
+## Session 7 — 2026-08-18, the contracts between components
+
+Fourteen commits. Session 6 was mostly measurement; this one was mostly
+CONTRACTS — two components that each looked right and disagreed about what they
+were exchanging. Almost none of it was found by reading code, and every fix has
+a real render or the real corpus behind it.
+
+An outside review of the codebase (`clipper-analysis-2026-08-17.md`, written by
+a different model, with my reply in `clipper-analysis-2026-08-17-review.md`)
+named seven of these before the session started. Its central claim was right and
+is worth keeping: **what the user sees, what the editor saves and what the
+renderer exports have to be the same reality.**
+
+### What shipped
+
+| | |
+|---|---|
+| Facecam 8/9 → **9/9** | The reach cap had switched off the frame-border conclusion; `scene_independence` answers "is there a second camera here" without looking at a border, which is what two borderless sources needed. |
+| A layout is only a layout if it lasts | Per-stretch detection reported a reacted-to video as an inset. A position seen in ONE stretch of eleven, where another holds seven, is content. |
+| One constant, two questions | Lowering the facecam hit-rate silently moved `_scene_faces` and cost the classifier a source. |
+| `trim_silence` deleted every caption | Not a drift. `remap_overlays` read keys the captioner never emitted, so the plan came back empty and the clip rendered with no subtitles at all — on both paths, for as long as the option has existed. |
+| Preview ≠ export | The editor previewed a static split screen for a clip that shipped with nineteen cuts. One decision, two consumers. |
+| The harness that does not have to be rewritten | `scripts/run_clipper_stage.py`. |
+| Two workers could claim one job | `UPDATE ... WHERE status='queued'` and `rowcount == 1`, proved with four real processes. |
+| The editor's rebuild buttons | Read `clip.transcript_segments`, a column nothing writes. |
+| The upload path | Taken as a location; taken as a NAME now. |
+| Resume trusted anything that existed | It reads the version and the source size `meta.json` has always recorded. |
+| The board counts and now looks | `docs/refs/facecam-golden.json`. |
+| The evidence named a term that did not decide | Reasons filtered to 15% of the winning score. |
+| Two files split | 757 → 376 and 835 → 519. |
+
+### Numbers not to measure again
+
+**The corpus is uniform as of 2026-08-18** — all eleven labelled sources
+re-analysed by the same code, 41 minutes, no failures. Every number below is
+against that, which is the first time any of them is comparable to anything.
+
+**Facecam detection is 9/9**, and 10/10 through `detect_regions` itself — the
+function the pipeline calls, as opposed to `_find_webcams`, which the scoreboard
+calls and which had been proving something narrower than it looked.
+
+**`detect_regions` was reading 40 frames of 400.** On the 4-hour co-stream the
+second facecam lands 3 of those 40, rate 0.075. Not rare, under-sampled. One
+facecam at 40, 100 and 200 frames; both at 400, with every labelled negative
+still at zero. The cost is 21 s against 2 s in a five-minute stage.
+
+**The content classifier is 6/11 on the uniform corpus**, and four of the five
+errors have truth `irl`. That is not a weight problem, and the evidence now says
+why in the sources' own numbers:
+
+```
+Kai Cenat, a room of monitors    14.1% edge density
+IRL World Cup, a stadium          9.9%
+Minecraft, an actual video game   7.8%
+```
+
+The `synthetic` term ranks both real-world sources as MORE synthetic than the
+game it exists to find, and `irl` has exactly one term whose own text reads
+"hand-held look: nothing on screen stays put". The label means real world, the
+vote means handheld, and Kai Cenat sits at a desk. **No recalibration is
+proposed**; three earlier weight attempts already moved 6/11 to 6/11 to 6/11.
+
+**`trim_silence` on a 36 s clip:** 35.83 s → 33.43 s, captions shifted by
+exactly the 2.40 s removed, end margin identical at 0.41 s, 49 caption events
+where the untrimmed cut has 97. Before the fix the same render produced no
+`.ass` at all.
+
+**Preview against export, same clip, same settings:** 9.60 s at 540x960 against
+33.43 s at 1080x1920, 49 caption events in each with identical timings, the same
+crop and the same highlighted word at t=5, watermark burned into both. 9.60 is
+the 12 s cap minus the 2.4 s cut that falls inside it.
+
+### The shape of every bug this session
+
+Eleven of the fourteen commits are the same sentence: **a value was recorded and
+nothing read it, or a value was read and nothing wrote it.**
+
+- `failed_chunks` — recorded, unread (fixed in session 6).
+- `transcript_segments` — read by the editor, written by nothing.
+- `analysis_version` and the source size — in `meta.json` since the clipper
+  shipped, read by nothing.
+- `watermark`, `drop_spans`, `on_progress`, `is_cancelled` — computed by the
+  export handler, not passed to the branch that had become the default.
+- `remap_overlays` — reading `start`/`end`, offered `start_t`/`end_t`.
+- The evidence strings — recorded for terms contributing 3% of the answer.
+
+**None of these fails loudly.** A missing consumer is silence, and a mismatched
+key is an empty list, which is a legitimate value everywhere it landed. Grep for
+the writer whenever you find a field you are about to trust.
+
+### Tests that agreed with themselves and nothing else
+
+Three fixtures were the inverse of reality and all three passed for months.
+
+`remap_overlays` had three unit tests written against the keys the FUNCTION
+used rather than the keys its caller passes — the function and its tests agreed
+with each other while the feature they covered removed every caption from the
+clip.
+
+The synthetic scene in `test_clipper_analysis.py` built "gameplay" as pure
+noise, and noise over 129,600 pixels averages to the same number every frame:
+the game held perfectly still while the inset was the only thing moving, the
+exact inverse of a real source. Every facecam test read as a phantom until the
+scene got a per-frame level.
+
+`test_a_wide_shot_with_people_in_it_is_not_a_facecam` built its wide shot by
+COMPOSITING a still rectangle where the people were — the one thing a wide shot
+does not contain — and passed because the rect came out too big rather than
+because it was not an inset.
+
+And four API tests staged uploads into the artifact root and posted absolute
+paths, which is precisely the hole `create_project` had: they exercised it as a
+feature.
+
+**`inspect.getsource` assertions fired on refactors three times today and on
+regressions zero times.** They are still worth keeping for wires that are
+invisible at runtime — that is the class of failure they were added for — but
+expect the false alarm whenever the wire moves.
+
+### Traps added
+
+- **A split module's constants cannot be swept through the re-export.**
+  `content_type` re-exports the facecam names; assigning to them there binds a
+  copy that `content_facecam` never reads. Patch the owning module.
+- **`init_db()` runs only in the app's lifespan.** Anything in-process meets the
+  schema of the last backend start. Use `scripts/run_clipper_stage.py`.
+- **A measurement from disk measures the code that last ran.** The corpus sat
+  half re-analysed for an hour and the classifier reading was uncomparable in
+  both directions. Re-analyse everything before believing a corpus-wide number.
+
+### Still open, and deliberately
+
+**Lease and heartbeat on the job queue.** The atomic claim answers two workers
+racing for one job; a heartbeat answers a process dying without restarting the
+app, and `recover_stuck_jobs` already requeues at startup, which on one machine
+is how that case ends. Build it when a job appears that startup recovery misses.
+
+**A golden case for caption placement.** Layout does not need one: it is a
+deterministic function of regions and content type, both already pinned, so a
+golden there would fail only where `plan_layout`'s own tests already do. Caption
+placement is different — it depends on `ui_panels` and the shot list and nothing
+pins it end to end — but it needs a real render per run, which is too expensive
+for a gate. Genuinely open.
+
+**Files still over 500 lines**: `routers/clipper.py` 665, `clipper_build.py`
+603, `signals.py` 565, `content_geom.py` 545, `captions.py` 520,
+`content_type.py` 519, `dynamic_edit.py` 509, `scoring.py` 505, `layout.py` 504.
+Only `content_geom.py` was pushed over by this session; the rest are inherited.
+Split them when you touch them.
 
 ## What is fragile — 2026-08-17
 
