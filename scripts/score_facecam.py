@@ -11,7 +11,9 @@ mid-stream has no single correct answer for the whole file.
 from __future__ import annotations
 
 import glob
+import json
 import sys
+from pathlib import Path
 
 import cv2
 
@@ -54,7 +56,30 @@ def load(pid: str, lo: float, hi: float):
     return grays[a:b], faces[a:b]
 
 
-def score(label: str = "") -> tuple[int, int]:
+GOLDEN = Path(__file__).resolve().parent.parent / "docs" / "refs" / "facecam-golden.json"
+
+
+def golden() -> dict:
+    """The rects this detector produced when the board last read 9/9.
+
+    The COUNT is what `score` reports and it is not enough on its own: a change
+    that keeps every source's number while moving the rectangles reads as no
+    change at all. Both facecams of the co-stream were detected 25 and 46 rows
+    short at the bottom for months with the count perfectly correct, and the
+    only reason anybody noticed is that somebody drew the rect on a frame.
+
+    Regenerate deliberately, never to make a run pass:
+        python scripts/score_facecam.py --bless
+    """
+    try:
+        return json.loads(GOLDEN.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def score(label: str = "", check_rects: bool = True) -> tuple[int, int]:
+    want_rects = golden() if check_rects else {}
+    moved = 0
     right = 0
     for pid, name, want, lo, hi in SOURCES:
         grays, faces = load(pid, lo, hi)
@@ -69,10 +94,38 @@ def score(label: str = "") -> tuple[int, int]:
         mark = "OK " if ok else "XX "
         rects = ", ".join(f"{c['w']}x{c['h']}@{c['x']},{c['y']}" for c in cams[:2])
         print(f"  {mark}{name:36s} want {want} got {got}   {rects}")
+
+        expected = (want_rects.get(pid) or {}).get("rects")
+        if expected is not None:
+            now = [[c["x"], c["y"], c["w"], c["h"]] for c in cams]
+            if now != expected:
+                moved += 1
+                print(f"     ^ RECTS MOVED: {expected} -> {now}")
+
     print(f"  --> {right}/{len(SOURCES)}  {label}")
+    if moved:
+        print(f"  !! {moved} source(s) kept their count and changed their "
+              f"geometry — see docs/refs/facecam-golden.json")
     return right, len(SOURCES)
 
 
+def bless() -> None:
+    """Rewrite the golden record from what the detector produces right now."""
+    out = {}
+    for pid, name, want, lo, hi in SOURCES:
+        grays, faces = load(pid, lo, hi)
+        fh, fw = grays[0].shape[:2]
+        cams, confs = ct._find_webcams(grays, faces, fw, fh)
+        out[pid] = {"name": name, "want": want,
+                    "rects": [[c["x"], c["y"], c["w"], c["h"]] for c in cams],
+                    "conf": [round(float(c), 3) for c in confs]}
+    GOLDEN.write_text(json.dumps(out, indent=2) + chr(10), encoding="utf-8")
+    print(f"blessed {len(out)} sources into {GOLDEN}")
+
+
 if __name__ == "__main__":
-    print("BASELINE (_FACECAM_OUTER = %.1f)" % ct._FACECAM_OUTER)
-    score("baseline")
+    if "--bless" in sys.argv:
+        bless()
+    else:
+        print("BASELINE (_FACECAM_OUTER = %.1f)" % ct._FACECAM_OUTER)
+        score("baseline")
