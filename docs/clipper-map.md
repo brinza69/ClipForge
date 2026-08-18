@@ -188,6 +188,7 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_ranker.py` · `test_clipper_render.py` · `test_clipper_signals.py` ·
 `test_clipper_storage.py` · `test_clipper_captions.py` · `test_clipper_api.py` ·
 `test_clipper_urlguard.py` · `test_clipper_resume.py` · `test_job_claim.py` ·
+`test_clipper_regenerate.py` ·
 `test_clipper_transcribe_progress.py` · `test_transcriber_resilience.py` ·
 `test_downloader_cookies.py`
 

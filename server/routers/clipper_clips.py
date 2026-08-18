@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from database import get_session
 from job_queue import job_queue
-from models import ClipModel, ClipStatus, JobType, ProjectModel
+from models import ClipModel, ClipStatus, JobType, ProjectModel, TranscriptModel
 from services.clipper.serialize import (
     CLIP_PATCHABLE,
     CLIP_PATCHABLE_JSON,
@@ -50,6 +50,33 @@ _FIELD_EVENTS = {
 
 def _err(status: int, code: str, message: str, details: str = "") -> HTTPException:
     return HTTPException(status, {"error": code, "message": message, "details": details})
+
+
+async def _project_transcript(session: AsyncSession, project_id: str) -> dict:
+    """The project's transcript, in the shape the scorer passed at build time.
+
+    THE CANONICAL SOURCE FOR A CLIP'S WORDS, and until 2026-08-17 the editor
+    used a different one: both regeneration paths read
+    `clip.transcript_segments`, a column that exists on the model and that
+    NOTHING in the clipper has ever written. So rebuilding captions produced an
+    empty plan and rebuilding a headline gave the model no words to work from —
+    silently, because an empty transcript is a legitimate state for a clip with
+    no speech.
+
+    Returns the WHOLE transcript rather than a slice: `build_caption_plan` and
+    `_clip_words` both take the candidate window and cut it themselves, and
+    handing them a pre-cut one would be a second place for the window
+    arithmetic to disagree.
+    """
+    row = (await session.execute(
+        select(TranscriptModel)
+        .where(TranscriptModel.project_id == project_id)
+        .limit(1)
+    )).scalar_one_or_none()
+    if not row or not row.segments:
+        return {"segments": []}
+    return {"language": row.language, "segments": row.segments,
+            "full_text": row.full_text}
 
 
 async def _load_clip(session: AsyncSession, clip_id: str) -> ClipModel:
@@ -167,11 +194,20 @@ async def regenerate(
     if what == "headline":
         from services.clipper.headline import generate_headline
 
+        from services.clipper.captions import _clip_words
+
+        transcript = await _project_transcript(session, clip.project_id)
         cand = {
             "start": clip.start_time,
             "end": clip.end_time,
             "text": clip.transcript_text or "",
-            "words": (clip.transcript_segments or {}) if isinstance(clip.transcript_segments, dict) else {},
+            # The same slicer `build_caption_plan` uses, so a regenerated
+            # headline sees exactly the words a regenerated caption would.
+            # `generate_headline` wants a LIST of word dicts; this used to hand
+            # it `clip.transcript_segments`, a column nothing writes, guarded by
+            # an isinstance check that made the empty case look deliberate.
+            "words": _clip_words({"start": clip.start_time, "end": clip.end_time},
+                                 transcript),
         }
         result = await generate_headline(
             cand,
@@ -185,7 +221,7 @@ async def regenerate(
     if what == "captions":
         from services.clipper.captions import build_caption_plan
 
-        transcript = {"segments": clip.transcript_segments or []}
+        transcript = await _project_transcript(session, clip.project_id)
         try:
             clip.caption_plan = build_caption_plan(
                 {"start": clip.start_time, "end": clip.end_time, "text": clip.transcript_text or ""},
@@ -282,9 +318,39 @@ async def export_file(clip_id: str, session: AsyncSession = Depends(get_session)
     )
 
 
+# States an export may be STARTED from. Deliberately not the strict machine an
+# audit would draw, and the difference is the product rather than laziness:
+#
+#   `candidate` stays legal because the documented flow is review the board,
+#   then Export — the runbook says so and `auto_export` enqueues candidates
+#   directly, bypassing this endpoint entirely.
+#
+#   `exported` and `failed` stay legal because re-rendering after an edit is
+#   what the clip editor is FOR. Requiring a separate re-render endpoint would
+#   make the ordinary case the awkward one.
+#
+# What is refused is the pair that can only be a mistake: a clip already
+# rendering (two jobs writing one file, progress oscillating between them) and
+# one that was rejected on purpose.
+_EXPORTABLE_FROM = {
+    ClipStatus.candidate.value,
+    ClipStatus.approved.value,
+    ClipStatus.exported.value,
+    ClipStatus.failed.value,
+}
+
+
 @router.post("/clips/{clip_id}/export")
 async def export_clip(clip_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     clip = await _load_clip(session, clip_id)
+    if clip.status == ClipStatus.exporting.value:
+        raise _err(409, "already_exporting",
+                   "That clip is already rendering.",
+                   "Wait for the running export to finish, or cancel its job.")
+    if clip.status not in _EXPORTABLE_FROM:
+        raise _err(409, "not_exportable",
+                   f"A {clip.status} clip cannot be exported.",
+                   "Approve it first if you want it rendered.")
     clip.status = ClipStatus.exporting.value
     await session.commit()
     job_id = await job_queue.enqueue(
