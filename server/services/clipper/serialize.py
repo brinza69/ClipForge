@@ -27,8 +27,43 @@ CLIP_PATCHABLE: dict[str, type] = {
     "transcript_text": str,
     "headline_text": str,
     "caption_preset_id": str,
-    "status": str,
 }
+
+# `status` was in the list above until 2026-08-18, typed `str` and validated
+# nowhere. A client could write any string into it, and — worse — could walk
+# straight past the guard on the export endpoint by setting the status the
+# guard wanted to see. A whitelist that includes the field the guards read is
+# not a whitelist. Status moves through the named endpoints only.
+#
+# THE ONE PLACE THE LEGAL MOVES ARE WRITTEN DOWN. Five call sites used to
+# assign `clip.status` directly, each with its own idea of what was allowed:
+# approve, reject, the export endpoint, the render worker's success path and
+# its failure path.
+_CLIP_TRANSITIONS: dict[str, frozenset[str]] = {
+    "candidate": frozenset({"approved", "rejected", "exporting"}),
+    "approved": frozenset({"rejected", "candidate", "exporting"}),
+    "rejected": frozenset({"approved", "candidate"}),
+    # Rendering. `exported` and `failed` are what the worker writes when it is
+    # done; nothing else may leave this state, which is what stops a second
+    # export being started on top of a running one.
+    "exporting": frozenset({"exported", "failed"}),
+    # Not terminal, deliberately: re-rendering after an edit is what the clip
+    # editor exists for, and a finished clip can still be rejected.
+    "exported": frozenset({"exporting", "rejected", "approved", "candidate"}),
+    "failed": frozenset({"exporting", "rejected", "candidate"}),
+}
+
+
+def can_transition(current: str | None, target: str) -> bool:
+    """Whether a clip may move from `current` to `target`.
+
+    A move to the state it is already in is allowed and is a no-op: approving
+    an approved clip is a double-click, not an error.
+    """
+    now = str(current or "candidate")
+    if now == target:
+        return True
+    return target in _CLIP_TRANSITIONS.get(now, frozenset())
 
 # Same idea for the JSON-blob columns, which need no coercion.
 CLIP_PATCHABLE_JSON = ("layout_plan", "caption_plan", "sub_scores", "warnings")

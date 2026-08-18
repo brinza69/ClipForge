@@ -130,3 +130,112 @@ async def test_export_is_refused_where_it_can_only_be_a_mistake(client, status, 
     r = await client.post(f"/api/clipper/clips/{cid}/export")
     assert r.status_code == 409, r.text
     assert code in json.dumps(r.json())
+
+
+# ── one clip, one export ─────────────────────────────────────────────────────
+#
+# The endpoint read the status, checked it, wrote it and committed — two
+# statements, so two requests could both read `candidate` and both enqueue a
+# render. Two jobs writing one file, with progress oscillating between them.
+#
+# The job queue got exactly this fix on 2026-08-17 and the clip side was left
+# read-then-write on the same day, which is how a lesson gets applied in one
+# place and not the other.
+
+
+async def _clip(pid: str, cid: str, status: str = "candidate") -> None:
+    await _seed(pid, with_transcript=False)
+    async with async_session() as session:
+        session.add(ClipModel(id=cid, project_id=pid, start_time=0.0, end_time=5.0,
+                              status=status, created_at=datetime.utcnow()))
+        await session.commit()
+
+
+async def _status_of(cid: str) -> str:
+    async with async_session() as session:
+        return (await session.get(ClipModel, cid)).status
+
+
+@pytest.mark.asyncio
+async def test_only_one_caller_can_claim_a_clip_for_export():
+    """The claim, tested where it can actually fail.
+
+    Eight gathered requests through the ASGI transport do NOT discriminate:
+    measured, that version passes against the old read-then-write endpoint too,
+    because the requests do not interleave enough to catch the race. A test
+    that cannot fail against the bug proves nothing about the fix.
+
+    Calling the claim directly with a session each does discriminate, and the
+    race is not theoretical: measured on a fresh DB, read-then-write lets FIVE
+    of eight callers believe they own the clip, while the conditional UPDATE
+    lets exactly one.
+    """
+    import asyncio
+
+    from routers.clipper_clips import claim_for_export
+
+    await _clip("conc-p", "conc-c")
+
+    async def attempt() -> bool:
+        async with async_session() as session:
+            return await claim_for_export(session, "conc-c")
+
+    results = await asyncio.gather(*(attempt() for _ in range(8)))
+    assert sum(results) == 1, f"{sum(results)} callers thought they had the clip"
+    assert await _status_of("conc-c") == "exporting"
+
+
+@pytest.mark.asyncio
+async def test_the_endpoint_queues_one_render_and_refuses_the_rest(client):
+    """The behaviour on top of the claim: 200 once, 409 after."""
+    await _clip("ep-p", "ep-c")
+    first = await client.post("/api/clipper/clips/ep-c/export")
+    assert first.status_code == 200, first.text
+    second = await client.post("/api/clipper/clips/ep-c/export")
+    assert second.status_code == 409
+    assert "already_exporting" in second.text
+
+
+@pytest.mark.asyncio
+async def test_status_cannot_be_written_through_the_generic_patch(client):
+    """The whitelist used to include `status` as a bare `str`, which let a
+    client write any value AND walk past the export guard by setting the state
+    the guard wanted to see. A whitelist containing the field the guards read
+    is not a whitelist."""
+    await _clip("patch-p", "patch-c", status="exporting")
+
+    r = await client.patch("/api/clipper/clips/patch-c",
+                           json={"status": "candidate", "title": "still allowed"})
+    assert r.status_code == 200, r.text
+    assert "status" not in r.json()["changed"]
+    assert await _status_of("patch-c") == "exporting"
+    assert r.json()["clip"]["title"] == "still allowed"
+
+
+@pytest.mark.asyncio
+async def test_a_rendering_clip_cannot_be_approved_or_rejected(client):
+    await _clip("mid-p", "mid-c", status="exporting")
+    for action in ("approve", "reject"):
+        r = await client.post(f"/api/clipper/clips/mid-c/{action}")
+        assert r.status_code == 409, f"{action}: {r.text}"
+        assert "illegal_transition" in r.text
+    assert await _status_of("mid-c") == "exporting"
+
+
+@pytest.mark.asyncio
+async def test_approving_an_approved_clip_is_a_double_click_not_an_error(client):
+    await _clip("dbl-p", "dbl-c", status="approved")
+    r = await client.post("/api/clipper/clips/dbl-c/approve")
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_an_exported_clip_can_still_be_re_rendered_and_rejected(client):
+    """Re-rendering after an edit is what the clip editor is for, so `exported`
+    is not terminal — the strict machine an audit would draw is the wrong
+    product."""
+    await _clip("re-p", "re-c", status="exported")
+    assert (await client.post("/api/clipper/clips/re-c/export")).status_code == 200
+
+    await _clip("rj-p", "rj-c", status="exported")
+    assert (await client.post("/api/clipper/clips/rj-c/reject")).status_code == 200

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -26,6 +26,7 @@ from database import get_session
 from job_queue import job_queue
 from models import ClipModel, ClipStatus, JobType, ProjectModel, TranscriptModel
 from services.clipper.serialize import (
+    can_transition,
     CLIP_PATCHABLE,
     CLIP_PATCHABLE_JSON,
     apply_patch,
@@ -142,6 +143,11 @@ async def _set_status(
     from services.clipper import feedback
 
     clip = await _load_clip(session, clip_id)
+    if not can_transition(clip.status, status):
+        raise _err(409, "illegal_transition",
+                   f"A {clip.status} clip cannot become {status}.",
+                   "Wait for the render to finish first."
+                   if clip.status == ClipStatus.exporting.value else "")
     clip.status = status
     await session.commit()
     await feedback.record(session, clip.id, clip.project_id, event, payload)
@@ -332,27 +338,57 @@ async def export_file(clip_id: str, session: AsyncSession = Depends(get_session)
 # What is refused is the pair that can only be a mistake: a clip already
 # rendering (two jobs writing one file, progress oscillating between them) and
 # one that was rejected on purpose.
-_EXPORTABLE_FROM = {
+_EXPORTABLE_FROM = (
     ClipStatus.candidate.value,
     ClipStatus.approved.value,
     ClipStatus.exported.value,
     ClipStatus.failed.value,
-}
+)
+
+
+async def claim_for_export(session: AsyncSession, clip_id: str) -> bool:
+    """Take a clip for rendering. True only for the caller that actually got it.
+
+    THE CONDITIONAL UPDATE IS THE LOCK, and it is a named function so it can be
+    tested the way the job queue's claim is — through the endpoint, eight
+    gathered requests do not interleave enough to catch anything, and a test
+    that cannot fail against the old read-then-write code proves nothing.
+
+    `exporting` is deliberately absent from the source states: a second export
+    on a running one is two jobs writing one file, with progress oscillating
+    between two writers.
+    """
+    result = await session.execute(
+        update(ClipModel)
+        .where(ClipModel.id == clip_id)
+        .where(ClipModel.status.in_(_EXPORTABLE_FROM))
+        .values(status=ClipStatus.exporting.value)
+    )
+    await session.commit()
+    return result.rowcount == 1
 
 
 @router.post("/clips/{clip_id}/export")
 async def export_clip(clip_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    clip = await _load_clip(session, clip_id)
-    if clip.status == ClipStatus.exporting.value:
-        raise _err(409, "already_exporting",
-                   "That clip is already rendering.",
-                   "Wait for the running export to finish, or cancel its job.")
-    if clip.status not in _EXPORTABLE_FROM:
+    """Claim the clip and queue one render.
+
+    THE CLAIM IS THE UPDATE. Reading the status and then writing it is two
+    statements, so two requests can both read `candidate` before either commits
+    and both enqueue a job — two renders writing one file, with progress
+    oscillating between them. This is the same fix the job queue got on
+    2026-08-17 and it was left undone here on the same day, which is how a
+    lesson gets applied in one place and not the other.
+    """
+    clip = await _load_clip(session, clip_id)          # 404s on an unknown id
+    if not await claim_for_export(session, clip_id):
+        if clip.status == ClipStatus.exporting.value:
+            raise _err(409, "already_exporting",
+                       "That clip is already rendering.",
+                       "Wait for the running export to finish, or cancel its job.")
         raise _err(409, "not_exportable",
                    f"A {clip.status} clip cannot be exported.",
                    "Approve it first if you want it rendered.")
-    clip.status = ClipStatus.exporting.value
-    await session.commit()
+    await session.refresh(clip)
     job_id = await job_queue.enqueue(
         project_id=clip.project_id,
         job_type=JobType.clipper_export.value,
