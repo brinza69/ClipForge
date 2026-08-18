@@ -114,7 +114,21 @@ not notice — it logs `[Errno 10048]` and exits while the API keeps answering.
 The job queue is shared through the DB, so anything enqueued races with that
 stale worker. It cost session 3 a whole analysis run.
 
-Run stages in-process instead. The harness is in the scratchpad pattern:
+Run stages in-process instead — and do not hand-roll the harness, because it
+has three traps in it and this file used to describe only two:
+
+```bash
+python scripts/run_clipper_stage.py analyze 39c89ae2e16e
+python scripts/run_clipper_stage.py export 39c89ae2e16e --clip 30d045851a64
+```
+
+It calls `init_db()` first, stubs the queue, swallows the enqueue that would
+hand the next stage back to the worker on 8420, restores the project's status
+afterwards, and carries the `__main__` guard. Written on 2026-08-17 after the
+same harness was typed out three times in one session and the first attempt
+died on the schema.
+
+What it does, for when you need it inline anyway:
 
 ```python
 class StubQueue:

@@ -161,6 +161,7 @@ operations). Split to stay under the 500-line limit.
 
 | file | what |
 |---|---|
+| `scripts/run_clipper_stage.py` | run ONE pipeline stage in-process, with `init_db()` first. The three traps it removes — stale schema, the worker on 8420, the Windows spawn guard — are in its docstring |
 | `scripts/export_clipper_state.py` | transcripts to disk plus `data/clipper/MANIFEST.md` |
 | `scripts/render_dynamic_clip.py` | drive the multi-shot renderer by hand |
 | `scripts/build_dynamic_review.py` | the review page for a project's `dynamic/` |
