@@ -282,6 +282,25 @@ class JobQueue:
                 f"(of {len(stuck_jobs)} running on startup)."
             )
 
+    async def _claim(self, session, job_id: str) -> bool:
+        """Take a queued job. True only for the caller that actually got it.
+
+        The conditional UPDATE is the lock. `WHERE status = 'queued'` means the
+        second writer matches no rows and gets rowcount 0, whatever order the
+        two processes arrived in.
+        """
+        result = await session.execute(
+            update(JobModel)
+            .where(JobModel.id == job_id)
+            .where(JobModel.status == JobStatus.queued.value)
+            .values(
+                status=JobStatus.running.value,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return result.rowcount == 1
+
     async def _process_next(self):
         """Pick up the next queued job and execute it. Two lanes: heavy media
         jobs respect max_concurrent_jobs; doodle jobs have their own small
@@ -327,16 +346,20 @@ class JobQueue:
                 await self.fail_job(job.id, f"No handler registered for job type: {job.type}")
                 return
 
-            # Mark as running
-            await session.execute(
-                update(JobModel)
-                .where(JobModel.id == job.id)
-                .values(
-                    status=JobStatus.running.value,
-                    updated_at=datetime.utcnow(),
-                )
-            )
-            await session.commit()
+            # Mark as running — and only if it is still queued. The SELECT
+            # above and this UPDATE are two statements, so without the extra
+            # WHERE two processes can both read the same `queued` row and both
+            # decide to run it. That is not hypothetical here: start_all.ps1
+            # runs a SECOND backend on 8421 against the same clipforge.db, and
+            # a job claimed twice means the same ingest downloading twice, the
+            # same export writing the same file, and progress that oscillates
+            # between two writers.
+            #
+            # SQLite serialises writers, so the loser sees the committed
+            # `running` and matches nothing. rowcount is the whole signal.
+            if not await self._claim(session, job.id):
+                logger.debug("job %s was claimed by another worker", job.id)
+                return
 
             # Capture job info before session closes
             job_id = job.id
