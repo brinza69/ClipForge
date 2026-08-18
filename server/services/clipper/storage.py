@@ -236,6 +236,48 @@ def artifact_exists(project_id: str, name: str) -> bool:
 
 # ── Housekeeping ─────────────────────────────────────────────────────────────
 
+def stale_artifacts(project_id: str, source: str | Path | None = None) -> str | None:
+    """Why the cached analysis cannot be trusted, or None if it can.
+
+    `retry_analysis` resumes from the furthest stage whose artifacts EXIST, and
+    existence was the whole test: a `signals.json` written by different code,
+    or against a different file, resumed exactly like a good one. Both failure
+    modes are already documented in this repo and both were paid for —
+
+      * session 3 drew conclusions from a `faces.json` produced before the
+        detector was fixed, and every one of them was worthless;
+      * repointing a project from a 480p cut to the 1080p original and
+        exporting produced garbage, because an 854x480 plan FITS INSIDE a
+        1920x1080 frame and no bounds check can tell it is wrong.
+
+    `meta.json` has carried `analysis_version` and the source's size since the
+    clipper shipped and nothing has ever read them. This is the reader. It
+    compares the file size rather than probing: a repoint changes it, and a
+    probe would cost a subprocess on a path that runs for every retry.
+
+    Returns a short reason suitable for a log line and an API field.
+    """
+    meta = read_artifact(project_id, "meta")
+    if not isinstance(meta, dict):
+        return None                      # nothing cached: nothing to distrust
+
+    from services.clipper import ANALYSIS_VERSION
+
+    was = str(meta.get("analysis_version") or "")
+    if was and was != str(ANALYSIS_VERSION):
+        return f"analysis_version {was} -> {ANALYSIS_VERSION}"
+
+    recorded = (meta.get("source") or {}).get("filesize")
+    if source and recorded:
+        try:
+            now = Path(source).stat().st_size
+        except OSError:
+            return None                  # the media is gone; ingest will say so
+        if int(now) != int(recorded):
+            return f"source changed on disk ({recorded} -> {now} bytes)"
+    return None
+
+
 def delete_project(project_id: str) -> None:
     """Remove the whole project tree. Silent when it was never created."""
     d = project_dir(project_id)

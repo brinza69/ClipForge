@@ -539,12 +539,29 @@ async def retry_analysis(project_id: str, session: AsyncSession = Depends(get_se
     project = await _load_project(session, project_id)
 
     paths = storage.paths(project_id)
-    if storage.artifact_exists(project_id, "signals") and paths["proxy"].exists():
+
+    # Existence was the whole test until 2026-08-17, so a signals.json written
+    # by different code — or against a different file — resumed exactly like a
+    # good one. `stale_artifacts` reads the version and the source size that
+    # meta.json has recorded since the clipper shipped and that nothing had
+    # ever consumed.
+    stale = storage.stale_artifacts(project_id, project.video_path)
+    if stale:
+        logger.info("clipper retry for %s: ignoring cached analysis (%s)",
+                    project_id, stale)
+
+    if not stale and storage.artifact_exists(project_id, "signals") and paths["proxy"].exists():
         resume = JobType.clipper_score.value if storage.artifact_exists(
             project_id, "candidates"
         ) else JobType.clipper_analyze.value
-    elif paths["proxy"].exists() and paths["audio"].exists():
+    elif not stale and paths["proxy"].exists() and paths["audio"].exists():
         resume = JobType.clipper_transcribe.value
+    elif (stale and "analysis_version" in stale
+            and paths["proxy"].exists() and paths["audio"].exists()):
+        # The code moved, not the media: the proxy and the audio are still a
+        # faithful copy of the same file, and re-downloading a 4 GB VOD to
+        # recompute signals would be the indefensible half of this endpoint.
+        resume = JobType.clipper_analyze.value
     else:
         resume = JobType.clipper_ingest.value
 
