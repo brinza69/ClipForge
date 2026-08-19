@@ -122,6 +122,51 @@ class _Sliced:
 # in subtitrari — trebuie sa fie acelasi text in amandoua, fiindca alinierea pe
 # cuvinte potriveste audio-ul TTS cu exact acest sir. NU intra in descriere:
 # acolo ar polua captionul postarii.
+# Muzica de fundal din sursa, tinuta SUB voce. Gol = oprit (comportamentul de
+# pana acum: audio-ul original se arunca si ramane doar vocea TTS).
+# Valoarea e in decibeli, negativa: -18 se aude discret, -12 e deja prezent.
+BG_MUSIC_DB = os.environ.get("CLIPFORGE_BG_MUSIC_DB", "").strip()
+
+
+def _atempo_chain(rate: float) -> str:
+    """atempo accepta doar 0.5–2.0 pe instanta, deci se inlanuie pentru rate
+    mai extreme. Factorul de intindere e limitat la 0.4–3.0 in speed_match, deci
+    inversul lui poate ieși din plaja unei singure instante."""
+    parts, r = [], rate
+    while r > 2.0:
+        parts.append("atempo=2.0")
+        r /= 2.0
+    while r < 0.5:
+        parts.append("atempo=0.5")
+        r /= 0.5
+    parts.append(f"atempo={r:.6f}")
+    return ",".join(parts)
+
+
+def _bg_audio_filter(factor: float) -> str | None:
+    """Filtrul care amesteca muzica sursei sub voce, sau None daca e oprit.
+
+    Audio-ul original TREBUIE intins cu acelasi factor ca imaginea, altfel se
+    desincronizeaza progresiv de video. Video-ul primeste PTS*factor (>1 =
+    incetinit), deci audio-ul are nevoie de atempo=1/factor.
+
+    `amix` cu normalize=1 (implicit) imparte volumul la numarul de intrari si ar
+    face vocea de doua ori mai slaba — de aici normalize=0.
+    `duration=shortest` opreste la finalul vocii, ca `-shortest` de dinainte.
+    """
+    if not BG_MUSIC_DB:
+        return None
+    try:
+        db = float(BG_MUSIC_DB)
+    except ValueError:
+        logger.warning("CLIPFORGE_BG_MUSIC_DB=%r nu e un numar — ignor", BG_MUSIC_DB)
+        return None
+    tempo = _atempo_chain(1.0 / factor) if factor and factor != 1.0 else "anull"
+    return (f"[0:a]{tempo},volume={db}dB,aresample=async=1:first_pts=0[bg];"
+            f"[1:a]aresample=async=1:first_pts=0[voce];"
+            f"[bg][voce]amix=inputs=2:normalize=0:duration=shortest[aout]")
+
+
 def tts_outro(lang: str | None = None) -> str:
     """Indemnul rostit la final, pe limba variantei.
 
@@ -683,6 +728,18 @@ async def _run_tts(text: str, cfg: Dict, output_path: str, slc: _Sliced) -> str:
         )
         return out
 
+    if engine == "kokoro":
+        # TTS local pe GPU — zero credite. Doar engleza; vezi services/kokoro_tts.
+        from services.kokoro_tts import synthesize as kokoro_synth
+        out = await loop.run_in_executor(
+            None,
+            lambda: kokoro_synth(
+                text=text, output_path=output_path, voice=voice_id,
+                language=language, speed=speed,
+            ),
+        )
+        return out
+
     if engine == "elevenlabs":
         from services.elevenlabs import synthesize as el_synth
         # ElevenLabs accepts 0.7-1.2; service clamps. Optional per-variant
@@ -920,12 +977,26 @@ async def _stage_match_and_caption(
     fused_vf = ",".join(p for p in (speed_vfilter, scale_vf, subtitles_vf) if p)
 
     ffmpeg = _ffmpeg_bin()
-    cmd = [
-        ffmpeg, "-y", "-loglevel", "error",
-        "-i", str(erased_video),   # input 0: erased video (its audio is dropped)
-        "-i", str(voice_path),     # input 1: the TTS voice
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-filter:v", fused_vf,
+    # Cand muzica de fundal e pornita, filtrul video trebuie mutat in
+    # filter_complex: ffmpeg nu accepta -filter:v si -filter_complex impreuna.
+    bg_af = _bg_audio_filter(plan.get("factor") or 1.0)
+    if bg_af and _has_audio_stream(str(erased_video)):
+        cmd = [
+            ffmpeg, "-y", "-loglevel", "error",
+            "-i", str(erased_video),   # input 0: video erased + audio-ul original
+            "-i", str(voice_path),     # input 1: vocea TTS
+            "-filter_complex", f"[0:v]{fused_vf}[vout];{bg_af}",
+            "-map", "[vout]", "-map", "[aout]",
+        ]
+    else:
+        cmd = [
+            ffmpeg, "-y", "-loglevel", "error",
+            "-i", str(erased_video),   # input 0: erased video (its audio is dropped)
+            "-i", str(voice_path),     # input 1: the TTS voice
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-filter:v", fused_vf,
+        ]
+    cmd += [
         "-c:v", "libx264", "-preset", "slow", "-crf", "16",
         "-r", str(OUTPUT_FPS),     # forced CFR — see OUTPUT_FPS
         "-pix_fmt", "yuv420p",

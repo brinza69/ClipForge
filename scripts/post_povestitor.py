@@ -27,6 +27,7 @@ Evidenta a ce s-a postat difera pe canal, si asta conteaza:
                facute, ca sa se poata reincerca.
 """
 import json
+import os
 import pathlib
 import re
 import sys
@@ -45,7 +46,9 @@ DRIVE_ROOT = targets.get("povestitor_drive_folder")
 POSTED = "posted"
 SLOTS_LOCAL = [(8, 0), (13, 0), (20, 30)]
 TZ = ZoneInfo("Europe/Bucharest")   # zona reala: trecerea la ora de iarna nu muta sloturile
-QUEUE_MAX = 10                      # Buffer Free: postari tinute in coada UNUI canal
+# Cate postari poate tine coada UNUI canal. 10 era plafonul planului Free;
+# pe plan platit nu mai exista, deci se ridica din CLIPFORGE_QUEUE_MAX.
+QUEUE_MAX = int(os.environ.get("CLIPFORGE_QUEUE_MAX", "10"))
 LEAD_MINUTES = 15
 
 def _sufix_ro(desc, part, total):
@@ -58,6 +61,31 @@ def _prefix_fr(desc, part, total):
     """`Partie 1 : ...` in fata. Ceruta explicit pentru pista franceza, ca
     spectatorul sa vada din prima ca e o serie, nu la sfarsitul captionului."""
     return desc if total == 1 else f"Partie {part} : {desc}"
+
+
+# Clasamentul (scor + titlu de YouTube) produs de scripts/rank_videos.py.
+_RANKING = {}
+_rank_file = _ROOT / "data" / "pov_ranking.json"
+if _rank_file.exists():
+    _RANKING = json.loads(_rank_file.read_text(encoding="utf-8"))
+
+
+def _meta_youtube(g, f, part, total):
+    """YouTube cere TITLU separat de descriere — fara el, Shorts-ul ramane fara
+    nume sau il ia din primele cuvinte ale descrierii. Titlul vine din clasament;
+    daca lipseste, se taie prima propozitie a descrierii.
+    `madeForKids` e o declaratie ceruta de YouTube: continutul asta nu e pentru
+    copii. `isAiGenerated` NU se seteaza — decizia utilizatorului."""
+    r = _RANKING.get(str(g["key"])) or {}
+    titlu = r.get("titlu") or (g["desc"].split(".")[0] or g["desc"])[:95]
+    if total > 1:
+        titlu = f"{titlu[:88]} ({part}/{total})"
+    # Categoria e OBLIGATORIE la YouTube ("YouTube posts require a category").
+    # 24 = Entertainment, potrivit pentru povestiri narate; 22 = People & Blogs
+    # e alternativa. Se schimba din CLIPFORGE_YT_CATEGORY.
+    return {"youtube": {"title": titlu[:100], "privacy": "public",
+                        "madeForKids": False,
+                        "categoryId": os.environ.get("CLIPFORGE_YT_CATEGORY", "24")}}
 
 
 PROFILES = {
@@ -77,6 +105,20 @@ PROFILES = {
         # vertical 1080x1920 -> Reel; `post` ar aparea ca video obisnuit in feed
         "metadata": {"facebook": {"type": "reel"}},
         "caption": _sufix_ro,
+    },
+    "narativ": {
+        "channel": "Narativ",          # canal YouTube, nu e in targets.json
+        "plan": _ROOT / "data" / "pov_post_list.json",
+        "record": "buffer",
+        "metadata": _meta_youtube,
+        "caption": _sufix_ro,
+    },
+    "facebook_fr": {
+        "channel": targets.get("facebook_channel_fr"),
+        "plan": _ROOT / "data" / "fr_post_list.json",
+        "record": "buffer",
+        "metadata": {"facebook": {"type": "reel"}},
+        "caption": _prefix_fr,
     },
     "franceza": {
         "channel": targets.get("tiktok_channel_fr"),
@@ -222,7 +264,10 @@ def main():
         print("coada e plina — reia dupa ce publica." if free <= 0 else "--limit 0, nimic de facut.")
         return
 
-    drive = drive_service()
+    # Doar evidenta pe folder are nevoie de Drive. Canalele care isi citesc
+    # istoricul din Buffer nu-l ating deloc, deci o expirare a tokenului Google
+    # (se intampla saptamanal) nu trebuie sa le blocheze si pe ele.
+    drive = drive_service() if prof["record"] == "drive" else None
     if prof["record"] == "drive":
         folder_id = posted_folder(drive, dry)
         done_names, done_ids = set(), set()
@@ -249,15 +294,22 @@ def main():
 
     slots = free_slots(datetime.now(timezone.utc), taken)
     sent = 0
+    oprit = False          # rate limit: opreste TOT, nu doar grupul curent
     grupuri = load_groups(prof["plan"])
+    if "--invers" in argv:
+        # Ordinea de pe Drive, dar de la cel mai nou spre cel mai vechi.
+        grupuri = list(reversed(grupuri))
     if doar:
-        fata = [g for g in grupuri if str(g["key"]) in doar]
+        # ordinea din --first conteaza (e un clasament), nu ordinea din plan
+        rang = {n: i for i, n in enumerate(doar)}
+        fata = sorted((g for g in grupuri if str(g["key"]) in doar),
+                      key=lambda g: rang[str(g["key"])])
         lipsa = [d for d in doar if d not in {str(g["key"]) for g in fata}]
         if lipsa:
             print(f"  --first: nu am gasit in plan {lipsa}")
         grupuri = fata + [g for g in grupuri if str(g["key"]) not in doar]
     for g in grupuri:
-        if sent >= n_max:
+        if sent >= n_max or oprit:
             break
         if not g["desc"]:
             print(f"  sarit {g['key']}: fara descriere (captionul ar fi gol)")
@@ -284,17 +336,26 @@ def main():
                    "schedulingType": "automatic", "mode": "customScheduled",
                    "dueAt": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                    "assets": [{"video": {"url": f["url"]}}]}
-            if prof["metadata"]:
-                inp["metadata"] = prof["metadata"]
+            md = prof["metadata"]
+            if callable(md):
+                md = md(g, f, f.get("part", 1), total)
+            if md:
+                inp["metadata"] = md
             try:
                 res = (gql(CREATE, {"i": inp}) or {}).get("createPost") or {}
                 # Reels cere fix 9:16. Cateva randari vechi au iesit 1080x1980
                 # (raport 0.5455) si sunt respinse. Merg totusi ca postare
                 # obisnuita in feed — mai bine acolo decat deloc, si coada nu se
                 # blocheaza pe ele.
-                e_reel = (prof["metadata"] or {}).get("facebook", {}).get("type") == "reel"
-                if e_reel and "aspect ratio" in (res.get("message") or "").lower():
-                    print(f"  {label}: raport gresit pentru Reels — pun ca postare in feed")
+                # Reels are conditii pe care un videoclip vechi nu le respecta:
+                # raport ~9:16 si cel mult 1m30s. Postarea obisnuita in feed nu
+                # le are, deci acolo merge — mai bine in feed decat deloc, si
+                # mai ales coada nu se blocheaza pe un singur fisier.
+                e_reel = isinstance(prof["metadata"], dict) and                     prof["metadata"].get("facebook", {}).get("type") == "reel"
+                msg = (res.get("message") or "").lower()
+                if e_reel and ("aspect ratio" in msg or "no longer than" in msg):
+                    motiv = "prea lung" if "no longer than" in msg else "raport gresit"
+                    print(f"  {label}: {motiv} pentru Reels — pun ca postare in feed")
                     alt = dict(inp, metadata={"facebook": {"type": "post"}})
                     res = (gql(CREATE, {"i": alt}) or {}).get("createPost") or {}
             except RuntimeError as e:
@@ -305,6 +366,7 @@ def main():
                     fereastra = "15 minute" if '"15m"' in str(e) else "24 de ore"
                     print(f"  rate limit Buffer ({fereastra}) dupa {sent} postari "
                           f"— reia dupa ce trece")
+                    oprit = True
                     break
                 raise
             if res.get("message"):

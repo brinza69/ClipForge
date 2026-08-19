@@ -30,11 +30,24 @@ _cache: dict | None = None
 
 
 def _path() -> pathlib.Path:
+    """Unde stau tintele.
+
+    Sunt comune pe rig — acelasi sheet, aceleasi foldere, aceleasi canale —
+    spre deosebire de `data_b/`, care tine starea SEPARATA a celui de-al doilea
+    backend (presete, DB, token). Dispecerul legat de placa B mostenea
+    `CLIPFORGE_DATA_DIR=data_b` de la watchdog si murea la pornire cautand un
+    `data_b/targets.json` care nu exista si nu trebuie sa existe. Deci: daca
+    exista in folderul indicat de mediu, se foloseste; altfel `data/` din repo.
+    """
     data = os.environ.get("CLIPFORGE_DATA_DIR")
-    base = pathlib.Path(data) if data else _ROOT / "data"
-    if not base.is_absolute():
-        base = _ROOT / base
-    return base / "targets.json"
+    if data:
+        base = pathlib.Path(data)
+        if not base.is_absolute():
+            base = _ROOT / base
+        p = base / "targets.json"
+        if p.exists():
+            return p
+    return _ROOT / "data" / "targets.json"
 
 
 def all_targets() -> dict:

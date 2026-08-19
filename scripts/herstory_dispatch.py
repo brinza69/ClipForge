@@ -200,6 +200,26 @@ def bump(row, attempts, done, bad_rows, reason):
     return True
 
 
+# `--max-randuri N` opreste dispecerul dupa N randuri RANDATE (nu si cele sarite
+# fiindca existau deja pe Drive). Iese cu SystemExit, care trece prin plasa de
+# siguranta de mai jos — altfel s-ar reporni si ar continua la nesfarsit.
+MAX_RANDURI = None
+for _i, _a in enumerate(sys.argv):
+    if _a == "--max-randuri" and _i + 1 < len(sys.argv):
+        MAX_RANDURI = int(sys.argv[_i + 1])
+_randate = {"n": 0}
+
+
+def _bifeaza_rand():
+    """Numara un rand terminat; opreste rularea cand s-a atins limita."""
+    if MAX_RANDURI is None:
+        return
+    _randate["n"] += 1
+    print(f"randuri terminate: {_randate['n']}/{MAX_RANDURI}", flush=True)
+    if _randate["n"] >= MAX_RANDURI:
+        raise SystemExit(0)
+
+
 def main(dry=False):
     if dry:
         p = read_pending()
@@ -315,6 +335,7 @@ def main(dry=False):
                 except Exception as e:
                     print(f"[{name}] rand {row} writeback esuat: {str(e)[:80]}", flush=True)
                 done.add(row); inflight[name] = None
+                _bifeaza_rand()
             elif st in ("failed", "error", "cancelled"):
                 print(f"[{name}] rand {row} {st}: {(j.get('error') or '')[:90]}", flush=True)
                 done.add(row); inflight[name] = None

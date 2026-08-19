@@ -29,6 +29,8 @@ CHEI = {
     "CLIPFORGE_DISPATCH_MIN_ROW": "2",
     "CLIPFORGE_TTS_OUTRO": "",
     "CLIPFORGE_TTS_OUTRO_FR": "",
+    # Muzica sursei tinuta sub voce, in dB (negativ). Gol = audio original aruncat.
+    "CLIPFORGE_BG_MUSIC_DB": "",
 }
 
 
@@ -80,7 +82,8 @@ def main():
                   "--presets": "CLIPFORGE_PRESETS",
                   "--min-row": "CLIPFORGE_DISPATCH_MIN_ROW",
                   "--outro": "CLIPFORGE_TTS_OUTRO",
-                  "--outro-fr": "CLIPFORGE_TTS_OUTRO_FR"}
+                  "--outro-fr": "CLIPFORGE_TTS_OUTRO_FR",
+                  "--muzica-db": "CLIPFORGE_BG_MUSIC_DB"}
         atins = False
         for flag, cheie in mapare.items():
             if flag in args:
