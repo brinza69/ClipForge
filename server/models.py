@@ -222,6 +222,12 @@ class TranscriptModel(Base):
     segments: Mapped[list | dict | None] = mapped_column(JSON, nullable=True)
     full_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Chunk numbers whisper could not finish. `_tolerant` stopped one bad chunk
+    # losing a whole 4-hour file, and the transcriber has reported these ever
+    # since — to nobody. Without them a transcript with holes in it is
+    # indistinguishable from a complete one, and every clip scored against the
+    # missing stretch is scored against silence that is not there.
+    failed_chunks: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 class ClipModel(Base):
     __tablename__ = "clips"

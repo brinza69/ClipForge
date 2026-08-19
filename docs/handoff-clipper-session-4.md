@@ -14,6 +14,11 @@ read `clipper-map.md` — it exists so nobody has to grep the tree again.
 - [What I would do next](#what-i-would-do-next--all-but-one-done-on-2026-08-16)
 - [Not built, from the upgrade spec](#not-built-from-the-upgrade-spec)
 
+- [Session 6 — mostly measurement](#session-6--2026-08-17-and-it-was-mostly-measurement)
+  — 25 commits, the numbers not to measure again, and five wrong turns
+- [What is fragile](#what-is-fragile--2026-08-17) — where it is most likely to be
+  wrong without saying so, ranked. Three of nine closed on 2026-08-17.
+
 **Known problems**, in priority order — [jump](#known-problems-in-priority-order)
 1. ~~The dynamic editor is not wired in~~ — FIXED
 2. Region detection is global — HALF FIXED, and the other half is understood
@@ -87,6 +92,19 @@ Unchanged from session 3 except where noted. `F:\ClipForge`, branch
 - **`PYTHONPATH=F:\ClipForge\server`** for scripts.
 - **PR #27 was merged** on 2026-08-10. Everything since is unmerged on the
   branch; open a new PR.
+
+### A backend without `--reload` is running yesterday's code
+
+`.claude/launch.json` started uvicorn without `--reload` until 2026-08-17, and
+that cost the same twenty minutes twice in one session. Both times the symptom
+was a NEW setting arriving at the API as `None` — first `auto_export`, then
+`vision_review` — which looks exactly like the `_normalise_settings` whitelist
+bug that had just been fixed, and is not it. The server simply had no idea the
+key existed.
+
+`--reload` is in the config now. If a setting you just added comes back `None`,
+check that before touching the code: restarting the API is cheaper than
+re-diagnosing a bug you already fixed.
 
 ### The backend on port 8420 is not yours
 
@@ -453,9 +471,125 @@ every inset source, so no single threshold exists.
 **What this leaves.** The geometry fix is known and it works; what is missing is
 a discriminator that answers "is there an inset here at all", independent of how
 big the rect came out. Until something does that job on purpose, the area gate
-will keep doing it by accident and the reach cannot be fixed. Nine approaches
-have now failed on this edge. **Do not attempt a tenth without a discriminator
-first.**
+will keep doing it by accident and the reach cannot be fixed.
+
+**6. `content_type` is not that discriminator, and cannot become one.** The
+attractive idea — the classifier already knows which sources are edited, so skip
+inset detection on those and the reach cap becomes safe — dies on one lookup:
+
+| source | truth | classified |
+|---|---|---|
+| EARLY STREAM | inset | `talking_head` |
+| moistcr1tikal | inset | `talking_head` |
+| Jynxzi | inset | `talking_head` |
+| go ghost | EDITED | `talking_head` |
+| Jensen Huang | EDITED | `talking_head` |
+| gym 12m | fullscreen | `commentary` |
+| apartament | EDITED | `commentary` |
+
+`talking_head` sits on both sides of the line and so does `commentary`. The
+classifier's categories describe CONTENT — one person talking — and the question
+here is FORM: edited versus locked off. Fixing the classifier would not help,
+because it is not measuring this axis at all. Worth knowing before someone files
+"the classifier is wrong" and "the facecam is missed" as one problem again.
+
+**7. Judging the edges over the rect's own extent does not do it either.** The
+sharpest remaining idea, and different in kind from the rest: `_snap_inset`
+builds its column profile from the rows spanned by the FACE BOX — a band a
+fraction of the inset tall — so a short coincidence and a full-height border are
+indistinguishable to it. An inset's border runs the whole side. Re-measuring each
+edge over the FOUND RECT instead, at bars from 1.3 to 1.7 and caps of 0.25 and
+0.30: **5/9, 5/9, 6/9, 4/9, 5/9, 6/9.** Never better than doing nothing.
+
+Eleven approaches have now failed on this edge, and the last two were the two
+best remaining ideas.
+
+### 8. THE ANSWER: those two facecams have no border — 2026-08-17
+
+Twelve approaches, and the reason all of them failed is not in any of them.
+
+The discriminator everything pointed at was the border: an inset is composited,
+so its edge exists all the way round and sits on the same pixels in every frame,
+where a rect grown around a face in an edited shot stops wherever some texture
+happened to be. Two measures were built and run before any gate was written —
+**coverage** (what fraction of the rect's perimeter is a gradient ridge) and
+**persistence** (in what share of frames the ridge is at that exact pixel):
+
+| rect | truth | coverage | persistence |
+|---|---|---|---|
+| Minecraft 12m | inset | 0.90 | 0.85 |
+| Minecraft 4h | inset | 0.91 | 0.72 |
+| moistcr1tikal | inset | 0.94 | 0.47 |
+| `go ghost` | none | 0.28 | 0.34 |
+| apartament | none | 0.67 | 0.73 |
+| **EARLY STREAM** | **inset** | **0.41** | **0.31** |
+| **Jynxzi** | **inset** | **0.44** | **0.84** |
+
+**The measure works.** Known insets score 0.90–0.94; a source with no facecam
+scores 0.28. It is not a bad signal.
+
+**The two failing sources score at phantom level.** Best case for any threshold
+over `coverage × persistence` is 10 of 13 rects, and the three it gets wrong are
+these two plus moistcr1tikal — 5 of 9 by source, below the 6 of 9 baseline.
+
+**Then look at the frames, which is what settles it.** Reproduce with
+`scratchpad/border_signal.py` or just crop the labelled rect out of a sampled
+frame. IShowSpeed's camera at that moment FILLS its region with chat composited
+straight over it, and Jynxzi's webcam sits on a game menu screen with **no drawn
+frame around it at all** — a borderless composite. Beside them the Minecraft
+inset has a hard rectangular edge you can see.
+
+**There is no border to find.** Every approach tried on this edge — four in
+session 3, two in session 5, six on 2026-08-17 — is a rule over a gradient, and
+on these two sources the gradient carries nothing, because nothing was drawn.
+That is not a tuning problem and no threshold reaches it.
+
+**So the correction to the entry above:** capping the reach appeared to "fix
+both failures outright" because the rects it produced landed in the right
+corner. Their border coverage is 0.41 and 0.44, at phantom level, so the edges
+were never on anything. That was position luck, not a fix.
+
+**What would actually work**, for whoever picks this up. A borderless facecam
+has to be found from the FACE, not from its frame: the cluster's own extent
+scaled by a factor, or a foreground/background separation over the region, or a
+small learned classifier on the candidate patch.
+
+### 9. 6/9 → 7/9, and the discriminator was already in the file
+
+The learned classifier was built and it lost. `scripts/facecam_dataset.py`
+generates 68 labelled candidates over 6 windows of each of the 9 sources — 30
+facecam, 38 phantom — and `scripts/facecam_train.py` fits a pure-numpy logistic
+over nine features, **validated leave-one-source-out**, because candidates from
+one stream share a layout and a camera and scoring on rows held out at random
+measures how well a model recognises sources it has already seen.
+
+| | mean over sources |
+|---|---|
+| logistic over 9 features | 84% |
+| **`corner_proximity` alone** | **91%** |
+
+A model that loses to one existing feature is not worth its inference, so there
+is no model. But building it answered the question it was built to answer: of
+nine features, `corner_proximity` separates 93% of candidates with a single
+threshold against 73% for the next best, and it carries the largest weight in
+the fit.
+
+**It was already in this file — as 25% of the confidence score, where it could
+be outvoted.** Three sessions looked for a discriminator past something that was
+computed on every candidate already.
+
+So: cap the reach at 0.30 of the frame, and gate on `corner_proximity >= 0.48`.
+**7 of 9, the first improvement in thirteen attempts.** Jynxzi goes 0 → 1 with
+`158x118@0,106`, bottom-left as labelled, and nothing else moves.
+
+**Read the sensitivity before touching it.** 7/9 holds from 0.44 to 0.52 and
+falls to 5/9 at 0.55. That plateau is 0.08 wide on nine sources, which is thin,
+and the cliff is moistcr1tikal — the left-edge mid-height inset this file
+already records as penalised by corner proximity. Re-run
+`scripts/score_facecam.py` before changing the number.
+
+**Still wrong: EARLY STREAM, and Minecraft 4h gives one facecam of two.** Both
+are the borderless case above, which no gate reaches.
 
 ### What the one remaining failure actually is
 
@@ -469,6 +603,194 @@ That is six approaches now that do not fix this edge, four from session 3 and
 two here. It needs something other than a better rule over the same gradient
 profile — the seed, or a different signal entirely. **Do not spend another
 session widening bounds.**
+
+## Session 6 — 2026-08-17, and it was mostly measurement
+
+Twenty-five commits. The pattern is worth naming before the list: almost
+nothing here was found by reading code. It was found by running the thing on
+real sources, looking at the output, and — three times — by the owner watching
+or listening to a file and saying it was wrong.
+
+### What shipped
+
+| | |
+|---|---|
+| The shot planner was never given the words | `_candidate()` passed four keys and `dynamic_edit` reads a fifth. Every dynamic export ever made cut on audio peaks alone and believed the streamer silent throughout. 11 shots with the words against the 9 that shipped. |
+| Gameplay framed as wide as the crop allows | A three-way A/B, the owner chose 1.00/1.00. `_merge_dead_cuts` came with it: at that setting `game` and `game_tight` are one rectangle, so a g→G step cut on nothing. |
+| The audio shipped clipped, at 96 kHz | True peak +0.2 dBFS against a −1.5 target. `loudnorm` single-pass AIMS at TP, it does not enforce it, and it leaves the stream at its own internal rate. Reported by ear. |
+| Both renderers level the same way | The static path had no loudness processing at all, so a clip that FELL BACK to it shipped quieter. One `loudness_chain()` in `ffmpeg_tools`. |
+| `dynamic_edit` ON by default | Everything measured over two sessions landed on a path a stock export never took. |
+| Pass D, both halves | `review.py` checks what a rule can state; `review_vision.py` asks a model what it cannot. Advisory, never rejects. |
+| The verdict reaches the board | `clips.review`, the panel, and a count on the card. |
+| The caption gets out of the way | `ui_panels` per clip, mapped through every shot's crop, and a widest-clear-band search replacing six ±4% nudges. |
+| The clip editor | Phase 9.6. Trim, headline, caption preset and height over a server-rendered still. |
+| Hands-off mode | `auto_export`: paste a link, come back to rendered files. |
+| Three silent failure modes | Settings parity, `failed_chunks` surfaced, disk pruning. |
+| Facecam 6/9 → 7/9 | Reach capped at 0.30 of the frame, gated on `corner_proximity >= 0.48`. |
+| Duration stopped outvoting content | `platform_fit` zeroed in all ten profiles. |
+| `emotion` measures something | `vocal_bursts.py` — laughter and shouting from the audio. |
+| `speech_ratio` measures speech | From the transcript, not the envelope. |
+
+### Numbers not to measure again
+
+**The ranking has 16.22 points of spread**, over 1073 real candidates with the
+gaming weights. That is the whole budget every sub-score competes for.
+`platform_fit` was taking 2.10 of it — 13% — for answering "is the duration in
+band", while `payoff` contributes 1.14. Duration outweighed content five to
+one, and the generator (15–90 s) disagreed with the TikTok band (15–45) so 26%
+of candidates were made as configured and then docked for it. Zeroed: clips
+over 45 s in the top 20 went from 0 to 8.
+
+**`emotion` was a constant.** 76% of candidates scored exactly 10/100 while it
+held 8% of the profile. `laughter_score` was a word list and Whisper does not
+write "haha". With audio detection: sd 5.41 → 11.73.
+
+**Aggregation mattered more than the detector there.** Averaging the burst
+timeline across a window asks "what fraction of this clip is laughter" — 0.02
+for a 35 s clip with one real laugh — and moved emotion's sd from 5.41 to 5.27.
+Peak scaled sub-linearly by duration: 11.73. Bare `max` scores 13.58 and was
+NOT chosen: it makes a half-second yelp identical to a three-second howl, and
+picking the formulation with the largest variance is optimising for spread
+rather than meaning.
+
+**`speech_ratio` from the envelope ran 0.863–1.000** across all eleven sources,
+range 0.137. From the transcript: 0.276–0.918, and edited talking content
+(0.86–0.92) separates cleanly from live streams (0.28–0.64). It did **not**
+improve the classifier — 6/11 either way.
+
+**The content classifier is 6/11, not the 3/11 this file used to say.**
+`scripts/score_content_type.py` is the scoreboard. Four of the five errors are
+`irl`, and it is a definition mismatch rather than a weight: the LABEL's `irl`
+means "real world, not gaming" and the classifier's vote means "handheld,
+nothing on screen stays put". Kai Cenat sits at a desk. Adding a speech term to
+that vote at three weights changed nothing: 6/11, 6/11, 6/11.
+
+**Pass D's vision half costs 0.4 cents a clip** on `gpt-5.6-terra`, measured on
+real exports: ~1170 input and ~170 output tokens each, low detail, six frames.
+`gpt-4o` is no longer on OpenAI's pricing page and `clipper_llm_judge_model`
+still names it.
+
+**Local vision models cannot do Pass D on this rig.** `qwen3-vl:4b-instruct`
+answered APPROVE to a clip whose caption covered 66% of the game UI, to one
+where 65% of the framed face was outside the crop, and to a clean clip — the
+same answer three times. The thinking variant discriminated by reading the
+captions and failed the good clip. `8b` does not fit in 8 GB (20%/80%
+CPU/GPU) and timed out past ten minutes a clip. Ollama is installed at
+`F:\ollama` with `OLLAMA_MODELS` on F:; the models are kept for `local-agents`
+text work, where a small model is the right tool.
+
+**48 GB of the disk was duplicate copies**, hash-verified, with every source
+still present. `create_project` MOVES a staged upload into the project and
+`_ingest_local` then COPIED it to `source.mp4`; `_uploads/batch/` held a third.
+Fixed at the source. `data/clipper` went 86.6 GB → 38.6 GB.
+
+### Wrong turns, so nobody walks them again
+
+Five, and each cost real time:
+
+- **`content_type` as the facecam discriminator.** The idea that the classifier
+  already knows which sources are edited dies on one lookup: `talking_head` is
+  the answer for three sources WITH insets and two that are edited. Its
+  categories describe content; the question is form.
+- **"Capping the reach fixes both failures."** It produced rects in the right
+  corner, so it looked like a fix. Their border coverage is 0.41 and 0.44
+  against 0.90+ for real insets — the edges were never on anything. Position
+  luck.
+- **"Five dead classifier inputs."** `frame_features` returns 8 keys and the
+  classifier reads several it does not produce, which looks damning until you
+  read `detect_content_type`: `summarize_motion` and `summarize_faces` fill
+  them. There is a test asserting that path now.
+- **The GPU-contention argument against a local vision model.** The transcriber
+  runs whisper in a spawned process that exits, so the VRAM is freed; the owner
+  caught this. The capability argument stands on its own and did not need it.
+- **`burst_share` as a mean.** See above.
+
+### The rule that keeps being right
+
+Every fix this session that mattered came from one of two places: running the
+pipeline end to end on a real source, or a person looking at the output. The
+audio was reported by ear. The gameplay crop was reported by eye. Pass D's own
+first run found a face shot framing Minecraft dirt. A vision model disagreed
+with my caption checker and was right. **Tests were green through all of it.**
+
+## What is fragile — 2026-08-17
+
+Not a bug list; the bug list is below. This is where the system is most likely
+to be WRONG WITHOUT SAYING SO, ranked by how much a failure costs before anyone
+notices. Written after three sessions of running it on real sources, and every
+entry has a measurement behind it.
+
+**1. Facecam detection, and it is not close.** Its precision on edited sources
+is an ARTEFACT of its imprecision on gaming ones — the runaway rects are
+rejected by `_WEBCAM_AREA`, and that rejection is the only thing keeping the
+edited sources clean. Demonstrated: fix the geometry and four false positives
+appear. Nothing is discriminating; a gate is doing it by accident. 6 of 9 on the
+labelled sources, eleven approaches failed, and every failure trades one side
+for the other. A wrong answer here silently picks the wrong layout for every
+clip in the source.
+
+**2. ~~The settings whitelist~~ — CLOSED 2026-08-17.**
+`_normalise_settings` keeps only keys already present in `_default_settings()`,
+so a key added to the frontend and forgotten there is discarded in silence —
+and every unit test of the feature stays green, because the value never
+arrives. It bit twice in one day: `auto_export`, then `vision_review`. The cheap
+guard is a test that compares the TypeScript `DEFAULT_SETTINGS` against the
+Python defaults and fails when they diverge. `test_settings_parity.py` does
+that, and found a second one on its first run: `DEFAULT_SETTINGS` is posted
+WHOLESALE on create and said `trim_silence: true` against a config default of
+`false`, so every project made in the browser had dead-air trimming on while
+three documents said it ships off. It compares VALUES as well as keys now,
+because that failure is the quieter of the two — the feature runs, it just runs
+in a mode nobody chose.
+
+**3. Hands-off made concurrency normal.** `max_concurrent_jobs = 2` and both
+`clipper_transcribe` and `clipper_export` sit in the heavy lane, so pasting
+three links now means whisper on the GPU while another project renders. That
+used to be an exotic case; the auto-export switch made it the ordinary one.
+
+**4. ~~A partial transcript passes as a whole one~~ — CLOSED 2026-08-17.** `_tolerant` stopped one bad
+chunk losing a 4-hour file, and the result now carries `failed_chunks` — which
+NOTHING downstream reads. Now on the `transcripts` row and in the stage
+message, on both the insert and the update path — a project transcribed twice
+takes the update branch, which is exactly the re-run somebody does BECAUSE the
+first attempt looked wrong.
+
+**5. The dynamic editor's framing rides on per-window detections.** The guard
+added on 2026-08-17 catches the catastrophe (a face shot whose crop excludes the
+face) and fires on 6% of face shots. It does not catch drift, only collapse.
+
+**6. Both halves of Pass D are young.** Two of the local half's three checks
+were WRONG the first time they touched real data. The vision half is one model,
+one prompt, no versioned eval, judged on six clips, and non-deterministic.
+
+**7. Features that measure nothing look exactly like features that do.**
+A score built from five live signals and three dead ones reads the same as one
+built from eight live ones, and nothing in the output says which it is.
+
+Three were dead and are not any more, all on 2026-08-17: `laughter_score` (a
+word list Whisper never satisfies → `vocal_bursts.py`), `speech_ratio` (the
+audio envelope, 0.863–1.000 on every source → the transcript, 0.276–0.918), and
+`platform_fit` (13% of all discrimination spent on duration → zero weight).
+
+**Still dead, with their measured contribution to the 16.22 points of spread
+the ranking has in total:** `technical` 0.10 and `safety` 0.24 — 4% of the
+profile between them for 2% of the work — and callbacks, which fired 6 times in
+927 candidates.
+
+Run `scripts/score_contribution.py` before believing any of this is current.
+It is weight × standard deviation per sub-score over real candidates, which is
+the measurement that found all three, twice, three sessions apart.
+
+**8. ~~Nothing prunes the disk~~ — CLOSED 2026-08-17.** `data/clipper` is past 56 GB and every project
+kept its source, proxy, audio, frames and exports forever. `scripts/prune_clipper.py`
+now reclaims it; `--duplicates` freed 48 GB with every source still on disk and
+`--sources` is available but warns, because the eleven labelled sources are the
+detectors' test corpus rather than clutter. C: still has 10 GB free.
+
+**9. Documentation drift is a measured rate, not a worry.** Five stale claims
+and two byte-identical duplicate files found in a single reading pass on
+2026-08-17. The map-and-handoff discipline is the mitigation and it only works
+if the next person keeps it.
 
 ## Known problems, in priority order
 
@@ -484,6 +806,32 @@ detection blends two formats and fits neither.
 The 12-minute slice found both facecams correctly, so this is specifically a
 long-stream problem: **layout is detected once, globally, for a source whose
 layout changes.**
+
+### 2b. A face shot can frame no face — found by Pass D, 2026-08-17
+
+The first thing Pass D caught that nothing else was looking for, on the first
+run with the vision half on. Worth reading as evidence that the pass earns its
+place, and as a defect in its own right.
+
+Clip `e8fa6b35ea66` of project `547301635e54`, shot 15, `face_medium`,
+31.07–33.49s. The frames show Minecraft dirt. No face.
+
+The camera is correct: `face_medium` is `y=34 h=334`, and the subject cluster
+sits at `cy=176`, inside it. The SHOT's rect is `y=260 h=334` — 226 px lower,
+below the facecam entirely.
+
+`plan_dynamic_edit` re-centres each face shot on `_centre_at(samples, t0, t1)`,
+the median of the detections **inside that shot's window**. The cluster centre
+is computed over the whole clip and is stable; a single window's detections are
+not, and when they are bad the crop walks off the inset that the cluster had
+found correctly.
+
+This is the seed-wobble family from problem #4 showing up somewhere new: there
+the unstable face box moved the EDGE SEARCH, here it moves the CROP. The
+obvious guard is to clamp the per-shot centre to within the cluster's own
+tolerance of the subject centre — `_dominant` already computes that tolerance
+for exactly this reason. Not done: it changes framing on every dynamic export
+and wants its own before/after.
 
 ### 3. Captions collide with in-game UI — FIXED 2026-08-17, with one gap named
 
@@ -678,10 +1026,11 @@ Predicted before the run as one of three possible outcomes, and it is the worst
 of the three: a wrong answer given confidently enough to be used.
 
 ### 10. Smaller
-- `emotion` is flat (8% of the gaming profile, sd 4.1) because
-  `laughter_score` is 0 on every window — Whisper does not transcribe laughter
-  as "haha". Needs audio detection, not a word list. Do **not** drop the term:
-  that would reward its absence.
+- ~~`emotion` is flat because `laughter_score` is 0 on every window~~ —
+  FIXED 2026-08-17. It needed audio detection rather than a word list, and
+  dropping the term was never the answer because that rewards its absence.
+  `services/clipper/vocal_bursts.py`: loud, voiced, and wordless. emotion's sd
+  over 69 real candidates went 5.41 → 11.73.
 - The learned ranker is complete and dormant — it needs 40 labelled clips.
 - Real-ESRGAN: service written, binary not installed, not wired to the
   clipper. `unsharp` already took the cheap part of the gain.

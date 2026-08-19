@@ -70,6 +70,8 @@ def _default_settings() -> dict[str, Any]:
         "fps": settings.clipper_export_fps,
         "language": "auto",
         "auto_export": settings.clipper_auto_export,
+        "vision_review": settings.clipper_vision_review,
+        "vision_model": settings.clipper_vision_model,
         "caption_preset_id": "bold_impact",
         "caption_position": "bottom",
         "caption_highlight": True,

@@ -37,6 +37,11 @@ message and says so explicitly.
    Everything still appears on the board; it is already rendered when you get
    there. Alternatives are never auto-rendered — they exist so a person can
    compare two cuts of one moment.
+
+   The second box, **"Have a model look at each finished clip"**, turns on Pass
+   D's vision half (`vision_review`). It is the only setting in ClipForge that
+   spends money — about 0.4¢ a clip on `gpt-5.6-terra` — and it is disabled
+   until an OpenAI key is saved in Settings. It reports; it never deletes.
 4. Watch the stage list. Leaving the page is safe — progress lives in the
    `jobs` table, not in the browser.
 5. Review the ranked candidates, click a score to see the 16 sub-scores,
@@ -88,7 +93,7 @@ Everything is `CLIPFORGE_`-prefixed; see `.env.example` for the annotated list.
 | Symptom | Setting |
 | --- | --- |
 | "Source is 6.3 h long, the limit is …" | `CLIPPER_MAX_SOURCE_DURATION_S` (default 12 h) |
-| Clips too short/long | the length preset in the form, or `CLIPPER_MIN_CLIP_S` / `_MAX_CLIP_S` |
+| Clips too short/long | the length preset in the form, or `CLIPPER_MIN_CLIP_S` / `_MAX_CLIP_S`. **This is the only lever.** `platform_fit` used to dock long clips 6 points and carries zero weight since 2026-08-17 — length is decided when candidates are generated, not by punishing them afterwards. |
 | Too many near-identical clips | lower `CLIPPER_OVERLAP_THRESHOLD` / `CLIPPER_TEXT_SIMILARITY_THRESHOLD` |
 | Analysis too slow on a long VOD | lower `CLIPPER_PROXY_WIDTH` / `CLIPPER_MAX_SAMPLED_FRAMES` |
 | Facecam detection wrong | override the layout per clip, or the content type on the project |
@@ -144,8 +149,14 @@ it beats the heuristic on held-out NDCG@5. Until then `ranker_version` reads
 
 ## 8. Privacy and limits
 
-* Everything runs locally. The only outbound calls are yt-dlp fetching the
-  source and, if you configure one, your own LLM for headlines.
+* Everything runs locally **except what you switch on**. Outbound calls, in
+  full:
+  * yt-dlp fetching the source;
+  * an LLM for headlines, if `CLIPPER_LLM_ENGINE` is set — sends transcript text;
+  * the anchor and judge passes, if `llm_select` is on — sends transcript text;
+  * **the vision review, if `vision_review` is on — sends six JPEG frames OF
+    YOUR VIDEO to OpenAI per exported clip.** That is the only setting that
+    uploads picture rather than text, and it is off by default.
 * Full transcripts are never logged.
 * There is **no authentication anywhere in ClipForge** — it is a single-user
   local studio bound to `localhost:3000` via CORS. Do not expose port 8420 to a

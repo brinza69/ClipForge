@@ -114,3 +114,51 @@ def test_unreadable_frames_leave_the_old_statistic_alone():
 
     assert _scene_faces([]) is None
     assert _scene_faces(["nope.jpg"]) is None
+
+
+# ── how much of a source is somebody talking ─────────────────────────────────
+
+
+def test_speech_ratio_prefers_the_transcript_over_the_envelope():
+    """The envelope is anything above the silence floor, and on a stream with
+    game audio under a voice that is nearly everything: measured across all
+    eleven labelled sources it ran 0.863-1.000, a range of 0.137. It could not
+    tell a Minecraft stream from an interview, which is the only thing the
+    classifier wanted it for.
+
+    From the transcript the same eleven run 0.276-0.918 — 4.7x the spread — and
+    they separate on the axis that matters: edited talking content sits at
+    0.86-0.92 and live streams at 0.28-0.64.
+    """
+    from services.clipper.content_geom import speech_ratio
+
+    # Envelope says almost everything is speech; the transcript says a third.
+    signals = {"duration": 100.0, "speech": [[0.0, 94.0]], "speech_coverage": 0.34}
+    assert speech_ratio(signals) == pytest.approx(0.34)
+
+
+def test_it_falls_back_to_the_envelope_when_there_is_no_transcript():
+    """A source analysed before this existed, or one whose transcription
+    failed, keeps the old answer rather than reading zero."""
+    from services.clipper.content_geom import speech_ratio
+
+    assert speech_ratio({"duration": 100.0, "speech": [[0.0, 90.0]]}) == pytest.approx(0.90)
+
+
+def test_the_classifier_reads_more_than_frame_features_supplies():
+    """A wrong turn worth pinning. `frame_features` returns 8 keys and the
+    classifier reads several it does not produce — motion_mean, face_stability,
+    face_count_mean — which looks exactly like five dead inputs if you call
+    that function on its own.
+
+    It is not: `detect_content_type` fills them from `summarize_motion` and
+    `summarize_faces` over the signals. Measured through the real path they
+    vary properly across the labelled sources.
+    """
+    import inspect
+
+    from services.clipper import content_type as ct
+
+    src = inspect.getsource(ct.detect_content_type)
+    assert "summarize_motion" in src
+    assert "summarize_faces" in src

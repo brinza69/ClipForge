@@ -144,3 +144,15 @@ def test_the_setting_survives_project_creation():
     # Clamped like clip_count: unattended render time needs a ceiling.
     assert _normalise_settings({"auto_export": 999})["auto_export"] == 20
     assert _normalise_settings({"auto_export": "nonsense"})["auto_export"] == 0
+
+
+def test_the_vision_setting_survives_project_creation_too():
+    """The same trap `auto_export` fell into: a key added to the frontend and
+    not to `_default_settings()` is dropped in silence by `_normalise_settings`.
+    Adding a second such key without a test would be repeating a mistake that
+    was caught once by luck."""
+    from routers.clipper import _normalise_settings
+
+    assert _normalise_settings({"vision_review": True})["vision_review"] is True
+    assert _normalise_settings({})["vision_review"] is False
+    assert _normalise_settings({"vision_model": "gpt-5.6-luna"})["vision_model"] == "gpt-5.6-luna"

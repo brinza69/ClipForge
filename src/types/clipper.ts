@@ -118,6 +118,12 @@ export interface ClipperSettings {
    * files, so it is chosen rather than handed out.
    */
   auto_export: number;
+  /**
+   * Have a vision model look at the rendered clip and say whether the moment it
+   * was cut for is actually on screen. The only setting that spends money, and
+   * it needs an OpenAI key in Settings before it does anything.
+   */
+  vision_review: boolean;
 
   // Editing preferences
   caption_preset_id: string;
@@ -128,6 +134,8 @@ export interface ClipperSettings {
   emoji_enabled: boolean;
   profanity_mask: boolean;
   trim_silence: boolean;
+  /** Multi-shot export: cut between cameras instead of one fixed split screen. */
+  dynamic_edit: boolean;
   jump_cuts: boolean;
   auto_zoom: boolean;
   reaction_zoom: boolean;
@@ -395,6 +403,7 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   fps: 30,
   language: "auto",
   auto_export: 0,
+  vision_review: false,
   caption_preset_id: "bold_impact",
   caption_position: "bottom",
   caption_highlight: true,
@@ -402,7 +411,13 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   headline_auto: true,
   emoji_enabled: false,
   profanity_mask: false,
-  trim_silence: true,
+  // These two mirror config.py, and this object is posted WHOLESALE on create —
+  // so a value here that disagrees with the backend's default silently wins.
+  // `trim_silence` said `true` against a config default of `false`, which meant
+  // every project made through the form had dead-air trimming on while the docs
+  // said it shipped off. test_settings_parity.py compares the values now.
+  trim_silence: false,
+  dynamic_edit: true,
   jump_cuts: false,
   auto_zoom: true,
   reaction_zoom: true,

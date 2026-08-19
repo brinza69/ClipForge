@@ -170,6 +170,34 @@ def test_the_edit_crosses_between_subjects():
     assert "game" in families and "face" in families
 
 
+def test_a_face_shot_always_contains_the_face():
+    """Re-centring each shot on its own window's detections follows the subject,
+    which is what it is for — until a window's detections are bad and the crop
+    walks off the inset the whole-clip cluster had located correctly.
+
+    Found by Pass D on a real export rather than by reading the code: clip
+    e8fa6b35ea66 shot 15 was `face_medium` at y=260 when the camera sat at y=34
+    and the subject at cy=176. The frames were Minecraft dirt. A face shot whose
+    crop excludes the face is not a face shot.
+    """
+    plan = _plan()
+    face = plan["subject"]["face"]
+    for shot in plan["shots"]:
+        if not shot["camera"].startswith("face"):
+            continue
+        r = shot["rect"]
+        assert r["x"] <= face["cx"] <= r["x"] + r["w"], shot
+        assert r["y"] <= face["cy"] <= r["y"] + r["h"], shot
+
+
+def test_a_stray_detection_does_not_drag_the_crop_off_the_inset():
+    """The guard itself, stated on the geometry."""
+    inside = {"x": 1546, "y": 34, "w": 186, "h": 334}
+    assert dynamic_edit._contains(inside, 1640.0, 176.0)
+    walked_off = {"x": 1546, "y": 260, "w": 186, "h": 334}
+    assert not dynamic_edit._contains(walked_off, 1640.0, 176.0)
+
+
 def test_the_clip_opens_on_a_face():
     assert _plan()["shots"][0]["camera"].startswith("face")
 

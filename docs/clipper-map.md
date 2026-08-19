@@ -84,12 +84,14 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `candidate_boundaries.py` | where a clip starts and ends. Sentence snapping, reaction keep, tail release |
 | `candidate_proposals.py` | turning anchors into candidate windows |
 | `candidate_terms.py` | the frozen feature vector, the word lists, and the boundary constants |
+| `vocal_bursts.py` | laughter and shouting from the audio — what `laughter_score` reads now that the word list never fired |
 | `dead_air.py` | dead seconds inside a chosen window, and the arithmetic of removing them (§15) |
 | `scoring.py` | the sub-scores and the ten weight profiles |
 | `dedupe.py` | overlap, text and same-payoff grouping; diversity across time, thread and archetype |
 | `ranker.py` | the learned ranker. Complete, dormant, needs 40 labelled clips |
 | `feedback.py` | recording what the user did with a clip |
 | `review.py` | Pass D (§21–22): what the CLIP looks like, checked before the encode |
+| `review_vision.py` | Pass D's second half: a vision model on the RENDERED clip. Off by default, needs an OpenAI key |
 
 ### Models
 
@@ -162,6 +164,12 @@ operations). Split to stay under the 500-line limit.
 | `scripts/export_clipper_state.py` | transcripts to disk plus `data/clipper/MANIFEST.md` |
 | `scripts/render_dynamic_clip.py` | drive the multi-shot renderer by hand |
 | `scripts/build_dynamic_review.py` | the review page for a project's `dynamic/` |
+| `scripts/prune_clipper.py` | reclaim disk from finished projects. Dry-run by default; never touches exports or analysis |
+| `scripts/score_contribution.py` | weight x sd per sub-score — which one actually orders the board. Found dead features twice, three sessions apart |
+| `scripts/score_content_type.py` | the content classifier scored against `source-labels.md` — 6/11 |
+| `scripts/facecam_dataset.py` | 68 labelled candidate rects + what each feature separates |
+| `scripts/facecam_train.py` | the classifier that lost to `corner_proximity`, leave-one-source-out |
+| `scripts/measure_inset_border.py` | border coverage and persistence per candidate rect — the measurement that showed two facecams have no border at all |
 | `scripts/score_facecam.py` | facecam detection scored against `source-labels.md`. Run it before believing any change to the seed — baseline 6/9 |
 
 ## Tests
@@ -212,6 +220,7 @@ default. Full table in `handoff-clipper-session-4.md`.
 |---|---|---|
 | `dynamic_edit` | **ON** since 2026-08-17 | multi-shot export instead of one static split screen |
 | `trim_silence` | off | dead-air removal from inside a window (§15) |
+| `vision_review` | off | a vision model judges the rendered clip — the only part of the pipeline that spends money (~0.4 cents/clip on gpt-5.6-terra) |
 | `auto_export` | 0 (off) | render the top N as soon as scoring finishes, instead of stopping at the board. With the source form's "don't wait for me" box, a pasted link becomes finished files with no second visit |
 | `llm_select` + `reasoning_version: "story_v1"` | off | the story engine |
 

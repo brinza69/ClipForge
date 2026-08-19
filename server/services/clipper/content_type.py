@@ -283,6 +283,27 @@ _FACECAM_TOL = 0.12
 # On the co-stream the two insets measure 5.3x and 4.5x the face width, so the
 # outer bound has to be generous — a facecam frames a head with a lot of room.
 _FACECAM_INNER, _FACECAM_OUTER = 0.75, 4.0
+# ...but never further than this share of the FRAME. The outer bound is a
+# multiple of the median face box and that box wobbles between 22 and 62 px
+# across eighths of one source, so on a small box a 4x reach searches rows
+# 0-144 of a 270-row frame — and inside a window that wide the strongest
+# gradient is whatever the busiest thing in the picture is. Measured on Jynxzi,
+# it was the stream's own top chrome.
+_FACECAM_REACH_CAP = 0.30
+# An inset sits against an edge of the frame. Of nine features measured over 68
+# labelled candidates this one separates best by a wide margin — 93% with a
+# single threshold, against 73% for the next — and it is the largest weight a
+# logistic fit gives. A learned classifier over all nine scored WORSE than this
+# feature alone under leave-one-source-out validation (84% against 91%), which
+# is why there is a constant here and not a model.
+#
+# Sensitivity, on the source scoreboard: 7/9 from 0.44 to 0.52 and 5/9 from
+# 0.55. 0.48 is the middle of that plateau. The cliff is moistcr1tikal, whose
+# inset sits at the left edge at mid-height rather than in a corner — the case
+# this file already records as penalised by corner_proximity. **A plateau
+# 0.08 wide on nine sources is thin. Do not nudge this without re-running
+# scripts/score_facecam.py.**
+_FACECAM_CORNER_MIN = 0.48
 # Fallback when no border step is found in range: the face box, padded.
 _FACECAM_PAD_W, _FACECAM_PAD_H = 2.6, 2.2
 # When the search runs into the frame border there may be no edge to find: a
@@ -356,14 +377,14 @@ def _snap_inset(seed: dict, gx: Any, gy: Any, fw: int, fh: int) -> dict:
     col_prof = gx[rows, :].mean(axis=0) if gx.size else np.zeros(0)
     row_prof = gy[:, cols].mean(axis=1) if gy.size else np.zeros(0)
 
-    x0 = _snap_edge(col_prof, cx, half_w * _FACECAM_INNER * 2,
-                    half_w * _FACECAM_OUTER * 2, fw, forward=False)
-    x1 = _snap_edge(col_prof, cx, half_w * _FACECAM_INNER * 2,
-                    half_w * _FACECAM_OUTER * 2, fw, forward=True)
-    y0 = _snap_edge(row_prof, cy, half_h * _FACECAM_INNER * 2,
-                    half_h * _FACECAM_OUTER * 2, fh, forward=False)
-    y1 = _snap_edge(row_prof, cy, half_h * _FACECAM_INNER * 2,
-                    half_h * _FACECAM_OUTER * 2, fh, forward=True)
+    inner_x, inner_y = half_w * _FACECAM_INNER * 2, half_h * _FACECAM_INNER * 2
+    outer_x = min(half_w * _FACECAM_OUTER * 2, fw * _FACECAM_REACH_CAP)
+    outer_y = min(half_h * _FACECAM_OUTER * 2, fh * _FACECAM_REACH_CAP)
+
+    x0 = _snap_edge(col_prof, cx, inner_x, outer_x, fw, forward=False)
+    x1 = _snap_edge(col_prof, cx, inner_x, outer_x, fw, forward=True)
+    y0 = _snap_edge(row_prof, cy, inner_y, outer_y, fh, forward=False)
+    y1 = _snap_edge(row_prof, cy, inner_y, outer_y, fh, forward=True)
 
     if x1 - x0 < seed["w"] or y1 - y0 < seed["h"]:
         return make_rect(cx - seed["w"] * _FACECAM_PAD_W / 2.0,
@@ -436,6 +457,13 @@ def _find_webcams(grays: Sequence[Any], faces: Sequence[Sequence[dict]],
         if not (_WEBCAM_AREA[0] <= rect_area_frac(snapped, fw, fh) <= _WEBCAM_AREA[1]):
             continue
         if not aspect_ok(snapped, *_WEBCAM_ASPECT):
+            continue
+        # An inset is against an edge. This is the gate the last three sessions
+        # were looking for, and it was already in the file — as 25% of the score
+        # below, where it could be outvoted. Capping the reach above made the
+        # rects plausible enough that the area gate stopped rejecting phantoms
+        # by accident, so something has to reject them on purpose.
+        if corner_proximity(snapped, fw, fh) < _FACECAM_CORNER_MIN:
             continue
         # Spread of the cluster's centres, as a share of its own size: a real
         # inset holds still, a false positive drifts with the game camera.

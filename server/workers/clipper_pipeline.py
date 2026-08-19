@@ -205,6 +205,17 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
             "track may be silent."
         )
 
+    # Chunks whisper could not finish. The transcriber has reported these since
+    # `_tolerant` stopped one bad chunk losing a whole 4-hour file, and nothing
+    # read them — so a transcript with holes went downstream looking complete,
+    # and every clip scored against a missing stretch was scored against silence
+    # that is not there. Recorded on the row and said out loud in the stage
+    # message, which is the only place a person is looking at this point.
+    failed_chunks = [int(c) for c in (result.get("failed_chunks") or [])]
+    if failed_chunks:
+        logger.warning("project %s: transcript is missing %d chunk(s): %s",
+                       project_id, len(failed_chunks), failed_chunks)
+
     async with async_session() as session:
         existing = await session.execute(
             select(TranscriptModel).where(TranscriptModel.project_id == project_id).limit(1)
@@ -219,6 +230,7 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
                     segments=segments,
                     full_text=result.get("full_text"),
                     word_count=result.get("word_count"),
+                    failed_chunks=failed_chunks or None,
                 )
             )
         else:
@@ -229,6 +241,7 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
                     segments=segments,
                     full_text=result.get("full_text"),
                     word_count=result.get("word_count"),
+                    failed_chunks=failed_chunks or None,
                 )
             )
         await session.execute(
@@ -238,7 +251,10 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
         )
         await session.commit()
 
-    await queue.update_progress(job_id, 1.0, "Transcribed")
+    await queue.update_progress(
+        job_id, 1.0,
+        f"Transcribed — {len(failed_chunks)} chunk(s) missing"
+        if failed_chunks else "Transcribed")
     await queue.enqueue(project_id=project_id, job_type=JobType.clipper_analyze.value)
     logger.info(
         f"clipper transcript for {project_id}: {len(segments)} segments, "
@@ -249,12 +265,30 @@ async def handle_transcribe(job_id: str, project_id: str, clip_id, metadata, que
 # ── Stage 3: analyze ────────────────────────────────────────────────────────
 
 
+async def _transcript_words(project_id: str) -> list[dict]:
+    """Every word with a timing, flattened. [] when there is no transcript yet.
+
+    Only used to answer "was anything transcribed here", so a missing transcript
+    degrades the vocal-burst detector to "every loud voiced moment counts"
+    rather than breaking the stage.
+    """
+    async with async_session() as session:
+        row = (await session.execute(
+            select(TranscriptModel)
+            .where(TranscriptModel.project_id == project_id).limit(1)
+        )).scalar_one_or_none()
+    segments = (row.segments if row else None) or []
+    if not isinstance(segments, list):
+        return []
+    return [w for s in segments if isinstance(s, dict) for w in (s.get("words") or [])]
+
+
 async def handle_analyze(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Pass A + content-type/region detection. Reads only the proxy."""
     import asyncio
 
     from services.clipper import content_type as ct
-    from services.clipper import ingest, signals
+    from services.clipper import ingest, signals, vocal_bursts
 
     project = await _load_project(project_id)
     paths = storage.paths(project_id)
@@ -269,6 +303,37 @@ async def handle_analyze(job_id: str, project_id: str, clip_id, metadata, queue)
         None,
         lambda: signals.build_signals(project_id, str(paths["proxy"]), str(paths["audio"]), duration),
     )
+    _guard(queue, job_id)
+
+    # Laughter and shouting, which the transcript cannot carry: Whisper does not
+    # write "haha", so the word list `laughter_score` was built on read 0 on
+    # every window of every source while holding 30% of `emotion` and 20% of
+    # `reaction`. This needs the WORDS as well as the audio — a loud voiced
+    # moment matters precisely when no word was transcribed for it — so it runs
+    # here, after transcription, rather than inside build_signals.
+    await queue.update_progress(job_id, 0.40, "Listening for reactions")
+    words = await _transcript_words(project_id)
+
+    # How much of this source is somebody TALKING, from the transcript rather
+    # than from the audio envelope. The envelope reads 0.863-1.000 on every one
+    # of the eleven labelled sources — a range of 0.137 — because on a stream
+    # with game audio under a voice almost everything clears the silence floor.
+    # The transcript reads 0.276-0.918 on the same eleven and separates edited
+    # talking content from live streams, which is what the classifier wanted it
+    # for. See content_geom.speech_ratio.
+    if words and duration > 0:
+        spoken = sum(max(0.0, float(w.get("end", 0.0)) - float(w.get("start", 0.0)))
+                     for w in words)
+        sig["speech_coverage"] = round(min(1.0, spoken / duration), 4)
+    sig["vocal_bursts"] = await loop.run_in_executor(
+        None,
+        lambda: vocal_bursts.vocal_burst_timeline(paths["audio"], words),
+    )
+    storage.write_artifact(project_id, "signals", sig)
+    found = vocal_bursts.summarise(sig["vocal_bursts"])
+    logger.info("project %s: %d vocal-burst frames of %d (%.1f%%)",
+                project_id, found["burst_frames"], found["frames"],
+                100.0 * found["share"])
     _guard(queue, job_id)
 
     # Sample frames on a stride that keeps the count bounded no matter how long
