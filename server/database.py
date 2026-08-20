@@ -67,6 +67,31 @@ async def init_db() -> None:
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Job ownership/lease columns. `create_all()` covers new databases;
+        # these additive statements keep existing installations compatible.
+        _job_migrations = [
+            ("worker_id", "VARCHAR(160)"),
+            ("lease_expires_at", "DATETIME"),
+            ("last_heartbeat", "DATETIME"),
+            ("attempt_count", "INTEGER DEFAULT 0"),
+            ("cancellation_requested", "BOOLEAN DEFAULT 0"),
+        ]
+        for col, col_type in _job_migrations:
+            try:
+                await conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}"))
+            except Exception:
+                # Existing columns are expected during every later startup.
+                # The broader migration error policy is unchanged in this
+                # batch; lease behavior is guarded by the runtime checks.
+                pass
+        try:
+            await conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_jobs_lease_expires_at ON jobs(lease_expires_at)")
+            )
+        except Exception:
+            pass
+
         # Column migrations for clips table
         _clip_migrations = [
             ("hook_text", "TEXT"),

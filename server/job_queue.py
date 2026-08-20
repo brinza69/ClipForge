@@ -6,10 +6,13 @@ SQLite-backed async job queue for media processing tasks.
 import asyncio
 import json
 import logging
+import os
+import socket
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional, Callable, Dict, Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import async_session
@@ -51,11 +54,19 @@ DOODLE_LANE_LIMIT = 2
 class JobQueue:
     """Manages background processing jobs with SQLite persistence."""
 
+    LEASE_SECONDS = 120.0
+    HEARTBEAT_SECONDS = 10.0
+    MAX_RECOVER = 50
+
     def __init__(self):
         self._handlers: Dict[str, Callable] = {}
         self._running_jobs: Dict[str, asyncio.Task] = {}
         self._running_types: Dict[str, str] = {}   # job_id -> job type (lane bookkeeping)
         self._cancelled_jobs = set()
+        self._lost_ownership_jobs = set()
+        self.worker_id = (
+            f"{socket.gethostname()[:80]}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
+        )
         self._processor_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
@@ -78,6 +89,8 @@ class JobQueue:
                 clip_id=clip_id,
                 type=job_type,
                 status=JobStatus.queued.value,
+                attempt_count=0,
+                cancellation_requested=False,
                 metadata_json=json.dumps(metadata) if metadata else None,
             )
             session.add(job)
@@ -93,23 +106,28 @@ class JobQueue:
         message: str = "",
     ):
         """Update job progress (0.0 - 1.0)."""
+        now = datetime.utcnow()
         async with async_session() as session:
             await session.execute(
                 update(JobModel)
                 .where(JobModel.id == job_id)
                 .where(JobModel.status == JobStatus.running.value)
+                .where(JobModel.worker_id == self.worker_id)
+                .where(JobModel.cancellation_requested.is_(False))
                 .values(
                     progress=progress,
                     progress_message=message,
-                    updated_at=datetime.utcnow(),
+                    last_heartbeat=now,
+                    lease_expires_at=now + timedelta(seconds=self.LEASE_SECONDS),
+                    updated_at=now,
                 )
             )
             await session.commit()
 
-    async def complete_job(self, job_id: str):
+    async def complete_job(self, job_id: str, *, owner_id: Optional[str] = None):
         """Mark a job as completed."""
         async with async_session() as session:
-            result = await session.execute(
+            query = (
                 update(JobModel)
                 .where(JobModel.id == job_id)
                 .where(JobModel.status == JobStatus.running.value)
@@ -120,6 +138,9 @@ class JobQueue:
                     updated_at=datetime.utcnow(),
                 )
             )
+            if owner_id is not None:
+                query = query.where(JobModel.worker_id == owner_id)
+            result = await session.execute(query)
             await session.commit()
         self._running_jobs.pop(job_id, None)
         self._running_types.pop(job_id, None)
@@ -131,25 +152,36 @@ class JobQueue:
                 f"Ignored completion for job {job_id}: it was no longer running"
             )
 
-    async def fail_job(self, job_id: str, error: str):
+    async def fail_job(
+        self,
+        job_id: str,
+        error: str,
+        *,
+        owner_id: Optional[str] = None,
+    ):
         """Mark a job as failed."""
         from models import ProjectStatus, ClipModel, ClipStatus
         error_text = str(error)[:800]
         async with async_session() as session:
-            result = await session.execute(
-                update(JobModel)
-                .where(JobModel.id == job_id)
-                .where(
-                    JobModel.status.in_(
-                        (JobStatus.queued.value, JobStatus.running.value)
-                    )
+            query = update(JobModel).where(JobModel.id == job_id)
+            if owner_id is not None:
+                query = query.where(
+                    JobModel.status == JobStatus.running.value,
+                    JobModel.worker_id == owner_id,
                 )
-                .values(
+            else:
+                query = query.where(
+                    JobModel.status == JobStatus.queued.value,
+                    JobModel.worker_id.is_(None),
+                )
+            result = await session.execute(
+                query.values(
                     status=JobStatus.failed.value,
                     error=error_text,
                     updated_at=datetime.utcnow(),
                 )
             )
+
             job = await session.get(JobModel, job_id) if result.rowcount == 1 else None
             if job:
                 if job.project_id:
@@ -179,18 +211,19 @@ class JobQueue:
         # original failure.
         await self._cleanup_workspace(job_id)
 
-    async def cancel_job(self, job_id: str):
+    async def cancel_job(self, job_id: str, *, owner_id: Optional[str] = None):
         """Cancel a running or queued job."""
         self._cancelled_jobs.add(job_id)
-        if job_id in self._running_jobs:
-            self._running_jobs[job_id].cancel()
+        task = self._running_jobs.get(job_id)
+        if task and task is not asyncio.current_task():
+            task.cancel()
             self._running_jobs.pop(job_id, None)
             self._running_types.pop(job_id, None)
 
         async with async_session() as session:
             from models import ProjectStatus, ClipModel, ClipStatus
 
-            result = await session.execute(
+            query = (
                 update(JobModel)
                 .where(JobModel.id == job_id)
                 .where(
@@ -200,9 +233,19 @@ class JobQueue:
                 )
                 .values(
                     status=JobStatus.cancelled.value,
+                    cancellation_requested=True,
+                    worker_id=None,
+                    lease_expires_at=None,
+                    last_heartbeat=None,
                     updated_at=datetime.utcnow(),
                 )
             )
+            if owner_id is not None:
+                query = query.where(
+                    (JobModel.status == JobStatus.running.value)
+                    & (JobModel.worker_id == owner_id)
+                )
+            result = await session.execute(query)
 
             # Keep parent project state consistent with the user's cancellation.
             job = await session.get(JobModel, job_id)
@@ -257,14 +300,81 @@ class JobQueue:
     def is_cancelled(self, job_id: str) -> bool:
         return job_id in self._cancelled_jobs
 
+    async def _heartbeat_once(self, job_id: str) -> bool:
+        """Renew a lease, returning False when this worker lost ownership."""
+        now = datetime.utcnow()
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    update(JobModel)
+                    .where(JobModel.id == job_id)
+                    .where(JobModel.status == JobStatus.running.value)
+                    .where(JobModel.worker_id == self.worker_id)
+                    .where(JobModel.cancellation_requested.is_(False))
+                    .values(
+                        last_heartbeat=now,
+                        lease_expires_at=now + timedelta(seconds=self.LEASE_SECONDS),
+                        updated_at=now,
+                    )
+                )
+                await session.commit()
+        except Exception:
+            logger.exception("Heartbeat failed for job %s", job_id)
+            return True
+
+        if result.rowcount == 1:
+            return True
+
+        self._lost_ownership_jobs.add(job_id)
+        task = self._running_jobs.get(job_id)
+        if task and task is not asyncio.current_task():
+            task.cancel()
+        logger.warning("Worker %s lost ownership of job %s", self.worker_id, job_id)
+        return False
+
+    async def _heartbeat_loop(self, job_id: str) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self.HEARTBEAT_SECONDS)
+                if not await self._heartbeat_once(job_id):
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Heartbeat loop stopped for job %s", job_id)
+
+    async def _requeue_owned_job(self, job_id: str) -> bool:
+        """Release a job during graceful shutdown without cancelling it."""
+        now = datetime.utcnow()
+        async with async_session() as session:
+            result = await session.execute(
+                update(JobModel)
+                .where(JobModel.id == job_id)
+                .where(JobModel.status == JobStatus.running.value)
+                .where(JobModel.worker_id == self.worker_id)
+                .values(
+                    status=JobStatus.queued.value,
+                    worker_id=None,
+                    lease_expires_at=None,
+                    last_heartbeat=None,
+                    cancellation_requested=False,
+                    progress=func.min(JobModel.progress, 0.05),
+                    progress_message="Interrupted by backend shutdown; requeued.",
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+        if result.rowcount == 1:
+            logger.info("Requeued job %s after graceful shutdown", job_id)
+            return True
+        return False
+
     async def recover_stuck_jobs(self):
         """
-        On startup, recover EVERY job left in `running` state. A job in
-        `running` when the process starts can only mean the previous process
-        died mid-job (crash, hard kill, or — common in dev — a restart). The
-        old 30-minute threshold left fresh jobs showing "running" for half an
-        hour after every restart; with `--reload` off and manual restarts
-        that's a constant annoyance. We requeue them all instead.
+        On startup, recover only jobs whose lease has expired. A job with a
+        live lease belongs to another backend process and must remain running.
+        Rows from before lease support have no safe owner, so they are failed
+        with an explicit retry message instead of being executed twice.
         """
         from models import ProjectStatus
 
@@ -278,46 +388,110 @@ class JobQueue:
             if not stuck_jobs:
                 return
 
-            # Sanity cap: if the table somehow has a flood of orphans, don't
-            # requeue them all (that could thrash on a corrupt DB). Mark the
-            # overflow failed and log loudly.
-            MAX_RECOVER = 50
-            if len(stuck_jobs) > MAX_RECOVER:
+            expired = [
+                job for job in stuck_jobs
+                if not job.worker_id or not job.lease_expires_at
+                or job.lease_expires_at <= now
+            ]
+            recoverable = [
+                job for job in expired
+                if job.worker_id and job.lease_expires_at
+            ]
+            if len(recoverable) > self.MAX_RECOVER:
                 logger.warning(
-                    f"{len(stuck_jobs)} jobs stuck in running — only requeueing the "
-                    f"first {MAX_RECOVER}, failing the rest."
+                    f"{len(recoverable)} expired jobs — only recovering the first "
+                    f"{self.MAX_RECOVER}, failing the rest."
                 )
 
             requeued = 0
             failed = 0
-            for i, job in enumerate(stuck_jobs):
+            skipped_live = len(stuck_jobs) - len(expired)
+            for job in stuck_jobs:
+                if job not in expired:
+                    continue
+
+                if not job.worker_id or not job.lease_expires_at:
+                    result = await session.execute(
+                        update(JobModel)
+                        .where(JobModel.id == job.id)
+                        .where(JobModel.status == JobStatus.running.value)
+                        .where(
+                            (JobModel.worker_id.is_(None))
+                            | (JobModel.lease_expires_at.is_(None))
+                        )
+                        .values(
+                            status=JobStatus.failed.value,
+                            error=(
+                                "Job has no lease owner and was not safely recoverable; "
+                                "retry it manually."
+                            ),
+                            progress_message="Recovery stopped: missing lease owner.",
+                            worker_id=None,
+                            lease_expires_at=None,
+                            last_heartbeat=None,
+                            updated_at=now,
+                        )
+                    )
+                    failed += result.rowcount == 1
+                    continue
+
                 project = await session.get(ProjectModel, job.project_id)
                 terminal = project and project.status in (
                     ProjectStatus.cancelled.value, ProjectStatus.failed.value,
                 )
-                if terminal or i >= MAX_RECOVER:
-                    job.status = JobStatus.failed.value
-                    job.error = (
-                        "Recovered from stuck running state; "
-                        + ("project is terminal." if terminal else "recovery cap exceeded.")
+                should_fail = terminal or requeued >= self.MAX_RECOVER
+                recovery_error = (
+                    "Recovered from expired lease; project is terminal."
+                    if terminal
+                    else "Recovery cap exceeded for expired lease."
+                )
+                if should_fail:
+                    result = await session.execute(
+                        update(JobModel)
+                        .where(JobModel.id == job.id)
+                        .where(JobModel.status == JobStatus.running.value)
+                        .where(JobModel.worker_id == job.worker_id)
+                        .where(JobModel.lease_expires_at <= now)
+                        .values(
+                            status=JobStatus.failed.value,
+                            error=recovery_error,
+                            progress_message="Recovered: not requeued.",
+                            worker_id=None,
+                            lease_expires_at=None,
+                            last_heartbeat=None,
+                            updated_at=now,
+                        )
                     )
-                    job.progress_message = "Recovered: not requeued."
-                    failed += 1
+                    failed += result.rowcount == 1
                     continue
 
-                job.status = JobStatus.queued.value
-                job.progress = min(job.progress or 0.0, 0.05)
-                job.progress_message = (
-                    f"Recovered from backend restart at "
-                    f"{now.strftime('%H:%M:%S')} — requeued."
+                result = await session.execute(
+                    update(JobModel)
+                    .where(JobModel.id == job.id)
+                    .where(JobModel.status == JobStatus.running.value)
+                    .where(JobModel.worker_id == job.worker_id)
+                    .where(JobModel.lease_expires_at <= now)
+                    .values(
+                        status=JobStatus.queued.value,
+                        progress=func.min(JobModel.progress, 0.05),
+                        progress_message=(
+                            f"Recovered from backend restart at "
+                            f"{now.strftime('%H:%M:%S')} — requeued."
+                        ),
+                        error=None,
+                        worker_id=None,
+                        lease_expires_at=None,
+                        last_heartbeat=None,
+                        cancellation_requested=False,
+                        updated_at=now,
+                    )
                 )
-                job.error = None
-                job.updated_at = datetime.utcnow()
-                requeued += 1
+                requeued += result.rowcount == 1
 
             await session.commit()
             logger.warning(
-                f"Stuck-job recovery: requeued {requeued}, failed {failed} "
+                f"Stuck-job recovery: requeued {requeued}, failed {failed}, "
+                f"left {skipped_live} live leases untouched "
                 f"(of {len(stuck_jobs)} running on startup)."
             )
 
@@ -328,13 +502,20 @@ class JobQueue:
         second writer matches no rows and gets rowcount 0, whatever order the
         two processes arrived in.
         """
+        now = datetime.utcnow()
         result = await session.execute(
             update(JobModel)
             .where(JobModel.id == job_id)
             .where(JobModel.status == JobStatus.queued.value)
+            .where(JobModel.cancellation_requested.is_(False))
             .values(
                 status=JobStatus.running.value,
-                updated_at=datetime.utcnow(),
+                worker_id=self.worker_id,
+                lease_expires_at=now + timedelta(seconds=self.LEASE_SECONDS),
+                last_heartbeat=now,
+                attempt_count=func.coalesce(JobModel.attempt_count, 0) + 1,
+                cancellation_requested=False,
+                updated_at=now,
             )
         )
         await session.commit()
@@ -409,6 +590,7 @@ class JobQueue:
 
         # Run handler in a background task
         async def _run():
+            heartbeat_task = asyncio.create_task(self._heartbeat_loop(job_id))
             try:
                 await handler(
                     job_id=job_id,
@@ -417,12 +599,33 @@ class JobQueue:
                     metadata=job_metadata,
                     queue=self,
                 )
-                await self.complete_job(job_id)
-            except (asyncio.CancelledError, JobCancelledError):
-                await self.cancel_job(job_id)
+                if job_id not in self._lost_ownership_jobs:
+                    await self.complete_job(job_id, owner_id=self.worker_id)
+            except asyncio.CancelledError:
+                if job_id in self._lost_ownership_jobs:
+                    logger.warning("Stopped stale worker for job %s", job_id)
+                elif self._stop_event.is_set():
+                    await self._requeue_owned_job(job_id)
+                else:
+                    await self.cancel_job(job_id, owner_id=self.worker_id)
+            except JobCancelledError:
+                if job_id in self._lost_ownership_jobs:
+                    logger.warning("Cancelled stale worker for job %s", job_id)
+                elif self._stop_event.is_set():
+                    await self._requeue_owned_job(job_id)
+                else:
+                    await self.cancel_job(job_id, owner_id=self.worker_id)
             except Exception as e:
                 logger.exception(f"Job {job_id} failed with exception")
-                await self.fail_job(job_id, str(e))
+                if job_id not in self._lost_ownership_jobs:
+                    await self.fail_job(job_id, str(e), owner_id=self.worker_id)
+            finally:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
+                self._running_jobs.pop(job_id, None)
+                self._running_types.pop(job_id, None)
+                self._lost_ownership_jobs.discard(job_id)
+                self._cancelled_jobs.discard(job_id)
 
         task = asyncio.create_task(_run())
         self._running_jobs[job_id] = task
@@ -449,10 +652,10 @@ class JobQueue:
     async def stop(self):
         """Stop the job processor gracefully.
 
-        Marks in-flight jobs as interrupted (so the UI shows clearly what
-        happened and the next startup's recovery requeues them cleanly),
-        then cancels their tasks with a short grace period to let them flush
-        DB writes before the event loop tears down.
+        Marks in-flight jobs as interrupted, then cancels their tasks with a
+        short grace period. Tasks that catch the cancellation release their
+        lease back to `queued`; a hard process kill leaves the lease to the
+        next startup's expiry-based recovery.
         """
         self._stop_event.set()
 
@@ -465,6 +668,8 @@ class JobQueue:
                         await session.execute(
                             update(JobModel)
                             .where(JobModel.id == job_id)
+                            .where(JobModel.status == JobStatus.running.value)
+                            .where(JobModel.worker_id == self.worker_id)
                             .values(
                                 progress_message="Interrupted by backend shutdown.",
                                 updated_at=datetime.utcnow(),
