@@ -97,6 +97,7 @@ class JobQueue:
             await session.execute(
                 update(JobModel)
                 .where(JobModel.id == job_id)
+                .where(JobModel.status == JobStatus.running.value)
                 .values(
                     progress=progress,
                     progress_message=message,
@@ -108,9 +109,10 @@ class JobQueue:
     async def complete_job(self, job_id: str):
         """Mark a job as completed."""
         async with async_session() as session:
-            await session.execute(
+            result = await session.execute(
                 update(JobModel)
                 .where(JobModel.id == job_id)
+                .where(JobModel.status == JobStatus.running.value)
                 .values(
                     status=JobStatus.done.value,
                     progress=1.0,
@@ -121,23 +123,40 @@ class JobQueue:
             await session.commit()
         self._running_jobs.pop(job_id, None)
         self._running_types.pop(job_id, None)
-        logger.info(f"Job {job_id} completed")
+        if result.rowcount == 1:
+            self._cancelled_jobs.discard(job_id)
+            logger.info(f"Job {job_id} completed")
+        else:
+            logger.warning(
+                f"Ignored completion for job {job_id}: it was no longer running"
+            )
 
     async def fail_job(self, job_id: str, error: str):
         """Mark a job as failed."""
         from models import ProjectStatus, ClipModel, ClipStatus
+        error_text = str(error)[:800]
         async with async_session() as session:
-            job = await session.get(JobModel, job_id)
+            result = await session.execute(
+                update(JobModel)
+                .where(JobModel.id == job_id)
+                .where(
+                    JobModel.status.in_(
+                        (JobStatus.queued.value, JobStatus.running.value)
+                    )
+                )
+                .values(
+                    status=JobStatus.failed.value,
+                    error=error_text,
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            job = await session.get(JobModel, job_id) if result.rowcount == 1 else None
             if job:
-                job.status = JobStatus.failed.value
-                job.error = str(error)[:800]
-                job.updated_at = datetime.utcnow()
-                
                 if job.project_id:
                     project = await session.get(ProjectModel, job.project_id)
                     if project:
                         project.status = ProjectStatus.failed.value
-                        project.description = f"[{job.type} failed] {str(error)[:200]}"
+                        project.description = f"[{job.type} failed] {error_text[:200]}"
                 
                 if job.clip_id:
                     clip = await session.get(ClipModel, job.clip_id)
@@ -147,6 +166,13 @@ class JobQueue:
             await session.commit()
         self._running_jobs.pop(job_id, None)
         self._running_types.pop(job_id, None)
+        if result.rowcount != 1:
+            logger.warning(
+                f"Ignored failure for job {job_id}: it was already terminal or missing"
+            )
+            return
+
+        self._cancelled_jobs.discard(job_id)
         logger.error(f"Job {job_id} failed: {error}")
         # Reclaim the failed job's scratch files (downloaded source, erased
         # video, per-variant dirs). Best-effort — never let cleanup mask the
@@ -164,9 +190,14 @@ class JobQueue:
         async with async_session() as session:
             from models import ProjectStatus, ClipModel, ClipStatus
 
-            await session.execute(
+            result = await session.execute(
                 update(JobModel)
                 .where(JobModel.id == job_id)
+                .where(
+                    JobModel.status.in_(
+                        (JobStatus.queued.value, JobStatus.running.value)
+                    )
+                )
                 .values(
                     status=JobStatus.cancelled.value,
                     updated_at=datetime.utcnow(),
@@ -175,21 +206,29 @@ class JobQueue:
 
             # Keep parent project state consistent with the user's cancellation.
             job = await session.get(JobModel, job_id)
-            if job and job.project_id:
+            transitioned = result.rowcount == 1
+            if transitioned and job and job.project_id:
                 project = await session.get(ProjectModel, job.project_id)
                 if project and project.status not in (ProjectStatus.failed.value, ProjectStatus.cancelled.value):
                     project.status = ProjectStatus.cancelled.value
-                    await session.commit()
-                    await session.refresh(project)
 
             # Best-effort clip state update (mainly for export jobs).
-            if job and job.clip_id:
+            if transitioned and job and job.clip_id:
                 clip = await session.get(ClipModel, job.clip_id)
                 if clip and clip.status not in (ClipStatus.exported.value, ClipStatus.failed.value, ClipStatus.rejected.value):
                     clip.status = ClipStatus.failed.value
 
             await session.commit()
-        logger.info(f"Job {job_id} cancelled")
+        if transitioned:
+            logger.info(f"Job {job_id} cancelled")
+        elif job and job.status == JobStatus.cancelled.value:
+            logger.info(f"Job {job_id} was already cancelled")
+        else:
+            self._cancelled_jobs.discard(job_id)
+            logger.warning(
+                f"Ignored cancellation for job {job_id}: it was already terminal or missing"
+            )
+            return
         # Reclaim scratch files for the cancelled job.
         await self._cleanup_workspace(job_id)
 

@@ -22,6 +22,7 @@ import sys
 import textwrap
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -46,6 +47,14 @@ async def _status(job_id: str) -> str:
     async with async_session() as session:
         job = await session.get(JobModel, job_id)
         return job.status
+
+
+async def _set_status(job_id: str, status: str, progress: float = 0.0) -> None:
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+        job.status = status
+        job.progress = progress
+        await session.commit()
 
 
 @pytest.mark.asyncio
@@ -73,6 +82,105 @@ async def test_claiming_a_job_that_is_not_queued_fails():
 
     async with async_session() as session:
         assert await queue._claim(session, "claim-cancelled") is False
+
+
+@pytest.mark.asyncio
+async def test_terminal_job_cannot_be_completed_by_a_late_worker():
+    queue = JobQueue()
+    await _queued("transition-complete")
+    await _set_status("transition-complete", "cancelled")
+
+    await queue.complete_job("transition-complete")
+
+    async with async_session() as session:
+        job = await session.get(JobModel, "transition-complete")
+        assert job.status == "cancelled"
+        assert job.progress == 0.0
+
+
+@pytest.mark.asyncio
+async def test_running_job_can_be_completed():
+    queue = JobQueue()
+    await _queued("transition-complete-valid")
+    await _set_status("transition-complete-valid", "running", progress=0.4)
+
+    await queue.complete_job("transition-complete-valid")
+
+    async with async_session() as session:
+        job = await session.get(JobModel, "transition-complete-valid")
+        assert job.status == "done"
+        assert job.progress == 1.0
+        assert job.progress_message == "Complete"
+
+
+@pytest.mark.asyncio
+async def test_terminal_job_cannot_be_failed_by_a_late_worker():
+    queue = JobQueue()
+    queue._cleanup_workspace = AsyncMock()
+    await _queued("transition-fail")
+    await _set_status("transition-fail", "done", progress=1.0)
+
+    await queue.fail_job("transition-fail", "late worker error")
+
+    assert await _status("transition-fail") == "done"
+    queue._cleanup_workspace.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_running_job_can_be_failed():
+    queue = JobQueue()
+    queue._cleanup_workspace = AsyncMock()
+    await _queued("transition-fail-valid")
+    await _set_status("transition-fail-valid", "running")
+
+    await queue.fail_job("transition-fail-valid", "expected failure")
+
+    async with async_session() as session:
+        job = await session.get(JobModel, "transition-fail-valid")
+        assert job.status == "failed"
+        assert job.error == "expected failure"
+    queue._cleanup_workspace.assert_awaited_once_with("transition-fail-valid")
+
+
+@pytest.mark.asyncio
+async def test_terminal_job_cannot_be_cancelled_by_a_late_request():
+    queue = JobQueue()
+    queue._cleanup_workspace = AsyncMock()
+    await _queued("transition-cancel")
+    await _set_status("transition-cancel", "done", progress=1.0)
+
+    await queue.cancel_job("transition-cancel")
+
+    assert await _status("transition-cancel") == "done"
+    queue._cleanup_workspace.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_running_job_can_be_cancelled():
+    queue = JobQueue()
+    queue._cleanup_workspace = AsyncMock()
+    await _queued("transition-cancel-valid")
+    await _set_status("transition-cancel-valid", "running")
+
+    await queue.cancel_job("transition-cancel-valid")
+
+    assert await _status("transition-cancel-valid") == "cancelled"
+    queue._cleanup_workspace.assert_awaited_once_with("transition-cancel-valid")
+
+
+@pytest.mark.asyncio
+async def test_progress_updates_are_ignored_after_job_is_terminal():
+    queue = JobQueue()
+    await _queued("transition-progress")
+    await _set_status("transition-progress", "done", progress=1.0)
+
+    await queue.update_progress("transition-progress", 0.25, "stale update")
+
+    async with async_session() as session:
+        job = await session.get(JobModel, "transition-progress")
+        assert job.status == "done"
+        assert job.progress == 1.0
+        assert job.progress_message != "stale update"
 
 
 @pytest.mark.asyncio
