@@ -334,7 +334,8 @@ async def remix_delete(job_id: str):
                 import asyncio
                 loop = asyncio.get_event_loop()
                 stats = await loop.run_in_executor(
-                    None, lambda: cleanup_job_workspace(project_id)
+                    None,
+                    lambda: cleanup_job_workspace(project_id, remove_outputs=True),
                 )
                 freed = stats.get("freed_bytes", 0)
             except Exception:

@@ -284,10 +284,30 @@ class JobQueue:
             project_id = job.project_id if job else None
             if not project_id:
                 return
+            preserve_paths: list[str] = []
+            try:
+                metadata = json.loads(job.metadata_json or "{}") if job else {}
+                if isinstance(metadata, dict):
+                    final_path = metadata.get("final_path")
+                    if final_path:
+                        preserve_paths.append(str(final_path))
+                    for result in metadata.get("results") or []:
+                        if not isinstance(result, dict):
+                            continue
+                        if result.get("final_path"):
+                            preserve_paths.append(str(result["final_path"]))
+                        for part in result.get("parts") or []:
+                            if isinstance(part, dict) and part.get("path"):
+                                preserve_paths.append(str(part["path"]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("job %s has unreadable output metadata", job_id)
             from services.cleanup import cleanup_job_workspace
             loop = asyncio.get_event_loop()
             stats = await loop.run_in_executor(
-                None, lambda: cleanup_job_workspace(project_id)
+                None,
+                lambda: cleanup_job_workspace(
+                    project_id, preserve_paths=preserve_paths
+                ),
             )
             if stats.get("freed_bytes"):
                 logger.info(
