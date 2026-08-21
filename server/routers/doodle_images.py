@@ -18,6 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from routers.upload_limits import read_upload_limited
 from services.doodle import storage
 
 logger = logging.getLogger("clipforge.routers.doodle_images")
@@ -28,6 +29,10 @@ class ReorderRequest(BaseModel):
     order: list[int]
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+_MAX_IMAGE_BYTES = 25 * 1024 * 1024
+_MAX_ZIP_BYTES = 100 * 1024 * 1024
+_MAX_BULK_FILES = 200
+_MAX_ZIP_IMAGES = 200
 
 _SCENE_NUM_RE = re.compile(r"scene[_\-]?(\d+)", re.IGNORECASE)
 _BARE_NUM_RE = re.compile(r"(\d+)")
@@ -81,6 +86,9 @@ async def upload_scene_images_bulk(project_id: str, files: list[UploadFile] = Fi
     sb = _load_or_404(project_id)
     scenes = sb.get("scenes") or []
 
+    if len(files) > _MAX_BULK_FILES:
+        raise HTTPException(413, f"Too many files. Maximum {_MAX_BULK_FILES} per upload.")
+
     matched = 0
     unmatched: list[str] = []
 
@@ -105,17 +113,42 @@ async def upload_scene_images_bulk(project_id: str, files: list[UploadFile] = Fi
 
     for upload in files:
         name = upload.filename or ""
-        data = await upload.read()
         if name.lower().endswith(".zip"):
+            data = await read_upload_limited(
+                upload, _MAX_ZIP_BYTES,
+                too_large_detail="ZIP upload too large. Maximum 100 MB.",
+            )
             try:
                 with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                    extracted_bytes = 0
+                    extracted_images = 0
                     for zi in zf.infolist():
                         if zi.is_dir():
                             continue
                         inner_name = Path(zi.filename).name
                         if Path(inner_name).suffix.lower() not in _IMAGE_EXTS:
                             continue
-                        inner_data = zf.read(zi)
+                        if zi.file_size > _MAX_IMAGE_BYTES:
+                            raise HTTPException(
+                                413,
+                                f"Image in ZIP is too large. Maximum {_MAX_IMAGE_BYTES // (1024 * 1024)} MB.",
+                            )
+                        extracted_images += 1
+                        if extracted_images > _MAX_ZIP_IMAGES:
+                            raise HTTPException(
+                                413,
+                                f"Too many images in ZIP. Maximum {_MAX_ZIP_IMAGES}.",
+                            )
+                        extracted_bytes += zi.file_size
+                        if extracted_bytes > _MAX_ZIP_IMAGES * _MAX_IMAGE_BYTES:
+                            raise HTTPException(413, "ZIP contains too much image data.")
+                        with zf.open(zi) as entry:
+                            inner_data = entry.read(_MAX_IMAGE_BYTES + 1)
+                        if len(inner_data) > _MAX_IMAGE_BYTES:
+                            raise HTTPException(
+                                413,
+                                f"Image in ZIP is too large. Maximum {_MAX_IMAGE_BYTES // (1024 * 1024)} MB.",
+                            )
                         if await _match_and_save(inner_name, inner_data):
                             matched += 1
                         else:
@@ -127,6 +160,10 @@ async def upload_scene_images_bulk(project_id: str, files: list[UploadFile] = Fi
         if Path(name).suffix.lower() not in _IMAGE_EXTS:
             unmatched.append(name)
             continue
+        data = await read_upload_limited(
+            upload, _MAX_IMAGE_BYTES,
+            too_large_detail="Image too large. Maximum 25 MB.",
+        )
         if await _match_and_save(name, data):
             matched += 1
         else:
@@ -143,7 +180,10 @@ async def upload_scene_image(project_id: str, scene_index: int, file: UploadFile
     if scene is None:
         raise HTTPException(404, f"Scene {scene_index} not found")
 
-    content = await file.read()
+    content = await read_upload_limited(
+        file, _MAX_IMAGE_BYTES,
+        too_large_detail="Image too large. Maximum 25 MB.",
+    )
     if not content:
         raise HTTPException(400, "Empty upload")
 
