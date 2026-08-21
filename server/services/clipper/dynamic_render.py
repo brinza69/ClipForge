@@ -438,19 +438,29 @@ def render_dynamic_clip(src: str, plan: dict, out: str, *, start: float,
 
         _raise_if_cancelled(is_cancelled)
 
+    from services.clipper import storage
+
+    final = Path(out)
+    temp = storage.temporary_output_path(final)
     work = Path(work_dir)
     cmd_path = write_sendcmd(plan, src_w, src_h, work / f"{Path(out).stem}.cmd.txt")
 
     cmd = build_dynamic_cmd(
-        src, plan, cmd_path, ass_path, out,
+        src, plan, cmd_path, ass_path, str(temp),
         start=start, duration=float(plan.get("duration") or 0.0),
         src_w=src_w, src_h=src_h, **kwargs)
 
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    run(cmd, timeout=RENDER_TIMEOUT, what="dynamic clip render")
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+        run(cmd, timeout=RENDER_TIMEOUT, what="dynamic clip render")
 
-    size = Path(out).stat().st_size if Path(out).exists() else 0
-    if size <= MIN_OUTPUT_BYTES:
-        raise FFmpegError(f"dynamic render produced no usable output ({size} bytes): {out}")
-    return {"path": str(out), "size": size, "sendcmd": cmd_path,
-            "shots": len(plan.get("shots") or []), "hits": len(plan.get("hits") or [])}
+        size = temp.stat().st_size if temp.is_file() else 0
+        if size <= MIN_OUTPUT_BYTES:
+            raise FFmpegError(
+                f"dynamic render produced no usable output ({size} bytes): {out}"
+            )
+        storage.finalize_output(temp, final)
+        return {"path": str(final), "size": size, "sendcmd": cmd_path,
+                "shots": len(plan.get("shots") or []), "hits": len(plan.get("hits") or [])}
+    finally:
+        temp.unlink(missing_ok=True)

@@ -9,6 +9,8 @@ a clip that cannot be cut dynamically must still export, statically.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from workers import clipper_render_jobs as jobs
@@ -307,6 +309,41 @@ def test_a_cancelled_export_does_not_start_the_encode():
         render_dynamic_clip("src.mp4", _plan(), "out.mp4", start=0.0,
                             work_dir=".", is_cancelled=lambda: True)
     assert "cancel" in type(caught.value).__name__.lower() + str(caught.value).lower()
+
+
+def test_dynamic_renderer_publishes_the_final_path_atomically(tmp_path, monkeypatch):
+    from services.clipper import dynamic_render
+    from services.clipper.dynamic_render import render_dynamic_clip
+
+    final = tmp_path / "clip.mp4"
+    final.write_bytes(b"previous render")
+    seen = {}
+
+    def fake_run(cmd, **_kwargs):
+        seen["temp"] = Path(cmd[-1])
+        seen["temp"].write_bytes(b"new render" * 300)
+
+    monkeypatch.setattr(dynamic_render, "run", fake_run)
+    plan = {
+        "duration": 30.0,
+        "hits": [],
+        "style": {},
+        "shots": [{
+            "t0": 0.0,
+            "t1": 30.0,
+            "rect": {"x": 0, "y": 0, "w": 608, "h": 1080},
+            "anchor": [960, 540],
+        }],
+    }
+    result = render_dynamic_clip(
+        "source.mp4", plan, str(final), start=0.0,
+        work_dir=tmp_path,
+    )
+
+    assert result["path"] == str(final)
+    assert final.read_bytes() == b"new render" * 300
+    assert seen["temp"] != final
+    assert not seen["temp"].exists()
 
 
 def test_the_export_handler_passes_all_four_to_the_dynamic_call():

@@ -25,6 +25,7 @@ from config import settings
 from database import get_session
 from job_queue import job_queue
 from models import ClipModel, ClipStatus, JobType, ProjectModel, TranscriptModel
+from services.clipper import storage
 from services.clipper.serialize import (
     can_transition,
     CLIP_PATCHABLE,
@@ -305,7 +306,7 @@ async def preview_file(clip_id: str, session: AsyncSession = Depends(get_session
 
     clip = await _load_clip(session, clip_id)
     path = clip.preview_path or clip.export_path
-    if not path or not Path(path).exists():
+    if not path or not storage.is_usable_output(path):
         raise _err(404, "no_preview", "This clip has no rendered preview yet.")
     return FileResponse(path, media_type="video/mp4", filename=f"{clip.id}.mp4")
 
@@ -316,7 +317,7 @@ async def export_file(clip_id: str, session: AsyncSession = Depends(get_session)
     from fastapi.responses import FileResponse
 
     clip = await _load_clip(session, clip_id)
-    if not clip.export_path or not Path(clip.export_path).exists():
+    if not clip.export_path or not storage.is_usable_output(clip.export_path):
         raise _err(404, "no_export", "This clip has not been exported yet.")
     safe = "".join(c for c in (clip.title or clip.id) if c.isalnum() or c in " -_")[:60].strip()
     return FileResponse(

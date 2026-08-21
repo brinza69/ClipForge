@@ -247,43 +247,41 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # timestamps, scores, the layout and caption plans, and the model versions
     # that produced them (brief §25).
     sidecar = out.with_suffix(".json")
-    sidecar.write_text(
-        __import__("json").dumps(
-            {
-                "clip_id": clip.id,
-                "project_id": project_id,
-                "source": {"path": src, "url": project.source_url},
-                "source_start": clip.start_time,
-                "source_end": clip.end_time,
-                "duration": clip.duration,
-                "title": clip.title,
-                "headline": clip.headline_text,
-                "transcript": clip.transcript_text,
-                "overall_score": clip.overall_score,
-                "sub_scores": clip.sub_scores,
-                "score_reason": clip.score_reason,
-                "layout_plan": plan,
-                # Present only when the multi-shot path rendered this file. The
-                # static layout_plan above is still written either way, because
-                # it is what a re-render falls back to.
-                "dynamic_plan": dyn,
-                # Pass D's verdict on this exact cut. Written whether or not it
-                # found anything: "APPROVE, twelve frames sampled" is a fact
-                # about the file, and an absent key would be ambiguous between
-                # "clean" and "never reviewed".
-                "review": review_result,
-                "caption_plan": clip.caption_plan,
-                "content_type": clip.content_type,
-                "analysis_version": project.analysis_version,
-                "ranker_version": clip.ranker_version,
-                "render": {"fps": fps, "crf": settings.clipper_export_crf,
-                           "preset": settings.clipper_export_preset},
-            },
-            indent=2,
-            ensure_ascii=False,
-            default=str,
-        ),
-        encoding="utf-8",
+    storage.atomic_write_json(
+        sidecar,
+        {
+            "clip_id": clip.id,
+            "project_id": project_id,
+            "source": {"path": src, "url": project.source_url},
+            "source_start": clip.start_time,
+            "source_end": clip.end_time,
+            "duration": clip.duration,
+            "title": clip.title,
+            "headline": clip.headline_text,
+            "transcript": clip.transcript_text,
+            "overall_score": clip.overall_score,
+            "sub_scores": clip.sub_scores,
+            "score_reason": clip.score_reason,
+            "layout_plan": plan,
+            # Present only when the multi-shot path rendered this file. The
+            # static layout_plan above is still written either way, because
+            # it is what a re-render falls back to.
+            "dynamic_plan": dyn,
+            # Pass D's verdict on this exact cut. Written whether or not it
+            # found anything: "APPROVE, twelve frames sampled" is a fact
+            # about the file, and an absent key would be ambiguous between
+            # "clean" and "never reviewed".
+            "review": review_result,
+            "caption_plan": clip.caption_plan,
+            "content_type": clip.content_type,
+            "analysis_version": project.analysis_version,
+            "ranker_version": clip.ranker_version,
+            "render": {"fps": fps, "crf": settings.clipper_export_crf,
+                       "preset": settings.clipper_export_preset},
+        },
+        indent=2,
+        ensure_ascii=False,
+        default=str,
     )
 
     async with async_session() as session:

@@ -7,6 +7,8 @@ before input, one encode, captions inside the single filtergraph, escaped user
 text — are checkable without ffmpeg, without media on disk and in milliseconds.
 """
 
+from pathlib import Path
+
 import pytest
 
 from services.clipper import render
@@ -295,6 +297,50 @@ async def test_render_clip_honours_cancellation_before_spawning_ffmpeg():
             "s.mp4", CAND, {}, None, "o.mp4",
             fps=60, crf=20, preset="medium", is_cancelled=lambda: True,
         )
+
+
+async def test_render_publishes_only_after_validation_and_keeps_old_output_on_failure(
+    tmp_path, monkeypatch
+):
+    final = tmp_path / "clip.mp4"
+    final.write_bytes(b"previous render")
+    seen = {}
+
+    def fake_run(cmd, **_kwargs):
+        output = Path(cmd[-1])
+        seen["temp"] = output
+        output.write_bytes(b"new render" * 300)
+
+    monkeypatch.setattr(render, "_has_audio", lambda _src: False)
+    monkeypatch.setattr(render, "video_info", lambda _path: {"duration": 1.0})
+    monkeypatch.setattr(render, "run", fake_run)
+
+    result = await render.render_clip(
+        "source.mp4", CAND, {}, None, str(final),
+        fps=30, crf=20, preset="fast",
+    )
+
+    assert result["path"] == str(final)
+    assert final.read_bytes() == b"new render" * 300
+    assert seen["temp"] != final
+    assert not seen["temp"].exists()
+
+    final.write_bytes(b"previous render")
+
+    def failed_run(cmd, **_kwargs):
+        seen["failed_temp"] = Path(cmd[-1])
+        seen["failed_temp"].write_bytes(b"partial")
+        raise RuntimeError("encode failed")
+
+    monkeypatch.setattr(render, "run", failed_run)
+    with pytest.raises(RuntimeError, match="encode failed"):
+        await render.render_clip(
+            "source.mp4", CAND, {}, None, str(final),
+            fps=30, crf=20, preset="fast",
+        )
+
+    assert final.read_bytes() == b"previous render"
+    assert not seen["failed_temp"].exists()
 
 
 def test_preview_constants_are_low_res_and_cheap():

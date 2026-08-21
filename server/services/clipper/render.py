@@ -28,6 +28,7 @@ from services.clipper.ffmpeg_tools import (
     run,
     video_info,
 )
+from services.clipper import storage
 
 logger = logging.getLogger("clipforge.clipper.render")
 
@@ -333,8 +334,10 @@ async def render_clip(
     """Render one clip at full resolution. Returns {path, size, duration}."""
     _raise_if_cancelled(is_cancelled)
 
+    final = Path(out)
+    temp = storage.temporary_output_path(final)
     cmd = build_render_cmd(
-        src, cand, plan, ass_path, out,
+        src, cand, plan, ass_path, str(temp),
         fps=fps, crf=crf, preset=preset, watermark=watermark,
         drop_spans=drop_spans,
         has_audio=bool(_has_audio(src)),
@@ -346,11 +349,17 @@ async def render_clip(
         duration = max(0.1, duration - removed_seconds(drop_spans))
     await _report(on_progress, 0.05, f"Encoding {duration:.1f}s at 1080x1920")
 
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    await _in_thread(lambda: run(cmd, timeout=RENDER_TIMEOUT, what="clip render"))
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+        await _in_thread(lambda: run(cmd, timeout=RENDER_TIMEOUT, what="clip render"))
 
-    await _report(on_progress, 0.95, "Verifying output")
-    return await _verify(out, duration)
+        await _report(on_progress, 0.95, "Verifying output")
+        result = await _verify(str(temp), duration)
+        storage.finalize_output(temp, final)
+        result["path"] = str(final)
+        return result
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 async def render_preview(
@@ -383,8 +392,10 @@ async def render_preview(
         # would take time out of a window it was never in.
         drop_spans = spans_within(drop_spans, capped)
 
+    final = Path(out)
+    temp = storage.temporary_output_path(final)
     cmd = build_render_cmd(
-        src, window, plan, ass_path, out,
+        src, window, plan, ass_path, str(temp),
         fps=PREVIEW_FPS, crf=PREVIEW_CRF, preset=PREVIEW_PRESET,
         out_w=PREVIEW_W, out_h=PREVIEW_H,
         watermark=watermark, drop_spans=drop_spans,
@@ -393,9 +404,15 @@ async def render_preview(
         # is judging the wrong file.
         has_audio=bool(_has_audio(src)),
     )
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    await _in_thread(lambda: run(cmd, timeout=PREVIEW_TIMEOUT, what="clip preview"))
-    return await _verify(out, capped)
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+        await _in_thread(lambda: run(cmd, timeout=PREVIEW_TIMEOUT, what="clip preview"))
+        result = await _verify(str(temp), capped)
+        storage.finalize_output(temp, final)
+        result["path"] = str(final)
+        return result
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 # ── Execution helpers ────────────────────────────────────────────────────────

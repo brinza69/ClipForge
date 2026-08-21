@@ -190,6 +190,7 @@ def _json_default(obj: Any) -> Any:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text through a same-directory temporary file and replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp{uuid.uuid4().hex[:8]}")
     try:
@@ -200,6 +201,45 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+def atomic_write_text(path: str | Path, text: str) -> None:
+    """Atomically publish a text file without exposing a partial write."""
+    _atomic_write_text(Path(path), text)
+
+
+def atomic_write_json(path: str | Path, data: Any, **kwargs: Any) -> None:
+    """Atomically serialise and publish JSON data."""
+    atomic_write_text(Path(path), json.dumps(data, **kwargs))
+
+
+def temporary_output_path(path: str | Path) -> Path:
+    """Return a same-directory temporary media path preserving its suffix.
+
+    Keeping the final suffix matters because ffmpeg infers the muxer from it.
+    The temporary name is hidden and unique, so concurrent retries cannot
+    write into one another's output.
+    """
+    final = Path(path)
+    return final.with_name(f".{final.stem}.tmp-{uuid.uuid4().hex}{final.suffix}")
+
+
+def finalize_output(temp: str | Path, final: str | Path) -> None:
+    """Atomically publish a validated media file over the final path."""
+    temp_path = Path(temp)
+    final_path = Path(final)
+    if not temp_path.is_file():
+        raise FileNotFoundError(f"temporary output is missing: {temp_path}")
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(temp_path, final_path)
+
+
+def is_usable_output(path: str | Path, minimum_bytes: int = 1024) -> bool:
+    """Whether a stored media path is a regular file with usable bytes."""
+    try:
+        return Path(path).is_file() and Path(path).stat().st_size > minimum_bytes
+    except OSError:
+        return False
+
+
 def write_artifact(project_id: str, name: str, data: dict | list) -> Path:
     """Atomically write analysis/{name}.json. Raises ValueError for a name
     outside ARTIFACT_NAMES."""
@@ -207,7 +247,7 @@ def write_artifact(project_id: str, name: str, data: dict | list) -> Path:
     # Compact separators, not indent=2: signals.json carries one sample per
     # proxy frame, so pretty-printing a 3-hour stream costs tens of MB.
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=_json_default)
-    _atomic_write_text(path, text)
+    atomic_write_text(path, text)
     return path
 
 
