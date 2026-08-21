@@ -14,6 +14,7 @@ from typing import Optional, Callable, Dict, Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from database import async_session
 from models import JobModel, JobStatus, JobType, ProjectModel
@@ -87,9 +88,22 @@ class JobQueue:
         job_type: str,
         clip_id: Optional[str] = None,
         metadata: Optional[dict] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
         """Add a job to the queue. Returns job ID."""
+        key = str(idempotency_key) if idempotency_key else None
         async with async_session() as session:
+            if key:
+                existing = await session.scalar(
+                    select(JobModel.id)
+                    .where(JobModel.idempotency_key == key)
+                    .where(JobModel.status.in_([
+                        JobStatus.queued.value, JobStatus.running.value
+                    ]))
+                    .limit(1)
+                )
+                if existing:
+                    return existing
             job = JobModel(
                 project_id=project_id,
                 clip_id=clip_id,
@@ -97,10 +111,27 @@ class JobQueue:
                 status=JobStatus.queued.value,
                 attempt_count=0,
                 cancellation_requested=False,
+                idempotency_key=key,
                 metadata_json=json.dumps(metadata) if metadata else None,
             )
             session.add(job)
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                if not key:
+                    raise
+                existing = await session.scalar(
+                    select(JobModel.id)
+                    .where(JobModel.idempotency_key == key)
+                    .where(JobModel.status.in_([
+                        JobStatus.queued.value, JobStatus.running.value
+                    ]))
+                    .limit(1)
+                )
+                if not existing:
+                    raise
+                return existing
             await session.refresh(job)
             logger.info(f"Enqueued job {job.id} [{job_type}] for project {project_id}")
             return job.id

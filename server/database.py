@@ -64,12 +64,12 @@ def _sqlite_pragmas(dbapi_connection, _record) -> None:
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-SCHEMA_VERSION = "2026-08-21-1"
+SCHEMA_VERSION = "2026-08-21-2"
 
 _REQUIRED_MIGRATED_COLUMNS = {
     "jobs": {
         "worker_id", "lease_expires_at", "last_heartbeat", "attempt_count",
-        "cancellation_requested",
+        "cancellation_requested", "idempotency_key",
     },
     "projects": {
         "processing_mode", "batch_id", "batch_index", "erase_params",
@@ -102,7 +102,8 @@ _REQUIRED_MIGRATED_COLUMNS = {
 }
 
 _REQUIRED_INDEXES = {
-    "idx_jobs_lease_expires_at", "idx_projects_batch_id",
+    "idx_jobs_lease_expires_at", "idx_jobs_active_idempotency",
+    "idx_projects_batch_id",
     "idx_clips_project_rank", "idx_clip_feedback_clip", "idx_clip_feedback_event",
 }
 
@@ -149,6 +150,7 @@ async def init_db() -> None:
             ("last_heartbeat", "DATETIME"),
             ("attempt_count", "INTEGER DEFAULT 0"),
             ("cancellation_requested", "BOOLEAN DEFAULT 0"),
+            ("idempotency_key", "VARCHAR(64)"),
         ]
         for col, col_type in _job_migrations:
             try:
@@ -162,6 +164,16 @@ async def init_db() -> None:
             await conn.execute(
                 text("CREATE INDEX IF NOT EXISTS idx_jobs_lease_expires_at ON jobs(lease_expires_at)")
             )
+        except Exception:
+            pass
+
+        try:
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active_idempotency "
+                "ON jobs(idempotency_key) "
+                "WHERE idempotency_key IS NOT NULL "
+                "AND status IN ('queued', 'running')"
+            ))
         except Exception:
             pass
 

@@ -210,6 +210,9 @@ class JobModel(Base):
     progress_message: Mapped[str] = mapped_column(String(200), default="")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A deterministic request fingerprint prevents double-clicks from
+    # creating two active pipelines for the same input/configuration.
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Persistent ownership prevents a second backend process from recovering
     # or finalising work that is still owned by the first one.

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -22,7 +21,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from database import async_session
+from job_queue import job_queue
 from models import JobModel, JobStatus, JobType, ProjectModel, ProjectStatus
+from services.job_idempotency import job_idempotency_key
 from services.downloader import detect_source_type, fetch_metadata, validate_url
 
 logger = logging.getLogger("clipforge.routers.remix")
@@ -149,7 +150,6 @@ async def remix_start(req: StartRequest):
         await session.refresh(project)
         project_id = project.id
 
-    job_id = uuid.uuid4().hex[:12]
     job_meta = {
         "url": req.url,
         "title": req.title or metdat.get("title"),
@@ -181,19 +181,31 @@ async def remix_start(req: StartRequest):
         "commentator_chroma_blend": req.commentator_chroma_blend,
     }
 
+    job_id = await job_queue.enqueue(
+        project_id=project_id,
+        job_type=JobType.remix_pipeline.value,
+        metadata=job_meta,
+        idempotency_key=job_idempotency_key(JobType.remix_pipeline.value, job_meta),
+    )
+
     async with async_session() as session:
-        row = JobModel(
-            id=job_id,
-            project_id=project_id,
-            type=JobType.remix_pipeline.value,
-            status=JobStatus.queued.value,
-            metadata_json=json.dumps(job_meta),
-        )
-        session.add(row)
-        await session.commit()
+        job = await session.get(JobModel, job_id)
+        if job and job.project_id != project_id:
+            orphan = await session.get(ProjectModel, project_id)
+            if orphan:
+                await session.delete(orphan)
+                await session.commit()
+            project_id = job.project_id
+            already_running = True
+        else:
+            already_running = False
 
     logger.info(f"remix_pipeline {job_id} enqueued for project {project_id}")
-    return {"job_id": job_id, "project_id": project_id}
+    return {
+        "job_id": job_id,
+        "project_id": project_id,
+        "already_running": already_running,
+    }
 
 
 @router.get("/recent")
