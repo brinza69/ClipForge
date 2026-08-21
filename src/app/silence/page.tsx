@@ -6,7 +6,6 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import {
   AudioLines, Loader2, Download, Upload, AlertCircle, CheckCircle2,
   Sparkles, Trash2, Settings2, FileVideo, FileAudio,

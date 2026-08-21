@@ -287,7 +287,6 @@ export default function CaptionEraserPage() {
       const MAX_QUIET_RETRIES = 6;  // tolerate ~9s of poll errors before giving up
       let quietErrors = 0;
 
-      // eslint-disable-next-line no-constant-condition
       while (true) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         attempts++;
@@ -297,7 +296,7 @@ export default function CaptionEraserPage() {
           if (!r.ok) throw new Error(`status ${r.status}`);
           job = await r.json();
           quietErrors = 0;
-        } catch (e) {
+        } catch {
           quietErrors++;
           if (quietErrors > MAX_QUIET_RETRIES) throw new Error("Lost connection to backend while polling job status.");
           continue;

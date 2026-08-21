@@ -25,6 +25,7 @@ from database import async_session
 from models import JobModel, JobStatus, JobType
 from routers.upload_limits import read_upload_limited
 from services import commentators
+from services.file_validation import is_usable_file
 
 logger = logging.getLogger("clipforge.routers.commentators")
 router = APIRouter(prefix="/api/commentators", tags=["commentators"])
@@ -74,7 +75,7 @@ async def create(
 @router.get("/{preset_id}/video")
 async def get_video(preset_id: str):
     p = commentators._video_path(preset_id)
-    if not p.exists():
+    if not is_usable_file(p):
         raise HTTPException(404, "Video missing for this preset")
     return FileResponse(path=str(p), media_type="video/mp4", filename=p.name)
 
@@ -82,7 +83,7 @@ async def get_video(preset_id: str):
 @router.get("/{preset_id}/thumb")
 async def get_thumb(preset_id: str):
     p = commentators._thumb_path(preset_id)
-    if not p.exists():
+    if not is_usable_file(p):
         raise HTTPException(404, "Thumb not available")
     return FileResponse(path=str(p), media_type="image/jpeg")
 

@@ -11,8 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Type, Upload, Plus, Trash2, Loader2, Download, AlertCircle,
-  CheckCircle2, FileVideo, Palette, Sparkles, Save,
+  Type, Upload, Plus, Trash2, Loader2, Download, FileVideo, Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CloneFromVideo } from "@/components/captions/clone-from-video";

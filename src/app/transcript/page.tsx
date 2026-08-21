@@ -28,15 +28,9 @@ interface EngineInfo {
   cost: string;
 }
 
-interface Language {
-  code: string;
-  name: string;
-}
-
 export default function TranscriptStudioPage() {
   const [engine, setEngine] = useState<Engine>("ollama");
   const [engines, setEngines] = useState<EngineInfo[]>([]);
-  const [languages, setLanguages] = useState<Language[]>([]);
   const [targetLang, setTargetLang] = useState<string>("");  // "" = keep original
   const [model, setModel] = useState<string>("");
 
@@ -67,7 +61,6 @@ export default function TranscriptStudioPage() {
       const r = await fetch(`/worker-api/transcript/engines`);
       const j = await r.json();
       setEngines(j.engines || []);
-      setLanguages(j.languages || []);
     } catch {
       setEngines([]);
     }

@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -33,11 +34,15 @@ from models import JobModel
 _SERVER = str(Path(__file__).resolve().parent.parent)
 
 
-async def _queued(job_id: str, created_at: datetime | None = None) -> None:
+async def _queued(
+    job_id: str,
+    created_at: datetime | None = None,
+    job_type: str = "clipper_export",
+) -> None:
     created_at = created_at or datetime.utcnow()
     async with async_session() as session:
         session.add(JobModel(
-            id=job_id, project_id="claim-proj", type="clipper_export", status="queued",
+            id=job_id, project_id="claim-proj", type=job_type, status="queued",
             progress=0.0, created_at=created_at,
             updated_at=created_at, metadata_json=json.dumps({}),
         ))
@@ -390,3 +395,114 @@ async def test_two_real_processes_cannot_both_claim_one_job(tmp_path):
 
     assert outs.count("WON") == 1, f"claims: {outs}"
     assert await _status("claim-processes") == "running"
+
+
+_CRASH_CHILD = textwrap.dedent("""
+    import asyncio, os, sys
+    sys.path.insert(0, sys.argv[2])
+    os.environ["CLIPFORGE_DATA_DIR"] = sys.argv[1]
+    from database import async_session
+    from job_queue import JobQueue
+
+    async def main():
+        async with async_session() as session:
+            claimed = await JobQueue()._claim(session, sys.argv[3])
+        print("CLAIMED" if claimed else "NOT_CLAIMED", flush=True)
+        # A hard process exit deliberately skips graceful queue shutdown.
+        os._exit(0)
+
+    asyncio.run(main())
+""")
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_a_job_owned_by_a_crashed_process(tmp_path):
+    """A new worker can reclaim a lease left behind by a hard process exit."""
+    job_id = "restart-recovery"
+    await _queued(job_id)
+    child = tmp_path / "crashed_worker.py"
+    child.write_text(_CRASH_CHILD, encoding="utf-8")
+
+    process = subprocess.Popen(
+        [sys.executable, str(child), os.environ["CLIPFORGE_DATA_DIR"],
+         _SERVER, job_id],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    out, err = process.communicate(timeout=120)
+    assert process.returncode == 0, f"crashed worker failed:\n{err}"
+    assert out.strip() == "CLAIMED"
+
+    owned = await _job(job_id)
+    assert owned.status == "running"
+    assert owned.worker_id
+
+    async with async_session() as session:
+        job = await session.get(JobModel, job_id)
+        job.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        await session.commit()
+
+    recovery = JobQueue()
+    await recovery.recover_stuck_jobs()
+
+    recovered = await _job(job_id)
+    assert recovered.status == "queued"
+    assert recovered.worker_id is None
+    assert recovered.attempt_count == 1
+    assert "requeued" in recovered.progress_message
+
+    await _claim(recovery, job_id)
+    claimed_again = await _job(job_id)
+    assert claimed_again.worker_id == recovery.worker_id
+    assert claimed_again.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_queue_processes_many_jobs_with_bounded_concurrency(monkeypatch):
+    """Several queued jobs finish once each without exceeding the lane cap."""
+    from config import settings
+
+    monkeypatch.setattr(settings, "max_concurrent_jobs", 3)
+    queue = JobQueue()
+    active = 0
+    max_active = 0
+    handled: list[str] = []
+    guard = asyncio.Lock()
+
+    async def handler(*, job_id, queue, **_kwargs):
+        nonlocal active, max_active
+        async with guard:
+            active += 1
+            max_active = max(max_active, active)
+            handled.append(job_id)
+        await queue.update_progress(job_id, 0.5, "halfway")
+        await asyncio.sleep(0.03)
+        async with guard:
+            active -= 1
+
+    queue.register_handler("queue_stress", handler)
+    job_ids = [f"queue-stress-{i}" for i in range(12)]
+    for i, job_id in enumerate(job_ids):
+        await _queued(
+            job_id,
+            created_at=datetime(1900, 1, 1) + timedelta(seconds=i),
+            job_type="queue_stress",
+        )
+
+    deadline = time.monotonic() + 10.0
+    try:
+        while time.monotonic() < deadline:
+            statuses = await asyncio.gather(*(_status(job_id) for job_id in job_ids))
+            if all(status == "done" for status in statuses):
+                break
+            await queue._process_next()
+            await asyncio.sleep(0.01)
+    finally:
+        await queue.stop()
+
+    final_statuses = await asyncio.gather(*(_status(job_id) for job_id in job_ids))
+    assert all(status == "done" for status in final_statuses)
+    assert len(handled) == len(job_ids)
+    assert len(set(handled)) == len(job_ids)
+    assert max_active <= 3
