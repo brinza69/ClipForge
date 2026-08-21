@@ -34,6 +34,17 @@ from services.job_idempotency import job_idempotency_key
 logger = logging.getLogger("clipforge.routers.parallel")
 router = APIRouter(prefix="/api/parallel", tags=["parallel"])
 
+_MIN_OUTPUT_BYTES = 1024
+
+
+def _is_usable_output(path: str | Path) -> bool:
+    """Accept only a regular, non-truncated media file for serving."""
+    try:
+        candidate = Path(path)
+        return candidate.is_file() and candidate.stat().st_size > _MIN_OUTPUT_BYTES
+    except OSError:
+        return False
+
 
 class VariantConfig(BaseModel):
     """One output video's per-variant settings. Voice + captions + commentator."""
@@ -175,7 +186,7 @@ def _variant_view(r: dict) -> dict:
     if fp:
         try:
             p = Path(fp)
-            if p.exists():
+            if _is_usable_output(p):
                 exists, size = True, p.stat().st_size
         except Exception:
             pass
@@ -195,7 +206,7 @@ def _variant_view(r: dict) -> dict:
                 "part": p.get("part"), "of": p.get("of"),
                 "filename": p.get("filename"),
                 "start": p.get("start"), "duration": p.get("duration"),
-                "available": bool(p.get("path") and Path(p["path"]).exists()),
+                "available": bool(p.get("path") and _is_usable_output(p["path"])),
             }
             for p in (r.get("parts") or [])
         ],
@@ -249,7 +260,7 @@ async def parallel_download(job_id: str, index: int):
     if not match:
         raise HTTPException(404, f"Variant {index} not found")
     out = Path(match.get("final_path", ""))
-    if not out.exists():
+    if not _is_usable_output(out):
         raise HTTPException(410, "Variant video no longer available")
     raw_name = match.get("output_filename") or out.name
     safe = _safe_filename(Path(raw_name).stem) + (Path(raw_name).suffix or ".mp4")
@@ -280,7 +291,7 @@ async def parallel_download_part(job_id: str, index: int, part: int):
     if not pmatch:
         raise HTTPException(404, f"Part {part} not found")
     out = Path(pmatch.get("path", ""))
-    if not out.exists():
+    if not _is_usable_output(out):
         raise HTTPException(410, "Part no longer available")
     safe = _safe_filename(out.stem) + ".mp4"
     return FileResponse(
