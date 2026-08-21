@@ -681,10 +681,28 @@ export default function RemixPage() {
   useEffect(() => {
     if (!jobId) return;
     let stop = false;
+    let inFlight = false;
+    let pollErrors = 0;
+    const deadline = Date.now() + 2 * 60 * 60 * 1000;
     const tick = async () => {
+      if (stop || inFlight) return;
+      if (Date.now() > deadline) {
+        stop = true;
+        setErrorMsg("Pipeline timed out after 2 hours");
+        return;
+      }
+      inFlight = true;
       try {
         const r = await fetch(`/worker-api/jobs/${jobId}`);
-        if (!r.ok) return;
+        if (!r.ok) {
+          pollErrors++;
+          if (pollErrors > 10) {
+            stop = true;
+            setErrorMsg(`Lost connection to backend while polling (${r.status})`);
+          }
+          return;
+        }
+        pollErrors = 0;
         const j = await r.json();
         if (stop) return;
         setProgress(Math.round((j.progress || 0) * 100));
@@ -719,7 +737,14 @@ export default function RemixPage() {
           stop = true;
           setErrorMsg("Cancelled");
         }
-      } catch { /* */ }
+      } catch {
+        pollErrors++;
+        if (pollErrors > 10) {
+          stop = true;
+          setErrorMsg("Lost connection to backend while polling job status");
+        }
+      }
+      finally { inFlight = false; }
     };
     tick();
     const id = setInterval(tick, 1500);

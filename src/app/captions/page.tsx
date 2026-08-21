@@ -457,6 +457,7 @@ export default function CaptionStudioPage() {
 
       // Poll
       const start = Date.now();
+      let completed = false;
       while (Date.now() - start < 30 * 60 * 1000) {
         await new Promise((r) => setTimeout(r, 1000));
         const sr = await fetch(`/worker-api/jobs/${job_id}`);
@@ -464,10 +465,11 @@ export default function CaptionStudioPage() {
         const j = await sr.json();
         setBurnProgress(Math.round((j.progress || 0) * 100));
         setBurnMsg(j.progress_message || "");
-        if (j.status === "done") break;
+        if (j.status === "done") { completed = true; break; }
         if (j.status === "failed") throw new Error(j.error || "Burn failed");
         if (j.status === "cancelled") throw new Error("Cancelled");
       }
+      if (!completed) throw new Error("Job timed out after 30 minutes");
 
       const dl = await fetch(`/worker-api/captions/burn/${job_id}/download`);
       if (!dl.ok) throw new Error("Download failed");
