@@ -192,6 +192,7 @@ def _variant_view(r: dict) -> dict:
             pass
     return {
         "index": r.get("index"),
+        "status": "done",
         "name": r.get("name"),
         "label": r.get("label"),
         "commentator_preset_id": r.get("commentator_preset_id"),
@@ -213,6 +214,34 @@ def _variant_view(r: dict) -> dict:
     }
 
 
+def _failed_variant_view(failure: dict) -> dict:
+    """Shape a failed variant without ever exposing a download link."""
+    return {
+        "index": failure.get("index"),
+        "status": "failed",
+        "name": failure.get("name"),
+        "label": failure.get("label"),
+        "commentator_preset_id": None,
+        "tts_engine": None,
+        "caption_template_id": None,
+        "output_filename": "",
+        "file_size": 0,
+        "file_available": False,
+        "error": failure.get("error") or "Variant failed",
+        "drive": None,
+        "parts": [],
+    }
+
+
+def _all_variant_views(meta: dict) -> list[dict]:
+    """Return successful and failed variants in their original order."""
+    views = [
+        *[_variant_view(r) for r in (meta.get("results") or [])],
+        *[_failed_variant_view(f) for f in (meta.get("variant_failures") or [])],
+    ]
+    return sorted(views, key=lambda item: item.get("index", 10**9))
+
+
 @router.get("/{job_id}/result")
 async def parallel_result(job_id: str):
     """Return per-variant results once the job is done."""
@@ -225,7 +254,6 @@ async def parallel_result(job_id: str):
     if job.status != JobStatus.done.value:
         raise HTTPException(409, f"Job not done (status={job.status})")
     meta = json.loads(job.metadata_json or "{}")
-    results = meta.get("results") or []
     return {
         "job_id": job_id,
         "project_id": job.project_id,
@@ -234,7 +262,8 @@ async def parallel_result(job_id: str):
             "original_translated": "",
             "ai_generated": "",
         },
-        "variants": [_variant_view(r) for r in results],
+        "variants": _all_variant_views(meta),
+        "failed_variants": meta.get("variant_failures") or [],
         "sheets_commit": meta.get("sheets_commit"),
         "sheets_row": meta.get("sheets_row"),
         "sheets_number": meta.get("sheets_number"),
@@ -322,14 +351,14 @@ async def parallel_recent(limit: int = 10):
             meta = json.loads(row.metadata_json or "{}")
         except Exception:
             meta = {}
-        results = meta.get("results") or []
+        variants = _all_variant_views(meta)
         out.append({
             "job_id": row.id,
             "project_id": row.project_id,
             "title": meta.get("title") or "Parallel",
             "url": meta.get("url"),
-            "variant_count": len(results),
-            "variants": [_variant_view(r) for r in results],
+            "variant_count": len(variants),
+            "variants": variants,
             "finished_at": row.updated_at.isoformat() if row.updated_at else None,
         })
     return {"runs": out, "count": len(out)}

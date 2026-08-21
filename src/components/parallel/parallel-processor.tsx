@@ -40,6 +40,8 @@ interface Commentator { id: string; name: string }
 interface FontsLists { system: string[]; user: { family: string; filename: string }[] }
 interface VariantResult {
   index: number;
+  status?: "done" | "failed";
+  error?: string;
   name: string | null;
   commentator_preset_id: string | null;
   output_filename: string;
@@ -559,6 +561,11 @@ export function ParallelProcessor({
                         const d = driveLabel(r.drive);
                         return d ? <div className={`text-[11px] mt-0.5 ${d.cls}`} title={r.drive?.reason || ""}>{d.text}</div> : null;
                       })()}
+                    {r.error && (
+                      <div className="text-[11px] text-destructive mt-0.5" title={r.error}>
+                        Failed: {r.error}
+                      </div>
+                    )}
                     </div>
                     {r.file_available ? (
                       <a href={`/worker-api/parallel/${jobId}/download/${r.index}`} download={r.output_filename}
@@ -566,7 +573,9 @@ export function ParallelProcessor({
                         <Download className="h-3.5 w-3.5" /> {r.parts && r.parts.length ? "Full" : "Download"}
                       </a>
                     ) : (
-                      <Badge variant="outline" className="text-[10px] text-muted-foreground shrink-0">file gone</Badge>
+                      <Badge variant="outline" className={`text-[10px] shrink-0 ${r.error ? "text-destructive" : "text-muted-foreground"}`}>
+                        {r.error ? "failed" : "file gone"}
+                      </Badge>
                     )}
                   </div>
                   {r.parts && r.parts.length > 0 && (

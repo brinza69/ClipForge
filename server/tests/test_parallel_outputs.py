@@ -1,6 +1,6 @@
 """Parallel results must never advertise or serve incomplete outputs."""
 
-from routers.parallel import _is_usable_output, _variant_view
+from routers.parallel import _all_variant_views, _is_usable_output, _variant_view
 
 
 def test_parallel_output_requires_regular_file_with_usable_bytes(tmp_path):
@@ -30,3 +30,18 @@ def test_variant_view_marks_tiny_outputs_and_parts_unavailable(tmp_path):
     assert view["file_available"] is False
     assert view["file_size"] == 0
     assert view["parts"][0]["available"] is False
+
+
+def test_all_variant_views_keeps_success_and_failure_order():
+    views = _all_variant_views({
+        "results": [{"index": 0, "name": "first"}],
+        "variant_failures": [{
+            "index": 1, "name": "second", "label": "second", "error": "quota",
+        }],
+    })
+
+    assert [view["index"] for view in views] == [0, 1]
+    assert views[0]["status"] == "done"
+    assert views[1]["status"] == "failed"
+    assert views[1]["file_available"] is False
+    assert views[1]["error"] == "quota"
