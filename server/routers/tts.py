@@ -29,6 +29,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from routers.upload_limits import read_upload_limited
+from services.file_validation import is_usable_file
 
 logger = logging.getLogger("clipforge.routers.tts")
 router = APIRouter(prefix="/api/tts", tags=["tts"])
@@ -421,7 +422,7 @@ async def download_tts_result(job_id: str):
     if job.status != "done" or not job.output_path:
         raise HTTPException(425, "Still processing")
     p = Path(job.output_path)
-    if not p.exists():
+    if not is_usable_file(p):
         raise HTTPException(410, "Result file no longer available")
     ext = p.suffix.lower() or (".mp3" if job.output_mime == "audio/mpeg" else ".wav")
     filename = f"clipforge_tts_{job.id}{ext}"

@@ -25,6 +25,7 @@ from job_queue import job_queue
 from models import JobModel, JobStatus, JobType, ProjectModel, ProjectStatus
 from services.job_idempotency import job_idempotency_key
 from services.downloader import detect_source_type, fetch_metadata, validate_url
+from services.file_validation import is_usable_file
 
 logger = logging.getLogger("clipforge.routers.remix")
 router = APIRouter(prefix="/api/remix", tags=["remix"])
@@ -253,7 +254,7 @@ async def remix_recent(limit: int = 10, offset: int = 0):
         if final_path:
             try:
                 p = Path(final_path)
-                if p.exists():
+                if is_usable_file(p):
                     exists = True
                     size_bytes = p.stat().st_size
             except Exception:
@@ -311,7 +312,7 @@ async def remix_download(job_id: str):
         raise HTTPException(409, f"Job not done (status={job.status})")
     meta = json.loads(job.metadata_json or "{}")
     out = Path(meta.get("final_path", ""))
-    if not out.exists():
+    if not is_usable_file(out):
         raise HTTPException(410, "Final video no longer available")
     raw_name = meta.get("output_filename") or out.name
     safe = _safe_filename(Path(raw_name).stem) + (Path(raw_name).suffix or ".mp4")

@@ -38,6 +38,7 @@ from database import async_session
 from models import JobModel, JobStatus, JobType
 from routers.upload_limits import read_upload_limited
 from services import caption_overlays, caption_templates, font_manager
+from services.file_validation import is_usable_file
 
 logger = logging.getLogger("clipforge.routers.captions")
 router = APIRouter(prefix="/api/captions", tags=["captions"])
@@ -403,7 +404,7 @@ async def download_burn(job_id: str):
         raise HTTPException(409, f"Job not done (status={job.status})")
     meta = json.loads(job.metadata_json or "{}")
     out = Path(meta.get("output_path", ""))
-    if not out.exists():
+    if not is_usable_file(out):
         raise HTTPException(410, "Output no longer available")
     filename = meta.get("output_filename") or out.name
     return FileResponse(

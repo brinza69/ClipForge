@@ -29,6 +29,7 @@ from job_queue import job_queue
 from models import JobModel, JobStatus, JobType, ProjectModel, ProjectStatus
 from routers.remix import Zone, _safe_filename
 from services.downloader import detect_source_type, fetch_metadata, validate_url
+from services.file_validation import is_usable_file
 from services.job_idempotency import job_idempotency_key
 
 logger = logging.getLogger("clipforge.routers.parallel")
@@ -39,11 +40,7 @@ _MIN_OUTPUT_BYTES = 1024
 
 def _is_usable_output(path: str | Path) -> bool:
     """Accept only a regular, non-truncated media file for serving."""
-    try:
-        candidate = Path(path)
-        return candidate.is_file() and candidate.stat().st_size > _MIN_OUTPUT_BYTES
-    except OSError:
-        return False
+    return is_usable_file(path, minimum_bytes=_MIN_OUTPUT_BYTES)
 
 
 class VariantConfig(BaseModel):

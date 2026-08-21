@@ -22,6 +22,7 @@ from database import async_session, get_session
 from models import JobModel, JobStatus, JobType, ProjectModel, ProjectStatus
 from routers.upload_limits import read_upload_limited
 from services.downloader import validate_url, detect_source_type, fetch_metadata
+from services.file_validation import is_usable_file
 from job_queue import job_queue
 
 logger = logging.getLogger("clipforge.routers.utilities")
@@ -156,7 +157,7 @@ async def download_erase_result(job_id: str):
 
     meta = _json.loads(job.metadata_json or "{}")
     out = Path(meta.get("output_path", ""))
-    if not out.exists():
+    if not is_usable_file(out):
         raise HTTPException(410, "Output file no longer available")
 
     filename = meta.get("output_filename") or out.name
@@ -297,7 +298,7 @@ async def download_silence_remove_result(job_id: str):
 
     meta = json.loads(job.metadata_json or "{}")
     out = Path(meta.get("output_path", ""))
-    if not out.exists():
+    if not is_usable_file(out):
         raise HTTPException(410, "Output file no longer available")
 
     filename = meta.get("output_filename") or out.name
@@ -455,7 +456,7 @@ async def download_upscale_result(job_id: str):
 
     meta = json.loads(job.metadata_json or "{}")
     out = Path(meta.get("output_path", ""))
-    if not out.exists():
+    if not is_usable_file(out):
         raise HTTPException(410, "Output file no longer available")
 
     filename = meta.get("output_filename") or out.name
