@@ -1006,6 +1006,13 @@ async def handle_remix_pipeline(
     project_dir = Path(settings.media_dir) / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
 
+    async def _persist_metadata() -> None:
+        async with async_session() as session:
+            job = await session.get(JobModel, job_id)
+            if job:
+                job.metadata_json = json.dumps(cfg)
+                await session.commit()
+
     # Stage 1 — download (0.00–0.10)
     slc_dl = _Sliced(queue, job_id, 0.00, 0.10)
     video_path = await _stage_download(cfg, slc_dl, queue, job_id, project_id)
@@ -1078,6 +1085,20 @@ async def handle_remix_pipeline(
     else:
         final_path = captioned_path
 
+    # Publish the output paths before optional post-processing. If the worker
+    # dies during the descriptions stage, failure cleanup can still preserve
+    # the already-rendered video instead of deleting the user's deliverable.
+    cfg.update({
+        "video_path": str(video_path),
+        "erased_path": str(erased_path),
+        "voice_path": str(voice_path),
+        "captioned_path": str(captioned_path),
+        "commentator_stats": commentator_stats,
+        "final_path": str(final_path),
+        "speed_match_stats": sm_stats,
+    })
+    await _persist_metadata()
+
     # Stage 7 — descriptions (0.95–1.00). Two short LLM calls; the user gets
     # both an original-translated and an AI-generated description.
     slc_desc = _Sliced(queue, job_id, 0.95, 1.00)
@@ -1102,11 +1123,7 @@ async def handle_remix_pipeline(
         "descriptions": descriptions,
         "output_filename": f"{Path(cfg.get('title') or project_id).stem}_remix.mp4",
     })
-    async with async_session() as session:
-        job = await session.get(JobModel, job_id)
-        if job:
-            job.metadata_json = json.dumps(cfg)
-            await session.commit()
+    await _persist_metadata()
 
     logger.info(f"remix_pipeline {job_id}: done → {final_path}")
     await queue.update_progress(job_id, 1.0, "Remix complete")
