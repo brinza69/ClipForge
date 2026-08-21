@@ -69,6 +69,12 @@ class JobQueue:
         )
         self._processor_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
+        self._ready = False
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether startup recovery completed and the processor is serving."""
+        return self._ready
 
     def register_handler(self, job_type: str, handler: Callable):
         """Register a handler function for a job type."""
@@ -656,18 +662,24 @@ class JobQueue:
         """Start the background job processor loop."""
         logger.info("Job queue processor started")
         self._stop_event.clear()
+        self._ready = False
 
         try:
             await self.recover_stuck_jobs()
         except Exception:
             logger.exception("Failed to recover stuck jobs on startup")
+            return
 
-        while not self._stop_event.is_set():
-            try:
-                await self._process_next()
-            except Exception as e:
-                logger.exception("Error in job processor loop")
-            await asyncio.sleep(1)
+        self._ready = True
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    await self._process_next()
+                except Exception:
+                    logger.exception("Error in job processor loop")
+                await asyncio.sleep(1)
+        finally:
+            self._ready = False
 
     async def stop(self):
         """Stop the job processor gracefully.
@@ -677,6 +689,7 @@ class JobQueue:
         lease back to `queued`; a hard process kill leaves the lease to the
         next startup's expiry-based recovery.
         """
+        self._ready = False
         self._stop_event.set()
 
         running = list(self._running_jobs.items())
