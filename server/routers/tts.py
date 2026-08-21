@@ -28,6 +28,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from routers.upload_limits import read_upload_limited
 
 logger = logging.getLogger("clipforge.routers.tts")
 router = APIRouter(prefix="/api/tts", tags=["tts"])
@@ -237,11 +238,12 @@ async def upload_voice(
     if suffix not in _AUDIO_EXTS:
         raise HTTPException(400, f"Unsupported audio format. Use one of {sorted(_AUDIO_EXTS)}")
 
-    content = await file.read()
+    content = await read_upload_limited(
+        file, 20 * 1024 * 1024,
+        too_large_detail="Voice sample too large (max 20MB)",
+    )
     if len(content) < 1000:
         raise HTTPException(400, "File appears to be empty")
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(413, "Voice sample too large (max 20MB)")
 
     safe = re.sub(r"[^A-Za-z0-9._\- ]+", "_", name).strip().replace(" ", "_") or "voice"
     target = voices_dir() / f"{safe}{suffix}"

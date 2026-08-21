@@ -27,6 +27,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
+from routers.upload_limits import read_upload_limited
 
 logger = logging.getLogger("clipforge.routers.transcript")
 router = APIRouter(prefix="/api/transcript", tags=["transcript"])
@@ -328,9 +329,10 @@ async def start_clean_from_upload(
     model: Optional[str] = Form(None),
 ):
     _validate_engine_ready(engine)
-    content = await file.read()
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(413, "File too large (max 5MB)")
+    content = await read_upload_limited(
+        file, 5 * 1024 * 1024,
+        too_large_detail="File too large (max 5MB)",
+    )
     try:
         text = content.decode("utf-8", errors="ignore")
     except Exception as e:

@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 from config import settings
 from database import async_session
 from models import JobModel, JobStatus, JobType
+from routers.upload_limits import read_upload_limited
 from services import caption_overlays, caption_templates, font_manager
 
 logger = logging.getLogger("clipforge.routers.captions")
@@ -116,7 +117,13 @@ async def list_fonts():
 
 @router.post("/fonts/upload")
 async def upload_font(file: UploadFile = File(...)):
-    content = await file.read()
+    content = await read_upload_limited(
+        file,
+        font_manager.MAX_FONT_SIZE,
+        too_large_detail=(
+            f"Font too large; max {font_manager.MAX_FONT_SIZE // (1024 * 1024)} MB"
+        ),
+    )
     if not content:
         raise HTTPException(400, "Empty upload")
     try:
@@ -148,9 +155,10 @@ async def upload_source(file: UploadFile = File(...)):
     suffix = Path(file.filename or "video").suffix.lower() or ".mp4"
     if suffix not in {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}:
         raise HTTPException(400, f"Unsupported video format: {suffix}")
-    content = await file.read()
-    if len(content) > 500 * 1024 * 1024:
-        raise HTTPException(413, "File too large. Maximum 500 MB.")
+    content = await read_upload_limited(
+        file, 500 * 1024 * 1024,
+        too_large_detail="File too large. Maximum 500 MB.",
+    )
     if len(content) < 1000:
         raise HTTPException(400, "File appears to be empty.")
 
@@ -189,9 +197,10 @@ async def clone_style(file: UploadFile = File(...)):
     suffix = Path(file.filename or "video").suffix.lower() or ".mp4"
     if suffix not in {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}:
         raise HTTPException(400, f"Unsupported video format: {suffix}")
-    content = await file.read()
-    if len(content) > 300 * 1024 * 1024:
-        raise HTTPException(413, "File too large. Maximum 300 MB.")
+    content = await read_upload_limited(
+        file, 300 * 1024 * 1024,
+        too_large_detail="File too large. Maximum 300 MB.",
+    )
     if len(content) < 500:
         raise HTTPException(400, "File appears to be empty.")
 

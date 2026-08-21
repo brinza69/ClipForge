@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse
 
 from database import async_session
 from models import JobModel, JobStatus, JobType
+from routers.upload_limits import read_upload_limited
 from services import commentators
 
 logger = logging.getLogger("clipforge.routers.commentators")
@@ -45,7 +46,13 @@ async def create(
     chroma_blend: float = Form(0.05),
     preset_id: Optional[str] = Form(None),
 ):
-    content = await file.read()
+    content = await read_upload_limited(
+        file,
+        commentators.MAX_VIDEO_BYTES,
+        too_large_detail=(
+            f"Video too large; max {commentators.MAX_VIDEO_BYTES // (1024 * 1024)} MB"
+        ),
+    )
     if not content:
         raise HTTPException(400, "Empty upload")
     try:
