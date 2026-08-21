@@ -15,7 +15,6 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 
-const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8420";
 
 type Engine = "ollama" | "openai" | "anthropic";
 
@@ -65,7 +64,7 @@ export default function TranscriptStudioPage() {
 
   const refreshEngines = useCallback(async () => {
     try {
-      const r = await fetch(`${WORKER_URL}/api/transcript/engines`);
+      const r = await fetch(`/worker-api/transcript/engines`);
       const j = await r.json();
       setEngines(j.engines || []);
       setLanguages(j.languages || []);
@@ -89,7 +88,7 @@ export default function TranscriptStudioPage() {
     const key = apiKeyInput.trim();
     setKeySaving(true);
     try {
-      const r = await fetch(`${WORKER_URL}/api/transcript/${keyEngineTarget}/key`, {
+      const r = await fetch(`/worker-api/transcript/${keyEngineTarget}/key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key }),
@@ -154,7 +153,7 @@ export default function TranscriptStudioPage() {
       if (activeLang) body.target_language = activeLang;
       if (model) body.model = model;
 
-      const startRes = await fetch(`${WORKER_URL}/api/transcript/clean`, {
+      const startRes = await fetch(`/worker-api/transcript/clean`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -172,7 +171,7 @@ export default function TranscriptStudioPage() {
       while (true) {
         await new Promise((r) => setTimeout(r, 1000));
         try {
-          const stRes = await fetch(`${WORKER_URL}/api/transcript/jobs/${job_id}`);
+          const stRes = await fetch(`/worker-api/transcript/jobs/${job_id}`);
           if (!stRes.ok) {
             errs++;
             if (errs > 10) throw new Error(`Status check failed (${stRes.status})`);
@@ -191,7 +190,7 @@ export default function TranscriptStudioPage() {
       }
 
       setProgress("Fetching result…");
-      const rRes = await fetch(`${WORKER_URL}/api/transcript/jobs/${job_id}/result`);
+      const rRes = await fetch(`/worker-api/transcript/jobs/${job_id}/result`);
       if (!rRes.ok) {
         let msg = `Result fetch failed: ${rRes.status}`;
         try { const j = await rRes.json(); msg = j.detail || msg; } catch {}

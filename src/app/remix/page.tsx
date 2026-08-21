@@ -25,7 +25,6 @@ import { CommentatorPicker } from "@/components/remix/commentator-picker";
 
 // Same-origin proxy through Next.js rewrites — avoids extension content
 // scripts that intercept cross-port fetches.
-const WORKER_URL = "";
 
 type Rect = { x: number; y: number; w: number; h: number };
 type ActiveRect = "erase" | "caption";

@@ -22,7 +22,6 @@ import { CloneFromVideo } from "@/components/captions/clone-from-video";
 // avoids browser extension content scripts that intercept cross-port fetches
 // — Chrome/Edge plugins like Grammarly, screenshot tools etc. silently break
 // multipart POSTs from :3000 → :8420.
-const WORKER_URL = "";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 

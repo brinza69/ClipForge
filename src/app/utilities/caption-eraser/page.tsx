@@ -11,7 +11,6 @@ import {
 import { toast } from "sonner";
 import { ControlsPanel } from "./controls-panel";
 
-const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8420";
 
 type Dims = { w: number; h: number };
 type RenderedRect = { x: number; y: number; w: number; h: number };
@@ -254,7 +253,7 @@ export default function CaptionEraserPage() {
       // 1. Submit via XHR so we can show real upload progress (fetch hides this).
       const { job_id, output_filename } = await new Promise<{ job_id: string; output_filename: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open("POST", `${WORKER_URL}/api/utilities/erase`);
+        xhr.open("POST", "/worker-api/utilities/erase");
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
             const pct = Math.round((e.loaded / e.total) * 100);
@@ -294,7 +293,7 @@ export default function CaptionEraserPage() {
         attempts++;
         let job: any;
         try {
-          const r = await fetch(`${WORKER_URL}/api/jobs/${job_id}`);
+          const r = await fetch(`/worker-api/jobs/${job_id}`);
           if (!r.ok) throw new Error(`status ${r.status}`);
           job = await r.json();
           quietErrors = 0;
@@ -316,7 +315,7 @@ export default function CaptionEraserPage() {
 
       // 3. Download the result.
       setProgress("Downloading result…");
-      const dl = await fetch(`${WORKER_URL}/api/utilities/erase/${job_id}/download`);
+      const dl = await fetch(`/worker-api/utilities/erase/${job_id}/download`);
       if (!dl.ok) {
         let msg = `Download failed ${dl.status}`;
         try { const j = await dl.json(); msg = j.detail || msg; } catch {}

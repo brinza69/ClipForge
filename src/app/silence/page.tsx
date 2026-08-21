@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8420";
 
 const AUDIO_EXTS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "wma"];
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "m4v", "avi"];
@@ -135,7 +134,7 @@ export default function SilenceRemoverPage() {
       form.append("silence_thresh_db", String(thresholdDb));
       form.append("keep_silence_ms", String(Math.round(keepSilenceSec * 1000)));
 
-      const submit = await fetch(`${WORKER_URL}/api/utilities/silence-remove`, {
+      const submit = await fetch(`/worker-api/utilities/silence-remove`, {
         method: "POST",
         body: form,
       });
@@ -152,7 +151,7 @@ export default function SilenceRemoverPage() {
           throw new Error("Job timed out after 15 minutes");
         }
         await new Promise((r) => setTimeout(r, 1000));
-        const sr = await fetch(`${WORKER_URL}/api/jobs/${job_id}`);
+        const sr = await fetch(`/worker-api/jobs/${job_id}`);
         if (!sr.ok) throw new Error(`Status fetch failed (${sr.status})`);
         const j = await sr.json();
         setProgress(Math.round((j.progress || 0) * 100));
@@ -163,11 +162,11 @@ export default function SilenceRemoverPage() {
       }
 
       // Fetch stats + binary
-      const rRes = await fetch(`${WORKER_URL}/api/utilities/silence-remove/${job_id}/result`);
+      const rRes = await fetch(`/worker-api/utilities/silence-remove/${job_id}/result`);
       const result = await rRes.json();
       setStats(result.stats as Stats);
 
-      const dlRes = await fetch(`${WORKER_URL}/api/utilities/silence-remove/${job_id}/download`);
+      const dlRes = await fetch(`/worker-api/utilities/silence-remove/${job_id}/download`);
       if (!dlRes.ok) throw new Error("Failed to fetch output");
       const blob = await dlRes.blob();
       const url = URL.createObjectURL(blob);

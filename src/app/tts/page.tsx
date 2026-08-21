@@ -16,7 +16,6 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 
-const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8420";
 
 type Engine = "xtts" | "elevenlabs" | "local_clone";
 
@@ -104,7 +103,7 @@ export default function TTSPage() {
 
   const refreshEngines = useCallback(async () => {
     try {
-      const r = await fetch(`${WORKER_URL}/api/tts/engines`);
+      const r = await fetch(`/worker-api/tts/engines`);
       const j = await r.json();
       setEngines(j.engines || []);
     } catch {
@@ -114,7 +113,7 @@ export default function TTSPage() {
 
   const refreshElevenStatus = useCallback(async () => {
     try {
-      const r = await fetch(`${WORKER_URL}/api/tts/elevenlabs/status`);
+      const r = await fetch(`/worker-api/tts/elevenlabs/status`);
       const j: ElevenStatus = await r.json();
       setElevenStatus(j);
     } catch {
@@ -125,7 +124,7 @@ export default function TTSPage() {
   const refreshVoices = useCallback(async (forEngine: Engine) => {
     setVoicesLoading(true);
     try {
-      const r = await fetch(`${WORKER_URL}/api/tts/voices?engine=${forEngine}`);
+      const r = await fetch(`/worker-api/tts/voices?engine=${forEngine}`);
       if (!r.ok) {
         // ElevenLabs not configured, etc. — just empty list
         setVoices([]);
@@ -166,7 +165,7 @@ export default function TTSPage() {
     const key = apiKeyInput.trim();
     setKeySaving(true);
     try {
-      const r = await fetch(`${WORKER_URL}/api/tts/elevenlabs/key`, {
+      const r = await fetch(`/worker-api/tts/elevenlabs/key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key }),
@@ -224,7 +223,7 @@ export default function TTSPage() {
         body.speed = speed;
       }
 
-      const startRes = await fetch(`${WORKER_URL}/api/tts/synthesize`, {
+      const startRes = await fetch(`/worker-api/tts/synthesize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -243,7 +242,7 @@ export default function TTSPage() {
       while (true) {
         await new Promise((r) => setTimeout(r, 1000));
         try {
-          const stRes = await fetch(`${WORKER_URL}/api/tts/jobs/${job_id}`);
+          const stRes = await fetch(`/worker-api/tts/jobs/${job_id}`);
           if (!stRes.ok) {
             errs++;
             if (errs > 10) throw new Error(`Status check failed (${stRes.status})`);
@@ -262,7 +261,7 @@ export default function TTSPage() {
       }
 
       setProgress("Fetching audio…");
-      const dlRes = await fetch(`${WORKER_URL}/api/tts/jobs/${job_id}/download`);
+      const dlRes = await fetch(`/worker-api/tts/jobs/${job_id}/download`);
       if (!dlRes.ok) {
         let msg = `Download failed: ${dlRes.status}`;
         try { const j = await dlRes.json(); msg = j.detail || msg; } catch {}
@@ -293,7 +292,7 @@ export default function TTSPage() {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("name", name);
-      const r = await fetch(`${WORKER_URL}/api/tts/voices`, { method: "POST", body: fd });
+      const r = await fetch(`/worker-api/tts/voices`, { method: "POST", body: fd });
       if (!r.ok) {
         let msg = `Upload failed (${r.status})`;
         try { const j = await r.json(); msg = j.detail || msg; } catch {}
@@ -314,7 +313,7 @@ export default function TTSPage() {
   const onDeleteVoice = async (id: string) => {
     if (!window.confirm(`Delete voice "${id}"?`)) return;
     try {
-      const r = await fetch(`${WORKER_URL}/api/tts/voices/${encodeURIComponent(id)}`, {
+      const r = await fetch(`/worker-api/tts/voices/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       if (!r.ok) throw new Error(`Delete failed (${r.status})`);
