@@ -131,10 +131,12 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 |---|---|
 | `render.py` | the static path: one filtergraph, one encode, optional dead-air cuts |
 | `captions.py` | the caption plan and its overlays |
-| `dynamic_edit.py` | the multi-shot planner: where to cut, which camera, where the subject is |
+| `dynamic_edit.py` | the multi-shot planner: which camera, where the subject is |
+| `dynamic_cuts.py` | WHERE the edit cuts, on the clock — sentence ends, peaks, rhythm. Split from `dynamic_edit.py` at 500 lines; knows nothing about cameras |
 | `dynamic_cameras.py` | the camera rungs and the action band |
 | `dynamic_window.py` | the per-window signals the planner needs — dense face track, motion inside the game region, and `ui_panels`, the per-clip UI rectangles the caption keeps out of |
 | `dynamic_render.py` | the shot list as one `-filter_complex` with `sendcmd` |
+| `dynamic_geometry.py` | the arithmetic on a plan: sizes, anchors, crop expressions and the `sendcmd` script. Holds `composition` — `crop` (a 9:16 window on a subject) and `fit` (the whole frame, letterboxed, for sequences with no subject) |
 | `serialize.py` | DB rows to API dicts, and `effective_content_type` |
 
 ---

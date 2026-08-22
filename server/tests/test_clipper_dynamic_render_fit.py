@@ -65,3 +65,63 @@ def test_an_unknown_composition_is_treated_as_a_crop():
     assert dr.composition_of({"composition": "cinematic"}) == "crop"
     assert dr.composition_of({}) == "crop"
     assert dr.composition_of({"composition": "fit"}) == "fit"
+
+
+# ── The transition, which is the thing the isolated tests do not prove ───────
+
+
+def _plan(*compositions: str) -> dict:
+    """A shot list alternating compositions, one second each."""
+    return {"shots": [
+        {"t0": float(i), "t1": float(i + 1), "composition": c,
+         "rect": ({"x": 0, "y": 0, "w": 3840, "h": 2160} if c == "fit"
+                  else {"x": 1300, "y": 0, "w": 1214, "h": 2160}),
+         "anchor": [1907.0, 1080.0], "move": "hold", "camera": "face"}
+        for i, c in enumerate(compositions)], "style": {}, "hits": []}
+
+
+def test_a_mixed_plan_schedules_both_geometries():
+    """PSNR on a clip of ONLY `crop` shots proves the old path did not regress.
+    It says nothing about the new one. This is the case that does: one plan, one
+    filtergraph, three shots that change composition twice.
+    """
+    script = dr.build_sendcmd(_plan("crop", "fit", "crop"), 3840, 2160)
+
+    widths = [int(w) for w in __import__("re").findall(r"crop w (\d+)", script)]
+    assert 3840 in widths, "the fit shot never asked for the whole frame"
+    assert any(w != 3840 for w in widths), "the crop shots were flattened too"
+
+
+def test_the_fit_shot_is_scheduled_at_its_own_start():
+    """A composition change that lands late shows the previous shot's framing
+    over the new shot's content — the cut and the reframe must be the same
+    instant."""
+    import re
+
+    script = dr.build_sendcmd(_plan("crop", "fit"), 3840, 2160)
+    at = [float(m) for m in re.findall(r"^([\d.]+)\s", script, re.M)]
+    full = [float(m.group(1)) for m in
+            re.finditer(r"^([\d.]+).*crop w 3840", script, re.M)]
+    assert full, "no command sets the full frame"
+    assert min(full) == 1.0, f"fit scheduled at {min(full)}, shot starts at 1.0"
+    assert at == sorted(at), "commands are not in time order"
+
+
+def test_the_graph_letterboxes_rather_than_stretching():
+    """The pad is what makes `fit` a letterbox instead of a stretched frame, and
+    `force_original_aspect_ratio` is what makes the pad necessary. Losing either
+    silently turns every full-frame shot into a distorted one."""
+    graph, label = dr.build_dynamic_filtergraph(
+        _plan("fit"), "cmd.txt", None, src_w=3840, src_h=2160)
+    assert "force_original_aspect_ratio=decrease" in graph
+    assert "pad=1080:1920" in graph
+    assert graph.index("scale=") < graph.index("pad="), "pad must follow scale"
+    assert label == "[vout]"
+
+
+def test_the_graph_starts_on_the_first_shots_own_rectangle():
+    """`crop` is initialised from shot zero and only then driven by sendcmd. A
+    plan that opens on `fit` must not open on a 9:16 window and jump."""
+    graph, _ = dr.build_dynamic_filtergraph(
+        _plan("fit", "crop"), "cmd.txt", None, src_w=3840, src_h=2160)
+    assert "crop=3840:2160:0:0" in graph, graph[:200]
