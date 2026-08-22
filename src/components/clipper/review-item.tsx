@@ -84,8 +84,8 @@ export function ReviewItemCard({ item, rubric, videoSrc, submitting, onSubmit }:
         />
       ) : (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          Preview-ul nu e randat pentru acest clip. Răspunde din transcript sau
-          sari peste sesiune și randează-l întâi.
+          Clipul nu e randat complet încă. Nu răspunde din transcript —
+          un preview e tăiat la 12 secunde și a invalidat deja o sesiune.
         </div>
       )}
 

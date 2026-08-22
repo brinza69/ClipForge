@@ -293,7 +293,10 @@ def public_item(session: dict, review_item_id: str, clip: dict) -> dict:
         "start": clip.get("start_time"),
         "end": clip.get("end_time"),
         "duration": clip.get("duration"),
-        "preview_ready": bool(clip.get("preview_path")),
+        # The EXPORT's readiness, because that is what the review serves. A
+        # preview is capped at 12 seconds, so reporting it as ready is how a
+        # session gets run on truncated clips.
+        "preview_ready": bool(clip.get("export_path")),
         # Shown only AFTER the verdict, by the page. Carried here because a
         # second request for it would be a second chance to leak which board
         # asked — this one is the same for every item.

@@ -226,3 +226,26 @@ def test_reveal_is_the_only_way_to_learn_membership():
     rows = review.reveal(session)
     assert {r["membership"] for r in rows} == {review.LEGACY, review.SHADOW,
                                               review.BOTH}
+
+
+def test_a_truncated_preview_never_counts_as_ready():
+    """The mistake that invalidated the first real session.
+
+    `render_preview` caps at 12 seconds by design — it is a proxy for the
+    editor. A review served from it asks "is this worth exporting" about the
+    first twelve seconds of a sixty-second clip. Measured on that session: 14 of
+    15 answers said the clip ended too early, which was true of the video and
+    false of the clip, and all five payoffs sat past the cut.
+
+    So readiness is the EXPORT's, and a clip with only a preview reports not
+    ready rather than quietly serving the proxy.
+    """
+    session = review.create("s1", _rows(), seed=7)
+    handle = session["order"][0]
+
+    only_preview = {"start_time": 0.0, "end_time": 60.0, "duration": 60.0,
+                    "preview_path": "/p.mp4", "export_path": None}
+    assert review.public_item(session, handle, only_preview)["preview_ready"] is False
+
+    exported = {**only_preview, "export_path": "/e.mp4"}
+    assert review.public_item(session, handle, exported)["preview_ready"] is True

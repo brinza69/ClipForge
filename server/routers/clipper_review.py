@@ -147,7 +147,7 @@ async def get_next(session_id: str,
     return {"done": False,
             "item": review_mod.public_item(state, handle, {
                 "start_time": clip.start_time, "end_time": clip.end_time,
-                "duration": clip.duration, "preview_path": clip.preview_path,
+                "duration": clip.duration, "export_path": clip.export_path,
                 "transcript_text": clip.transcript_text}),
             **review_mod.progress(state)}
 
@@ -210,10 +210,21 @@ async def item_video(session_id: str, review_item_id: str,
         raise HTTPException(status_code=404, detail="no such review item")
 
     clip = await session.get(ClipModel, item["clip_id"])
-    path = (clip.preview_path or clip.export_path) if clip else None
+    # THE EXPORT, never the preview. `render_preview` caps at 12 seconds by
+    # design — it is a proxy for the editor — and a review session run on it
+    # asks "is this clip worth exporting" about the first twelve seconds of a
+    # sixty-second clip. Measured on the first real session: 14 of 15 answers
+    # said the clip ended too early, which was true of the video and false of
+    # the clip, and every one of the five payoffs sat past the cut.
+    #
+    # So there is no fallback. A missing export is an answerable 409; a silent
+    # downgrade to a truncated proxy is what invalidated a whole session.
+    path = clip.export_path if clip else None
     if not path or not storage.is_usable_output(path):
-        raise HTTPException(status_code=404,
-                            detail="this clip has no rendered preview yet")
+        raise HTTPException(
+            status_code=409,
+            detail="this clip has no full render yet — a preview is capped at "
+                   "12s and cannot be reviewed")
     # Named after the HANDLE, not the clip: a download or a saved file that
     # carries the clip id walks the leak out of the browser.
     return FileResponse(path, media_type="video/mp4",
