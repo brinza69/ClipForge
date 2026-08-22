@@ -59,18 +59,39 @@ source → ingest → proxy/audio → transcription → analysis → scoring →
 calculează ordinea v2 și o înregistrează, dar livrează în continuare ordinea legacy. `story_v2` este
 **refuzat de API** — regula funcționează, dar nu a fost comparată orb pe corpus, ceea ce este Batch 10.
 
-Ce s-a livrat, cu măsurătoarea care justifică fiecare:
+Ce s-a livrat, cu măsurătoarea care justifică fiecare. **Fiecare rând este snapshot-ul de la
+momentul batch-ului respectiv, nu o singură rulare** — numărul de candidați diferă de la un batch la
+altul (909 → 943 → 946) fiindcă fiecare batch a schimbat ce se produce. Starea artefactului curent e
+mai jos.
 
-| batch | ce repară | măsurat pe `gateslice4h` |
+| batch | ce repară | snapshot la data batch-ului, `gateslice4h` |
 |---|---|---|
 | 1 | `reasoning_mode`, o singură setare | story engine-ul era **inaccesibil din API**; ambele chei vechi erau aruncate tăcut |
 | 2a | `origin` la feedback | 43 de rânduri de antrenare, **toate cu eticheta 1.0**; acum 0 |
 | 0 | `reasoning_run.json`, `selection_trace.json` | acoperire și fallback-uri, înainte nemăsurabile |
 | 3 | `story_evidence`, remeasure | payoff semantic vs mecanic: mediană 5–7s, maxim 61s; metrici stale acum **0** |
 | 4 | chunking pe ceas | 2 chunk-uri (3h21m + 38m) → **6 de ~45m**, zero goluri; cel mai timpuriu payoff 2.95h → **0.11h** |
-| 5 | momente, nu variante | 943 candidați → **295 momente**; momente story ajunse la judge **1 → 47 din 61** |
-| 2b | board = ce a ales judge-ul | câștigători nejudecați **7 → 0** în comparația v2 |
+| 5 | momente, nu variante | 943 variante → **295 grupuri de momente**; variante story care poartă verdict **1 → 47 din 61** |
+| 2b | board = ce a ales judge-ul | 7/10 câștigători legacy erau `not_evaluated`; sub regula v2, **0** — v2 nu are backfill |
 | 6 | patru scale de scor, eligibilitate separată | exact **80** din 946 au `overall != heuristic_score`, și aceia sunt pool-ul judecat |
+
+## Starea artefactului curent
+
+Recalculat din `analysis/selection_trace.json`, run `99105dc0fd5f` — **acestea sunt cifrele de
+comparat cu o rulare nouă**, nu cele din tabelul de mai sus:
+
+| | |
+|---|---|
+| candidați (variante) | 946 |
+| grupuri de momente | 304 |
+| grupuri cu cel puțin un verdict | 109 |
+| variante judecate | 365 (114 `selected`, 251 `not_selected_in_judged_pool`) |
+| variante story | 64, din care 50 cu verdict |
+| grupuri story distincte | 24, din care 19 judecate |
+| câștigători | 10, `pool_rounds=0`, `eliminated=0` |
+
+Deosebirea variantă/grup contează: „47 din 61" din tabelul Batch 5 numără **variante** care poartă
+verdict, nu momente distincte. La nivel de moment, cifra echivalentă azi este 19 din 24.
 
 ## Ce NU este închis
 
@@ -80,7 +101,9 @@ Ce s-a livrat, cu măsurătoarea care justifică fiecare:
     Gate-ul Batch 3 e pe ea și a **trecut**: 8/8 și 15/15, ≥95%.
   - *grounding coverage* întreabă dacă afirmațiile pot fi **legate de transcript**. Din 48 de
     afirmații distincte pe `gateslice4h`: 27 grounded strict, 11 ar fi dacă promptul ar cere
-    `atom_ids`, 5 dacă am accepta subsecvența, **5 (10%) fără suport recuperabil**.
+    `atom_ids`, 5 potriviri relaxate încă nevalidate, iar **5 (10%) nu au nicio potrivire locală
+    în ±120s**. „Fără potrivire locală" nu este același lucru cu „inventat" — este limita a ce poate
+    afirma măsurătoarea actuală.
   Nu recalibra pragul de 95% pe cifra de 27/48 — măsoară altceva.
 
   Cele 11 **nu** sunt „atomi numiți greșit": `matched_by` este `timestamp` pentru toate cele 111

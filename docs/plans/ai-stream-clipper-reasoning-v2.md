@@ -700,7 +700,7 @@ pe corpus, numărul de momente story ajunse la judge crește față de baseline.
 | candidați | 909 | 943 |
 | grupuri de momente | — | **295** |
 | pool-ul judge-ului | 80 variante | **80 momente** |
-| **momente story ajunse la judge** | **1 din 75** | **47 din 61** |
+| **variante story care poartă verdict** | **1 din 75** | **47 din 61** |
 | candidați care poartă un verdict | 80 | **173** |
 
 Categoriile bugetului, toate trei active: `heuristic=40, story=17, coverage=23`.
