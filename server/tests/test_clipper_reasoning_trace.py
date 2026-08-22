@@ -406,7 +406,7 @@ def test_an_unchunked_run_has_no_chunk_fingerprint():
     assert chunked.as_dict()["chunk_plan_fingerprint"] is not None
 
 
-def test_two_judging_rounds_add_up_instead_of_the_second_erasing_the_first():
+def test_two_judging_rounds_add_up_instead_of_the_second_erasing_the_first(monkeypatch):
     """`note_count` ASSIGNS. `_judge_pool` runs once per round.
 
     So a run that judged two pools recorded only the second one, and a second
@@ -434,13 +434,26 @@ def test_two_judging_rounds_add_up_instead_of_the_second_erasing_the_first():
                         "grounding": {"payoff": True}}}
              for i in range(6)]
 
+    # The budget is squeezed so the SECOND round has real work. A second pool
+    # that comes back empty adds zero, so it cannot tell summing apart from
+    # assigning the same number twice — the first version of this test proved
+    # nothing for exactly that reason. Patched rather than parameterised:
+    # `_judge_pool` reads the budget from `llm_select`, and widening its
+    # signature for a test would be a production seam nothing else needs.
+    from services.clipper import llm_select
+    monkeypatch.setattr(llm_select, "MAX_JUDGE_CLIPS", 2)
+
     trace = _trace()
     first = clipper_judging._judge_pool(cands, 1000.0, trace)
     taken = {g["moment_id"] for g in first["selected_groups"]}
-    clipper_judging._judge_pool(cands, 1000.0, trace, exclude=taken,
-                                groups=first["all_groups"])
+    second = clipper_judging._judge_pool(cands, 1000.0, trace, exclude=taken,
+                                         groups=first["all_groups"])
 
-    assert trace.counts["judge_pool_moments"] == len(first["pool"])
+    assert len(first["pool"]) and len(second["pool"]), "both rounds must judge"
+    assert (trace.counts["judge_pool_moments"]
+            == len(first["pool"]) + len(second["pool"]))
+    # The field census is the other case: identical every round, so summing it
+    # would report twice as many story moments as exist.
     assert trace.counts["story_groups"] == 6
 
 
