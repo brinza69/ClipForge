@@ -46,7 +46,13 @@ def _write_traces(project_id: str, trace: Any, field: list[dict],
         ("selection_trace", lambda: reasoning_trace.build_selection_trace(
             field, mode=mode, run_id=getattr(trace, "run_id", ""),
             eliminated=eliminated,
-            judged_count=trace.counts.get("judge_hits", 0))),
+            judged_count=trace.counts.get("judge_hits", 0),
+            # Read from the run's own counter, never left at the default: the
+            # two artefacts disagreed on `gateslice4h` — reasoning_run said 1
+            # round, selection_trace said 0 — and 0 is the value that means
+            # "the pool never had to be re-judged", so the trace was quietly
+            # claiming the opposite of what happened.
+            pool_rounds=trace.counts.get("pool_rounds", 0))),
     ):
         try:
             storage.write_artifact(project_id, name, build())

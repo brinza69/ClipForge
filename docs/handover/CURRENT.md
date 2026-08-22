@@ -11,7 +11,7 @@ Reasoning v2 al Clipper-ului este implementat până la Batch 6 inclusiv, ruleaz
 legacy — și **nu este aprobat implicit**: `story_v2` este refuzat de API până la comparația oarbă pe
 corpus. Detaliile și ce a rămas deschis sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURRENT.md).
 
-Teste backend: **915 trec**, 2 pică — ambele din `test_tiktok_transform.py`, cu 404, pentru că
+Teste backend: **916 trec**, 2 pică — ambele din `test_tiktok_transform.py`, cu 404, pentru că
 routerul TikTok nu este montat. TypeScript curat.
 
 ## Cum folosești acest document

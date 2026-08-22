@@ -297,6 +297,34 @@ def test_the_whole_write_path_round_trips(tmp_path, monkeypatch):
     assert run["run_id"] == sel["run_id"] == t.run_id
 
 
+def test_the_two_artefacts_agree_on_how_many_pool_rounds_ran(tmp_path,
+                                                             monkeypatch):
+    """`pool_rounds` must come from the run, not from the parameter default.
+
+    On `gateslice4h` the two artefacts disagreed: `reasoning_run` said 1 round,
+    `selection_trace` said 0 — because `_write_traces` never passed it and 0 is
+    the default. 0 is not a neutral value here: it is the one that means the
+    judged pool was accepted on the first pass, so the trace was asserting the
+    opposite of what the run did, in the artefact an audit reads first.
+    """
+    from config import settings
+    from services.clipper import storage
+    from workers.clipper_build import _write_traces
+
+    monkeypatch.setattr(type(settings), "clipper_dir",
+                        property(lambda _self: tmp_path))
+    storage.ensure_dirs("p1")
+
+    t = _trace()
+    t.note_count("pool_rounds", 2)
+    _write_traces("p1", t, [_cand(0, 30, rank_position=1)], "story_v1")
+
+    run = storage.read_artifact("p1", "reasoning_run")
+    sel = storage.read_artifact("p1", "selection_trace")
+    assert run["counts"]["pool_rounds"] == 2
+    assert sel["totals"]["pool_rounds"] == 2
+
+
 def test_a_candidate_dropped_before_the_board_still_appears(tmp_path, monkeypatch):
     """Built from the SURVIVORS, this artefact could say how the winners ranked
     and could not say why a moment is missing — which is the question it exists

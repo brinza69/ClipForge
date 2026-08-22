@@ -80,18 +80,28 @@ mai jos.
 Recalculat din `analysis/selection_trace.json`, run `99105dc0fd5f` — **acestea sunt cifrele de
 comparat cu o rulare nouă**, nu cele din tabelul de mai sus:
 
-| | |
+**Atenție: sunt două grupări diferite și nu trebuie amestecate.** `dedupe_group` din
+`selection_trace.json` este gruparea de deduplicare peste tot câmpul; `judge_pool_moments` din
+`reasoning_run.json` este ce a trimis efectiv selecția la judge. Prima e mai mare fiindcă propagarea
+verdictului atinge variante din grupuri care n-au fost niciodată în pool.
+
+| | sursă |
 |---|---|
-| candidați (variante) | 946 |
-| grupuri de momente | 304 |
-| grupuri cu cel puțin un verdict | 109 |
-| variante judecate | 365 (114 `selected`, 251 `not_selected_in_judged_pool`) |
-| variante story | 64, din care 50 cu verdict |
-| grupuri story distincte | 24, din care 19 judecate |
-| câștigători | 10, `pool_rounds=0`, `eliminated=0` |
+| candidați (variante) | 946 | 
+| `dedupe_group` distincte | 304 | `selection_trace` |
+| dintre ele, cu cel puțin o variantă judecată | 109 | `selection_trace` |
+| momente trimise la judge | 80, din care 19 story | `reasoning_run.judge_pool_moments` |
+| variante judecate | 365 (114 `selected`, 251 `not_selected_in_judged_pool`) | `selection_trace` |
+| variante story | 64, din care 50 cu verdict | `selection_trace` |
+| runde de pool | 1 | `reasoning_run.counts` |
+| câștigători | 10, `eliminated=0` | `selection_trace` |
 
 Deosebirea variantă/grup contează: „47 din 61" din tabelul Batch 5 numără **variante** care poartă
-verdict, nu momente distincte. La nivel de moment, cifra echivalentă azi este 19 din 24.
+verdict, nu momente distincte.
+
+`selection_trace.json` de pe disc raportează `pool_rounds: 0` pentru această rulare — este **greșit**,
+un default care nu era transmis; rularea a avut 1 rundă, așa cum scrie `reasoning_run.json`. Reparat,
+dar artefactul existent păstrează cifra veche: la o comparație, ia `pool_rounds` din `reasoning_run`.
 
 ## Ce NU este închis
 
