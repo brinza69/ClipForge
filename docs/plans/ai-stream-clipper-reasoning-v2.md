@@ -1093,31 +1093,58 @@ dacă răspunsul e da.
 Patru surse, fiecare clonată și rulată **o singură dată** în `story_v2_shadow`, aceeași configurație
 (sha256 `224fce16d6c8f91c`), commit `b442f20`. Recitit cu `scripts/pilot_census.py`.
 
-| sursă | tip | h | momente story | **/oră** | grounded | valid | sferturi |
+| sursă | tip | h | **descoperiri** | **/oră** | grounded | grupuri | sferturi |
 |---|---|---|---|---|---|---|---|
-| `go ghost` | talking-head editat, EN | 0,37 | 6 | **16,2** | 5 | 2 | 1/2/1/2 |
-| Turul apartamentului | vlog IRL, **română** | 0,70 | 10 | **14,3** | 6 | 3 | 0/3/5/2 |
-| Jensen Huang | interviu structurat | 1,05 | 11 | 10,5† | 9 | 6 | 1/0/5/5 |
-| moistcr1tikal | **Just Chatting live 3h43m** | 3,72 | 33 | **8,9** | 19 | 7 | 9/4/7/13 |
-| *gateslice4h* | *gaming live 4h — baseline* | *4,00* | *25* | *6,2* | *14* | *7* | *5/7/5/8* |
+| `go ghost` | talking-head editat, EN | 0,37 | 6 | **16,2** | 5 | 6 | 1/2/1/2 |
+| Turul apartamentului | vlog IRL, **română** | 0,70 | 9 | **12,9** | 6 | 10 | 0/3/5/2 |
+| Jensen Huang | interviu structurat | 1,05 | 7 | 6,7† | 5 | 11 | 1/0/5/5 |
+| moistcr1tikal | **Just Chatting live 3h43m** | 3,72 | 28 | **7,5** | 16 | 33 | 9/4/7/13 |
+| *gateslice4h* | *gaming live 4h — baseline* | *4,00* | *23* | *5,8* | *14* | *25* | *5/7/5/8* |
 
-**Motorul nu este Minecraft-shaped.** Comparația cea mai apropiată de un experiment controlat este
-ultimul rând contra penultimului — două stream-uri live de aproape patru ore, unul gaming și unul nu:
-**8,9 momente story pe oră față de 6,2, cu aceeași rată de grounding** (58% față de 56%). Toate
-patru sursele depășesc baseline-ul la densitate. Româna nu este o barieră. Niciuna nu a colapsat.
+**Coloana care contează este „descoperiri", nu „grupuri", și prima versiune a acestei secțiuni
+raporta grupuri.** Un grup este un grup de dedupe, iar dedupe atât sparge cât și unește față de
+ancorele de dedesubt: pe interviu **7 payoff-uri distincte au devenit 11 grupuri**, pe stream-ul de
+patru ore 28 au devenit 25. O densitate comparată pe grupuri compară comportamentul dedupe-ului la
+fel de mult ca al conținutului.
+
+**Și „descoperiri" este tot un proxy.** Identitatea canonică este **ancora**, iar niciun `anchor_id`
+nu este propagat astăzi la variante — `payoff_t`, cuantizat ca în `moment_id`, este cel mai apropiat
+număr onest. Două ancore care cad în aceeași cuantă se contopesc aici; una a cărei ancoră traversează
+o margine de cuantă între variante se sparge. **Un `anchor_id` stabil este condiția ca oricare din
+aceste cifre să fie definitivă.**
+
+**Motorul nu este Minecraft-shaped, și concluzia nu depinde de care metrică se alege.** Comparația
+cea mai apropiată de un experiment controlat este ultimul rând contra penultimului — două stream-uri
+live de aproape patru ore, unul gaming și unul nu:
+
+| metrică | non-gaming | gaming | diferență |
+|---|---|---|---|
+| descoperiri cuantizate/oră | 7,5 | 5,8 | +29% |
+| payoff-uri brute/oră | 9,9 | 7,0 | +41% |
+| grupuri/oră | 8,9 | 6,2 | +43% |
+
+Trei metrici, aceeași direcție. Rata de grounding este aceeași (58% față de 56%). Româna nu este o
+barieră. Niciuna dintre surse nu a colapsat.
 
 Arhetipurile nu sunt forțate în forme de gaming: pe `go ghost`, `HOT_TAKE` a căzut exact pe
 propoziția care dă titlul videoclipului, alături de `REVEAL`, `CLUTCH`, `CALLBACK` și `STORY`.
 
-† **Cifra interviului este un plafon inferior, nu o măsurătoare.** `anchors#0` acoperă 0-2240s —
-primele 59% din sursă — și a produs **zero** ancore, înregistrat ca `unusable`, `parsed=False`. Cele
-11 momente vin din 43% din material, deci densitatea reală este în jur de 24/oră. Singurul motiv
-pentru care se vede este câmpul `unusable` din Batch 0; fără el concluzia ar fi fost „interviul e
-înclinat spre final, interesant".
+† **Interviul este o rulare cenzurată, păstrată ca artefact al modului de eșec.** `anchors#0` acoperă
+0-2240s — primele 57% din sursă — și a produs **zero** ancore, înregistrat ca `unusable`,
+`parsed=False`. Raportarea corectă: 7 payoff-uri distincte observate; 6,7/oră pe durata întreagă,
+rulare cenzurată; 15,5/oră în regiunea efectiv procesată, pur descriptiv; densitatea întregii surse
+**necunoscută**. Nu se numește „plafon inferior": asta ar presupune că recuperarea adaugă rezultate
+fără să schimbe chunk-ul reușit, iar o rerulare completă nu garantează asta. Nu se rerulează ad-hoc
+pentru o cifră mai frumoasă — se repară recuperarea per chunk, apoi se validează pe o clonă nouă.
 
-**Rata de eșec operațional este ea însăși un rezultat.** Din 11 chunk-uri de `anchors`, unul a venit
-neparsabil; la `promises`, două. Nu sunt eșecuri de generalizare și nu se citesc ca atare — dar
-înseamnă că o singură rulare per sursă nu este suficientă pentru o cifră pe care se ia o decizie.
+**Rata de eșec operațional este ea însăși un rezultat.** Pe cele trei surse terminate înainte de
+moistcr1tikal: **1 din 5 cereri de chunk `anchors` a venit neutilizabilă, 20%**; socotind și
+`promises`, 1 din 10 cereri structurate. Nu sunt eșecuri de generalizare și nu se citesc ca atare —
+dar înseamnă că o singură rulare per sursă nu ajunge pentru o cifră pe care se ia o decizie.
+
+**Retrase explicit, fiindcă au fost scrise înainte de a fi verificate:** „interviul are 11 momente"
+(are 7 descoperiri distincte), „interviul are 6 valid" (are 4 payoff-uri cu cel puțin o variantă
+validă), și cifra de 1 eșec din 9 chunk-uri (este 1 din 5 pe cererile de `anchors`).
 
 **Ce NU a demonstrat pilotul.** Că v2 produce clipuri mai bune. Densitatea, grounding-ul și
 distribuția sunt diagnostice: motorul își poate activa bugetul story și poate produce impecabil 33 de

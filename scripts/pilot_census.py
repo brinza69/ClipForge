@@ -132,19 +132,22 @@ def main() -> int:
     if not ok:
         return 1
 
+    # `payoffs` leads, not `groups`. Groups are what the shortlist spends on and
+    # dedupe splits and merges them relative to the anchors underneath, so
+    # comparing sources on groups compares their dedupe behaviour too.
     head = (f"{'project':>14} {'hours':>6} {'cands':>6} {'moments':>8} "
-            f"{'story':>6} {'/hour':>6} {'grnd':>5} {'valid':>6} {'unc':>4} "
-            f"{'inv':>4}  quarters")
+            f"{'payoffs':>8} {'/hour':>6} {'grnd':>5} {'groups':>7} "
+            f"{'valid':>6} {'unc':>4}  quarters")
     print(head)
     print("-" * len(head))
     for row in ok:
-        per_hour = row["story_groups"] / row["hours"] if row["hours"] else 0.0
+        per_hour = row["story_payoffs"] / row["hours"] if row["hours"] else 0.0
         spread = ("/".join(str(n) for n in row["story_quarters"])
                   if row["story_quarters"] else "unknown")
         print(f"{row['project']:>14} {row['hours']:6.2f} {row['candidates']:6d} "
-              f"{row['moments']:8d} {row['story_groups']:6d} {per_hour:6.1f} "
-              f"{row['story_grounded']:5d} {row['story_valid']:6d} "
-              f"{row['story_uncertain']:4d} {row['story_invalid']:4d}  {spread}")
+              f"{row['moments']:8d} {row['story_payoffs']:8d} {per_hour:6.1f} "
+              f"{row['story_payoffs_grounded']:5d} {row['story_groups']:7d} "
+              f"{row['story_valid']:6d} {row['story_uncertain']:4d}  {spread}")
 
     print("")
     for row in ok:

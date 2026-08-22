@@ -444,13 +444,39 @@ def story_census(groups: Sequence[dict], *, duration: float,
         return sum(1 for g in story if g.get("validity") == name)
 
     return {
+        # WHAT THE SHORTLIST SPENDS ON, not how many things the engine found.
+        # A group is a dedupe group, and dedupe both splits and merges relative
+        # to the anchors underneath: on a 63-minute interview 7 distinct payoffs
+        # became 11 groups, while on a 4-hour stream 28 became 25. Comparing
+        # sources on this number compares their dedupe behaviour as much as
+        # their content.
         "story_groups": len(story),
         "story_grounded": sum(1 for g in story if g.get("grounded")),
         "story_valid": _validity("valid"),
         "story_uncertain": _validity("uncertain"),
         "story_invalid": _validity("invalid"),
         "story_quarters": spread,
+        # WHAT THE ENGINE FOUND, as closely as this data allows. Distinct
+        # payoffs, quantised the same way `moment_id` quantises them so model
+        # jitter of a second does not become a second discovery.
+        #
+        # A PROXY, and the plan should say so: the canonical identity is the
+        # ANCHOR, and no `anchor_id` is propagated to the variants today. Two
+        # anchors whose payoffs land in one bucket collapse here, and one anchor
+        # whose payoff moved across a bucket edge between variants splits. Until
+        # the anchor carries an id, this is the closest honest count.
+        **_discoveries(story),
     }
+
+
+def _discoveries(story: Sequence[dict]) -> dict:
+    buckets = {int(_num(g.get("payoff_t"), -1.0) // _QUANTUM_S)
+               for g in story if _num(g.get("payoff_t"), -1.0) >= 0}
+    grounded = {int(_num(g.get("payoff_t"), -1.0) // _QUANTUM_S)
+                for g in story
+                if _num(g.get("payoff_t"), -1.0) >= 0 and g.get("grounded")}
+    return {"story_payoffs": len(buckets),
+            "story_payoffs_grounded": len(grounded)}
 
 
 # Split out when this file crossed 500 lines; re-exported so the worker and the

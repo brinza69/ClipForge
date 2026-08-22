@@ -480,3 +480,33 @@ def test_an_unknown_duration_reports_no_spread_rather_than_a_flat_one():
 
     assert census["story_groups"] == 1
     assert census["story_quarters"] is None
+
+
+def test_the_census_counts_discoveries_apart_from_dedupe_groups():
+    """Groups are not findings. Dedupe splits and merges relative to the anchors
+    underneath — on a 63-minute interview 7 distinct payoffs became 11 groups —
+    so a density compared across sources on groups compares their dedupe
+    behaviour as much as their content.
+
+    Two cuts of ONE payoff are one discovery even when the grouping keeps them
+    apart, which it does when their text and spans differ enough.
+    """
+    same = [_cand(0, 60, payoff=30.0, text="alpha bravo charlie delta echo"),
+            _cand(20, 40, payoff=30.0, text="foxtrot golf hotel india juliet")]
+
+    census = cg.story_census(cg.build_groups(same), duration=1000.0)
+
+    assert census["story_payoffs"] == 1
+    assert census["story_groups"] >= census["story_payoffs"]
+
+
+def test_jitter_of_a_second_is_not_a_second_discovery():
+    """Quantised the same way `moment_id` quantises, so the census agrees with
+    the system's own idea of when two cuts are the same moment. A model that
+    places one payoff at 100.4s and 101.9s found one thing.
+    """
+    jitter = [_cand(80, 120, payoff=100.4, text="alpha bravo charlie delta echo"),
+              _cand(85, 125, payoff=101.9, text="foxtrot golf hotel india juliet")]
+
+    assert cg.story_census(cg.build_groups(jitter),
+                           duration=1000.0)["story_payoffs"] == 1

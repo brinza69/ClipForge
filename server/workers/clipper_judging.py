@@ -82,7 +82,8 @@ def _judge_pool(refined: list[dict], duration: float, trace: Any,
         # distinguish "the field held 20 story moments and 19 were judged" from
         # "it held 200".
         for name in ("story_groups", "story_grounded", "story_valid",
-                     "story_uncertain", "story_invalid"):
+                     "story_uncertain", "story_invalid",
+                     "story_payoffs", "story_payoffs_grounded"):
             trace.note_count(name, out[name])
         _note_spread(trace, out["story_quarters"])
         trace.note_stage("shortlist", "built", ", ".join(
