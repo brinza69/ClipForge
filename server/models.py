@@ -126,6 +126,12 @@ class ClipperEvent(str, enum.Enum):
     score_overridden = "score_overridden"
     posted = "posted"
     performance_recorded = "performance_recorded"
+    # A blind evaluation answer, NOT a decision about the clip. Deliberately
+    # outside feedback._DECISIVE: someone answering "would you export this"
+    # about a clip they never asked for has not chosen to publish it, and the
+    # ranker reading it as approval is how training_rows() once returned 43
+    # rows every one of which was labelled 1.0.
+    reviewed = "reviewed"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
