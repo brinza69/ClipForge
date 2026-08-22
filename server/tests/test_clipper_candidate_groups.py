@@ -430,6 +430,35 @@ def test_the_census_says_where_on_the_clock_the_story_moments_are():
     assert sum(census["story_quarters"][:3]) == 0
 
 
+def test_a_moment_is_placed_by_its_payoff_not_by_where_the_cut_starts():
+    """The moment IS its payoff — `moment_id` is built from it. A cut carrying
+    long context can open a whole quarter before the thing it is about, and
+    placing by `start` would report where the camera rolled rather than where
+    the moment happened.
+    """
+    census = cg.story_census(
+        cg.build_groups([_cand(10.0, 990.0, payoff=950.0)]), duration=1000.0)
+
+    assert census["story_quarters"] == [0, 0, 0, 1]
+
+
+def test_all_three_validity_buckets_are_recorded():
+    """"4 uncertain" cannot say whether the other two are valid or invalid, and
+    `grounded` is a different axis — it is about the payoff's evidence, not the
+    window — so it is not the complement of anything here.
+    """
+    cands = [_cand(0, 30, payoff=20), _cand(200, 230, payoff=220),
+             _cand(400, 430, payoff=420)]
+    groups = cg.build_groups(cands)
+    for group, verdict in zip(groups, ("valid", "uncertain", "invalid")):
+        group["validity"] = verdict
+
+    census = cg.story_census(groups, duration=1000.0)
+
+    assert (census["story_valid"], census["story_uncertain"],
+            census["story_invalid"]) == (1, 1, 1)
+
+
 def test_a_moment_at_the_very_end_lands_inside_the_last_quarter():
     """`start / duration * 4` is exactly 4 for a moment starting at `duration`,
     which indexes off the end of a four-element list. Clamped, because a
@@ -441,12 +470,13 @@ def test_a_moment_at_the_very_end_lands_inside_the_last_quarter():
     assert census["story_quarters"] == [0, 0, 0, 1]
 
 
-def test_a_source_with_no_duration_still_counts_its_story_moments():
-    """Duration comes from a probe that can fail. Counting must survive it —
-    the spread is what becomes unknowable, not the census.
+def test_an_unknown_duration_reports_no_spread_rather_than_a_flat_one():
+    """Duration comes from a probe that can fail. Counting must survive it, but
+    four zeros is a SHAPE — the flattest one — and a reader comparing sources
+    would take it as "evenly spread, nothing anywhere". `None` says unknown.
     """
     census = cg.story_census(cg.build_groups([_cand(0, 30, payoff=20)]),
                              duration=0.0)
 
     assert census["story_groups"] == 1
-    assert census["story_quarters"] == [0, 0, 0, 0]
+    assert census["story_quarters"] is None

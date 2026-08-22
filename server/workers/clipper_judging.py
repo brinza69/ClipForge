@@ -24,6 +24,24 @@ from services.clipper import selection
 logger = logging.getLogger("clipforge.clipper.build")
 
 
+def _note_spread(trace: Any, quarters: list[int] | None) -> None:
+    """Where the story moments sit, as numbers and as a line to read.
+
+    The scalars are what a comparison across sources reads; the stage detail is
+    for a person. `None` means the source's duration never probed, so the shape
+    is UNKNOWN — recorded as `unavailable` rather than as four zeros, which is
+    itself a shape and the flattest one there is. Same mistake as `pool_rounds`
+    defaulting to 0: a placeholder that reads as a measurement.
+    """
+    if not quarters:
+        trace.note_stage("story_spread", "unavailable", "source duration unknown")
+        return
+    for index, count in enumerate(quarters, start=1):
+        trace.note_count(f"story_q{index}", count)
+    trace.note_stage("story_spread", "measured",
+                     "/".join(str(n) for n in quarters))
+
+
 def _judge_pool(refined: list[dict], duration: float, trace: Any,
                 *, exclude: set[str] | None = None,
                 groups: list[dict] | None = None) -> dict | None:
@@ -48,20 +66,25 @@ def _judge_pool(refined: list[dict], duration: float, trace: Any,
 
     if trace is not None:
         trace.note_count("moment_groups", out["groups"])
-        trace.note_count("judge_pool_moments", len(out["pool"]))
-        trace.note_count("judge_pool_story", out["story"])
+        # ACCUMULATED, not assigned. `note_count` overwrites, and this runs once
+        # per judging round — a second round left the trace describing only that
+        # round, and a second round that found an empty pool would have reported
+        # zero moments judged for a run that judged plenty. Rounds exclude what
+        # earlier rounds already took, so adding them counts distinct moments.
+        trace.note_count("judge_pool_moments",
+                         trace.counts.get("judge_pool_moments", 0) + len(out["pool"]))
+        trace.note_count("judge_pool_story",
+                         trace.counts.get("judge_pool_story", 0) + out["story"])
         # The denominators for the line above, and where the story moments sit
-        # on the clock. Recorded for every run, not only when someone thinks to
-        # measure: `judge_pool_story` alone cannot distinguish "the field held
-        # 20 story moments and 19 were judged" from "it held 200".
-        trace.note_count("story_groups", out["story_groups"])
-        trace.note_count("story_grounded", out["story_grounded"])
-        trace.note_count("story_uncertain", out["story_uncertain"])
-        # A distribution, so it goes where the shortlist categories go —
-        # `counts` holds scalars, and widening it for one list would be a new
-        # trace API for a single caller.
-        trace.note_stage("story_spread", "measured",
-                         "/".join(str(n) for n in out["story_quarters"]))
+        # on the clock. These describe the FIELD, so they are the same every
+        # round and assignment is right for them. Recorded on every run, not
+        # only when someone thinks to measure: `judge_pool_story` alone cannot
+        # distinguish "the field held 20 story moments and 19 were judged" from
+        # "it held 200".
+        for name in ("story_groups", "story_grounded", "story_valid",
+                     "story_uncertain", "story_invalid"):
+            trace.note_count(name, out[name])
+        _note_spread(trace, out["story_quarters"])
         trace.note_stage("shortlist", "built", ", ".join(
             f"{k}={v}" for k, v in sorted(out["categories"].items())))
     logger.info("clipper: %d moments from %d candidates, %d in the judge pool "

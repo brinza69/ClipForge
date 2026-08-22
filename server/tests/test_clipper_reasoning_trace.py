@@ -404,3 +404,56 @@ def test_an_unchunked_run_has_no_chunk_fingerprint():
     chunked.note_chunk("anchors", 0, chars=100, produced=3)
     assert empty.as_dict()["chunk_plan_fingerprint"] is None
     assert chunked.as_dict()["chunk_plan_fingerprint"] is not None
+
+
+def test_two_judging_rounds_add_up_instead_of_the_second_erasing_the_first():
+    """`note_count` ASSIGNS. `_judge_pool` runs once per round.
+
+    So a run that judged two pools recorded only the second one, and a second
+    round that came back with an empty pool would have reported zero moments
+    judged for a run that judged plenty — the trace understating the work in
+    exactly the runs that did the most of it. Rounds exclude what earlier rounds
+    already took, so adding them counts distinct moments and never double-counts.
+
+    The field census is the other case and must NOT accumulate: it describes the
+    whole field, is identical every round, and summing it would report twice as
+    many story moments as exist.
+    """
+    from workers import clipper_judging
+
+    # Distinct VOCABULARY, not distinct numbers. Six lines that share six of
+    # seven words are one moment as far as `dedupe._group` is concerned, and it
+    # is right — text similarity is one of the three axes it compares on. The
+    # first version of this fixture collapsed all six into one group.
+    import random
+    words = ("anvil beacon coral drip ember flint glow harbor ingot jungle kelp "
+             "lava mossy nether orb portal quartz slime torch vine").split()
+    cands = [{"start": i * 100.0, "end": i * 100.0 + 30.0, "overall": 90.0 - i,
+              "text": " ".join(random.Random(i).sample(words, 8)),
+              "story": {"payoff_t": i * 100.0 + 20.0, "validity": "valid",
+                        "grounding": {"payoff": True}}}
+             for i in range(6)]
+
+    trace = _trace()
+    first = clipper_judging._judge_pool(cands, 1000.0, trace)
+    taken = {g["moment_id"] for g in first["selected_groups"]}
+    clipper_judging._judge_pool(cands, 1000.0, trace, exclude=taken,
+                                groups=first["all_groups"])
+
+    assert trace.counts["judge_pool_moments"] == len(first["pool"])
+    assert trace.counts["story_groups"] == 6
+
+
+def test_a_source_of_unknown_length_says_so_instead_of_reporting_a_flat_shape():
+    """Four zeros is the flattest shape there is, and a reader comparing
+    sources would take it as "evenly spread". Same failure as `pool_rounds`
+    defaulting to 0: a placeholder that reads as a measurement.
+    """
+    from workers import clipper_judging
+
+    trace = _trace()
+    clipper_judging._note_spread(trace, None)
+
+    stage = next(s for s in trace.stages if s["name"] == "story_spread")
+    assert stage["status"] == "unavailable"
+    assert not any(k.startswith("story_q") for k in trace.counts)

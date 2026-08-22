@@ -403,7 +403,7 @@ def build_pool(refined: Sequence[dict], *, duration: float, budget: int,
 
 def story_census(groups: Sequence[dict], *, duration: float,
                  quarters: int = 4) -> dict:
-    """How many story moments exist, how many are grounded, and where they sit.
+    """How many story moments exist, how they validate, and where they sit.
 
     Counting, not deciding — nothing here reaches the pool. It exists because
     the pilot on non-Minecraft sources asks a question the run trace could not
@@ -414,21 +414,41 @@ def story_census(groups: Sequence[dict], *, duration: float,
     The temporal spread is the half that is easy to skip and expensive to lack.
     Batch 4 found the first three hours of a four-hour stream unread, and the
     only reason it was visible is that someone plotted payoff times by hand.
+
+    PLACED BY `payoff_t`, NOT BY `start`. The moment's identity is its payoff —
+    `moment_id` is built from it — and a cut carrying long context can begin a
+    whole quarter before the thing it is about. Placing by the cut would report
+    where the CAMERA started, which is not the question.
+
+    `story_grounded` is about the PAYOFF's evidence and `story_valid` about the
+    window; they are separate axes, and neither is the complement of the other.
+    All three validity buckets are recorded because "4 uncertain" alone cannot
+    say whether the other two are valid or invalid.
     """
     groups = [g for g in (groups or ()) if isinstance(g, dict)]
     story = [g for g in groups if g.get("is_story")]
 
-    spread = [0] * quarters
+    # None, not zeros: a source whose duration never probed has an UNKNOWN
+    # spread, and four zeros is a shape — the flattest one there is.
+    spread: list[int] | None = None
     if duration > 0:
+        spread = [0] * quarters
         for group in story:
-            index = int(_num(group.get("start")) / duration * quarters)
+            at = _num(group.get("payoff_t"), -1.0)
+            if at < 0:
+                at = (_num(group.get("start")) + _num(group.get("end"))) / 2.0
+            index = int(at / duration * quarters)
             spread[min(quarters - 1, max(0, index))] += 1
+
+    def _validity(name: str) -> int:
+        return sum(1 for g in story if g.get("validity") == name)
 
     return {
         "story_groups": len(story),
         "story_grounded": sum(1 for g in story if g.get("grounded")),
-        "story_uncertain": sum(1 for g in story
-                               if g.get("validity") == "uncertain"),
+        "story_valid": _validity("valid"),
+        "story_uncertain": _validity("uncertain"),
+        "story_invalid": _validity("invalid"),
         "story_quarters": spread,
     }
 
