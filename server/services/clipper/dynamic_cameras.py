@@ -238,7 +238,8 @@ def _face_samples(face_track: Sequence[dict], sx: float, sy: float,
 
 
 def _dominant(samples: Sequence[tuple[float, float, float, float]],
-              src_w: int, src_h: int
+              src_w: int, src_h: int,
+              anchor: tuple[float, float] | None = None
               ) -> tuple[list[tuple[float, float, float, float]], dict[str, float]]:
     """Keep the samples belonging to the biggest face cluster.
 
@@ -252,10 +253,31 @@ def _dominant(samples: Sequence[tuple[float, float, float, float]],
         return [], {"cx": src_w / 2.0, "cy": src_h * 0.45,
                     "w": src_w * 0.11, "n": 0}
 
-    mx, my = _median([s[1] for s in samples]), _median([s[2] for s in samples])
+    # The median is a guess that the busiest cluster IS the subject. On a Just
+    # Chatting stream it is not: the busiest faces are the ones in the video
+    # being reacted to, and the median lands on them. `anchor` is the caller
+    # saying it already knows where the fixed subject sits — see
+    # `dynamic_subject.stable_track`, which only answers when the evidence is
+    # decisive, so this stays None on the sources that already work.
+    if anchor:
+        mx, my = float(anchor[0]), float(anchor[1])
+    else:
+        mx, my = _median([s[1] for s in samples]), _median([s[2] for s in samples])
     tol_x, tol_y = src_w * 0.16, src_h * 0.22
     kept = [s for s in samples if abs(s[1] - mx) <= tol_x and abs(s[2] - my) <= tol_y]
     if len(kept) < max(3, len(samples) // 6):   # cluster too thin to trust
+        if anchor:
+            # An anchor is KNOWLEDGE about the whole source; the fallback is a
+            # guess from one window. Preferring the guess is what put the crop
+            # back on the reacted-to video: measured on `pilot2c8a` clip
+            # 8cb13e48ef30, 0 of 123 detections in the window sit near the
+            # webcam — it is there in the frame and the detector simply misses
+            # it — so falling back handed the window to the content faces, all
+            # 123 of them. A fixed subject does not stop existing because this
+            # forty seconds failed to detect it.
+            return [], {"cx": float(anchor[0]), "cy": float(anchor[1]),
+                        "w": anchor[2] if len(anchor) > 2 else src_w * 0.11,
+                        "n": 0}
         kept = list(samples)
 
     return kept, {

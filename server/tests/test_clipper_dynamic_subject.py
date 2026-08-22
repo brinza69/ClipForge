@@ -114,3 +114,78 @@ def test_one_face_in_a_span_is_still_not_unanimous():
     track = _track("." * 20 + "F" + "." * 19)
     line = ds.presence_timeline(track, hop=HOP)
     assert ds.composition_for(line, 4.0, 8.0, HOP, ds.raw_presence(track)) == "fit"
+
+
+# ── the stable track ─────────────────────────────────────────────────────────
+
+
+def _at(x, y, w, n, jitter=0.0, t0=0.0, step=1.0):
+    """`n` detections around (x, y), optionally wandering by `jitter`."""
+    import random
+    rng = random.Random(int(x * 1000 + y))
+    return [{"t": t0 + i * step,
+             "boxes": [[x + rng.uniform(-jitter, jitter) - w / 2,
+                        y + rng.uniform(-jitter, jitter) - w / 2, w, w]]}
+            for i in range(n)]
+
+
+def _merge(*tracks):
+    out = {}
+    for track in tracks:
+        for s in track:
+            out.setdefault(s["t"], {"t": s["t"], "boxes": []})["boxes"] += s["boxes"]
+    return [out[t] for t in sorted(out)]
+
+
+def test_a_fixed_overlay_is_found_among_wandering_faces():
+    """The moistcr1tikal case. The detector reports plenty of real faces — they
+    are the ones IN the video being reacted to — and `_dominant` follows the
+    biggest. Measured on that source the webcam's cluster spreads 4.1px against
+    12.2px for the next; nothing else about it stands out, not size and not
+    persistence.
+    """
+    track = _merge(_at(30, 140, 25, 200, jitter=2.0),      # the webcam
+                   _at(230, 90, 70, 150, jitter=30.0),     # the video's faces
+                   _at(300, 90, 65, 120, jitter=30.0))
+
+    found = ds.stable_track(track)
+
+    assert found is not None
+    assert abs(found["cx"] - 30) < 8 and abs(found["cy"] - 140) < 8
+
+
+def test_two_locked_off_cameras_are_not_a_fixed_overlay():
+    """Jensen: two interview subjects, spreads 5.3 and 5.4. Claiming one would
+    stop the edit cutting between speakers — a regression on a source whose
+    framing the reviewer approved."""
+    track = _merge(_at(150, 90, 50, 200, jitter=4.0),
+                   _at(350, 90, 50, 200, jitter=4.0))
+    assert ds.stable_track(track) is None
+
+
+def test_handheld_footage_has_no_stable_subject():
+    """The vlog: every cluster between 13.8 and 14.7."""
+    track = _merge(_at(200, 60, 45, 120, jitter=25.0),
+                   _at(260, 60, 45, 120, jitter=25.0))
+    assert ds.stable_track(track) is None
+
+
+def test_one_persistent_cluster_alone_is_not_evidence():
+    """A source with a single subject is the case that already works. With
+    nothing to compare against, "tightest" means nothing."""
+    assert ds.stable_track(_at(200, 90, 90, 200, jitter=6.0)) is None
+
+
+def test_too_few_detections_decide_nothing():
+    assert ds.stable_track(_at(30, 140, 25, 5)) is None
+    assert ds.stable_track([]) is None
+
+
+def test_the_margin_is_what_makes_it_a_decision():
+    """Same two clusters; only the gap between them changes."""
+    close = _merge(_at(30, 140, 25, 200, jitter=5.0),
+                   _at(230, 90, 70, 200, jitter=6.0))
+    apart = _merge(_at(30, 140, 25, 200, jitter=2.0),
+                   _at(230, 90, 70, 200, jitter=30.0))
+    assert ds.stable_track(close) is None
+    assert ds.stable_track(apart) is not None

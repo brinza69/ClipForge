@@ -310,6 +310,17 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
         return None
 
     signals = storage.read_artifact(project.id, "signals") or {}
+
+    from services.clipper import dynamic_subject
+
+    faces_all = storage.read_artifact(project.id, "faces") or {}
+    stable = dynamic_subject.stable_track(
+        faces_all.get("samples") if isinstance(faces_all, dict) else faces_all)
+    if stable:
+        logger.info("clip %s: framing on the source's fixed subject "
+                    "(spread %.1fpx vs %.1f for the next cluster)",
+                    clip.id, stable["spread"], stable["runner_up"])
+
     loop = asyncio.get_event_loop()
     window = await loop.run_in_executor(
         None,
@@ -325,7 +336,11 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
             proxy_h=int(signals.get("proxy_height") or 0),
             game_motion=window["motion"], game_focus=window["focus"],
             game_detail=window["detail"], game_ui=window["ui"],
-            game_motion_hop=window["hop"]),
+            game_motion_hop=window["hop"],
+            # Computed on the WHOLE-source track, not this window's. A fixed
+            # webcam overlay is only recognisable against hours of material —
+            # inside one 40-second window it looks like any other cluster.
+            stable_track=stable),
     )
     shots = plan.get("shots") or []
     if len(shots) < 2:

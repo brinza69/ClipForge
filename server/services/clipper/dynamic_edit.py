@@ -242,6 +242,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                       game_detail: Sequence[float] | None = None,
                       game_ui: Sequence[float] | None = None,
                       game_motion_hop: float = 0.25,
+                      stable_track: dict | None = None,
                       style: dict | None = None) -> dict:
     """Plan the shot list for one candidate.
 
@@ -289,9 +290,24 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
 
     pw = int(proxy_w or _f(signals.get("proxy_width"), 0)) or src_w
     ph = int(proxy_h or _f(signals.get("proxy_height"), 0)) or src_h
+    # A source-wide fixed subject, when one was found. It arrives in PROXY
+    # pixels like everything else from the face track, and `_dominant` works in
+    # SOURCE pixels, so it is scaled here — the same trap `dynamic_edit`'s
+    # header warns about.
+    anchor = None
+    if isinstance(stable_track, dict) and stable_track.get("cx") is not None:
+        anchor = (float(stable_track["cx"]) * src_w / float(pw),
+                  float(stable_track["cy"]) * src_h / float(ph),
+                  float(stable_track.get("w") or 0.0) * src_w / float(pw))
+
     samples, face = _dominant(
         _face_samples(face_track, src_w / float(pw), src_h / float(ph), clip_start),
-        src_w, src_h)
+        src_w, src_h, anchor)
+    if anchor:
+        warnings.append(
+            "Framing on the source's fixed subject rather than the largest face "
+            f"in each window (spread {stable_track.get('spread')}px against "
+            f"{stable_track.get('runner_up')}px for the next cluster).")
     if not samples:
         warnings.append(
             "No face detected in this window; the facecam position is a guess.")

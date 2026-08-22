@@ -132,7 +132,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `render.py` | the static path: one filtergraph, one encode, optional dead-air cuts |
 | `captions.py` | the caption plan and its overlays |
 | `dynamic_edit.py` | the multi-shot planner: which camera, where the subject is |
-| `dynamic_subject.py` | is there anyone to point a camera at, per span — hysteresis over the 0.25s face track, with unanimous raw evidence overriding the lag. Decides `crop` vs `fit` |
+| `dynamic_subject.py` | two questions about the subject. Per span: is anyone there — hysteresis over the 0.25s face track, deciding `crop` vs `fit`. Per source: `stable_track` finds a fixed webcam overlay, which is what stops the crop following the faces in a reacted-to video |
 | `dynamic_cuts.py` | WHERE the edit cuts, on the clock — sentence ends, peaks, rhythm. Split from `dynamic_edit.py` at 500 lines; knows nothing about cameras |
 | `dynamic_cameras.py` | the camera rungs and the action band |
 | `dynamic_window.py` | the per-window signals the planner needs — dense face track, motion inside the game region, and `ui_panels`, the per-clip UI rectangles the caption keeps out of |

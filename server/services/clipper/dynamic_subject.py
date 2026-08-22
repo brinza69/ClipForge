@@ -147,3 +147,112 @@ def raw_presence(face_track: Iterable[dict]) -> list[bool]:
     """Unsmoothed per-sample presence, for the unanimity check above."""
     return [bool(s.get("boxes")) for s in (face_track or ())
             if isinstance(s, dict)]
+
+
+# ── the stable track ─────────────────────────────────────────────────────────
+#
+# The second half of the reframing defect, and a different failure from the one
+# above. On a Just Chatting stream the detector reports plenty of faces and they
+# are real — they are the faces IN the video being reacted to. `_dominant` picks
+# the biggest cluster, the biggest cluster is whatever is playing on the
+# browser, and the crop follows it. The reviewer saw it immediately: "nu ia
+# webcam pe toate video-urile, de acum ia fețele din video-ul la care se uită".
+#
+# WHAT ACTUALLY DISCRIMINATES, measured on the four pilot sources rather than
+# assumed. Neither size nor persistence alone works: the webcam is 5.2% of frame
+# width and an interview subject 10.6%, but a vlog's subject is 9.8%, and every
+# source has several clusters that persist across the whole VOD.
+#
+# What separates them is how much TIGHTER the tightest one is than the rest:
+#
+#     moistcr1tikal   4.1 px   next 12.2   — a fixed webcam overlay
+#     Jensen          5.3 px   next  5.4   — two locked-off interview cameras
+#     vlog RO        13.8 px   next 13.9   — handheld, nothing is stable
+#     go ghost        8.0 px   next 10.0   — one talking head, moderately still
+#
+# Only the first has a cluster that stands apart. So a stable track is claimed
+# only when the best is decisively better than the runner-up, and on the three
+# sources where the current framing already works, nothing is claimed and
+# nothing changes.
+
+#: How many times tighter than the runner-up the best cluster must be.
+DOMINANCE = 2.0
+
+#: A cluster must appear across at least this much of the source's span, and in
+#: at least this share of its samples, before it can be called persistent.
+MIN_SPAN = 0.5
+MIN_SHARE = 0.05
+
+#: Grid used to collect detections into candidate clusters, in proxy pixels.
+_CELL = 40
+
+
+def stable_track(face_track: Iterable[dict], *, dominance: float = DOMINANCE
+                 ) -> dict | None:
+    """The one fixed subject in this source, or None when there is not one.
+
+    Returns `{"cx", "cy", "w", "spread", "runner_up"}` in the coordinate space
+    of the track it was given. None is the common answer and the safe one: it
+    means "carry on choosing the way you already do".
+    """
+    samples = [s for s in (face_track or ()) if isinstance(s, dict)]
+    boxes = [(float(s.get("t") or 0.0), b) for s in samples
+             for b in (s.get("boxes") or []) if b and len(b) >= 4]
+    if len(boxes) < 20:
+        return None
+
+    times = [t for t, _ in boxes]
+    span_total = max(times) - min(times)
+    if span_total <= 0:
+        return None
+
+    cells: dict[tuple[int, int], list] = {}
+    for t, b in boxes:
+        cx, cy = b[0] + b[2] / 2.0, b[1] + b[3] / 2.0
+        key = (int(cx // _CELL) * _CELL, int(cy // _CELL) * _CELL)
+        cells.setdefault(key, []).append((t, cx, cy, float(b[2])))
+
+    scored = []
+    for members in cells.values():
+        ts = [m[0] for m in members]
+        if (max(ts) - min(ts)) / span_total < MIN_SPAN:
+            continue
+        if len(members) / len(samples) < MIN_SHARE:
+            continue
+        scored.append((_spread(members), members))
+    if len(scored) < 2:
+        # One persistent cluster and nothing to compare it against is not
+        # evidence of a fixed overlay — it is a source with one subject, which
+        # is the case that already works.
+        return None
+
+    scored.sort(key=lambda row: row[0])
+    best, runner_up = scored[0][0], scored[1][0]
+    if best <= 0 or runner_up < best * float(dominance):
+        return None
+
+    members = scored[0][1]
+    return {"cx": _mean(m[1] for m in members),
+            "cy": _mean(m[2] for m in members),
+            "w": _mean(m[3] for m in members),
+            "spread": round(best, 2),
+            "runner_up": round(runner_up, 2)}
+
+
+def _spread(members: Sequence[tuple]) -> float:
+    """Positional standard deviation of a cluster, in pixels."""
+    xs = [m[1] for m in members]
+    ys = [m[2] for m in members]
+    return (_variance(xs) + _variance(ys)) ** 0.5
+
+
+def _variance(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    mean = sum(values) / len(values)
+    return sum((v - mean) ** 2 for v in values) / len(values)
+
+
+def _mean(values: Iterable[float]) -> float:
+    vals = list(values)
+    return round(sum(vals) / len(vals), 2) if vals else 0.0
