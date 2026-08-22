@@ -49,9 +49,10 @@ def _write_traces(project_id: str, trace: Any, field: list[dict],
             judged_count=trace.counts.get("judge_hits", 0),
             # Read from the run's own counter, never left at the default: the
             # two artefacts disagreed on `gateslice4h` — reasoning_run said 1
-            # round, selection_trace said 0 — and 0 is the value that means
-            # "the pool never had to be re-judged", so the trace was quietly
-            # claiming the opposite of what happened.
+            # round, selection_trace said 0. `clipper_judging` counts from one
+            # (`round_index + 1`), so 0 does not mean "accepted on the first
+            # pass" — it means the judge never ran at all, which for a judged
+            # run is a different claim entirely.
             pool_rounds=trace.counts.get("pool_rounds", 0))),
     ):
         try:

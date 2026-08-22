@@ -40,11 +40,15 @@ unsupported. Support now means the words are there NEAR where the claim says
 they are; a match three hours away is not support, and the bag-of-words rung is
 gone.
 
-A claim that fails `contiguous` but passes `subsequence` is a FALSE NEGATIVE of
-the matcher: the quote is really there and a transcription hiccup or a dropped
-filler word broke the run. One that only passes `bag` is a paraphrase with real
-support. One that reaches `absent` is the model inventing, and no matcher can
-rescue it.
+WHAT THIS CANNOT TELL YOU. The rungs describe what matched, not why. A claim
+that fails `contiguous` but passes `subsequence` MAY be a false negative of the
+matcher — or a real paraphrase that happens to keep word order. One that reaches
+`absent` has no local match; that is not the same as the model inventing it, and
+this method cannot separate the two. The first version's conclusion was believed
+because the labels asserted causes the measurement never established. Note also
+that the model names no atoms at all on this corpus: `matched_by` is `timestamp`
+for all 111 claims, and the `atom_ids` in the artefact are filled in by us from
+the window.
 
     python scripts/measure_grounding.py gateslice4h
 
@@ -180,11 +184,16 @@ def main() -> int:
         strict = t["contiguous"]
         print("")
         print(f"  grounded as shipped : {strict}/{total} = {strict / total:.1%}")
-        print(f"  wrong atoms named   : {t['near_verbatim']:4d}  "
-              f"verbatim within {WINDOW_S:.0f}s of the claim, in other atoms")
-        print(f"  matcher too strict  : {t['subsequence']:4d}  "
+        # These name WHAT MATCHED, never why. "The model invented it" and "the
+        # matcher is too strict" are causes this method cannot tell apart, and
+        # printing them as labels is how the first version's conclusion got
+        # believed. The claim never names an atom — `matched_by` is `timestamp`
+        # for all 111 — so "wrong atoms" was never available either.
+        print(f"  exact, located      : {t['near_verbatim']:4d}  "
+              f"verbatim within {WINDOW_S:.0f}s, not canonically bound")
+        print(f"  relaxed, unvalidated: {t['subsequence']:4d}  "
               "in order with gaps, in that window")
-        print(f"  model invented it   : {t['absent']:4d}")
+        print(f"  no local match      : {t['absent']:4d}")
         for name in ("near_verbatim", "subsequence", "absent"):
             for ex in out["examples"][name]:
                 print(f"    [{name}] {ex}")

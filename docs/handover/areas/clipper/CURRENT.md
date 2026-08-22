@@ -81,9 +81,9 @@ Recalculat din `analysis/selection_trace.json`, run `99105dc0fd5f` — **acestea
 comparat cu o rulare nouă**, nu cele din tabelul de mai sus:
 
 **Atenție: sunt două grupări diferite și nu trebuie amestecate.** `dedupe_group` din
-`selection_trace.json` este gruparea de deduplicare peste tot câmpul; `judge_pool_moments` din
-`reasoning_run.json` este ce a trimis efectiv selecția la judge. Prima e mai mare fiindcă propagarea
-verdictului atinge variante din grupuri care n-au fost niciodată în pool.
+`selection_trace.json` grupează **tot câmpul**; `judge_pool_moments` din `reasoning_run.json` este
+shortlist-ul **plafonat** trimis la judge. De aceea 304 > 80 — plafon, nu propagare. Propagarea
+explică altceva: de ce 109 grupuri conțin un verdict deși numai 80 au mers la judge.
 
 | | sursă |
 |---|---|
@@ -99,9 +99,14 @@ verdictului atinge variante din grupuri care n-au fost niciodată în pool.
 Deosebirea variantă/grup contează: „47 din 61" din tabelul Batch 5 numără **variante** care poartă
 verdict, nu momente distincte.
 
-`selection_trace.json` de pe disc raportează `pool_rounds: 0` pentru această rulare — este **greșit**,
-un default care nu era transmis; rularea a avut 1 rundă, așa cum scrie `reasoning_run.json`. Reparat,
-dar artefactul existent păstrează cifra veche: la o comparație, ia `pool_rounds` din `reasoning_run`.
+`pool_rounds` se numără de la unu (`clipper_judging` notează `round_index + 1`): **0 = judge-ul nu a
+rulat deloc**, 1 = pool-ul a fost acceptat după prima rundă, 2 = a fost nevoie de a doua. Nu citi 0 ca
+„acceptat din prima".
+
+`selection_trace.json` de pe disc raportează `pool_rounds: 0` pentru această rulare judecată — este
+**greșit**, un default care nu era transmis; rularea a avut 1 rundă, așa cum scrie `reasoning_run.json`.
+Reparat, dar artefactul existent păstrează cifra veche: la o comparație, ia `pool_rounds` din
+`reasoning_run`.
 
 ## Ce NU este închis
 
@@ -112,8 +117,9 @@ dar artefactul existent păstrează cifra veche: la o comparație, ia `pool_roun
   - *grounding coverage* întreabă dacă afirmațiile pot fi **legate de transcript**. Din 48 de
     afirmații distincte pe `gateslice4h`: 27 grounded strict, 11 ar fi dacă promptul ar cere
     `atom_ids`, 5 potriviri relaxate încă nevalidate, iar **5 (10%) nu au nicio potrivire locală
-    în ±120s**. „Fără potrivire locală" nu este același lucru cu „inventat" — este limita a ce poate
-    afirma măsurătoarea actuală.
+    în ±120s**. Rândurile spun **ce a găsit matcher-ul, nu de ce**: „fără potrivire locală" nu
+    înseamnă „inventat", iar cele 11 nu înseamnă „prompt greșit" până nu trece resolver-ul
+    determinist — sunt cauze pe care măsurătoarea actuală nu le poate separa.
   Nu recalibra pragul de 95% pe cifra de 27/48 — măsoară altceva.
 
   Cele 11 **nu** sunt „atomi numiți greșit": `matched_by` este `timestamp` pentru toate cele 111

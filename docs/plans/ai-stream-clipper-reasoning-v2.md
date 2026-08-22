@@ -611,10 +611,13 @@ Ce se verifică efectiv, și este o verificare reală:
 `matched_by` înregistrează care localizator a fost folosit, tocmai ca cele două rate să nu fie
 raportate ca una singură.
 
-**Ratele stricte, măsurate:** payoff **33/41 = 80%**, context **20/32 = 62%**. Sursa lungă e vizibil
-mai slabă (20/28 și 15/27) — modelul parafrazează mai mult pe un transcript lung. De aceea `validity`
-este majoritar `uncertain` acolo, ceea ce este raportare corectă, nu eșec. Aceasta este cifra pe care
-§14.3 o cerea înainte ca `grounded` să poată deveni eligibility în Batch 6.
+**Ratele stricte, măsurate:** payoff **33/41 = 80%**, context **20/32 = 62%**; sursa lungă 20/28 și
+15/27. **Aceste rate sunt per candidat, calculate înainte de deduplicarea canonică**, deci numără
+aceeași afirmație o dată pentru fiecare variantă care o împarte. Cifra pe afirmații distincte este în
+§14.3 și este singura comparabilă între rulări. Concluzia care stătea aici — „modelul parafrazează
+mai mult pe un transcript lung" — **nu se susține**: măsurătoarea nu separă parafraza de o legătură
+canonică lipsă, iar duplicarea putea produce singură diferența dintre surse. `validity` majoritar
+`uncertain` pe sursa lungă rămâne raportare corectă.
 
 **Două defecte ale primei versiuni, găsite la review și reparate înainte de a fi raportate ca
 rezultat:** potrivirea era `substring` pe textul concatenat, deci `"a bla"` trecea contra
@@ -1047,33 +1050,37 @@ implementare:
    mai devreme, răspunsul este nu, iar motivul este măsurat: 1 candidat story din 38 a ajuns la
    judge. Constrângerea este acum aplicată și mecanic — `story_v2` este respins din API până la
    gate-ul din Batch 5.
-3. **Regula de grounding va avea un fals-negativ inițial nemăsurat** — modelele parafrazează în loc
-   să citeze. De aceea eșecul marchează, nu elimină.
+3. **Regula de grounding are un fals-negativ.** De aceea eșecul marchează, nu elimină.
 
    **Măsurat, 2026-08-22**, cu `scripts/measure_grounding.py`, pe 48 de afirmații distincte de pe
-   `gateslice4h` și 10 de pe `gate2d3375`:
+   `gateslice4h` și 10 de pe `gate2d3375`. Rândurile descriu **ce a găsit matcher-ul**, nu de ce:
 
    | | `gateslice4h` | `gate2d3375` |
    |---|---|---|
-   | grounded ca livrat | 27 (56%) | 10 (100%) |
-   | atomi greșiți — citatul e verbatim la ≤120s | 11 (23%) | 0 |
-   | matcher prea strict — în ordine, cu goluri | 5 (10%) | 0 |
-   | **fără suport** | **5 (10%)** | **0** |
+   | grounded strict, ca livrat | 27 (56%) | 10 (100%) |
+   | potrivire exactă locală, fără legătură canonică | 11 (23%) | 0 |
+   | potrivire relaxată, încă nevalidată | 5 (10%) | 0 |
+   | **nicio potrivire locală în ±120s** | **5 (10%)** | **0** |
 
-   Riscul **s-a materializat**: circa o afirmație din zece nu are suport recuperabil lângă momentul
-   pe care îl revendică. „Marchează, nu elimina" a fost decizia corectă, și dintr-un motiv real.
+   **Ce NU spune tabelul.** Nu spune că modelul parafrazează, nu spune că a numit atomi greșiți — nu
+   a numit niciunul, `matched_by` este `timestamp` pentru toate cele 111 intrări, iar `atom_ids` din
+   artefact sunt completate de noi din fereastră. Și nu spune că cele 5 din urmă sunt inventate:
+   „fără potrivire locală" este limita metodei, nu o concluzie despre model. Fals-negativul există și
+   „marchează, nu elimina" rămâne decizia corectă; cât din el e al nostru și cât al modelului este
+   încă nemăsurat.
 
    **Prima versiune a măsurătorii a fost greșită și a inversat concluzia.** Număra 111 afirmații
-   unde sunt 47 distincte, fiindcă variantele aceluiași moment împart blocul story. Și căuta în
+   unde sunt 48 distincte, fiindcă variantele aceluiași moment împart blocul story. Și căuta în
    TOT fluxul: testată cu 200 de citate inventate din vocabularul transcriptului, 8 treceau proba
    de subsecvență și **200 din 200** treceau bag-of-words. Un test pe care nimic nu-l poate pica
    raportează zero eșecuri, și exact așa a ieșit „modelul nu a inventat niciodată". Metoda de acum
    caută într-o fereastră de ±120s în jurul momentului revendicat, a renunțat la bag-of-words, și
    trece **0 din 200** de citate inventate.
 
-   Ambele cauze recuperabile sunt ale noastre: promptul nu cere `atom_ids`, deși designul din §5.2
-   le prevedea, deci grounding-ul cade mereu pe fereastra implicită; iar matcher-ul cere rulare
-   contiguă acolo unde transcrierea a pierdut un cuvânt de umplutură.
+   **Ordinea de reparare**, decisă la review: resolver determinist (citatul căutat în tokeni întregi,
+   `matched_t` și driftul salvate, potrivirile multiple rămân `ambiguous`) → remăsurare pe aceleași
+   ancore cached → A/B de prompt cu `atom_ids` doar pentru ce rămâne nerezolvat → prag lexical
+   calibrat pe holdout. Nu se presupune că toate cele 11 vor deveni grounded.
 
 ## 14b. Stare de aprobare
 
