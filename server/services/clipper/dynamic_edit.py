@@ -35,6 +35,7 @@ logger = logging.getLogger("clipforge.clipper.dynamic_edit")
 
 __all__ = ["DEFAULT_STYLE", "CAMERAS", "camera_rects", "plan_dynamic_edit"]
 
+from services.clipper import dynamic_subject as subject_mod
 from services.clipper.dynamic_cameras import (   # noqa: F401  (re-exported)
     ASPECT,
     CAMERAS,
@@ -294,6 +295,19 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
     if not samples:
         warnings.append(
             "No face detected in this window; the facecam position is a guess.")
+
+    # WHEN THERE IS ANYONE TO POINT AT, over the window. Built from the raw
+    # track rather than `samples`, because `_dominant` has already collapsed
+    # everything onto one cluster and a sequence with nobody in it is exactly
+    # what that collapse cannot express. See `dynamic_subject` for why the
+    # thresholds are what they are.
+    _rebased = [{"t": _f(f.get("t")) - clip_start, "boxes": f.get("boxes") or []}
+                for f in (face_track or []) if isinstance(f, dict)]
+    presence = subject_mod.presence_timeline(_rebased)
+    presence_raw = subject_mod.raw_presence(_rebased)
+    presence_hop = subject_mod._hop_of(
+        [{"t": _f(f.get("t")) - clip_start} for f in (face_track or [])
+         if isinstance(f, dict)])
     cams = camera_rects(face, merged, src_w, src_h)
     fallback = (face["cx"], face["cy"])
 
@@ -408,6 +422,11 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             "action": round(action, 3),
             "speech": round(ratio, 3),
             "text": text[:120],
+            # `fit` only where nobody is on screen. Everything else keeps the
+            # framing that the visual test showed working — this is deliberately
+            # not a redesign of the shots that were already fine.
+            "composition": subject_mod.composition_for(
+                presence, t0, t1, presence_hop, presence_raw),
         })
 
     shots = _merge_dead_cuts(shots)
