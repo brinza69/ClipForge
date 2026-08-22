@@ -92,7 +92,8 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `dead_air.py` | dead seconds inside a chosen window, and the arithmetic of removing them (§15) |
 | `scoring.py` | the sub-scores, the four named score scales and eligibility |
 | `scoring_profiles.py` | the ten weight rows and nothing else. Moved verbatim when `scoring.py` crossed 500 lines — the comments above each row ARE the record of what was measured on which source, and `scripts/score_contribution.py` was run before and after to prove the ordering did not move |
-| `candidate_groups.py` | MOMENTS rather than variants: a stable `moment_id`, one representative cut per moment, the budget that decides who the judge is asked about, and the labelled packet it is asked with. Reuses `dedupe._group` for the grouping itself |
+| `candidate_groups.py` | MOMENTS rather than variants: a stable `moment_id`, one representative cut per moment, the budget that decides who the judge is asked about, the labelled packet it is asked with, and `story_census` — how many story moments exist, how many are grounded, and which quarter of the source they sit in. Reuses `dedupe._group` for the grouping itself |
+| `verdict_propagation.py` | What happens to a verdict AFTER the judge gives it: every cut of a judged moment inherits it, blended against its own heuristic score, into `selection_score` and never into `overall`. Split from `candidate_groups.py` at 500 lines; re-exported from it |
 | `selection.py` | which moments reach the board. When a judge ran the board is drawn from the moments it SELECTED, never from two score scales compared against each other; plus the round cap and the declared backfill. Runs in shadow until v2 has been compared against legacy |
 | `dedupe.py` | overlap, text and same-payoff grouping; diversity across time, thread and archetype |
 | `ranker.py` | the learned ranker. Complete, dormant, needs 40 labelled clips |

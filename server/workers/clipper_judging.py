@@ -50,6 +50,18 @@ def _judge_pool(refined: list[dict], duration: float, trace: Any,
         trace.note_count("moment_groups", out["groups"])
         trace.note_count("judge_pool_moments", len(out["pool"]))
         trace.note_count("judge_pool_story", out["story"])
+        # The denominators for the line above, and where the story moments sit
+        # on the clock. Recorded for every run, not only when someone thinks to
+        # measure: `judge_pool_story` alone cannot distinguish "the field held
+        # 20 story moments and 19 were judged" from "it held 200".
+        trace.note_count("story_groups", out["story_groups"])
+        trace.note_count("story_grounded", out["story_grounded"])
+        trace.note_count("story_uncertain", out["story_uncertain"])
+        # A distribution, so it goes where the shortlist categories go —
+        # `counts` holds scalars, and widening it for one list would be a new
+        # trace API for a single caller.
+        trace.note_stage("story_spread", "measured",
+                         "/".join(str(n) for n in out["story_quarters"]))
         trace.note_stage("shortlist", "built", ", ".join(
             f"{k}={v}" for k, v in sorted(out["categories"].items())))
     logger.info("clipper: %d moments from %d candidates, %d in the judge pool "

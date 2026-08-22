@@ -388,3 +388,65 @@ def test_reusing_the_grouping_survives_the_blend():
                            groups=first["all_groups"])
     assert ([g["moment_id"] for g in reused["all_groups"]]
             == [g["moment_id"] for g in first["all_groups"]])
+
+
+# ── The census the pilot reads ───────────────────────────────────────────────
+
+
+def test_the_pool_reports_how_many_story_moments_it_chose_from():
+    """`story` needs a denominator or it cannot be read.
+
+    "19 story moments went to the judge" is a success if the field held 20 and
+    a failure if it held 200, and the run trace recorded only the numerator.
+    That is the number the non-Minecraft pilot turns on: a source where the
+    engine finds almost no story moments fails differently from one where it
+    finds plenty and the shortlist spends its budget elsewhere.
+    """
+    cands = ([_cand(i * 100, i * 100 + 30, payoff=i * 100 + 20, grounded=i < 3)
+              for i in range(8)]
+             + [_cand(2000 + i * 100, 2030 + i * 100) for i in range(5)])
+
+    out = cg.build_pool(cands, duration=3000.0, budget=80)
+
+    assert out["story_groups"] == 8
+    assert out["story_grounded"] == 3
+    # The denominator is the FIELD, so it can never be smaller than the part
+    # of it the judge was asked about.
+    assert out["story"] <= out["story_groups"]
+
+
+def test_the_census_says_where_on_the_clock_the_story_moments_are():
+    """Batch 4 found the first three hours of a four-hour stream unread, and it
+    was visible only because someone plotted payoff times by hand. A source
+    whose story moments all sit in one quarter is the same failure wearing a
+    different source, so the shape is recorded on every run now.
+    """
+    late = [_cand(3000 + i * 60, 3040 + i * 60, payoff=3020 + i * 60)
+            for i in range(6)]
+
+    census = cg.story_census(cg.build_groups(late), duration=4000.0)
+
+    assert census["story_quarters"][3] == 6
+    assert sum(census["story_quarters"][:3]) == 0
+
+
+def test_a_moment_at_the_very_end_lands_inside_the_last_quarter():
+    """`start / duration * 4` is exactly 4 for a moment starting at `duration`,
+    which indexes off the end of a four-element list. Clamped, because a
+    boundary case that raises would take down a run for a counter.
+    """
+    census = cg.story_census(cg.build_groups([_cand(100.0, 130.0, payoff=120.0)]),
+                             duration=100.0)
+
+    assert census["story_quarters"] == [0, 0, 0, 1]
+
+
+def test_a_source_with_no_duration_still_counts_its_story_moments():
+    """Duration comes from a probe that can fail. Counting must survive it —
+    the spread is what becomes unknowable, not the census.
+    """
+    census = cg.story_census(cg.build_groups([_cand(0, 30, payoff=20)]),
+                             duration=0.0)
+
+    assert census["story_groups"] == 1
+    assert census["story_quarters"] == [0, 0, 0, 0]
