@@ -276,17 +276,37 @@ def test_a_refused_moment_cannot_return_through_one_of_its_own_cuts():
     assert board["winners"] == [] and board["backfilled"] == 0
 
 
-def test_the_board_numbers_its_own_winners():
-    """`deduplicate` assigns `rank_position` to the winners IT elected and 0 to
-    everything else, and this rule elects a different set. Without its own
-    numbering a rescued winner reached the board carrying `rank_position=0`, so
-    the v2 order never arrived in the DB, the API or auto-export."""
+def test_committing_a_board_numbers_its_own_winners():
+    """`deduplicate` numbers the winners IT elected and gives everything else 0,
+    and this rule elects a different set. Without its own numbering a rescued
+    winner reached the board carrying `rank_position=0`, so the v2 order never
+    arrived in the DB, the API or auto-export."""
     demoted = _cand(30.0, rank=1, llm=90.0, moment="m1")
     demoted["is_alternative"] = True
     demoted["rank_position"] = 0
     second = _cand(40.0, rank=2, llm=80.0, moment="m2")
-    out = selection.board([second, demoted], want=2, judged=True)
+    field = [second, demoted]
+
+    out = selection.board(field, want=2, judged=True)
+    selection.apply_board(field, out["winners"])
     assert [c["rank_position"] for c in out["winners"]] == [1, 2]
+
+
+def test_deciding_a_board_writes_nothing():
+    """Shadow calls `board()` a SECOND time to record what v2 would choose.
+    While the numbering lived inside it, that call stamped `rank_position` onto
+    candidates the shipped board had not selected — the comparison corrupting
+    the very thing it exists to leave alone."""
+    shipped = _cand(90.0, moment="m1")
+    other = _cand(10.0, rank=1, llm=95.0, moment="m2")
+    field = [shipped, other]
+
+    legacy = selection.board(field, want=1, judged=False)
+    selection.apply_board(field, legacy["winners"])
+    before = [c.get("rank_position") for c in field]
+
+    selection.board(field, want=1, judged=True)      # the shadow comparison
+    assert [c.get("rank_position") for c in field] == before
 
 
 def test_two_rounds_are_ordered_by_round_then_by_rank():
@@ -307,3 +327,26 @@ def test_a_verdict_with_no_round_recorded_sorts_as_the_first_round():
     b = _cand(10.0, rank=1, llm=90.0, moment="m2")
     out = selection.board([a, b], want=2, judged=True)
     assert out["winners"] == [b, a]
+
+
+def test_a_failed_judge_reverts_the_whole_field_to_the_heuristic_order():
+    """The plan asks for an atomic revert. By the time a judge fails, some
+    candidates have already been blended down by a partial verdict, so ranking
+    on `overall` leaves exactly the mixed scale the failure was supposed to
+    undo: a candidate with heuristic 80, blended to 30, loses to one with 60."""
+    blended = {"overall": 30.0, "heuristic_score": 80.0, "llm_score": 10.0,
+               "moment_id": "m1"}
+    untouched = {"overall": 60.0, "heuristic_score": 60.0, "moment_id": "m2"}
+
+    out = selection.board([blended, untouched], want=1, judged=False, revert=True)
+    assert out["winners"] == [blended], "the better heuristic clip wins"
+
+
+def test_a_mode_that_simply_does_not_use_the_rule_is_not_a_failure():
+    """story_v1 has always shipped the blended ordering. A revert there would
+    change what an existing user sees for no reason."""
+    blended = {"overall": 30.0, "heuristic_score": 80.0, "moment_id": "m1"}
+    untouched = {"overall": 60.0, "heuristic_score": 60.0, "moment_id": "m2"}
+
+    out = selection.board([blended, untouched], want=1, judged=False)
+    assert out["winners"] == [untouched], "unchanged from what shipped"

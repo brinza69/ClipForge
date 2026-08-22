@@ -383,10 +383,14 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     # their board silently reordered by a rule that has not been compared
     # against legacy on anything.
     shadow = mode == reasoning_mode.STORY_V2_SHADOW
+    # A judge that was asked and came back with nothing is a FAILURE, and the
+    # plan asks for the whole field to return to the heuristic order when that
+    # happens. A mode that simply does not use the rule is not a failure.
     picked = selection.board(
         ranked, want=target_count,
         judged=selection.rule_applies(mode, judged),
-        min_score=float(cfg.get("min_score") or 0))
+        min_score=float(cfg.get("min_score") or 0),
+        revert=reasoning_mode.uses_llm(mode) and not judged)
     winners = picked["winners"]
     trace.note_stage(
         "board", "shadow" if shadow else ("judged" if judged else "legacy"),

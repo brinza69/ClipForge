@@ -149,6 +149,20 @@ def _render_packet(index: int, packet: dict) -> str:
     return "\n".join(lines)
 
 
+def _base_score(cand: dict) -> float:
+    """The heuristic reading a verdict is blended against.
+
+    Captures it on first use when the caller did not: `apply_ranking` is also
+    reached from tests and from the scored path, and without a named base the
+    blend is against whatever `overall` happens to hold.
+    """
+    base = cand.get("heuristic_score")
+    if base is None:
+        base = _num(cand.get("overall"))
+        cand["heuristic_score"] = base
+    return _num(base)
+
+
 # A verdict from the brutal editor is worth this much of the clip's score.
 # Not a veto: the ranking already saw the same clip, so a reject reason is a
 # second opinion, not an override.
@@ -212,7 +226,13 @@ def apply_ranking(cands: list[dict], verdicts: Any, *,
         }
         if verdict.get("why"):
             cand["llm_reason"] = str(verdict["why"])[:200]
-        cand["overall"] = round((1.0 - w) * _num(cand.get("overall")) + w * score, 2)
+        # Blended against the HEURISTIC reading, captured here if the caller did
+        # not. Blending against `overall` works exactly once: a second pool
+        # round, or any caller that scores twice, compounds a verdict into a
+        # number that already holds one — and the base of the blend stops being
+        # a thing anyone can name.
+        base = _base_score(cand)
+        cand["overall"] = round((1.0 - w) * base + w * score, 2)
         # The number the selection rule ranks on, named. Set HERE as well as in
         # the propagation, or the pool's own members are the only judged
         # candidates without one.
@@ -231,7 +251,7 @@ def apply_ranking(cands: list[dict], verdicts: Any, *,
                 continue
             cand["llm_score"] = 0.0
             cand["judge_score"] = 0.0
-            cand["overall"] = round((1.0 - w) * _num(cand.get("overall")), 2)
+            cand["overall"] = round((1.0 - w) * _base_score(cand), 2)
             cand["selection_score"] = cand["overall"]
     return hit
 

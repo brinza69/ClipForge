@@ -156,3 +156,27 @@ def test_an_inherited_verdict_carries_both_names_as_well():
     from services.clipper import candidate_groups as cg
 
     assert "judge_score" in cg._VERDICT_FIELDS
+
+
+def test_the_blend_is_against_a_base_that_can_be_named():
+    """Blending against `overall` works exactly once. A second pool round, or
+    any caller that scores twice, compounds a verdict into a number that
+    already holds one — and the base stops being a thing anyone can name."""
+    from services.clipper.llm_judge import apply_ranking
+
+    cand = _cand(overall=80.0, text="a clip")
+    apply_ranking([cand], [{"id": 0}], weight=0.5)
+    once = cand["overall"]
+
+    apply_ranking([cand], [{"id": 0}], weight=0.5)
+    assert cand["overall"] == once, "scoring twice must not compound"
+    assert cand["heuristic_score"] == 80.0
+
+
+def test_the_base_is_captured_when_the_caller_did_not_set_one():
+    """`apply_ranking` is reached from tests and from the scored path too."""
+    from services.clipper.llm_judge import apply_ranking
+
+    cand = _cand(overall=42.0)
+    apply_ranking([cand], [{"id": 0}], weight=0.5)
+    assert cand["heuristic_score"] == 42.0

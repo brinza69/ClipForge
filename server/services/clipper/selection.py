@@ -100,7 +100,7 @@ def enough_selected(cands: Sequence[dict], want: int) -> bool:
 
 
 def board(ranked: Sequence[dict], *, want: int, judged: bool,
-          min_score: float = 0.0) -> dict:
+          min_score: float = 0.0, revert: bool = False) -> dict:
     """The winners, under the rule. Returns `{winners, backfilled, tally}`.
 
     `ranked` is the WHOLE deduplicated field, alternatives included, and that
@@ -124,9 +124,16 @@ def board(ranked: Sequence[dict], *, want: int, judged: bool,
     want = max(0, int(want))
 
     if not judged:
+        # `revert` is the judge having FAILED, which is not the same as the
+        # rule not applying. A failure means the whole field goes back to the
+        # heuristic order, atomically — and by then some candidates have
+        # already been blended down by a partial verdict, so ranking on
+        # `overall` leaves exactly the mixed scale the failure was supposed to
+        # undo. Measured: a candidate with heuristic 80, blended to 30, loses
+        # to one with heuristic 60.
         return {"winners": _by_score(
                     [c for c in ranked if not c.get("is_alternative")],
-                    want, min_score),
+                    want, min_score, heuristic=revert),
                 "backfilled": 0, "tally": tally}
 
     # `(judge_round, llm_rank)`, not `llm_rank` alone. Each round ranks its own
@@ -168,14 +175,6 @@ def board(ranked: Sequence[dict], *, want: int, judged: bool,
             winners.append(cand)
             backfilled += 1
 
-    # The board's OWN ordering, written where everything downstream reads it.
-    # `deduplicate` assigns `rank_position` to the winners IT elected and 0 to
-    # everything else, and this rule elects a different set — so without this a
-    # rescued winner reached the board carrying `rank_position=0` and the v2
-    # order never arrived in the DB, the API or auto-export.
-    for position, cand in enumerate(winners, start=1):
-        cand["rank_position"] = position
-
     return {"winners": winners, "backfilled": backfilled, "tally": tally}
 
 
@@ -192,7 +191,13 @@ def rule_applies(mode: str, judged: bool) -> bool:
 
 
 def apply_board(ranked: Sequence[dict], winners: Sequence[dict]) -> None:
-    """Flag the field against the board that was chosen.
+    """COMMIT a board: number its winners and flag everything else.
+
+    Separate from `board()` on purpose. `board()` decides and returns; this
+    writes. Shadow mode calls `board()` a second time to record what v2 WOULD
+    have chosen, and while the numbering lived inside it that second call
+    stamped `rank_position` onto candidates the shipped board had not selected
+    — the comparison corrupting the very thing it was supposed to leave alone.
 
     Everything dedupe kept but the board did not take is an ALTERNATIVE —
     without that a 6-hour VOD showed 352 "winners" for a request of 8. The half
@@ -207,6 +212,13 @@ def apply_board(ranked: Sequence[dict], winners: Sequence[dict]) -> None:
         cand["is_alternative"] = id(cand) not in chosen
         if id(cand) not in chosen:
             cand["rank_position"] = None
+    # `deduplicate` numbers the winners IT elected and gives everything else 0,
+    # and this rule elects a different set — so without its own numbering a
+    # rescued winner reached the board carrying `rank_position=0` and the v2
+    # order never arrived in the DB, the API or auto-export.
+    for position, cand in enumerate(winners, start=1):
+        if isinstance(cand, dict):
+            cand["rank_position"] = position
 
 
 def _selection_score(cand: dict) -> float:
@@ -230,14 +242,24 @@ def _moment_key(cand: dict) -> Any:
     return cand.get("moment_id") or cand.get("dedupe_group") or id(cand)
 
 
-def _by_score(ranked: Sequence[dict], want: int, min_score: float) -> list[dict]:
+def _by_score(ranked: Sequence[dict], want: int, min_score: float, *,
+              heuristic: bool = False) -> list[dict]:
     """The legacy pick: best by `overall`, with the min-score floor.
+
+    `heuristic=True` ranks on `heuristic_score` instead — the reading no
+    verdict ever touched. Used only when a judge FAILED, where the plan asks
+    for the whole field to return to the heuristic order atomically.
 
     Never returns an empty board because the threshold was set too high — keep
     the best one and let the score speak for itself.
     """
-    out = sorted(ranked, key=lambda c: -_num(c.get("overall")))
+    def key(cand: dict) -> float:
+        if heuristic and cand.get("heuristic_score") is not None:
+            return _num(cand["heuristic_score"])
+        return _num(cand.get("overall"))
+
+    out = sorted(ranked, key=lambda c: -key(c))
     if min_score > 0:
-        held = [c for c in out if _num(c.get("overall")) >= min_score]
+        held = [c for c in out if key(c) >= min_score]
         out = held or out[:1]
     return out[:want]
