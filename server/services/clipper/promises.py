@@ -173,24 +173,40 @@ def prompt(lines: str, want: int) -> str:
 async def detect(segments: Sequence[dict], duration: float, *,
                  per_chunk: int = 6,
                  engines: Sequence[str] | None = None,
-                 model: str | None = None) -> list[dict]:
-    """Every setup in the stream that could pay off later. [] when no engine."""
+                 model: str | None = None, trace: Any = None,
+                 timeout: float | None = None, is_cancelled=None) -> list[dict]:
+    """Every setup in the stream that could pay off later. [] when no engine.
+
+    This pass is a MODEL call like the other two, and it used to be the one the
+    trace could not see: every provider attempt it made was invisible, so a run
+    whose promises pass failed over to a second engine looked untouched.
+    """
     from services.clipper import llm_select
 
-    lines = llm_select.transcript_lines(segments)
-    if not lines:
+    from services.clipper import chunking
+
+    items = llm_select.transcript_line_items(segments)
+    if not items:
         return []
     engines = engines or llm_select.NOMINATE_ENGINES
     found: list[dict] = []
-    for chunk in llm_select.chunk_lines(lines):
-        answer = await llm_select._ask(engines, prompt(chunk, per_chunk),
-                                       model=model)
-        if answer is None:
-            continue
-        for raw in (llm_select.parse_json(answer) or []):
+    chunks = chunking.plan_chunks(items)
+    for chunk in chunks:
+        if is_cancelled is not None and is_cancelled():
+            break
+        request = f"promises#{chunk['index']}"
+        want = chunking.quota_for(chunk, per_chunk=per_chunk)
+        parsed = await llm_select._ask_json(
+            engines, prompt(chunk["lines"], want), model=model, trace=trace,
+            stage="promises", request=request, timeout=timeout,
+            is_cancelled=is_cancelled, keys=("t", "time", "text"))
+        before = len(found)
+        for raw in (parsed or []):
             item = normalise_promise(raw, duration)
             if item is not None:
                 found.append(item)
+        llm_select._note_chunk_span(trace, "promises", chunk, len(found) - before)
+    llm_select._note_coverage(trace, "promises", chunks, duration)
     found.sort(key=lambda p: p["t"])
     logger.info("promises: %d setups found (%s)", len(found),
                 PROMISE_PROMPT_VERSION)
