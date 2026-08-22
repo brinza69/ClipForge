@@ -392,6 +392,11 @@ class ClipFeedbackModel(Base):
     project_id: Mapped[str | None] = mapped_column(String(12), index=True, nullable=True)
     event_type: Mapped[str] = mapped_column(String(30), index=True)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # WHO did this: "manual" (a person clicked), "auto" (the pipeline did it on
+    # its own, e.g. auto_export) or "system". Only "manual" is a verdict — see
+    # feedback.label_for_events. NULL means the row predates this column and its
+    # origin is unrecoverable, which is why NULL does not label either.
+    origin: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

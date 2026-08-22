@@ -129,6 +129,26 @@ async def _vision_review(clip: ClipModel, cfg: dict, rendered: Path,
     return merged
 
 
+def _job_origin(metadata: object) -> str:
+    """Who asked for this render, from the job that carries it.
+
+    An UNSTAMPED job is `system`, which is neutral for training — NOT `manual`.
+    Manual was the first answer here and it was wrong in the one direction that
+    costs something: today only `_auto_export` enqueues on its own, so a missing
+    stamp really did mean a person, but the next piece of automation that
+    enqueues an export and forgets to stamp it would have every clip it rendered
+    filed as human approval, silently. Every caller that means `manual` now says
+    so, and a missing stamp costs a label instead of inventing one.
+
+    The same argument is written out in `feedback.record`, which is why `origin`
+    is a required argument there.
+    """
+    from services.clipper import feedback
+
+    asked = (metadata or {}).get("origin") if isinstance(metadata, dict) else None
+    return str(asked) if asked in feedback.ORIGINS else feedback.ORIGIN_SYSTEM
+
+
 async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Full-quality 1080x1920 deliverable."""
     import asyncio
@@ -303,6 +323,7 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         await feedback.record(
             session, clip.id, project_id, "exported",
             {"path": str(out), "size": result.get("size")},
+            origin=_job_origin(metadata),
         )
 
     await queue.update_progress(job_id, 1.0, "Completed")
@@ -369,6 +390,7 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
     from services.clipper import feedback
 
     async with async_session() as session:
-        await feedback.record(session, clip.id, project_id, "previewed", None)
+        await feedback.record(session, clip.id, project_id, "previewed", None,
+                              origin=_job_origin(metadata))
 
     await queue.update_progress(job_id, 1.0, "Preview ready")

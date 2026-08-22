@@ -25,6 +25,7 @@ from config import settings
 from database import get_session
 from job_queue import job_queue
 from models import ClipModel, ClipStatus, JobType, ProjectModel, TranscriptModel
+from services.clipper import feedback as feedback_mod
 from services.clipper import storage
 from services.clipper.serialize import (
     can_transition,
@@ -133,7 +134,8 @@ async def patch_clip(
             payload_out: dict[str, Any] = {"field": field}
             if field in before:
                 payload_out |= {"old": before[field], "new": getattr(clip, field)}
-            await feedback.record(session, clip.id, clip.project_id, event, payload_out)
+            await feedback.record(session, clip.id, clip.project_id, event, payload_out,
+                                  origin=feedback.ORIGIN_MANUAL)
 
     return {"clip": clip_to_dict(clip), "changed": changed}
 
@@ -151,7 +153,8 @@ async def _set_status(
                    if clip.status == ClipStatus.exporting.value else "")
     clip.status = status
     await session.commit()
-    await feedback.record(session, clip.id, clip.project_id, event, payload)
+    await feedback.record(session, clip.id, clip.project_id, event, payload,
+                          origin=feedback.ORIGIN_MANUAL)
     return clip_to_dict(clip)
 
 
@@ -195,6 +198,10 @@ async def regenerate(
             project_id=clip.project_id,
             job_type=JobType.clipper_preview.value,
             clip_id=clip.id,
+            # Stamped even though a person clearly asked: an UNSTAMPED job is
+            # deliberately not read as a verdict, so every human-initiated
+            # render has to say so.
+            metadata={"origin": feedback_mod.ORIGIN_MANUAL},
         )
         return {"job_id": job_id, "what": what}
 
@@ -394,6 +401,7 @@ async def export_clip(clip_id: str, session: AsyncSession = Depends(get_session)
         project_id=clip.project_id,
         job_type=JobType.clipper_export.value,
         clip_id=clip.id,
+        metadata={"origin": feedback_mod.ORIGIN_MANUAL},
     )
     return {"job_id": job_id, "clip_id": clip.id}
 
@@ -408,7 +416,12 @@ async def record_feedback(
     event_type = (payload or {}).get("event_type") or ""
     try:
         event_id = await feedback.record(
-            session, clip.id, clip.project_id, event_type, (payload or {}).get("payload")
+            session, clip.id, clip.project_id, event_type,
+            (payload or {}).get("payload"),
+            # The endpoint is the UI's, so this is manual BY CONTRACT: the
+            # client is not allowed to name an origin. Letting it would let an
+            # automation file its own exports as human verdicts.
+            origin=feedback.ORIGIN_MANUAL,
         )
     except ValueError as exc:
         raise _err(400, "unknown_event", str(exc)) from exc
@@ -451,6 +464,7 @@ async def record_performance(
             "published_at": body.get("published_at"),
             **numeric,
         },
+        origin=feedback.ORIGIN_MANUAL,
     )
     return {"event_id": event_id}
 

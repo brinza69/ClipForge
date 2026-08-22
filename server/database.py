@@ -327,6 +327,16 @@ async def init_db() -> None:
             except Exception:
                 pass
 
+        _clip_feedback_migrations = [
+            ("origin", "VARCHAR(10)"),
+        ]
+        for col, col_type in _clip_feedback_migrations:
+            try:
+                await conn.execute(
+                    text(f"ALTER TABLE clip_feedback ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass
+
         # Ranked review lists sort by (project_id, rank_position) constantly.
         for stmt in (
             "CREATE INDEX IF NOT EXISTS idx_clips_project_rank ON clips(project_id, rank_position)",
