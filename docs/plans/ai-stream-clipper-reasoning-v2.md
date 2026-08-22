@@ -1084,6 +1084,52 @@ implementare:
    ancore cached → A/B de prompt cu `atom_ids` doar pentru ce rămâne nerezolvat → prag lexical
    calibrat pe holdout. Nu se presupune că toate cele 11 vor deveni grounded.
 
+## 14c. Pilot pe surse diverse, 2026-08-22
+
+**Întrebarea:** motorul story generalizează, sau e modelat de singurul stream de Minecraft pe care
+s-au măsurat batch-urile 0-6? Costul de etichetare din Batch 10 se plătește o singură dată și numai
+dacă răspunsul e da.
+
+Patru surse, fiecare clonată și rulată **o singură dată** în `story_v2_shadow`, aceeași configurație
+(sha256 `224fce16d6c8f91c`), commit `b442f20`. Recitit cu `scripts/pilot_census.py`.
+
+| sursă | tip | h | momente story | **/oră** | grounded | valid | sferturi |
+|---|---|---|---|---|---|---|---|
+| `go ghost` | talking-head editat, EN | 0,37 | 6 | **16,2** | 5 | 2 | 1/2/1/2 |
+| Turul apartamentului | vlog IRL, **română** | 0,70 | 10 | **14,3** | 6 | 3 | 0/3/5/2 |
+| Jensen Huang | interviu structurat | 1,05 | 11 | 10,5† | 9 | 6 | 1/0/5/5 |
+| moistcr1tikal | **Just Chatting live 3h43m** | 3,72 | 33 | **8,9** | 19 | 7 | 9/4/7/13 |
+| *gateslice4h* | *gaming live 4h — baseline* | *4,00* | *25* | *6,2* | *14* | *7* | *5/7/5/8* |
+
+**Motorul nu este Minecraft-shaped.** Comparația cea mai apropiată de un experiment controlat este
+ultimul rând contra penultimului — două stream-uri live de aproape patru ore, unul gaming și unul nu:
+**8,9 momente story pe oră față de 6,2, cu aceeași rată de grounding** (58% față de 56%). Toate
+patru sursele depășesc baseline-ul la densitate. Româna nu este o barieră. Niciuna nu a colapsat.
+
+Arhetipurile nu sunt forțate în forme de gaming: pe `go ghost`, `HOT_TAKE` a căzut exact pe
+propoziția care dă titlul videoclipului, alături de `REVEAL`, `CLUTCH`, `CALLBACK` și `STORY`.
+
+† **Cifra interviului este un plafon inferior, nu o măsurătoare.** `anchors#0` acoperă 0-2240s —
+primele 59% din sursă — și a produs **zero** ancore, înregistrat ca `unusable`, `parsed=False`. Cele
+11 momente vin din 43% din material, deci densitatea reală este în jur de 24/oră. Singurul motiv
+pentru care se vede este câmpul `unusable` din Batch 0; fără el concluzia ar fi fost „interviul e
+înclinat spre final, interesant".
+
+**Rata de eșec operațional este ea însăși un rezultat.** Din 11 chunk-uri de `anchors`, unul a venit
+neparsabil; la `promises`, două. Nu sunt eșecuri de generalizare și nu se citesc ca atare — dar
+înseamnă că o singură rulare per sursă nu este suficientă pentru o cifră pe care se ia o decizie.
+
+**Ce NU a demonstrat pilotul.** Că v2 produce clipuri mai bune. Densitatea, grounding-ul și
+distribuția sunt diagnostice: motorul își poate activa bugetul story și poate produce impecabil 33 de
+payoff-uri proaste. `Precision@10` pe momente considerate exportabile de om, v2 contra legacy în
+review orb, procentul self-contained și corectitudinea marginilor cer judecată umană și rămân
+nemăsurate. Acesta este restul gate-ului, și el este Batch 10.
+
+**Condițiile rulării, ca să nu fie citite ca mai mult decât sunt.** Ollama a picat pe conexiune la
+fiecare apel, înainte să vadă promptul, deci motorul efectiv a fost OpenAI la promises, anchors și
+judge. Cohorta se numește „reasoning v2, fallback OpenAI" — nu este o evaluare a lui Ollama și nu
+este independentă de provider.
+
 ## 14b. Stare de aprobare
 
 Batch 0 și Batch 1 au **undă verde**, cu ajustările din §13.17, §13.23 și §13.24 deja integrate.
