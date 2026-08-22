@@ -124,8 +124,11 @@ async def main() -> int:
 
     print(f"=== {args.stage} on {args.project_id} (status {before})", flush=True)
     try:
-        await handler("harness", args.project_id, args.clip, {},
-                      StubQueue(args.quiet))
+        # `launched_by` lands in reasoning_run.json. Two story runs on this rig
+        # were quoted as evidence and could not have come through the API, and
+        # nothing on disk said so — a run started from here has to admit it.
+        await handler("harness", args.project_id, args.clip,
+                      {"launched_by": "script"}, StubQueue(args.quiet))
     finally:
         if not args.keep_status and before:
             restore(args.project_id, before)

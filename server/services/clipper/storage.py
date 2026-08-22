@@ -44,8 +44,13 @@ ARTIFACT_NAMES: frozenset[str] = frozenset(
     # to rebuild; that one is not. It is stored with the fingerprint of what
     # produced it, so a re-run after a settings change recomputes instead of
     # silently reusing an answer the new configuration would never have given.
+    # "reasoning_run" and "selection_trace" are the observability pair: how the
+    # run was configured and what the models did, and why each candidate ended
+    # where it did. Neither is an input to anything — they exist so a later
+    # change can be shown to be an improvement rather than asserted to be one.
     {"signals", "faces", "regions", "segments", "candidates", "meta",
-     "promises", "atoms", "threads", "graph", "anchors", "segment_types", "regions_by_segment"}
+     "promises", "atoms", "threads", "graph", "anchors", "segment_types",
+     "regions_by_segment", "reasoning_run", "selection_trace"}
 )
 
 _SUBDIRS = (
@@ -146,6 +151,8 @@ def paths(project_id: str) -> dict[str, Path]:
         "anchors": analysis / "anchors.json",
         "segment_types": analysis / "segment_types.json",
         "regions_by_segment": analysis / "regions_by_segment.json",
+        "reasoning_run": analysis / "reasoning_run.json",
+        "selection_trace": analysis / "selection_trace.json",
     }
 
 

@@ -51,6 +51,8 @@ def test_paths_exposes_the_contract_keys(clipper):
         "anchors",
         "segment_types",
         "regions_by_segment",
+        "reasoning_run",
+        "selection_trace",
     }
     assert p["proxy"].name == "proxy.mp4"
     assert p["audio"].name == "speech.wav"

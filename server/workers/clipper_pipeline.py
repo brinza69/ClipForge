@@ -399,7 +399,11 @@ async def handle_analyze(job_id: str, project_id: str, clip_id, metadata, queue)
     storage.write_artifact(project_id, "meta", meta)
 
     await queue.update_progress(job_id, 1.0, "Detected content type")
-    await queue.enqueue(project_id=project_id, job_type=JobType.clipper_score.value)
+    # `launched_by` is carried to reasoning_run.json. Left unset it defaults to
+    # "worker", which was true of everything and therefore said nothing.
+    await queue.enqueue(project_id=project_id,
+                        job_type=JobType.clipper_score.value,
+                        metadata={"launched_by": "pipeline"})
     logger.info(
         f"clipper analysis for {project_id}: {detected.get('content_type')} "
         f"@{detected.get('confidence'):.2f} from {len(frames)} frames"
