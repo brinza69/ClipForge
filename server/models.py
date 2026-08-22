@@ -355,6 +355,12 @@ class ClipModel(Base):
     dedupe_group: Mapped[str | None] = mapped_column(String(12), nullable=True)
     is_alternative: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     rank_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Where the shadow board would have placed this clip, and which run said so.
+    # NULL for everything the shadow board did not pick, and for every run that
+    # was not in a shadow mode. Never read by the pipeline — it exists so a
+    # blind review can be shown v2's choices without shipping them.
+    shadow_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shadow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Frozen at scoring time so the ranker trains on what the model actually
     # saw, not on features recomputed by newer code.
     feature_vector: Mapped[dict | None] = mapped_column(JSON, nullable=True)

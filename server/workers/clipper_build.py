@@ -404,6 +404,19 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         # a comparison made after that is a comparison with the legacy answer.
         would = selection.board(ranked, want=target_count, judged=judged)
         legacy_ids = [id(c) for c in winners]
+        # STAMPED, not just counted. The count answers "did v2 disagree"; a
+        # blind review answers "was it right", and that needs to know WHICH
+        # moments v2 would have shipped. Written on the candidate so
+        # `_write_clips` carries it to the row and the trace picks it up —
+        # `rank_position` and `is_alternative` stay untouched, which is what
+        # keeps shadow inert.
+        for position, cand in enumerate(would["winners"], start=1):
+            cand["shadow_rank"] = position
+            # The rank belongs to the run that produced it. Without this a rank
+            # read months later cannot be told apart from one a different
+            # ordering produced, and the blind review would compare two boards
+            # that never coexisted.
+            cand["shadow_run_id"] = getattr(trace, "run_id", "")
         trace.note_stage(
             "board_v2", "would",
             f"{len(would['winners'])} winners, {would['backfilled']} backfilled, "
@@ -431,7 +444,16 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
 
     # ── Pass E (cheap half) + Pass D ────────────────────────────────────────
     await queue.update_progress(job_id, 0.70, "Preparing layouts")
-    plan_winners(winners, cfg, transcript, regions, faces, src_w, src_h, profile)
+    # The shadow board's picks are planned TOO, and this is not a nicety. They
+    # are `is_alternative` rows, so without it they carry `layout_plan: null`
+    # and `caption_plan: null` — measured on `pilotf81b`, 69 of 69 alternatives.
+    # A blind review that renders them next to legacy's picks would compare a
+    # captioned, framed clip against an uncaptioned, unframed one and call the
+    # difference selection quality. Planning both is what makes the comparison
+    # about the choice.
+    plan_winners(winners + [c for c in ranked
+                            if c.get("shadow_rank") and c not in winners],
+                 cfg, transcript, regions, faces, src_w, src_h, profile)
 
     _guard(queue, job_id)
     await _attach_headlines(winners, cfg, queue, job_id)

@@ -193,7 +193,11 @@ def _reasoning_of(cand: dict) -> dict | None:
                 "llm_reason", "llm_tag", "heuristic_score", "learned_score",
                 "judge_score", "selection_score", "eligibility",
                 "judge_status", "judge_round", "board_reason",
-                "payoff_source", "verdict_inherited"):
+                "payoff_source", "verdict_inherited",
+                # Also columns, deliberately. The column is what a query filters
+                # on to build a review session; this copy is what survives in
+                # the explanation a person reads next to the clip.
+                "shadow_rank", "shadow_run_id"):
         value = cand.get(key)
         if value not in (None, "", [], {}):
             out[key] = value
@@ -237,8 +241,13 @@ async def _write_clips(
         fresh = drop_moments_already_exported(
             ranked, kept_spans, float(settings.clipper_overlap_threshold))
         for cand in fresh:
+            # A shadow pick is `is_alternative`, so the plans it was given would
+            # be dropped here — and a clip with no layout cannot be rendered at
+            # all. `planned` is what HAS a plan, which is winners plus whatever
+            # the shadow board asked for; `is_winner` still decides what ships.
             is_winner = id(cand) in winner_ids
-            layout = cand.get("layout") if is_winner else None
+            planned = is_winner or bool(cand.get("shadow_rank"))
+            layout = cand.get("layout") if planned else None
             start = float(cand.get("start") or 0.0)
             end = float(cand.get("end") or 0.0)
             session.add(
@@ -255,12 +264,14 @@ async def _write_clips(
                     transcript_text=(cand.get("text") or "")[:20000],
                     content_type=cand.get("content_type") or profile,
                     layout_plan=layout,
-                    caption_plan=cand.get("captions") if is_winner else None,
+                    caption_plan=cand.get("captions") if planned else None,
                     warnings=(layout or {}).get("warnings") or [],
                     reasoning=_reasoning_of(cand),
                     dedupe_group=cand.get("dedupe_group"),
                     is_alternative=bool(cand.get("is_alternative")),
                     rank_position=cand.get("rank_position"),
+                    shadow_rank=cand.get("shadow_rank"),
+                    shadow_run_id=cand.get("shadow_run_id") or None,
                     feature_vector=cand.get("features"),
                     ranker_version=cand.get("ranker_version"),
                     status=ClipStatus.candidate.value,

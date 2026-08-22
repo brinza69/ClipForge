@@ -192,6 +192,8 @@ async def init_db() -> None:
             ("caption_align", "VARCHAR(10)"),
             ("hook_y_pct", "REAL"),
             ("hook_align", "VARCHAR(10)"),
+            ("shadow_rank", "INTEGER"),
+            ("shadow_run_id", "VARCHAR(64)"),
         ]
         for col_name, col_type in _clip_migrations:
             try:

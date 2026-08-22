@@ -470,3 +470,45 @@ def test_a_source_of_unknown_length_says_so_instead_of_reporting_a_flat_shape():
     stage = next(s for s in trace.stages if s["name"] == "story_spread")
     assert stage["status"] == "unavailable"
     assert not any(k.startswith("story_q") for k in trace.counts)
+
+
+# ── What shadow leaves behind ────────────────────────────────────────────────
+
+
+def test_a_shadow_pick_is_recorded_without_being_shipped():
+    """Shadow must be visible AND inert, and those pull opposite ways.
+
+    Recording only the COUNT of differences answers "did v2 disagree" and not
+    "was it right" — a blind review needs to know WHICH moments v2 would have
+    shipped. Stamping `shadow_rank` says that; touching `rank_position` or
+    `is_alternative` would ship it, which is the one thing shadow promises not
+    to do.
+    """
+    from services.clipper import selection
+
+    field = [_cand(0, 30, llm_score=40.0, llm_rank=2, heuristic_score=90.0),
+             _cand(60, 90, llm_score=95.0, llm_rank=1, heuristic_score=10.0)]
+    legacy = selection.board(field, want=1, judged=False)
+    selection.apply_board(field, legacy["winners"])
+    would = selection.board(field, want=1, judged=True)
+    for position, cand in enumerate(would["winners"], start=1):
+        cand["shadow_rank"] = position
+
+    shipped = [c for c in field if c.get("rank_position")]
+    shadow = [c for c in field if c.get("shadow_rank")]
+    assert shipped == [field[0]], "the heuristic's pick still ships"
+    assert shadow == [field[1]], "the judge's pick is recorded, not shipped"
+    assert field[1]["is_alternative"] is True
+    assert field[1].get("rank_position") is None
+
+
+def test_a_shadow_rank_carries_the_run_that_produced_it():
+    """A rank read months later cannot otherwise be told apart from one a
+    different ordering produced, and the blind review would then compare two
+    boards that never coexisted.
+    """
+    from workers.clipper_finalize import _reasoning_of
+
+    out = _reasoning_of({"shadow_rank": 3, "shadow_run_id": "abc123"})
+    assert out["shadow_rank"] == 3 and out["shadow_run_id"] == "abc123"
+    assert _reasoning_of({"start": 0.0}) is None
