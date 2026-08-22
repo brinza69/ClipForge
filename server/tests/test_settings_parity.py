@@ -32,7 +32,16 @@ _FRONTEND_ONLY: set[str] = set()
 # are set per project through the API or left at their config default — so the
 # test asserts the direction that matters (nothing posted is dropped) and only
 # reports these.
-_BACKEND_ONLY = {"vision_model"}
+_BACKEND_ONLY = {
+    "vision_model",
+    # Declared in ClipperSettings but deliberately NOT in DEFAULT_SETTINGS. The
+    # backend resolves its default from config.py, so a value posted wholesale
+    # from the browser would override a rig that was configured there — the
+    # exact trap `trim_silence` fell into, and worse here because this key
+    # decides which reasoning engine runs. The form sends it only when the user
+    # picks one.
+    "reasoning_mode",
+}
 
 
 def _typescript_defaults() -> dict[str, object]:

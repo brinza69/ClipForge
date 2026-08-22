@@ -223,9 +223,28 @@ class Settings(BaseSettings):
     #                earliest start that carries every fact the payoff needs
     # Legacy stays the default until story_v1 has been measured on more than
     # one source. Both need clipper_llm_select; with it off this has no effect.
+    #
+    # SUPERSEDED by clipper_reasoning_mode below, and kept because 133 projects
+    # on this rig predate that setting. services/clipper/reasoning_mode.py maps
+    # the pair onto one mode; do not read either of these directly any more.
     clipper_reasoning_version: str = "legacy"
 
     clipper_llm_select: bool = False
+    # The one switch that decides which reasoning engine runs:
+    #   "legacy"          — interesting signals -> window -> features -> score
+    #   "llm_nominate"    — legacy scoring plus the LLM nomination pass + judge
+    #   "story_v1"        — payoff first: anchors, context debt, hook latency
+    #   "story_v2_shadow" — v2 writes its artefacts, legacy still orders the board
+    #   "story_v2"        — not selectable yet; see reasoning_mode.SELECTABLE
+    #
+    # Blank means "derive it from the two legacy keys above", so an operator who
+    # already set CLIPFORGE_CLIPPER_LLM_SELECT keeps exactly what they had.
+    clipper_reasoning_mode: str = ""
+    # How long any one model call may take before the next engine is tried.
+    # A provider that never answers is the failure the engine list cannot route
+    # around on its own: without a deadline the whole run waits on it and the
+    # fallbacks are never reached. 0 disables the deadline.
+    clipper_llm_timeout_s: float = 180.0
     # The judging pass needs a FRONTIER model, and the repo-wide default is a
     # small one. Measured on the same 46 candidates: gpt-4o-mini answered
     # almost everything 50, 40 or 10 with reasons like "Excitement about

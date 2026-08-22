@@ -147,7 +147,42 @@ export interface ClipperSettings {
   // Layout
   layout_mode: LayoutMode;
   face_pct: number; // 0..1 share of the canvas given to the facecam
+
+  /**
+   * Which reasoning engine picks the moments. The backend REFUSES an unknown
+   * value instead of falling back to a default, because a setting that reads
+   * back as something other than what it ran is what this replaced: the two
+   * keys it supersedes were dropped in silence on every create and patch.
+   *
+   * OPTIONAL, and deliberately absent from DEFAULT_SETTINGS, for two reasons.
+   * Sending it means "the user chose this" — DEFAULT_SETTINGS is posted
+   * wholesale, so a value here would override a rig configured through
+   * config.py, which is the trap `trim_silence` fell into. And the 133 projects
+   * that predate the key have settings without it, so a required field would
+   * make every one of them fail this type on read.
+   *
+   * `story_v2` and `story_v2_shadow` are absent from ReasoningMode — neither is
+   * selectable yet.
+   */
+  reasoning_mode?: ReasoningMode;
 }
+
+/**
+ * `legacy` is signals -> window -> score. `llm_nominate` adds the LLM
+ * nomination pass and the judge on top of legacy scoring. `story_v1` reasons
+ * payoff-first. `story_v2_shadow` runs the v2 selection and records what it
+ * WOULD have chosen, while the board you see stays legacy.
+ *
+ * `story_v2` — the same rule actually ordering the board — is known to the
+ * backend and refused, because it has not been compared against legacy on a
+ * corpus yet. It is left out here so the form cannot offer a mode the API
+ * will reject.
+ */
+export type ReasoningMode =
+  | "legacy"
+  | "llm_nominate"
+  | "story_v1"
+  | "story_v2_shadow";
 
 export interface Rect {
   x: number;
@@ -427,6 +462,12 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   min_score: 0,
   layout_mode: "auto",
   face_pct: 0.35,
+  // `reasoning_mode` is NOT here on purpose. This object is posted wholesale,
+  // so anything in it overrides the backend — and the backend's default for
+  // that key is RESOLVED from config.py, including an operator who turned the
+  // story engine on through the old environment variables. A value here would
+  // silently take it back off. The form sends the key only when the user picks
+  // one; see _BACKEND_ONLY in server/tests/test_settings_parity.py.
 };
 
 export const CONTENT_TYPE_LABELS: Record<ContentType, string> = {

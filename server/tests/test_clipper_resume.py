@@ -17,7 +17,13 @@ from workers import clipper_build as build
 
 
 def _stamp(reasoning="story_v1", duration=1000.0):
-    return build._anchor_stamp({"reasoning_version": reasoning}, duration)
+    # `reasoning_mode`, not the `reasoning_version` this used to pass. That key
+    # only ever did anything alongside `llm_select`, so a cfg carrying it alone
+    # named a configuration that cannot occur — and the stamp recorded a mode
+    # the run was not in. The stamp now records the RESOLVED mode, which is what
+    # actually decides whether anchors get made and how.
+    # test_clipper_reasoning_mode.py keeps the old shape covered.
+    return build._anchor_stamp({"reasoning_mode": reasoning}, duration)
 
 
 @pytest.fixture
