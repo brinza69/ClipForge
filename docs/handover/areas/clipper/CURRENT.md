@@ -115,8 +115,8 @@ Reparat, dar artefactul existent păstrează cifra veche: la o comparație, ia `
   - *context coverage* întreabă dacă fereastra aleasă **conține** momentele de context necesare.
     Gate-ul Batch 3 e pe ea și a **trecut**: 8/8 și 15/15, ≥95%.
   - *grounding coverage* întreabă dacă afirmațiile pot fi **legate de transcript**. Din 48 de
-    afirmații distincte pe `gateslice4h`: 27 grounded strict, 11 ar fi dacă promptul ar cere
-    `atom_ids`, 5 potriviri relaxate încă nevalidate, iar **5 (10%) nu au nicio potrivire locală
+    afirmații distincte pe `gateslice4h`: 27 grounded strict, 11 potriviri exacte locale fără
+    legătură canonică, 5 potriviri relaxate încă nevalidate, **5 (10%) fără nicio potrivire locală
     în ±120s**. Rândurile spun **ce a găsit matcher-ul, nu de ce**: „fără potrivire locală" nu
     înseamnă „inventat", iar cele 11 nu înseamnă „prompt greșit" până nu trece resolver-ul
     determinist — sunt cauze pe care măsurătoarea actuală nu le poate separa.

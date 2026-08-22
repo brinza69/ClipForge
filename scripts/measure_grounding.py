@@ -2,8 +2,11 @@
 
 `story_evidence.ground_claim` marks a claim grounded only when its quote appears
 as a CONTIGUOUS run of normalised tokens in the atoms it names. A claim that
-fails is kept and recorded, never dropped — this measures how often that happens
-and how far off the failures are.
+fails is kept and recorded, never dropped — this counts how often that happens
+and CLASSIFIES each failure by which weaker local rule, if any, finds the quote.
+It does not measure distance: no drift, no `matched_t`. That belongs to the
+deterministic resolver, and until that exists these are unclassified negatives,
+not established false negatives.
 
 NOT the same thing as the Batch 3 gate. That gate is CONTEXT coverage — whether
 the chosen window CONTAINS the required context — and it passed at 8/8 and

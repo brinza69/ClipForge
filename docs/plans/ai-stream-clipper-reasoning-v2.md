@@ -1050,7 +1050,8 @@ implementare:
    mai devreme, răspunsul este nu, iar motivul este măsurat: 1 candidat story din 38 a ajuns la
    judge. Constrângerea este acum aplicată și mecanic — `story_v2` este respins din API până la
    gate-ul din Batch 5.
-3. **Regula de grounding are un fals-negativ.** De aceea eșecul marchează, nu elimină.
+3. **Regula de grounding produce rezultate negative încă neclasificate.** De aceea eșecul
+   marchează, nu elimină.
 
    **Măsurat, 2026-08-22**, cu `scripts/measure_grounding.py`, pe 48 de afirmații distincte de pe
    `gateslice4h` și 10 de pe `gate2d3375`. Rândurile descriu **ce a găsit matcher-ul**, nu de ce:
@@ -1065,9 +1066,10 @@ implementare:
    **Ce NU spune tabelul.** Nu spune că modelul parafrazează, nu spune că a numit atomi greșiți — nu
    a numit niciunul, `matched_by` este `timestamp` pentru toate cele 111 intrări, iar `atom_ids` din
    artefact sunt completate de noi din fereastră. Și nu spune că cele 5 din urmă sunt inventate:
-   „fără potrivire locală" este limita metodei, nu o concluzie despre model. Fals-negativul există și
-   „marchează, nu elimina" rămâne decizia corectă; cât din el e al nostru și cât al modelului este
-   încă nemăsurat.
+   „fără potrivire locală" este limita metodei, nu o concluzie despre model. Și nu spune că cele 21 de
+   negative sunt **false** negative: asta presupune că citatul chiar e acolo și l-a ratat matcher-ul,
+   ceea ce se stabilește abia după resolver-ul determinist. Până atunci sunt negative neclasificate,
+   iar „marchează, nu elimina" rămâne decizia corectă tocmai fiindcă nu știm încă ce sunt.
 
    **Prima versiune a măsurătorii a fost greșită și a inversat concluzia.** Număra 111 afirmații
    unde sunt 48 distincte, fiindcă variantele aceluiași moment împart blocul story. Și căuta în
