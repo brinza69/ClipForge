@@ -17,9 +17,11 @@ five files that do not exist.
 
 | you want | read |
 |---|---|
-| the state of the world, known problems, traps | `handoff-clipper-session-4.md` |
+| the current state of the world, known problems, traps | `handover/areas/clipper/CURRENT.md` |
 | what every file is (this document) | you are here |
 | why the reasoning works the way it does | `story-engine.md` |
+| planul auditat pentru Reasoning v2 | `plans/ai-stream-clipper-reasoning-v2.md` |
+| ce anume din acel plan a fost verificat în cod, și cu ce dovadă | `plans/ai-stream-clipper-reasoning-v2-review.md` |
 | which brief requirement is built, section by section | `story-engine-spec-status.md` |
 | ground truth for the detectors — what each source actually is | `source-labels.md` |
 | how to run the pipeline by hand | `ai-stream-clipper-runbook.md` |
@@ -27,8 +29,9 @@ five files that do not exist.
 | what is already on disk and can be skipped | `../data/clipper/MANIFEST.md` |
 
 Older handoffs are history, superseded but not wrong about the code they
-describe: `handoff-clipper-session-3.md`, `handoff-clipper-session-2.md`,
-`handoff-dynamic-edit.md`.
+describe: `handover/archive/clipper/handoff-clipper-session-3.md`,
+`handover/archive/clipper/handoff-clipper-session-2.md`,
+`handover/archive/clipper/handoff-dynamic-edit.md`.
 
 ---
 
@@ -47,7 +50,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `clipper_ingest` | `clipper_pipeline.handle_ingest` | `source/`, `proxy/proxy.mp4`, `audio/speech.wav`, `meta` |
 | `clipper_transcribe` | `clipper_pipeline.handle_transcribe` | the `transcripts` row |
 | `clipper_analyze` | `clipper_pipeline.handle_analyze` | `signals`, `faces`, `regions`, `regions_by_segment`, frames, `content_type` |
-| `clipper_score` | `clipper_build.handle_score` | `segments`, `atoms`, `promises`, `threads`, `graph`, `anchors`, `segment_types`, `candidates`, the `clips` rows |
+| `clipper_score` | `clipper_build.handle_score` | `segments`, `atoms`, `promises`, `threads`, `graph`, `anchors`, `segment_types`, `candidates`, `reasoning_run`, `selection_trace`, the `clips` rows |
 | `clipper_export` | `clipper_render_jobs.handle_export` | `exports/<clip>.mp4` + a `.json` sidecar |
 | `clipper_preview` | `clipper_render_jobs.handle_preview` | `previews/<clip>.mp4` |
 
@@ -75,6 +78,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `episodes.py` | what the stream has been about, per stretch (§2). Read by the anchor prompt |
 | `promises.py` | setups that could pay off later, and what a callback costs (§4) |
 | `story.py` | the payoff-first reasoning: anchors, context debt, hook latency, archetypes, edit variants |
+| `story_evidence.py` | the ONE representation of the narrative evidence. Deterministic grounding of a model claim against the atoms it names, `remeasure` after every boundary change, and `semantic_payoff` — the payoff features read now instead of the audio detector's. Marks a failed match, never drops it |
 
 ### Choosing clips
 
@@ -86,10 +90,13 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `candidate_terms.py` | the frozen feature vector, the word lists, and the boundary constants |
 | `vocal_bursts.py` | laughter and shouting from the audio — what `laughter_score` reads now that the word list never fired |
 | `dead_air.py` | dead seconds inside a chosen window, and the arithmetic of removing them (§15) |
-| `scoring.py` | the sub-scores and the ten weight profiles |
+| `scoring.py` | the sub-scores, the four named score scales and eligibility |
+| `scoring_profiles.py` | the ten weight rows and nothing else. Moved verbatim when `scoring.py` crossed 500 lines — the comments above each row ARE the record of what was measured on which source, and `scripts/score_contribution.py` was run before and after to prove the ordering did not move |
+| `candidate_groups.py` | MOMENTS rather than variants: a stable `moment_id`, one representative cut per moment, the budget that decides who the judge is asked about, and the labelled packet it is asked with. Reuses `dedupe._group` for the grouping itself |
+| `selection.py` | which moments reach the board. When a judge ran the board is drawn from the moments it SELECTED, never from two score scales compared against each other; plus the round cap and the declared backfill. Runs in shadow until v2 has been compared against legacy |
 | `dedupe.py` | overlap, text and same-payoff grouping; diversity across time, thread and archetype |
 | `ranker.py` | the learned ranker. Complete, dormant, needs 40 labelled clips |
-| `feedback.py` | recording what the user did with a clip |
+| `feedback.py` | recording what the user did with a clip, and — since the `origin` column — WHO did it. Only `manual` events label for training; `auto` (auto_export) and `system` are neutral, and so is the NULL origin of any row written before the column. The measurement that forced this is in the module docstring |
 | `review.py` | Pass D (§21–22): what the CLIP looks like, checked before the encode |
 | `review_vision.py` | Pass D's second half: a vision model on the RENDERED clip. Off by default, needs an OpenAI key |
 
@@ -97,6 +104,11 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 
 | file | what |
 |---|---|
+| `reasoning_mode.py` | WHICH engine a project runs, as one setting. Also the compatibility mapping for the `llm_select` + `reasoning_version` pair it replaced — both of which `_normalise_settings` used to drop in silence, which is why the story engine could not be turned on from the API at all |
+| `reasoning_trace.py` | what a scoring run DID: `reasoning_run.json` (versions, chunk plan, every provider attempt and fallback, the settings actually in force) and `selection_trace.json` (why each candidate ended where it did, including the ones the judge never saw). Pure; the worker feeds it and `storage.py` writes it |
+| `chunking.py` | how a long stream is handed to a model: chunks bounded by the CLOCK as well as the byte budget, an overlap so a moment on a seam is whole somewhere, coverage accounting that names the gaps, and a quota that follows the span. Replaces the character-only split that turned four hours into 3h21m + 38m |
+| `llm_engine.py` | reaching a model and recording every attempt: `_ask`, `parse_json`, and the trace notes. Split out when Batch 0's tracing took `llm_select` past 500 lines; re-exported from there so nothing else had to change |
+| `llm_prompts.py` | what we ASK a model: the nomination and anchor prompts, versioned because the cached anchor artifact is only valid for the prompt that produced it |
 | `llm_select.py` | anchor detection and the nomination pass, chunked and versioned |
 | `llm_judge.py` | comparative ranking from three perspectives (§18, §19) |
 | `headline.py` | the clip's headline text |
@@ -132,6 +144,9 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 |---|---|
 | `clipper_pipeline.py` | ingest, transcribe, analyze; registers all six handlers |
 | `clipper_build.py` | the scoring stage end to end |
+| `clipper_judging.py` | running the judge over pools of moments: which get asked about, how many rounds, and the verdict propagated to every cut of a judged moment |
+| `clipper_cache.py` | what a previous run left on disk and whether it can still be trusted: the anchor stamp (prompt, mode, engines, duration, chunk plan) and the per-stretch content types. A checkpoint without a stamp is worse than no checkpoint |
+| `clipper_finalize.py` | everything after the winners are chosen: layout + caption planning, headlines, the two trace artefacts, the `clips` rows, and auto-export. Split out when Batch 0 took `clipper_build` past 500 lines; re-exported from there |
 | `clipper_render_plan.py` | WHAT a render will contain: window, shot list, layout, caption file, dead-air spans. `_decide_render` is the entry point and both handlers consume its one answer |
 | `clipper_render_jobs.py` | the export and preview jobs themselves: one ffmpeg encode each, plus Pass D |
 
@@ -150,6 +165,10 @@ operations). Split to stay under the 500-line limit.
 | `src/app/ai-stream-clipper/page.tsx` | project list and the create form |
 | `src/app/ai-stream-clipper/[id]/page.tsx` | one project: progress, then the board |
 | `src/components/clipper/source-form.tsx` | URL or upload, plus the settings |
+| `server/routers/clipper_settings.py` | what a settings dict is allowed to say. Both HTTP entry points go through it, which is what stops a key from being dropped in silence |
+| `server/routers/clipper_runs.py` | starting, cancelling, resuming and inspecting a run. Mounted under the same prefix; no URL changed |
+| `src/components/clipper/pill.tsx` | the choice-group toggle every settings row is built from |
+| `src/components/clipper/reasoning-mode-field.tsx` | which reasoning engine to use. Offers ONLY the modes the API accepts, and defaults to sending nothing so a rig configured in `config.py` is not overridden by the browser |
 | `src/components/clipper/analysis-progress.tsx` | the stage list during a run |
 | `src/components/clipper/project-card.tsx` | one project in the list |
 | `src/components/clipper/candidate-grid.tsx` | the board: sort, filter, bulk actions |
@@ -173,6 +192,7 @@ operations). Split to stay under the 500-line limit.
 | `scripts/facecam_dataset.py` | 68 labelled candidate rects + what each feature separates |
 | `scripts/facecam_train.py` | the classifier that lost to `corner_proximity`, leave-one-source-out |
 | `scripts/measure_inset_border.py` | border coverage and persistence per candidate rect — the measurement that showed two facecams have no border at all |
+| `scripts/evaluate_clipper_reasoning.py` | read the two traces off disk and report what happened: how much of the field the judge saw, how many story candidates reached it, chunk coverage, fallbacks. Reports, never asserts — run it before and after a change and diff the `--json` |
 | `scripts/score_facecam.py` | facecam detection scored against `source-labels.md`. Run it before believing any change to the seed — baseline **9/9**, and it also diffs the RECTS against `docs/refs/facecam-golden.json`, because a change that keeps every count while moving the geometry reads as no change at all. `--bless` regenerates the record |
 
 ## Tests
@@ -204,7 +224,7 @@ data/clipper/<project_id>/
   frames/      sampled JPEGs, capped at clipper_max_sampled_frames
   analysis/    signals, faces, regions, regions_by_segment, segments, atoms,
                promises, threads, graph, anchors, segment_types, candidates,
-               meta, transcript.json
+               meta, transcript.json, reasoning_run, selection_trace
   exports/     <clip>.mp4 + <clip>.json sidecar + <clip>.ass
   previews/    low-res renders
   thumbs/      poster frames
@@ -218,7 +238,7 @@ done. Regenerate it with `scripts/export_clipper_state.py`.
 ## Switches
 
 Per-project keys in `clipper_settings`, each falling back to a `config.py`
-default. Full table in `handoff-clipper-session-4.md`.
+default. Full table in `handover/archive/clipper/handoff-clipper-session-4.md`.
 
 | switch | default | turns on |
 |---|---|---|
@@ -226,7 +246,7 @@ default. Full table in `handoff-clipper-session-4.md`.
 | `trim_silence` | off | dead-air removal from inside a window (§15) |
 | `vision_review` | off | a vision model judges the rendered clip — the only part of the pipeline that spends money (~0.4 cents/clip on gpt-5.6-terra) |
 | `auto_export` | 0 (off) | render the top N as soon as scoring finishes, instead of stopping at the board. With the source form's "don't wait for me" box, a pasted link becomes finished files with no second visit |
-| `llm_select` + `reasoning_version: "story_v1"` | off | the story engine |
+| `reasoning_mode` | resolved from config, `legacy` on a stock rig | which reasoning engine runs. Selectable: `legacy`, `llm_nominate`, `story_v1`. Known but REFUSED by the API: `story_v2_shadow` (until Batch 2 makes shadow stop reordering the board) and `story_v2` (until Batch 5). Replaces `llm_select` + `reasoning_version`, still read for the projects that predate it — see `services/clipper/reasoning_mode.py`. The form omits the key unless the user picks one, so a rig configured in `config.py` is not overridden by the browser |
 
 `dynamic_edit` being on is what makes the rest of the multi-shot work reachable
 — cuts on speech pauses, the wide gameplay framing, Pass D and the audio

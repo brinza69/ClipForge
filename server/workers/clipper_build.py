@@ -29,75 +29,23 @@ from models import (
     ProjectStatus,
     TranscriptModel,
 )
-from services.clipper import storage
+from services.clipper import ANALYSIS_VERSION
+from services.clipper import feedback as feedback_mod
+from services.clipper import reasoning_mode, reasoning_trace, selection, storage
+from services.clipper import story_evidence
 from services.clipper.serialize import effective_content_type
+# What a previous run left on disk, and whether it can be trusted. Split out
+# when this file crossed 500 lines; re-exported because the tests and the
+# runbook reach for these by their old names.
+# Running the judge over pools of moments. Split out when this file crossed
+# 500 lines; re-exported because the tests reach for these by their old names.
+from workers.clipper_judging import _judge_pool, _judge_rounds  # noqa: F401
+from workers.clipper_cache import (  # noqa: F401
+    _anchor_stamp, _cache, _cached, _reasoning_mode, _segment_types,
+)
+
 
 logger = logging.getLogger("clipforge.clipper.build")
-
-
-def _anchor_stamp(cfg: dict, duration: float) -> dict:
-    """What a cached anchor set is only valid for.
-
-    A checkpoint without one is worse than no checkpoint: change the prompt,
-    the engine or the reasoning version, re-score, and the run silently reuses
-    answers the new configuration would never have produced. Everything here
-    changes what the model is asked or which model is asked.
-    """
-    from services.clipper import llm_select
-
-    return {
-        "prompt": llm_select.ANCHOR_PROMPT_VERSION,
-        "reasoning": str(cfg.get("reasoning_version")
-                         or settings.clipper_reasoning_version or "legacy"),
-        "engines": list(llm_select.NOMINATE_ENGINES),
-        "duration": round(float(duration or 0.0), 1),
-    }
-
-
-def _cached(project_id: str, name: str, stamp: dict) -> Any | None:
-    """A previous run's model output, or None when it cannot be trusted."""
-    blob = storage.read_artifact(project_id, name)
-    if not isinstance(blob, dict) or blob.get("stamp") != stamp:
-        return None
-    logger.info("clipper %s: reusing %s from a previous run", project_id, name)
-    return blob.get("data")
-
-
-def _cache(project_id: str, name: str, stamp: dict, data: Any) -> None:
-    storage.write_artifact(project_id, name, {"stamp": stamp, "data": data})
-
-
-def _segment_types(project_id: str, duration: float, transcript: dict) -> list[dict]:
-    """Per-stretch content types, checkpointed. [] when it cannot be worked out.
-
-    Never fatal: a source whose stretches cannot be classified scores exactly
-    as it did before this existed.
-    """
-    from services.clipper import segment_type as seg_type_mod
-
-    cached = storage.read_artifact(project_id, "segment_types")
-    if isinstance(cached, list) and cached:
-        return cached
-
-    paths = storage.paths(project_id)
-    frames = sorted(str(p) for p in paths["frames_dir"].glob("*.jpg"))
-    times = (storage.read_artifact(project_id, "faces") or {}).get("times") or []
-    signals = storage.read_artifact(project_id, "signals") or {}
-    if not frames or len(times) != len(frames) or duration <= 0:
-        return []
-    try:
-        out = seg_type_mod.classify_ranges(
-            frames, times, signals, transcript,
-            seg_type_mod.clock_ranges(duration))
-    except Exception:
-        logger.warning("clipper %s: per-stretch content typing failed; using "
-                       "the whole-file profile", project_id, exc_info=True)
-        return []
-    if out:
-        storage.write_artifact(project_id, "segment_types", out)
-        logger.info("clipper %s: %d stretches typed (%s)", project_id, len(out),
-                    ", ".join(sorted({str(s["content_type"]) for s in out})))
-    return out
 
 
 async def _fetch_transcript(project_id: str) -> dict[str, Any]:
@@ -141,9 +89,31 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     profile = effective_content_type(project)
     platform = cfg.get("platform") or "tiktok"
 
+    # Bound here, not in the story branch: `refine_boundaries` reads them on
+    # EVERY path, and the legacy path never enters that branch.
+    atoms: list[dict] = []
+
     min_s = float(cfg.get("min_clip_s") or settings.clipper_min_clip_s)
     max_s = float(cfg.get("max_clip_s") or settings.clipper_max_clip_s)
     target_count = int(cfg.get("clip_count") or settings.clipper_default_clip_count)
+
+    # Everything this run did, written to disk at the end. Created here so the
+    # settings it snapshots are the ones the run actually used, not the ones a
+    # later reader assumes from the defaults — the gap that made two story runs
+    # unusable as evidence (see reasoning_trace.py).
+    trace = reasoning_trace.RunTrace(
+        project_id,
+        mode=_reasoning_mode(cfg),
+        settings_snapshot=cfg,
+        launched_by=str((metadata or {}).get("launched_by") or "worker"),
+    )
+    trace.note_versions(
+        analysis=ANALYSIS_VERSION,
+        anchor_prompt=llm_select.ANCHOR_PROMPT_VERSION,
+        judge_prompt=llm_select.JUDGE_PROMPT_VERSION,
+        content_profile=profile,
+        duration=round(duration, 1),
+    )
 
     transcript = await _fetch_transcript(project_id)
     sig = storage.read_artifact(project_id, "signals") or {}
@@ -186,20 +156,31 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     # nominates roughly the same obvious moments the scorer already finds, so
     # using it as a filter would discard exactly the non-obvious picks the
     # judging pass is paid to find. Two recalls that fail differently.
-    reasoning = str(cfg.get("reasoning_version")
-                    or settings.clipper_reasoning_version or "legacy").lower()
-    if bool(cfg.get("llm_select", settings.clipper_llm_select)):
+    mode = _reasoning_mode(cfg)
+    if reasoning_mode.uses_llm(mode):
         await queue.update_progress(job_id, 0.25, "Reading the transcript")
         segments = transcript.get("segments") or []
+        llm_timeout = float(settings.clipper_llm_timeout_s or 0.0)
+        # Cancellation reaches INSIDE the model passes now. A four-hour source
+        # is six chunks and up to three engines each; before this, pressing
+        # cancel waited for every one of them.
+        def cancelled() -> bool:
+            return bool(queue.is_cancelled(job_id))
+
+        # Bound before the try: the story branch assigns them and the
+        # nomination branch does not, so the trace below and the refinement
+        # further down would raise NameError on the very paths that have
+        # neither. `atoms` is read by remeasure to resolve back-references.
+        anchors: list[dict] = []
         try:
-            if reasoning == "story_v1":
+            if reasoning_mode.uses_story(mode):
                 # The stream as units the reasoning can point at, each
                 # carrying its own signals. Built from the transcript and the
                 # Pass A series with no model involved — a 12-hour stream is
                 # ~8,600 atoms and the cost rule forbids a call per two
                 # seconds of video.
                 atoms = storage.read_artifact(project_id, "atoms")
-                if not isinstance(atoms, list):
+                if not isinstance(atoms, list):  # noqa: SIM108
                     atoms = atoms_mod.build(transcript, sig)
                     storage.write_artifact(project_id, "atoms", atoms)
                 # Setups that could pay off later, swept once over the whole
@@ -208,7 +189,9 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 # lands on a prediction from an hour earlier is invisible.
                 known = storage.read_artifact(project_id, "promises")
                 if not isinstance(known, list):
-                    known = await promises_mod.detect(segments, duration)
+                    known = await promises_mod.detect(
+                        segments, duration, trace=trace,
+                        timeout=llm_timeout, is_cancelled=cancelled)
                     storage.write_artifact(project_id, "promises", known)
                 # Payoff first: each anchor carries what a viewer must already
                 # know, so the window can open on the earliest required fact
@@ -225,34 +208,58 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 # is the one thing a per-chunk pass otherwise cannot know.
                 anchors = _cached(project_id, "anchors",
                                   _anchor_stamp(cfg, duration))
+                if anchors is not None:
+                    # Says WHY there are no chunks this run. Without it a cached
+                    # run and a run whose chunking produced nothing look the
+                    # same on disk.
+                    trace.note_stage("anchors", "cached",
+                                     f"{len(anchors)} reused")
                 if anchors is None:
                     anchors = await llm_select.detect_anchors(
                         segments, duration, promises=known, atoms=atoms,
-                        threads=arcs)
+                        threads=arcs, trace=trace, timeout=llm_timeout,
+                        is_cancelled=cancelled)
                     _cache(project_id, "anchors",
                            _anchor_stamp(cfg, duration), anchors)
                 storage.write_artifact(project_id, "graph",
                                        threads_mod.edges(arcs, known, anchors))
+                # Check each claim against the atoms it says it came from,
+                # BEFORE the anchor becomes a window. Marks, never drops: see
+                # story_evidence for why a first-version text matcher must not
+                # double as a recall filter.
+                anchors = [story_evidence.ground_anchor(a, atoms)
+                           for a in (anchors or [])]
+                trace.note_count(
+                    "anchors_grounded",
+                    sum(1 for a in anchors if a.get("payoff_grounded")))
                 nominated = cand_mod.candidates_from_anchors(
                     anchors, transcript, sig, min_s=min_s, max_s=max_s,
                     duration=duration, atoms=atoms, threads=arcs)
             else:
-                nominated = await llm_select.nominate(segments, duration)
-        except Exception:
+                nominated = await llm_select.nominate(
+                    segments, duration, trace=trace, timeout=llm_timeout,
+                    is_cancelled=cancelled)
+        except Exception as exc:
             logger.warning("LLM proposal failed; keeping the rule-based set",
                            exc_info=True)
+            trace.note_error("propose", exc)
             nominated = []
+        trace.note_count("anchors", len(anchors or []))
+        trace.note_count("nominated", len(nominated or []))
+        trace.note_stage("propose", "ok" if nominated else "empty",
+                         f"mode={mode}")
         if nominated:
             raw = cand_mod.merge_nominations(
                 raw, nominated, transcript, min_s=min_s, max_s=max_s,
-                keep_overlaps=(reasoning == "story_v1"))
+                keep_overlaps=reasoning_mode.uses_story(mode))
         _guard(queue, job_id)
 
     refined = []
     for cand in raw:
         try:
             refined.append(
-                cand_mod.refine_boundaries(cand, transcript, sig, min_s=min_s, max_s=max_s)
+                cand_mod.refine_boundaries(cand, transcript, sig, min_s=min_s,
+                                           max_s=max_s, atoms=atoms)
             )
         except Exception:
             # One bad window must not sink the run — keep the unrefined form.
@@ -281,12 +288,21 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         cand["features"] = features
         cand["sub_scores"] = scored["sub_scores"]
         cand["reason"] = scored["reason"]
+        # FOUR NAMES, FOUR MEANINGS. `overall` used to be all of them at once:
+        # the heuristic, then the heuristic blended with the ranker, then that
+        # blended with the judge — and by the time a candidate reached the board
+        # nothing could tell which reading it held. Each now has its own field
+        # and keeps its value; `overall` remains the blended number every
+        # existing reader expects, but it is no longer the only record.
         heuristic = float(scored["overall"])
+        cand["heuristic_score"] = round(heuristic, 2)
+        cand["eligibility"] = scored["eligibility"]
         if use_learned:
             # Blend rather than replace: the learned model is trained on this
             # user's taste but on a small dataset, so the transparent heuristic
             # keeps half the vote.
             learned = ranker.predict(model, features) * 100.0
+            cand["learned_score"] = round(learned, 2)
             cand["overall"] = round(0.5 * heuristic + 0.5 * learned, 2)
             cand["ranker_version"] = model.get("version")
         else:
@@ -294,21 +310,33 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
             cand["ranker_version"] = "heuristic-1"
     # The frontier pass, over the union. Blended into `overall`, so a failure
     # here costs the judgement, not the run.
-    if bool(cfg.get("llm_select", settings.clipper_llm_select)):
+    judged = False
+    if reasoning_mode.uses_llm(_reasoning_mode(cfg)):
         await queue.update_progress(job_id, 0.48, "Judging candidates")
-        try:
-            await llm_select.judge(
-                refined,
-                weight=float(settings.clipper_llm_weight),
-                want=target_count,
-                model=(cfg.get("llm_judge_model")
-                       or settings.clipper_llm_judge_model or None))
-        except Exception:
-            logger.warning("LLM judging failed; keeping the heuristic ranking",
-                           exc_info=True)
+        judged = await _judge_rounds(refined, duration, target_count, cfg,
+                                     trace, queue, job_id)
         _guard(queue, job_id)
 
+    # Stamp the verdict status on the WHOLE field before anything is written or
+    # dropped. Two reasons it belongs here and not inside the board rule:
+    # `candidates.json` is written on this line and would otherwise carry no
+    # status at all, and a tally taken later describes only the survivors — the
+    # first version counted zero `not_selected_in_judged_pool` because every one
+    # of the 60 the judge declined had already been filtered out of the list it
+    # was counting.
+    tally = selection.mark(refined)
+    trace.note_stage("verdicts", "marked", ", ".join(
+        f"{k}={v}" for k, v in sorted(tally.items())))
+
     storage.write_artifact(project_id, "candidates", refined)
+
+    # The FULL post-judge field, kept for the selection trace. Everything below
+    # this line removes candidates, and "why is this moment missing" is the
+    # question the trace exists to answer — built from the survivors it could
+    # only answer "how did the winners rank".
+    field = list(refined)
+    field_index = {id(c): i for i, c in enumerate(field)}
+    eliminated: dict[int, str] = {}
 
     # ── Dedupe + diversity ──────────────────────────────────────────────────
     # Moments already on the board as exports come out FIRST, before dedupe
@@ -320,6 +348,11 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     refined = drop_moments_already_exported(
         refined, await _exported_spans(project_id),
         float(settings.clipper_overlap_threshold))
+    survived = {id(c) for c in refined}
+    for cand in field:
+        if id(cand) not in survived:
+            eliminated[field_index[id(cand)]] = (
+                reasoning_trace.ELIMINATED_ALREADY_EXPORTED)
 
     await queue.update_progress(job_id, 0.55, "Removing duplicates")
     ranked = dedupe_mod.deduplicate(
@@ -328,14 +361,50 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         text_threshold=float(settings.clipper_text_similarity_threshold),
         target_count=target_count,
     )
-    winners = [c for c in ranked if not c.get("is_alternative")]
-    min_score = float(cfg.get("min_score") or 0)
-    if min_score > 0:
-        held = [c for c in winners if float(c.get("overall") or 0) >= min_score]
-        # Never return an empty board because the threshold was set too high —
-        # keep the best one and let the score speak for itself.
-        winners = held or winners[:1]
-    winners = winners[:target_count]
+    # `deduplicate` returns EVERY input — it marks `is_alternative` rather than
+    # dropping, so this loop is expected to find nothing today. It is not dead
+    # weight: a candidate that vanishes here means that contract changed, and
+    # the alternative is for the trace to lose it in silence. Which of the two
+    # a reader is looking at is exactly what `eliminated_by` answers.
+    kept = {id(c) for c in ranked}
+    for cand in field:
+        index = field_index[id(cand)]
+        if id(cand) not in kept and index not in eliminated:
+            eliminated[index] = reasoning_trace.ELIMINATED_DEDUPED
+
+    # THE RULE. When a judge ran, the board is drawn from the moments it chose,
+    # not from the whole field ranked by a number that means different things
+    # for different candidates. In shadow mode it is computed and recorded and
+    # the legacy order still ships — that is what shadow means.
+    # ONLY story_v2 orders the board with it. The first version read
+    # `judged and not shadow`, which is inverted: it applied the rule in
+    # story_v1 and llm_nominate — modes that never asked for it — and skipped it
+    # in shadow, the one mode written for it. A user on story_v1 would have had
+    # their board silently reordered by a rule that has not been compared
+    # against legacy on anything.
+    shadow = mode == reasoning_mode.STORY_V2_SHADOW
+    picked = selection.board(
+        ranked, want=target_count,
+        judged=selection.rule_applies(mode, judged),
+        min_score=float(cfg.get("min_score") or 0))
+    winners = picked["winners"]
+    trace.note_stage(
+        "board", "shadow" if shadow else ("judged" if judged else "legacy"),
+        f"{len(winners)} winners, {picked['backfilled']} backfilled, "
+        f"{picked['tally'][selection.SELECTED]} selectable")
+    trace.note_count("board_backfilled", picked["backfilled"])
+    if shadow:
+        # The whole point of shadow: compute the v2 board and write down how it
+        # differs, WITHOUT shipping it. Recorded here rather than derived later
+        # because `is_alternative` and `rank_position` are rewritten below, and
+        # a comparison made after that is a comparison with the legacy answer.
+        would = selection.board(ranked, want=target_count, judged=judged)
+        legacy_ids = [id(c) for c in winners]
+        trace.note_stage(
+            "board_v2", "would",
+            f"{len(would['winners'])} winners, {would['backfilled']} backfilled, "
+            f"{sum(1 for c in would['winners'] if id(c) not in legacy_ids)} "
+            "differ from legacy")
 
     # Everything dedupe kept but we did not select is an ALTERNATIVE, not a
     # winner. Without this the board shows every surviving candidate: a 6-hour
@@ -343,50 +412,22 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     # near-duplicates and the truncation above lives in a Python list that
     # _write_clips never sees. Re-flagging here keeps them retrievable behind
     # "show near-duplicates" instead of dropping them.
-    chosen = {id(c) for c in winners}
-    for cand in ranked:
-        if id(cand) not in chosen:
-            cand["is_alternative"] = True
-            cand["rank_position"] = None
+    # The flag is CLEARED on winners as well as set on everything else. Dedupe
+    # elects its leaders by `overall`, which the judge's verdict is blended
+    # into, so a judged candidate can be flagged `is_alternative` before the
+    # rule ever runs — and the rule exists precisely to rescue those. Leaving
+    # the flag on meant `_write_clips` stored the rescued winner as an
+    # alternative and it never reached the board at all.
+    # `selection.board` has already numbered the winners; this only flags the
+    # rest. Re-deriving the order here from `overall` would put the heuristic
+    # back in charge of the one thing the rule exists to take away from it.
+    selection.apply_board(ranked, winners)
 
     _guard(queue, job_id)
 
     # ── Pass E (cheap half) + Pass D ────────────────────────────────────────
     await queue.update_progress(job_id, 0.70, "Preparing layouts")
-    layout_mode = cfg.get("layout_mode") or "auto"
-    face_pct = float(cfg.get("face_pct") or settings.clipper_face_pct)
-    preset_id = cfg.get("caption_preset_id") or "bold_impact"
-    position = cfg.get("caption_position") or "bottom"
-
-    for cand in winners:
-        try:
-            cand["layout"] = layout_mod.plan_layout(
-                cand, regions, faces, src_w, src_h,
-                mode=layout_mode,
-                face_pct=face_pct,
-                include_chat=bool(cfg.get("include_chat")),
-                content_type=profile,
-            )
-        except Exception:
-            logger.warning("layout planning failed; falling back to a full-frame crop",
-                           exc_info=True)
-            cand["layout"] = {
-                "layout": "fullscreen_crop",
-                "face_rect": None, "game_rect": None, "chat_rect": None,
-                "keyframes": [], "warnings": ["Layout planning failed; using a centre crop."],
-                "face_pct": face_pct, "safe_zones": {},
-            }
-        try:
-            cand["captions"] = cap_mod.build_caption_plan(
-                cand, transcript,
-                preset_id=preset_id,
-                max_words=3,
-                position=position,
-                layout=cand["layout"],
-            )
-        except Exception:
-            logger.warning("caption planning failed for a candidate", exc_info=True)
-            cand["captions"] = None
+    plan_winners(winners, cfg, transcript, regions, faces, src_w, src_h, profile)
 
     _guard(queue, job_id)
     await _attach_headlines(winners, cfg, queue, job_id)
@@ -394,6 +435,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     # ── Persist ─────────────────────────────────────────────────────────────
     await queue.update_progress(job_id, 0.90, "Generating previews")
     await _write_clips(project_id, ranked, winners, profile)
+    _write_traces(project_id, trace, field, mode, eliminated)
 
     async with async_session() as session:
         await session.execute(
@@ -414,190 +456,18 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     )
 
 
-async def _auto_export(project_id: str, cfg: dict, queue) -> int:
-    """Queue renders for the best N clips, for a run nobody is watching.
 
-    The pipeline has always stopped here, and stopping here is right when a
-    person is going to look at the board: rendering is the one stage that costs
-    minutes and writes files, so doing it uninvited is the wrong surprise.
-
-    It is the wrong answer for the other use, which is pasting a link and
-    walking away. So the chain continues only when the project asked for it.
-
-    Alternatives are excluded. They exist so a human can compare two cuts of one
-    moment, and rendering both is exactly the duplication dedupe just removed.
-    """
-    try:
-        want = int(cfg.get("auto_export", settings.clipper_auto_export) or 0)
-    except (TypeError, ValueError):
-        want = 0
-    if want <= 0:
-        return 0
-
-    async with async_session() as session:
-        rows = await session.execute(
-            select(ClipModel.id)
-            .where(ClipModel.project_id == project_id,
-                   ClipModel.is_alternative.is_not(True),
-                   ClipModel.status == ClipStatus.candidate.value)
-            .order_by(ClipModel.overall_score.desc())
-            .limit(want)
-        )
-        clip_ids = [r[0] for r in rows]
-
-    for clip_id in clip_ids:
-        # One job each rather than one job for the batch: the export lane is
-        # bounded, a failed render should cost its own clip and not the rest,
-        # and the board fills in as they land instead of all at the end.
-        await queue.enqueue(project_id=project_id,
-                            job_type=JobType.clipper_export.value,
-                            clip_id=clip_id)
-    return len(clip_ids)
-
-
-async def _attach_headlines(winners: list[dict], cfg: dict, queue, job_id: str) -> None:
-    """Pass D — bounded and entirely optional.
-
-    Runs on at most clipper_top_n_llm winners, and only when the user asked for
-    headlines. A missing or broken LLM falls back to the deterministic
-    extractive headline rather than failing the run.
-    """
-    from services.clipper.headline import generate_headline
-
-    if not cfg.get("headline_enabled", True):
-        return
-
-    engine = settings.clipper_llm_engine or None
-    language = cfg.get("language") or "auto"
-    budget = max(0, int(settings.clipper_top_n_llm))
-
-    for index, cand in enumerate(winners):
-        if queue.is_cancelled(job_id):
-            raise JobCancelledError("Cancelled by user.")
-        # Past the budget we still want a headline — just not an LLM one.
-        use_engine = engine if index < budget else None
-        try:
-            result = await generate_headline(cand, engine=use_engine, language=language)
-            cand["headline"] = result.get("text") or ""
-        except Exception:
-            logger.warning("headline generation failed for a candidate", exc_info=True)
-            cand["headline"] = ""
-
-
-async def _exported_spans(project_id: str) -> list[dict]:
-    """Spans of clips the user already exported — real deliverables, preserved
-    across a re-analysis, and therefore moments the new set must not re-propose."""
-    async with async_session() as session:
-        rows = await session.execute(
-            select(ClipModel.start_time, ClipModel.end_time)
-            .where(ClipModel.project_id == project_id)
-            .where(ClipModel.status == ClipStatus.exported.value)
-        )
-    return [{"start": float(a or 0.0), "end": float(b or 0.0)}
-            for a, b in rows.all()]
-
-
-def drop_moments_already_exported(ranked: list[dict], kept_spans: list[dict],
-                                  threshold: float) -> list[dict]:
-    """Candidates whose moment is not already on the board as an export.
-
-    A preserved export still occupies its moment, but dedupe only ever sees the
-    fresh candidates, so nothing else stops the new set proposing it again.
-    Observed after three exports and a re-score: 11 winners for a requested 8,
-    with one moment on the board three times.
-    """
-    from services.clipper import dedupe as dedupe_mod
-
-    if not kept_spans:
-        return list(ranked)
-    return [c for c in ranked
-            if not any(dedupe_mod.overlap_ratio(c, span) > threshold
-                       for span in kept_spans)]
-
-
-def _reasoning_of(cand: dict) -> dict | None:
-    """Everything that explains this pick, or None when there is nothing to say.
-
-    Kept as one JSON column rather than a dozen: the shape differs between the
-    legacy path (reasons only) and story_v1 (anchor, payoff, required context,
-    archetype, variant), and freezing a schema across both would mean a
-    migration every time the reasoning changes.
-    """
-    out: dict = {}
-    if cand.get("reasons"):
-        out["reasons"] = [str(r) for r in cand["reasons"]][:12]
-    for key in ("story", "variant", "llm_score", "llm_rank", "llm_verdict",
-                "llm_reason", "llm_tag"):
-        value = cand.get(key)
-        if value not in (None, "", [], {}):
-            out[key] = value
-    return out or None
-
-
-async def _write_clips(
-    project_id: str, ranked: list[dict], winners: list[dict], profile: str
-) -> None:
-    """Replace this project's candidates with the new set.
-
-    A re-analysis should not leave the previous run's clips behind, but clips
-    the user already exported are real deliverables — those are preserved.
-
-    A preserved clip still occupies its moment, so the new set must not propose
-    that moment again: dedupe only ever sees the fresh candidates, and without
-    this the board shows the same window twice, once as the export and once as
-    a new winner. Observed after three exports and a re-score — 11 winners for
-    a requested 8, with one moment on the board three times.
-    """
-    winner_ids = {id(c) for c in winners}
-
-    async with async_session() as session:
-        keep = await session.execute(
-            select(ClipModel.id, ClipModel.start_time, ClipModel.end_time)
-            .where(ClipModel.project_id == project_id)
-            .where(ClipModel.status == ClipStatus.exported.value)
-        )
-        kept = keep.all()
-        keep_ids = {row[0] for row in kept}
-        kept_spans = [{"start": float(row[1] or 0.0), "end": float(row[2] or 0.0)}
-                      for row in kept]
-
-        stmt = sql_delete(ClipModel).where(ClipModel.project_id == project_id)
-        if keep_ids:
-            stmt = stmt.where(ClipModel.id.notin_(keep_ids))
-        await session.execute(stmt)
-
-        # Belt and braces: handle_score already filtered these out before
-        # dedupe, but _write_clips is the only thing guarding the table.
-        fresh = drop_moments_already_exported(
-            ranked, kept_spans, float(settings.clipper_overlap_threshold))
-        for cand in fresh:
-            is_winner = id(cand) in winner_ids
-            layout = cand.get("layout") if is_winner else None
-            start = float(cand.get("start") or 0.0)
-            end = float(cand.get("end") or 0.0)
-            session.add(
-                ClipModel(
-                    project_id=project_id,
-                    title=(cand.get("headline") or cand.get("title") or "Untitled clip")[:400],
-                    start_time=start,
-                    end_time=end,
-                    duration=round(max(0.0, end - start), 3),
-                    overall_score=float(cand.get("overall") or 0.0),
-                    sub_scores=cand.get("sub_scores"),
-                    score_reason=cand.get("reason"),
-                    headline_text=cand.get("headline") or None,
-                    transcript_text=(cand.get("text") or "")[:20000],
-                    content_type=profile,
-                    layout_plan=layout,
-                    caption_plan=cand.get("captions") if is_winner else None,
-                    warnings=(layout or {}).get("warnings") or [],
-                    reasoning=_reasoning_of(cand),
-                    dedupe_group=cand.get("dedupe_group"),
-                    is_alternative=bool(cand.get("is_alternative")),
-                    rank_position=cand.get("rank_position"),
-                    feature_vector=cand.get("features"),
-                    ranker_version=cand.get("ranker_version"),
-                    status=ClipStatus.candidate.value,
-                )
-            )
-        await session.commit()
+# The half that carries the decision out — headlines, traces, `clips` rows and
+# the unattended renders. Split when this file crossed 500 lines; re-exported
+# because the tests, the runbook and `handle_score` above all reach for these
+# by their old names.
+from workers.clipper_finalize import (  # noqa: E402,F401
+    _attach_headlines,
+    _auto_export,
+    plan_winners,
+    _exported_spans,
+    _reasoning_of,
+    _write_clips,
+    _write_traces,
+    drop_moments_already_exported,
+)
