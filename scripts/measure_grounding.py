@@ -15,6 +15,17 @@ So the failures are re-checked against a ladder of weaker rules:
     subsequence  every token, in order, gaps allowed, inside that same window
     absent       none of the above
 
+WHAT THE METHOD WAS TESTED AGAINST, because a measurement nobody checked is
+how the first version reached the wrong answer. Two null models:
+
+    200 invented six-word quotes drawn from the transcript's own vocabulary
+        -> 0/200 pass either rung (the first version: 8/200 and 200/200)
+    400 REAL quotes tested against windows where they were NOT said
+        -> 0/301 pass; 5/311 for the short 5-to-7-word ones, 1.6%
+
+That second one is the honest null: real quotes keep natural word frequency and
+collocation, which random draws do not.
+
 TWO THINGS THE FIRST VERSION GOT WRONG, and they inverted its conclusion.
 
 It counted 111 claims where there are 47 distinct ones: several candidate
@@ -131,7 +142,11 @@ def measure(project_id: str) -> dict:
 
             near = _window_text(atoms, float(claim.get("t") or 0.0))
             tokens = quote.split()
-            if quote in near:
+            # Token sequence, never `quote in near`: that is a SUBSTRING test,
+            # so "at" matches inside "chat" and a short quote grounds itself
+            # against any word containing it. Production already compares
+            # tokens; this script did not.
+            if se._contains_sequence(near.split(), tokens):
                 bucket = "near_verbatim"
             elif _is_subsequence(tokens, near.split()):
                 bucket = "subsequence"
