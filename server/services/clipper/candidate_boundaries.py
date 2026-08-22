@@ -12,6 +12,8 @@ primary boundary signal; audio energy only refines it.
 
 from __future__ import annotations
 
+import copy
+
 import logging
 from typing import Sequence
 
@@ -248,8 +250,25 @@ def _rank_alternatives(raw: list[dict], words: Sequence[dict], start: float,
     return [alt for _drift, alt in kept[:2]]
 
 
+def _context_floor(cand: dict) -> float | None:
+    """The earliest fact this clip must contain, or None when it needs none.
+
+    Only the story path has one. On the legacy path there is no anchor, so
+    nothing here changes what the boundary code has always done.
+    """
+    story = cand.get("story")
+    if not isinstance(story, dict):
+        return None
+    times = [_num(item.get("t"), -1.0)
+             for item in (story.get("required_context") or [])
+             if isinstance(item, dict)]
+    times = [t for t in times if t >= 0]
+    return min(times) if times else None
+
+
 def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
-                      min_s: float, max_s: float) -> dict:
+                      min_s: float, max_s: float,
+                      atoms: Sequence[dict] | None = None) -> dict:
     """Return a NEW candidate with human-quality in and out points.
 
     Order matters: open on a sentence, add a lead-in only if the opening line
@@ -269,8 +288,17 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
     reasons = [str(r) for r in (cand.get("reasons") or [])]
     alternatives: list[dict] = []
 
+    # The latest start that still carries every required fact. `story.py` chose
+    # the opening for exactly this and nothing downstream knew: measured on the
+    # short gate source, `start_on_sentence` moved one balanced variant from
+    # 32.0 to 32.5 and left its only required-context fact half a second
+    # outside the clip. Snapping to a sentence is a presentation fix; dropping
+    # the setup the moment was cut around is not a fair price for it.
+    context_floor = _context_floor(cand)
+
     snapped = _nearest_sentence_start(sentences, start)
-    if snapped is not None and snapped + lo <= ceiling:
+    if (snapped is not None and snapped + lo <= ceiling
+            and (context_floor is None or snapped <= context_floor + 0.001)):
         start = snapped
         _add(reasons, "start_on_sentence")
     start = _snap(words, start, to_end=False, limit=floor)
@@ -341,5 +369,16 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
                 "text": _text_of(inside) or str(cand.get("text") or ""),
                 "words": list(inside), "reasons": reasons,
                 "alternatives": _rank_alternatives(alternatives, words, start, end, lo, hi)})
+    # `dict(cand)` copies the story block, metrics and all, and everything above
+    # this line can move BOTH edges. Measured before this call existed: on the
+    # four-hour source, 20 story candidates ended up with required context
+    # outside their own final span and their recorded hook latency belonged to
+    # a window that no longer existed. The story block is deep-copied first so
+    # remeasuring never writes through into the caller's candidate.
+    if isinstance(out.get("story"), dict):
+        from services.clipper import story_evidence
+
+        out["story"] = copy.deepcopy(out["story"])
+        story_evidence.remeasure(out, atoms=atoms)
     return out
 

@@ -40,6 +40,7 @@ from services.clipper.candidate_terms import (
     _div, _hits, _mean, _neighbourhood, _num, _snap, _source, _text_of,
     _tokens, _words_for,
 )
+from services.clipper import story_evidence
 from services.clipper.segmentation import (
     norm_token, overlap_seconds, points_in, series_slice, signal_view,
 )
@@ -378,7 +379,19 @@ def extract_features(cand: dict, transcript: dict, signals: dict,
     inside, before, after = _neighbourhood(words, start, end)
     total = _num(duration) or (_num(words[-1]["end"]) if words else 0.0)
 
-    payoff = _payoff_time(start, end, inside, sv)
+    # THE PAYOFF THE CLIP WAS CHOSEN FOR, when there is one. Until this line
+    # existed, every payoff feature described a payoff the audio detector found
+    # inside the window — which on the audited sources sat a median of 5-7s and
+    # up to 61s away from the one the model named. The clip was picked for one
+    # event and scored around another.
+    #
+    # The mechanical detector stays, LABELLED, as the fallback: the legacy path
+    # has no anchor at all, and a semantic payoff outside the final window is a
+    # coverage failure that `boundary_coverage` already records.
+    semantic = story_evidence.semantic_payoff(cand)
+    payoff = semantic if semantic is not None else _payoff_time(start, end, inside, sv)
+    payoff_source = (story_evidence.SOURCE_SEMANTIC if semantic is not None
+                     else story_evidence.SOURCE_MECHANICAL)
     # No evidence: assume the conventional position so the downstream bands stay
     # neutral, and let payoff_strength report the truth.
     payoff_at = payoff if payoff is not None else start + 0.7 * span
@@ -390,6 +403,15 @@ def extract_features(cand: dict, transcript: dict, signals: dict,
         strength = _clamp01(0.5 * near + 0.2 * min(1.0, cues / 2.0)
                             + (0.3 if points_in(payoff_at - 0.75, payoff_at + 0.75,
                                                 sv["peaks"]) else 0.0))
+        if payoff_source == story_evidence.SOURCE_SEMANTIC:
+            # The model's own conviction, blended rather than replacing the
+            # measurement. It knows whether the moment resolved; the audio
+            # knows whether anyone reacted, and a payoff that lands in silence
+            # is weaker than one that does not, whatever the model thought.
+            # Kept as a blend for the same reason the judge is: neither side
+            # gets the whole vote.
+            told = _clamp01(_num((cand.get("story") or {}).get("payoff_strength"), 0.5))
+            strength = _clamp01(0.5 * told + 0.5 * strength)
 
     raw: dict[str, float] = {
         "duration": span,
@@ -400,6 +422,9 @@ def extract_features(cand: dict, transcript: dict, signals: dict,
         "payoff_position": _clamp01(_div(payoff_at - start, span)),
         "payoff_strength": strength,
     }
+    # Not a feature — the vector is frozen and the ranker replays its order —
+    # but the one thing a reader needs to interpret the four above.
+    cand["payoff_source"] = payoff_source
     raw.update(_lexical(inside, source["counts"]))
     raw.update(_structure(inside, source["sentences"], before, after, start, end))
     raw.update(_audio(start, end, span, sv, payoff_at))
