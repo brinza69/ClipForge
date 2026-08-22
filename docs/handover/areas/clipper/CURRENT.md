@@ -74,10 +74,22 @@ Ce s-a livrat, cu măsurătoarea care justifică fiecare:
 
 ## Ce NU este închis
 
-- **Batch 3, pragul de context coverage.** 95% a fost *ales*, nu măsurat, și nu poate fi atins pe
-  acest corpus: din 48 de afirmații distincte, 27 sunt grounded strict, 11 ar fi dacă promptul ar
-  cere `atom_ids`, 5 dacă am accepta subsecvența — iar **5 (10%) nu au suport recuperabil**.
-  Modelul chiar parafrazează. Vezi `scripts/measure_grounding.py`.
+- **Grounding coverage — metrică fără prag, și nu are voie să fie confundată cu context coverage.**
+  Sunt două lucruri diferite și numai unul are gate:
+  - *context coverage* întreabă dacă fereastra aleasă **conține** momentele de context necesare.
+    Gate-ul Batch 3 e pe ea și a **trecut**: 8/8 și 15/15, ≥95%.
+  - *grounding coverage* întreabă dacă afirmațiile pot fi **legate de transcript**. Din 48 de
+    afirmații distincte pe `gateslice4h`: 27 grounded strict, 11 ar fi dacă promptul ar cere
+    `atom_ids`, 5 dacă am accepta subsecvența, **5 (10%) fără suport recuperabil**.
+  Nu recalibra pragul de 95% pe cifra de 27/48 — măsoară altceva.
+
+  Cele 11 **nu** sunt „atomi numiți greșit": `matched_by` este `timestamp` pentru toate cele 111
+  afirmații, adică modelul nu a numit niciun atom și `atom_ids` sunt completate de noi din fereastră.
+  Sunt citate exacte, găsite local, dar nelegate canonic de un atom. Ordinea de reparare, în ordinea
+  asta: resolver determinist (caută citatul în tokeni întregi, salvează `matched_t` și driftul,
+  potrivirile multiple rămân `ambiguous`) → remăsurare pe aceleași ancore cached → A/B de prompt cu
+  `atom_ids` **doar dacă mai rămâne nerezolvat** → prag lexical calibrat pe holdout.
+  Vezi `scripts/measure_grounding.py`.
 - **`eligibility` nu e citită de nimeni.** Se scrie și se înregistrează; nicio decizie nu depinde de
   ea, iar `ineligible` nu s-a declanșat niciodată pe acest corpus (0 din 946).
 - **Inerția lui shadow e parțială.** `apply_ranking` mută `overall` pentru pool-ul de 80 —
