@@ -1185,6 +1185,48 @@ Câte clipuri are fiecare sursă de evaluat, după re-scorare cu `shadow_rank`:
 Diferența v2 față de legacy la re-rulare: 7 din 8 pe `go ghost`, 6 pe vlog, 7 pe
 interviu. Acordul între board-uri este de una-două poziții din opt.
 
+## 14e. Ce a găsit review-ul orb, 2026-08-22
+
+Două sesiuni complete, câte una per sursă, pe export-uri întregi.
+
+| sursă | board | văzute | da | nu | nesigur | precizie | margini ok |
+|---|---|---|---|---|---|---|---|
+| go ghost | legacy | 8 | 5 | 2 | 1 | 0,71 | 2 |
+| go ghost | **v2** | 8 | 6 | **0** | 2 | **1,00** | **5** |
+| vlog RO | legacy | 8 | 0 | 4 | 4 | **0,00** | 3 |
+| vlog RO | **v2** | 8 | 1 | 2 | 5 | **0,33** | 2 |
+
+**v2 conduce pe ambele surse**, dar eșantionul e minuscul: 8 clipuri per board, iar
+la go ghost un singur răspuns schimbat mută precizia cu 15 puncte. Semnal, nu dovadă.
+
+### Constatarea care contează mai mult decât comparația
+
+**Pe vlogul românesc, 13 din 14 clipuri au probleme tehnice, iar cauza nu e selecția.**
+
+Sursa e 4K (3840×2160), un tur de apartament filmat din mână. Motorul a clasificat-o
+`interview` cu încredere **0,419** și a aplicat layout `split_screen` la 12 din 14
+clipuri. Split-screen taie o fâșie verticală de **384 px dintr-un cadru de 3840 px** —
+și `face_rect` este **identic pe toate clipurile proiectului**, deci nu urmărește
+subiectul într-un vlog în care camera se mișcă permanent.
+
+Verificat pe cadre extrase: o perdea pe tot ecranul, un balcon fără om, tocul unei uși,
+un pat cu o pisică. Din cinci cadre inspectate, **unul** conține persoana care vorbește.
+
+**De ce contează pentru §14c.** Pilotul a clasat vlogul a doua cea mai bună sursă,
+14,3 momente story pe oră. Review-ul uman spune că unul din paisprezece merită exportat.
+Densitatea măsura dacă motorul **găsește** momente; nu putea vedea că randarea le
+distruge. Este exact avertismentul de la review: „motorul își poate activa bugetul story
+și poate produce impecabil 40 de payoff-uri proaste".
+
+**Consecință pentru comparația legacy/v2 pe această sursă:** ambele board-uri au fost
+plafonate de aceeași defecțiune de randare, deci comparația rămâne valabilă intern, dar
+măsoară alegerea între clipuri pe care evaluatorul abia le putea judeca — de aici cele
+9 răspunsuri `nesigur` din 14.
+
+**Nu este o problemă de reasoning și nu se repară în batch-urile 7-10.** Aparține
+`layout.py` și clasificatorului de conținut: un vlog IRL nu este un interviu, iar un
+crop fix pe o sursă filmată din mână este greșit indiferent de clasificare.
+
 ## 14b. Stare de aprobare
 
 Batch 0 și Batch 1 au **undă verde**, cu ajustările din §13.17, §13.23 și §13.24 deja integrate.
