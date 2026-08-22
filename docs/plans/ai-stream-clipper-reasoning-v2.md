@@ -1195,9 +1195,13 @@ Două sesiuni complete, câte una per sursă, pe export-uri întregi.
 | go ghost | **v2** | 8 | 6 | **0** | 2 | **1,00** | **5** |
 | vlog RO | legacy | 8 | 0 | 4 | 4 | **0,00** | 3 |
 | vlog RO | **v2** | 8 | 1 | 2 | 5 | **0,33** | 2 |
+| Jensen | legacy | 8 | 4 | 3 | 1 | 0,57 | **5** |
+| Jensen | v2 | 8 | 4 | 3 | 1 | 0,57 | 1 |
 
-**v2 conduce pe ambele surse**, dar eșantionul e minuscul: 8 clipuri per board, iar
-la go ghost un singur răspuns schimbat mută precizia cu 15 puncte. Semnal, nu dovadă.
+**v2 conduce pe două surse din trei și este la egalitate pe a treia** — pe Jensen
+identic la verdict, dar mai slab la margini, 1 față de 5. Eșantionul rămâne minuscul:
+8 clipuri per board, iar la go ghost un singur răspuns schimbat mută precizia cu 15
+puncte. Semnal, nu dovadă.
 
 ### Constatarea care contează mai mult decât comparația
 
@@ -1226,6 +1230,38 @@ măsoară alegerea între clipuri pe care evaluatorul abia le putea judeca — d
 **Nu este o problemă de reasoning și nu se repară în batch-urile 7-10.** Aparține
 `layout.py` și clasificatorului de conținut: un vlog IRL nu este un interviu, iar un
 crop fix pe o sursă filmată din mână este greșit indiferent de clasificare.
+
+### Același defect pe interviu, și formularea exactă a evaluatorului
+
+Jensen: 12 din 15 clipuri cu problemă tehnică, aceeași cauză — 3840×2160, clasificat
+`interview` cu încredere **0,418**, `split_screen` la 15 din 15, și **un singur
+`face_rect` pentru tot proiectul**: `{x: 1312, w: 392}`, adică 392 px dintr-un cadru
+de 3840.
+
+Cadrele extrase arată de ce cifra e 12 din 15 și nu 13 din 14 ca la vlog:
+
+> „când apare altceva decât fețele lor pe ecran se vede prost fiindcă e tăiat"
+
+Pe un interviu camera stă mare parte din timp pe vorbitori, deci crop-ul fix nimerește;
+încadrarea pe fețe este chiar bună. **Fiecare cutaway este însă distrus** — primul cadru
+inspectat este o diagramă „8 MILLION PIXELS" tăiată la o fâșie de grilă fără sens. Pe
+vlog camera nu stă aproape niciodată pe față, deci aproape totul se distruge.
+
+**Cauza unică, măsurată pe ambele surse:** crop-ul se calculează **o dată pe proiect** și
+nu urmărește niciodată cadrul. Un `face_rect` distinct pentru 15 clipuri la Jensen, unul
+pentru 14 la vlog. Nu este o eroare de clasificare — clasificarea doar decide cât de des
+nimerește un crop care oricum nu se mișcă.
+
+Nota de la go ghost, singura sursă fără acest defect, este de alt ordin de mărime:
+
+> „cu câteva milisecunde mai devreme decât trebuia se termină"
+
+**Ce înseamnă asta pentru citirea preciziei.** Pe vlog și pe Jensen, `worth_exporting`
+măsoară un amestec de selecție și de randare, iar evaluatorul a spus explicit că prin
+„problemă tehnică" înțelege „e editat prost". Singura sursă pe care precizia măsoară
+curat selecția este go ghost, unde layout-ul este `talking_head` și defectul nu apare —
+și acolo v2 are 1,00 față de 0,71.
+
 
 ## 14b. Stare de aprobare
 
