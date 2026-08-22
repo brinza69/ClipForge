@@ -85,9 +85,9 @@ comparat cu o rulare nouă**, nu cele din tabelul de mai sus:
 shortlist-ul **plafonat** trimis la judge. De aceea 304 > 80 — plafon, nu propagare. Propagarea
 explică altceva: de ce 109 grupuri conțin un verdict deși numai 80 au mers la judge.
 
-| | sursă |
-|---|---|
-| candidați (variante) | 946 | 
+| metrică | valoare | sursă |
+|---|---|---|
+| candidați (variante) | 946 | `selection_trace` |
 | `dedupe_group` distincte | 304 | `selection_trace` |
 | dintre ele, cu cel puțin o variantă judecată | 109 | `selection_trace` |
 | momente trimise la judge | 80, din care 19 story | `reasoning_run.judge_pool_moments` |

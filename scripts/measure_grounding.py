@@ -1,19 +1,24 @@
-"""How much of the grounding gap is the model paraphrasing, and how much is us.
+"""Where a claim's words sit relative to where the claim says they are.
 
 `story_evidence.ground_claim` marks a claim grounded only when its quote appears
 as a CONTIGUOUS run of normalised tokens in the atoms it names. A claim that
-fails is kept and recorded, never dropped — but the batch's gate asks for 95%
-context coverage and the corpus reports 89%, and "the model paraphrases" and
-"our matcher is too strict" are two different problems with two different fixes.
+fails is kept and recorded, never dropped — this measures how often that happens
+and how far off the failures are.
 
-So the failures are re-checked against a ladder of weaker rules:
+NOT the same thing as the Batch 3 gate. That gate is CONTEXT coverage — whether
+the chosen window CONTAINS the required context — and it passed at 8/8 and
+15/15. This is GROUNDING coverage, whether a claim can be tied to the transcript
+at all. Two different questions; only the first has a threshold. Do not
+recalibrate one against the other.
+
+The failures are re-checked against a ladder of weaker rules:
 
     contiguous   what ships. every token, in order, adjacent, in the atoms
                  the claim names
     near_verbatim  the same quote, verbatim, inside a WINDOW around the time
-                 the claim gives — the atoms named were wrong, the words were not
+                 the claim gives — located, but not canonically bound
     subsequence  every token, in order, gaps allowed, inside that same window
-    absent       none of the above
+    absent       no local match
 
 WHAT THE METHOD WAS TESTED AGAINST, because a measurement nobody checked is
 how the first version reached the wrong answer. Two null models:
@@ -28,7 +33,7 @@ collocation, which random draws do not.
 
 TWO THINGS THE FIRST VERSION GOT WRONG, and they inverted its conclusion.
 
-It counted 111 claims where there are 47 distinct ones: several candidate
+It counted 111 claims where there are 48 distinct ones: several candidate
 variants share one anchor's story block, so the same quote was counted up to
 three times and the percentages described the duplication as much as the data.
 
