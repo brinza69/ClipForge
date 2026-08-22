@@ -83,6 +83,23 @@ def _size(height: float, src_w: int, src_h: int) -> tuple[int, int]:
     return w, h
 
 
+#: What a shot does with the frame.
+#:
+#:   "crop" — the only behaviour there has ever been: a 9:16 window pointed at
+#:            a subject, pushed and snapped.
+#:   "fit"  — the WHOLE frame, letterboxed. For the sequences that have no
+#:            subject to point at: a diagram, a screen share, a cutaway. The
+#:            blind review's clearest single result was that a 9:16 window on
+#:            those produces a wall of texture — a "8 million pixels" slide
+#:            became an unreadable strip of grid — while the whole frame is
+#:            small but legible.
+COMPOSITIONS = ("crop", "fit")
+
+
+def composition_of(shot: dict) -> str:
+    return "fit" if str((shot or {}).get("composition") or "crop") == "fit" else "crop"
+
+
 def _size_timeline(shot: dict, style: dict, src_w: int, src_h: int
                    ) -> list[tuple[float, int, int]]:
     """[(t, w, h)] control points for one shot, snap then push, deduplicated.
@@ -92,8 +109,16 @@ def _size_timeline(shot: dict, style: dict, src_w: int, src_h: int
     dissolve-free slide. A `push`/`pull` then walks the size across the rest of
     the shot at `push_hz`, which is dense enough to read as continuous motion
     and sparse enough that the filter is not reconfigured every frame.
+
+    A `fit` shot emits ONE point at the full frame and never reaches `_size`.
+    That is the whole trap: `_size` forces 9:16 on everything it is given, so a
+    rect of the full 3840×2160 comes back out as 1214×2160 and the letterbox
+    never happens. Nor does it snap or push — a shot that exists because there
+    is nothing to point at has nothing to move toward.
     """
     t0, t1 = float(shot["t0"]), float(shot["t1"])
+    if composition_of(shot) == "fit":
+        return [(round(t0, 3), even(src_w), even(src_h))]
     base = float((shot.get("rect") or {}).get("h") or src_h)
     snap_s = float(style.get("snap_s") or 0.0)
     snap_amount = float(style.get("snap_amount") or 0.0)
@@ -155,6 +180,12 @@ def _position_exprs(shot: dict, biggest: tuple[int, int],
     command alone re-centres the rectangle — that is what turns the push-in into
     a zoom TOWARD THE ANCHOR instead of toward the middle of the frame.
     """
+    # A `fit` shot is the whole frame: origin at 0,0 and nothing to shake. The
+    # anchor logic below exists to keep a SMALLER window on a subject, and a
+    # window the size of the frame has neither a subject nor room to move.
+    if composition_of(shot) == "fit":
+        return "0", "0"
+
     shake = float(shot.get("shake") or 0.0)
     anchor = shot.get("anchor") or [src_w / 2.0, src_h / 2.0]
     ax = _anchor(float(anchor[0]), src_w, biggest[0], shake + 2.0)
@@ -264,10 +295,23 @@ def build_dynamic_filtergraph(plan: dict, cmd_path: str, ass_path: str | None,
     x0 = even(rect.get("x") or (src_w - w0) // 2)
     y0 = even(rect.get("y") or (src_h - h0) // 2)
 
+    # PROPORTIONS FIRST, then pad to the frame. The old chain scaled straight to
+    # 1080x1920, which is correct only while every crop is exactly 9:16 — and it
+    # is the reason a `fit` shot could not exist: the whole 16:9 frame would have
+    # been stretched, not letterboxed.
+    #
+    # The pad is NOT quite a no-op on ordinary shots, and pretending otherwise
+    # would be the wrong claim to verify against. Crops are rounded to even
+    # pixels, so 1214/2160 = 0.56204 against an exact 0.5625, and a shot can pick
+    # up a column or two of black. That is invisible and it is not a frame-hash
+    # match — which is why the check for this change is "same dimensions, no
+    # deformation, tiny pixel difference", not "identical bytes".
     chain = [
         f"sendcmd=f='{escape_filter_path(cmd_path)}'",
         f"crop={w0}:{h0}:{x0}:{y0}",
-        f"scale={even(out_w)}:{even(out_h)}:flags=lanczos",
+        f"scale={even(out_w)}:{even(out_h)}"
+        ":force_original_aspect_ratio=decrease:flags=lanczos",
+        f"pad={even(out_w)}:{even(out_h)}:(ow-iw)/2:(oh-ih)/2:color=black",
         "setsar=1",
         _eq_filter(plan),
     ]
