@@ -1048,9 +1048,32 @@ implementare:
    judge. Constrângerea este acum aplicată și mecanic — `story_v2` este respins din API până la
    gate-ul din Batch 5.
 3. **Regula de grounding va avea un fals-negativ inițial nemăsurat** — modelele parafrazează în loc
-   să citeze. De aceea eșecul marchează, nu elimină. Rata trebuie măsurată în Batch 3 și raportată
-   înainte ca `grounded` să fie folosit ca eligibility în Batch 6, altfel un prompt slab devine un
-   filtru de recall deghizat în criteriu de calitate.
+   să citeze. De aceea eșecul marchează, nu elimină.
+
+   **Măsurat, 2026-08-22**, cu `scripts/measure_grounding.py`, pe 48 de afirmații distincte de pe
+   `gateslice4h` și 10 de pe `gate2d3375`:
+
+   | | `gateslice4h` | `gate2d3375` |
+   |---|---|---|
+   | grounded ca livrat | 27 (56%) | 10 (100%) |
+   | atomi greșiți — citatul e verbatim la ≤120s | 11 (23%) | 0 |
+   | matcher prea strict — în ordine, cu goluri | 5 (10%) | 0 |
+   | **fără suport** | **5 (10%)** | **0** |
+
+   Riscul **s-a materializat**: circa o afirmație din zece nu are suport recuperabil lângă momentul
+   pe care îl revendică. „Marchează, nu elimina" a fost decizia corectă, și dintr-un motiv real.
+
+   **Prima versiune a măsurătorii a fost greșită și a inversat concluzia.** Număra 111 afirmații
+   unde sunt 47 distincte, fiindcă variantele aceluiași moment împart blocul story. Și căuta în
+   TOT fluxul: testată cu 200 de citate inventate din vocabularul transcriptului, 8 treceau proba
+   de subsecvență și **200 din 200** treceau bag-of-words. Un test pe care nimic nu-l poate pica
+   raportează zero eșecuri, și exact așa a ieșit „modelul nu a inventat niciodată". Metoda de acum
+   caută într-o fereastră de ±120s în jurul momentului revendicat, a renunțat la bag-of-words, și
+   trece **0 din 200** de citate inventate.
+
+   Ambele cauze recuperabile sunt ale noastre: promptul nu cere `atom_ids`, deși designul din §5.2
+   le prevedea, deci grounding-ul cade mereu pe fereastra implicită; iar matcher-ul cere rulare
+   contiguă acolo unde transcrierea a pierdut un cuvânt de umplutură.
 
 ## 14b. Stare de aprobare
 
