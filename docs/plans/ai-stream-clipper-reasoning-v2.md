@@ -1207,29 +1207,38 @@ puncte. Semnal, nu dovadă.
 
 **Pe vlogul românesc, 13 din 14 clipuri au probleme tehnice, iar cauza nu e selecția.**
 
-Sursa e 4K (3840×2160), un tur de apartament filmat din mână. Motorul a clasificat-o
-`interview` cu încredere **0,419** și a aplicat layout `split_screen` la 12 din 14
-clipuri. Split-screen taie o fâșie verticală de **384 px dintr-un cadru de 3840 px** —
-și `face_rect` este **identic pe toate clipurile proiectului**, deci nu urmărește
-subiectul într-un vlog în care camera se mișcă permanent.
+Sursa e 4K (3840×2160), un tur de apartament filmat din mână.
 
-Verificat pe cadre extrase: o perdea pe tot ecranul, un balcon fără om, tocul unei uși,
-un pat cu o pisică. Din cinci cadre inspectate, **unul** conține persoana care vorbește.
+**CORECȚIE, 2026-08-22.** Prima versiune a acestei secțiuni a numit cauza „crop fix pe
+proiect", citind `layout_plan.face_rect`, identic pe toate clipurile. **Este fals.**
+`layout_plan` este doar planul static de rezervă. Toate cele patru proiecte pilot au
+`dynamic_edit=true`, iar când planul dinamic există workerul cheamă rendererul dinamic,
+nu pe cel static — `clipper_render_jobs.py:201`. Fișierele `.cmd.txt` ale export-urilor
+arată crop-uri care se schimbă de zeci de ori într-un clip: pe un clip Jensen, x-ul trece
+prin 1623 → 2139 → 1623 → 1667 → 1751 → 1515 → 2159 → 2067.
 
-**De ce contează pentru §14c.** Pilotul a clasat vlogul a doua cea mai bună sursă,
-14,3 momente story pe oră. Review-ul uman spune că unul din paisprezece merită exportat.
-Densitatea măsura dacă motorul **găsește** momente; nu putea vedea că randarea le
-distruge. Este exact avertismentul de la review: „motorul își poate activa bugetul story
-și poate produce impecabil 40 de payoff-uri proaste".
+Deci: `face_rect` fix **nu este crop-ul care a produs aceste export-uri**, `keyframes=[]`
+pe split-screen **nu explică imaginile**, iar conectarea keyframe-urilor statice **nu ar
+fi schimbat nimic** cât timp planul dinamic e activ. Diagnosticul a măsurat planul, nu
+rezultatul — aceeași eroare ca sesiunea de review servită din preview-uri.
 
-**Consecință pentru comparația legacy/v2 pe această sursă:** ambele board-uri au fost
-plafonate de aceeași defecțiune de randare, deci comparația rămâne valabilă intern, dar
-măsoară alegerea între clipuri pe care evaluatorul abia le putea judeca — de aici cele
-9 răspunsuri `nesigur` din 14.
+**Cauza reală.** `dynamic_edit` este construit explicit pentru **facecam + gameplay** și
+este aplicat nediferențiat pe interviu, vlog și talking-head. Regula lui — cea mai mare
+față din fiecare eșantion, redusă la un singur cluster dominant — este corectă pe un
+stream de gaming, unde există o singură față într-un colț fix. Pe un interviu cu doi
+vorbitori alege alternativ; pe un vlog în care camera se plimbă urmărește orice seamănă
+cu o față; pe un Just Chatting urmărește **fețele din videoclipul reacționat**, ceea ce
+evaluatorul a observat direct: „nu ia webcam pe toate video-urile, de acum ia fețele din
+video-ul la care se uită".
 
-**Nu este o problemă de reasoning și nu se repară în batch-urile 7-10.** Aparține
-`layout.py` și clasificatorului de conținut: un vlog IRL nu este un interviu, iar un
-crop fix pe o sursă filmată din mână este greșit indiferent de clasificare.
+Cadrele extrase rămân valabile ca dovadă a rezultatului: perdea pe tot ecranul, balcon
+gol, toc de ușă, pat cu pisică; iar pe moistcr1tikal o pagină YouTube întreagă cu bara de
+căutare, like/dislike, SHARE și SAVE în cadru, fără creator.
+
+**A doua corecție.** Am raportat și că `faces.json` are zero fețe pe moistcr1tikal, deci
+că detecția eșuează tăcut. Și asta e fals — citisem greșit formatul. Structura reală este
+`{samples: [{t, boxes}], times: [...]}`, iar sursele au 1285, 1595 și 737 de eșantioane
+cu cel puțin o față. **Detecția funcționează; direcționarea ei nu.**
 
 ### Același defect pe interviu, și formularea exactă a evaluatorului
 
@@ -1247,10 +1256,10 @@ Pe un interviu camera stă mare parte din timp pe vorbitori, deci crop-ul fix ni
 inspectat este o diagramă „8 MILLION PIXELS" tăiată la o fâșie de grilă fără sens. Pe
 vlog camera nu stă aproape niciodată pe față, deci aproape totul se distruge.
 
-**Cauza unică, măsurată pe ambele surse:** crop-ul se calculează **o dată pe proiect** și
-nu urmărește niciodată cadrul. Un `face_rect` distinct pentru 15 clipuri la Jensen, unul
-pentru 14 la vlog. Nu este o eroare de clasificare — clasificarea doar decide cât de des
-nimerește un crop care oricum nu se mișcă.
+**Cauza unică, după corecția de mai sus:** crop-ul **se mișcă**, dar îl mișcă o regulă
+scrisă pentru facecam + gameplay. Nu este o eroare de clasificare și nu este un crop
+înghețat — este urmărirea celui mai mare cluster de fețe, aplicată unui material în care
+cel mai mare cluster de fețe nu este subiectul.
 
 Nota de la go ghost, singura sursă fără acest defect, este de alt ordin de mărime:
 
