@@ -185,6 +185,62 @@ async def test_project_round_trip(client, clipper_tmp):
     assert (await client.get(f"/api/clipper/projects/{pid}")).status_code == 404
 
 
+async def test_the_reasoning_mode_survives_create_patch_and_reaches_the_worker(
+    client, clipper_tmp
+):
+    """The gate for Batch 1, end to end and through the real DB.
+
+    Its predecessors — `llm_select` and `reasoning_version` — never appeared in
+    `_default_settings()`, so `_normalise_settings` dropped both on every write.
+    The story engine was unreachable from the API and nothing said so: the
+    project was created, the run proceeded, and it quietly ran legacy.
+    """
+    from workers.clipper_build import _reasoning_mode
+
+    staged = _stage(clipper_tmp, "reasoning.mp4")
+    created = await client.post(
+        "/api/clipper/projects",
+        json={
+            "source_kind": "upload",
+            "upload_path": str(staged),
+            "rights_confirmed": True,
+            "settings": {"clip_count": 3, "reasoning_mode": "story_v1"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    pid = created.json()["id"]
+
+    try:
+        stored = created.json()["clipper_settings"]
+        assert stored["reasoning_mode"] == "story_v1"
+        # The worker reads the stored dict, not the request, so this is the
+        # half that was actually broken.
+        assert _reasoning_mode(stored) == "story_v1"
+
+        patched = await client.patch(
+            f"/api/clipper/projects/{pid}/settings",
+            json={"settings": {"clip_count": 3, "reasoning_mode": "legacy"}},
+        )
+        assert patched.status_code == 200, patched.text
+        after = patched.json()["project"]["clipper_settings"]
+        assert after["reasoning_mode"] == "legacy"
+        assert _reasoning_mode(after) == "legacy"
+
+        # Not selectable yet, and refused rather than downgraded to shadow.
+        refused = await client.patch(
+            f"/api/clipper/projects/{pid}/settings",
+            json={"settings": {"reasoning_mode": "story_v2"}},
+        )
+        assert refused.status_code == 400
+        assert refused.json()["detail"]["error"] == "reasoning_mode_unavailable"
+
+        # ...and the refusal changed nothing.
+        detail = await client.get(f"/api/clipper/projects/{pid}")
+        assert detail.json()["clipper_settings"]["reasoning_mode"] == "legacy"
+    finally:
+        await client.delete(f"/api/clipper/projects/{pid}")
+
+
 async def test_content_type_override_triggers_a_rescore_when_there_is_analysis(
     client, clipper_tmp
 ):

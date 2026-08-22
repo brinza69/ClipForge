@@ -396,9 +396,9 @@ def test_the_pipeline_callers_pass_the_content_type():
     refactor — the technique is worth keeping for wires that are invisible at
     runtime, and it costs a false alarm every time the wire is rerouted.
     """
-    from workers import clipper_build, clipper_render_plan
+    from workers import clipper_finalize, clipper_render_plan
 
-    for mod in (clipper_build, clipper_render_plan):
+    for mod in (clipper_finalize, clipper_render_plan):
         src = inspect.getsource(mod)
         assert "plan_layout(" in src, f"{mod.__name__} no longer plans layouts"
         call = src[src.index("plan_layout("):]

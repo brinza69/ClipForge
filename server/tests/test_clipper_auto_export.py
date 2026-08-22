@@ -156,3 +156,30 @@ def test_the_vision_setting_survives_project_creation_too():
     assert _normalise_settings({"vision_review": True})["vision_review"] is True
     assert _normalise_settings({})["vision_review"] is False
     assert _normalise_settings({"vision_model": "gpt-5.6-luna"})["vision_model"] == "gpt-5.6-luna"
+
+
+async def test_cancelling_during_headlines_raises_the_right_error():
+    """The regression the 500-line split introduced and no test caught.
+
+    `_attach_headlines` moved from clipper_build into clipper_finalize and its
+    `JobCancelledError` import did not follow it, so cancelling a run while
+    headlines were being generated raised NameError instead — which the queue
+    treats as a crashed job rather than a cancelled one.
+
+    A symbol-table check over the five files that batch touched found it in one
+    of them and nothing else; this test is what keeps it found.
+    """
+    from job_queue import JobCancelledError
+    from workers import clipper_finalize
+
+    class Cancelled:
+        def is_cancelled(self, _job_id):
+            return True
+
+        async def update_progress(self, *_a, **_k):
+            return None
+
+    with pytest.raises(JobCancelledError):
+        await clipper_finalize._attach_headlines(
+            [{"start": 0.0, "end": 10.0, "text": "hi"}],
+            {"headline_enabled": True}, Cancelled(), "job1")
