@@ -1157,6 +1157,34 @@ fiecare apel, înainte să vadă promptul, deci motorul efectiv a fost OpenAI la
 judge. Cohorta se numește „reasoning v2, fallback OpenAI" — nu este o evaluare a lui Ollama și nu
 este independentă de provider.
 
+## 14d. Review orb — cum se rulează, 2026-08-22
+
+Pagina: `/clipper-review`. Sesiunea trăiește pe server; browserul ține doar id-ul,
+ca un reload să nu abandoneze o sesiune la jumătate.
+
+**O sesiune per proiect, alegerea operatorului.** Recomandarea de la review era un
+singur shuffle global, stratificat, fiindcă amestecarea surselor împiedică
+evaluatorul să prindă ritmul unei surse și să-l ducă în clipul următor. Per proiect
+se pierde exact atâta: clipurile unei surse vin la rând, deci un efect de context
+între ele **nu poate fi exclus**. În schimb se poate opri curat la granița unei
+surse, ceea ce contează la ~15 clipuri pe sesiune și un evaluator singur.
+
+**Consecința la citirea rezultatelor:** o diferență legacy/v2 măsurată în interiorul
+unei surse este comparabilă; una măsurată **între** surse nu, fiindcă fiecare sesiune
+are propriul context și propria oboseală. Agregarea peste proiecte se face pe
+proporții per sursă, nu pe suma clipurilor.
+
+Câte clipuri are fiecare sursă de evaluat, după re-scorare cu `shadow_rank`:
+
+| sursă | legacy | v2 | ambele | de evaluat |
+|---|---|---|---|---|
+| `pilotf81b` go ghost | 8 | 8 | 1 | **15** |
+| `pilotee0e` vlog RO | 8 | 8 | 2 | **14** |
+| `pilot6b38` Jensen | 8 | 8 | 1 | **15** |
+
+Diferența v2 față de legacy la re-rulare: 7 din 8 pe `go ghost`, 6 pe vlog, 7 pe
+interviu. Acordul între board-uri este de una-două poziții din opt.
+
 ## 14b. Stare de aprobare
 
 Batch 0 și Batch 1 au **undă verde**, cu ajustările din §13.17, §13.23 și §13.24 deja integrate.
