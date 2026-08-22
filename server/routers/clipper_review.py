@@ -190,6 +190,36 @@ async def post_answer(session_id: str, body: Answer,
     return {"ok": True, **review_mod.progress(state)}
 
 
+@router.get("/{session_id}/item/{review_item_id}/video")
+async def item_video(session_id: str, review_item_id: str,
+                     session: AsyncSession = Depends(get_session)):
+    """The clip's preview, addressed by the session handle.
+
+    Not `/clips/{clip_id}/preview-file`, which is the same bytes: that URL puts
+    the clip id in the page's DOM and in the browser's network log, and the clip
+    id is what the reviewer's own board is addressed by. One glance at the board
+    for that id tells them whether the clip is ranked, which is the whole blind
+    for the price of opening devtools.
+    """
+    from fastapi.responses import FileResponse
+
+    state = _load(session_id)
+    item = next((i for i in state.get("items") or ()
+                 if i.get("review_item_id") == review_item_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="no such review item")
+
+    clip = await session.get(ClipModel, item["clip_id"])
+    path = (clip.preview_path or clip.export_path) if clip else None
+    if not path or not storage.is_usable_output(path):
+        raise HTTPException(status_code=404,
+                            detail="this clip has no rendered preview yet")
+    # Named after the HANDLE, not the clip: a download or a saved file that
+    # carries the clip id walks the leak out of the browser.
+    return FileResponse(path, media_type="video/mp4",
+                        filename=f"{review_item_id}.mp4")
+
+
 @router.get("/{session_id}/result")
 async def get_result(session_id: str) -> dict:
     """The comparison, and the membership that was hidden until now.

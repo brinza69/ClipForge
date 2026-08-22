@@ -14,11 +14,13 @@ import {
   PenTool,
   Clapperboard,
   Scissors,
+  Eye,
 } from "lucide-react";
 import { RunningJobsBadge } from "@/components/layout/running-jobs-badge";
 
 const navItems = [
   { label: "AI Stream Clipper", href: "/ai-stream-clipper", icon: Scissors },
+  { label: "Review orb", href: "/clipper-review", icon: Eye },
   { label: "Remix Pipeline", href: "/remix",  icon: Wand2 },
   { label: "Parallel Processing", href: "/parallel", icon: Layers },
   { label: "Parallel from Sheets", href: "/parallel-sheets", icon: FileSpreadsheet },

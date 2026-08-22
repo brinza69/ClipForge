@@ -57,6 +57,19 @@ def _link_tree(src: Path, dst: Path) -> int:
     return linked
 
 
+def _repoint(path: str | None, source_id: str, clone_id: str) -> str | None:
+    """A stored media path, moved onto the clone's own directory.
+
+    Only rewrites the project-id segment, and only when it is really there: a
+    path outside the clipper tree (an upload the user pointed at in place) has
+    no clone-local copy, so leaving it alone is the honest answer.
+    """
+    if not path:
+        return None
+    marker = f"{os.sep}{source_id}{os.sep}"
+    return path.replace(marker, f"{os.sep}{clone_id}{os.sep}") if marker in path else path
+
+
 async def clone(source_id: str, clone_id: str) -> int:
     from database import async_session, init_db
     from models import ProjectModel, TranscriptModel
@@ -92,6 +105,15 @@ async def clone(source_id: str, clone_id: str) -> int:
             content_type=src.content_type,
             content_type_confidence=src.content_type_confidence,
             content_type_override=src.content_type_override,
+            # REPOINTED at the clone's own copy, not left NULL and not copied
+            # verbatim. The media is hardlinked into the clone's directory, so
+            # the bytes are already there — but `_source_path` reads this column
+            # and nothing else, so a clone without it can be re-scored (which
+            # reads artefacts off disk) and cannot be RENDERED. Found when the
+            # blind review needed previews: every clone failed with "the source
+            # video is no longer on disk" while the file sat next to it.
+            video_path=_repoint(src.video_path, source_id, clone_id),
+            thumbnail_path=_repoint(src.thumbnail_path, source_id, clone_id),
         ))
 
         row = (await session.execute(
