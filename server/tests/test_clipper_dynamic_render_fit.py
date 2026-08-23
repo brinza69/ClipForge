@@ -23,13 +23,19 @@ def _shot(**kw):
     return base
 
 
-def test_a_fit_shot_keeps_the_whole_frame():
-    """`_size` would have forced 3840x2160 back to 1214x2160 — a 9:16 crop of
-    the frame, which is the very thing `fit` exists not to be."""
-    out = dr._size_timeline(_shot(composition="fit"), dr.DEFAULT_STYLE
-                            if hasattr(dr, "DEFAULT_STYLE") else {},
-                            3840, 2160)
-    assert out == [(0.0, 3840, 2160)]
+def test_a_fit_shot_takes_the_whole_9_16_canvas():
+    """`_size` would have forced the full frame back to 1214x2160 — a 9:16 crop
+    of it, which is the thing `fit` exists not to be.
+
+    The canvas, not the source: the graph letterboxes the source onto a 9:16
+    canvas up front, so the full-frame crop is the canvas. See
+    `test_clipper_render_geometry`, which checks the pixels this produces.
+    """
+    from services.clipper.dynamic_geometry import canvas_size
+
+    cw, ch, _ = canvas_size(3840, 2160)
+    out = dr._size_timeline(_shot(composition="fit"), {}, 3840, 2160)
+    assert out == [(0.0, cw, ch)]
 
 
 def test_a_crop_shot_is_untouched_by_the_new_path():
@@ -107,21 +113,25 @@ def test_the_fit_shot_is_scheduled_at_its_own_start():
     assert at == sorted(at), "commands are not in time order"
 
 
-def test_the_graph_letterboxes_rather_than_stretching():
-    """The pad is what makes `fit` a letterbox instead of a stretched frame, and
-    `force_original_aspect_ratio` is what makes the pad necessary. Losing either
-    silently turns every full-frame shot into a distorted one."""
-    graph, label = dr.build_dynamic_filtergraph(
-        _plan("fit"), "cmd.txt", None, src_w=3840, src_h=2160)
-    assert "force_original_aspect_ratio=decrease" in graph
-    assert "pad=1080:1920" in graph
-    assert graph.index("scale=") < graph.index("pad="), "pad must follow scale"
-    assert label == "[vout]"
+# REMOVED: test_the_graph_letterboxes_rather_than_stretching.
+#
+# It asserted that the filtergraph TEXT contained `force_original_aspect_ratio`
+# and `pad`. It did, and it passed — while every `fit` shot shipped stretched,
+# because `scale` fixes its output size at configuration time and never
+# recomputes it when `sendcmd` changes the crop. Four review sessions carried
+# the same note on every source before anyone looked at the pixels.
+#
+# `test_clipper_render_geometry` replaces it by rendering a circle and measuring
+# whether it is still round. Reading the graph cannot catch this class of defect
+# and should not be trusted to.
 
 
 def test_the_graph_starts_on_the_first_shots_own_rectangle():
     """`crop` is initialised from shot zero and only then driven by sendcmd. A
     plan that opens on `fit` must not open on a 9:16 window and jump."""
+    from services.clipper.dynamic_geometry import canvas_size
+
+    cw, ch, _ = canvas_size(3840, 2160)
     graph, _ = dr.build_dynamic_filtergraph(
         _plan("fit", "crop"), "cmd.txt", None, src_w=3840, src_h=2160)
-    assert "crop=3840:2160:0:0" in graph, graph[:200]
+    assert f"crop={cw}:{ch}:0:0" in graph, graph[:200]

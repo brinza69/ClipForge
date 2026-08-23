@@ -37,6 +37,7 @@ from typing import Any, Sequence
 
 from services.clipper.dynamic_geometry import (  # noqa: F401  (re-exported)
     COMPOSITIONS,
+    canvas_size,
     _position_exprs,
     _size,
     _size_timeline,
@@ -141,28 +142,31 @@ def build_dynamic_filtergraph(plan: dict, cmd_path: str, ass_path: str | None,
     shots = (plan or {}).get("shots") or []
     first = shots[0] if shots else {}
     rect = first.get("rect") or {}
-    w0 = even(rect.get("w") or _size(src_h, src_w, src_h)[0])
-    h0 = even(rect.get("h") or _size(src_h, src_w, src_h)[1])
-    x0 = even(rect.get("x") or (src_w - w0) // 2)
-    y0 = even(rect.get("y") or (src_h - h0) // 2)
+    canvas_w, canvas_h, off_y = canvas_size(src_w, src_h)
 
-    # PROPORTIONS FIRST, then pad to the frame. The old chain scaled straight to
-    # 1080x1920, which is correct only while every crop is exactly 9:16 — and it
-    # is the reason a `fit` shot could not exist: the whole 16:9 frame would have
-    # been stretched, not letterboxed.
+    if composition_of(first) == "fit":
+        w0, h0, x0, y0 = canvas_w, canvas_h, 0, 0
+    else:
+        w0 = even(rect.get("w") or _size(src_h, src_w, src_h)[0])
+        h0 = even(rect.get("h") or _size(src_h, src_w, src_h)[1])
+        x0 = even(rect.get("x") or (src_w - w0) // 2)
+        y0 = even((rect.get("y") or (src_h - h0) // 2) + off_y)
+
+    # PAD FIRST, and this is not a style choice. `scale` fixes its output size
+    # when the filter is configured and does not recompute it when `sendcmd`
+    # changes the crop, so `force_original_aspect_ratio` did nothing for a `fit`
+    # shot — the output stayed 1080x1920 and the whole 16:9 frame was STRETCHED
+    # into it. The reviewer saw it on every source: "aceeași problemă cu imaginea
+    # streched". The graph read correctly and the pixels were wrong.
     #
-    # The pad is NOT quite a no-op on ordinary shots, and pretending otherwise
-    # would be the wrong claim to verify against. Crops are rounded to even
-    # pixels, so 1214/2160 = 0.56204 against an exact 0.5625, and a shot can pick
-    # up a column or two of black. That is invisible and it is not a frame-hash
-    # match — which is why the check for this change is "same dimensions, no
-    # deformation, tiny pixel difference", not "identical bytes".
+    # Letterboxing the source onto a 9:16 canvas up front makes every crop —
+    # including the full-frame one — 9:16, so `scale` has exactly one geometry
+    # and needs no aspect handling at all.
     chain = [
+        f"pad={canvas_w}:{canvas_h}:0:{off_y}:color=black",
         f"sendcmd=f='{escape_filter_path(cmd_path)}'",
         f"crop={w0}:{h0}:{x0}:{y0}",
-        f"scale={even(out_w)}:{even(out_h)}"
-        ":force_original_aspect_ratio=decrease:flags=lanczos",
-        f"pad={even(out_w)}:{even(out_h)}:(ow-iw)/2:(oh-ih)/2:color=black",
+        f"scale={even(out_w)}:{even(out_h)}:flags=lanczos",
         "setsar=1",
         _eq_filter(plan),
     ]

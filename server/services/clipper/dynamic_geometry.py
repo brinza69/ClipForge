@@ -27,7 +27,8 @@ from typing import Any
 from services.clipper.dynamic_edit import ASPECT
 from services.clipper.ffmpeg_tools import even
 
-__all__ = ["COMPOSITIONS", "composition_of", "build_sendcmd", "write_sendcmd"]
+__all__ = ["COMPOSITIONS", "canvas_size", "composition_of",
+           "build_sendcmd", "write_sendcmd"]
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +43,29 @@ def _size(height: float, src_w: int, src_h: int) -> tuple[int, int]:
         w = even(src_w)
         h = even(min(src_h, w / ASPECT))
     return w, h
+
+
+def canvas_size(src_w: int, src_h: int) -> tuple[int, int, int]:
+    """The 9:16 canvas the source is letterboxed onto, and its y offset.
+
+    THE WHOLE REASON THE GRAPH PADS FIRST. `scale` computes its output size when
+    the filter is configured and does NOT recompute it when `sendcmd` changes
+    the crop mid-stream, so one `scale` cannot serve two output geometries.
+    `force_original_aspect_ratio` therefore did nothing for a `fit` shot: the
+    output stayed 1080x1920 and the 16:9 frame was STRETCHED into it. The graph
+    looked right, the pixels were wrong, and a test that read the graph's text
+    passed while the reviewer was looking at distorted video.
+
+    Padding first removes the problem instead of working around it: every crop —
+    including the one that is the whole frame — is 9:16 of the canvas, so
+    `scale` has exactly one job.
+
+    A source already at or narrower than 9:16 needs no canvas; it gets itself.
+    """
+    if src_w <= 0 or src_h <= 0 or (src_w / float(src_h)) <= ASPECT:
+        return even(src_w), even(src_h), 0
+    canvas_h = even(src_w / ASPECT)
+    return even(src_w), canvas_h, (canvas_h - even(src_h)) // 2
 
 
 #: What a shot does with the frame.
@@ -79,7 +103,8 @@ def _size_timeline(shot: dict, style: dict, src_w: int, src_h: int
     """
     t0, t1 = float(shot["t0"]), float(shot["t1"])
     if composition_of(shot) == "fit":
-        return [(round(t0, 3), even(src_w), even(src_h))]
+        cw, ch, _ = canvas_size(src_w, src_h)
+        return [(round(t0, 3), cw, ch)]
     base = float((shot.get("rect") or {}).get("h") or src_h)
     snap_s = float(style.get("snap_s") or 0.0)
     snap_amount = float(style.get("snap_amount") or 0.0)
@@ -147,10 +172,13 @@ def _position_exprs(shot: dict, biggest: tuple[int, int],
     if composition_of(shot) == "fit":
         return "0", "0"
 
+    # Clamped against the SOURCE, then moved onto the canvas. Clamping against
+    # the canvas would let a crop wander into the black bars.
+    _, _, off_y = canvas_size(src_w, src_h)
     shake = float(shot.get("shake") or 0.0)
     anchor = shot.get("anchor") or [src_w / 2.0, src_h / 2.0]
     ax = _anchor(float(anchor[0]), src_w, biggest[0], shake + 2.0)
-    ay = _anchor(float(anchor[1]), src_h, biggest[1], shake + 2.0)
+    ay = _anchor(float(anchor[1]), src_h, biggest[1], shake + 2.0) + off_y
 
     x = f"{ax:.1f}-out_w/2"
     y = f"{ay:.1f}-out_h/2"
