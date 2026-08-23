@@ -121,7 +121,12 @@ async def start_session(body: NewSession,
             status_code=409,
             detail="no board to review: score a project in a shadow mode first")
 
-    out = review_mod.create(uuid.uuid4().hex[:16], picked, seed=body.seed)
+    # Stamped AT CREATION. The pilot's sessions were stamped afterwards, from
+    # memory, and the label was factually wrong until a review caught it.
+    from services.clipper.dynamic_render import RENDER_VERSION
+
+    out = review_mod.create(uuid.uuid4().hex[:16], picked, seed=body.seed,
+                            render_version=RENDER_VERSION)
     _save(out)
     logger.info("clipper review %s: %d items over %d projects",
                 out["session_id"], len(out["order"]), len(body.project_ids))

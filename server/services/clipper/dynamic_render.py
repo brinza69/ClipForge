@@ -60,11 +60,27 @@ from services.clipper.ffmpeg_tools import (
 logger = logging.getLogger("clipforge.clipper.dynamic_render")
 
 __all__ = [
+    "RENDER_VERSION",
     "build_sendcmd",
     "build_dynamic_filtergraph",
     "build_dynamic_cmd",
     "render_dynamic_clip",
 ]
+
+#: What this renderer DOES, stamped on anything that evaluates its output.
+#:
+#: A blind review compares clips, and clips are the product of a selection AND a
+#: render. When the render changes underneath, verdicts given on the old one are
+#: not wrong — they are about a different video, and without a name for which
+#: video they were about, they are unattributable. The first pilot's sessions
+#: were stamped after the fact and one of them had to be marked invalid outright.
+#:
+#:   render_v1_dynamic_edit  — facecam+gameplay grammar applied to everything;
+#:                             a 9:16 window on every sequence, and the crop
+#:                             following the largest face cluster in each window
+#:   render_v2_subject_aware — the whole frame when nobody is on screen, and the
+#:                             source's fixed subject when it has one
+RENDER_VERSION = "render_v2_subject_aware"
 
 RENDER_TIMEOUT = 3600.0
 MIN_OUTPUT_BYTES = 1024
