@@ -35,7 +35,12 @@ R = 300
 
 
 def _source(path, seconds: float = 2.0) -> str:
-    """A white disc on grey, 1920x1080, as long as the plan needs.
+    """A white disc on a FINE GRID, 1920x1080, as long as the plan needs.
+
+    The grid is not decoration. The fill is the same picture blurred, so it
+    cannot be told from the sharp frame by brightness — only by how fast the
+    image changes, and a flat grey changes at the same rate whether it is
+    blurred or not. The grid gives every region something to lose.
 
     The source has to outlast the plan: a two-second source under a six-second
     shot list renders sixty frames and the transition test measures nothing.
@@ -44,9 +49,9 @@ def _source(path, seconds: float = 2.0) -> str:
         [ffmpeg_bin(), "-y", "-v", "error",
          "-f", "lavfi", "-i",
          f"color=c=gray:s={SRC_W}x{SRC_H}:d={seconds + 1:.1f}:r=30",
-         "-vf", (f"drawbox=x=0:y=0:w={SRC_W}:h={SRC_H}:color=gray:t=fill,"
-                 f"geq=lum='if(lt((X-{SRC_W//2})*(X-{SRC_W//2})"
-                 f"+(Y-{SRC_H//2})*(Y-{SRC_H//2}),{R*R}),255,110)':"
+         "-vf", (f"geq=lum='if(lt((X-{SRC_W // 2})*(X-{SRC_W // 2})"
+                 f"+(Y-{SRC_H // 2})*(Y-{SRC_H // 2}),{R * R}),255,"
+                 r"if(lt(mod(X\,16)\,8)+lt(mod(Y\,16)\,8)-1,60,150))':"
                  "cb=128:cr=128"),
          "-pix_fmt", "yuv420p", str(path)],
         check=True, capture_output=True)
@@ -69,6 +74,32 @@ def _frame(path, at: float) -> np.ndarray:
          "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
         check=True, capture_output=True).stdout
     return np.frombuffer(out, np.uint8).reshape(1920, 1080)
+
+
+
+#: Where the sharp frame lands once the source is letterboxed into 1080x1920.
+BAND_H = round(1080 * SRC_H / SRC_W)
+BAND_TOP = (1920 - BAND_H) // 2
+
+
+def _sharpness(block: np.ndarray) -> float:
+    """Mean absolute difference between neighbouring rows.
+
+    The fill is the same picture blurred, so it cannot be told from the sharp
+    frame by brightness or colour — only by how fast it changes. That is the
+    whole point of the backdrop, and it is what makes it measurable.
+    """
+    if block.size == 0 or block.shape[0] < 2:
+        return 0.0
+    return float(np.abs(np.diff(block.astype(np.int16), axis=0)).mean())
+
+
+def _band(frame: np.ndarray) -> np.ndarray:
+    return frame[BAND_TOP:BAND_TOP + BAND_H]
+
+
+def _outside(frame: np.ndarray) -> np.ndarray:
+    return frame[: max(0, BAND_TOP - 20)]
 
 
 def _shot(t0, t1, composition):
@@ -96,9 +127,14 @@ def _render(tmp_path, *compositions):
 def test_a_full_frame_shot_keeps_the_circle_round(tmp_path):
     """The defect, stated as a measurement. Stretching a 16:9 frame into 9:16
     makes the disc 1.78x taller than it is wide; the reviewer called it
-    "streched" on all four sources and no graph-reading test could see it."""
+    "streched" on all four sources and no graph-reading test could see it.
+
+    Measured inside the sharp band only. The blurred fill is the same frame
+    zoomed, so it contains the disc too — over the whole output the bounding box
+    would be the union of both and would mean nothing.
+    """
     out = _render(tmp_path, "fit")
-    w, h = _disc(_frame(out, 1.0))
+    w, h = _disc(_band(_frame(out, 1.0)))
 
     assert w > 50 and h > 50, f"no disc found ({w}x{h})"
     assert abs(h / w - 1.0) < 0.10, f"disc is {w}x{h} — aspect {h / w:.2f}"
@@ -106,22 +142,32 @@ def test_a_full_frame_shot_keeps_the_circle_round(tmp_path):
 
 def test_a_full_frame_shot_shows_the_whole_frame(tmp_path):
     """Round is not enough on its own: a 9:16 crop of the middle would also be
-    round. The letterbox has to be there too."""
+    round. The frame has to be letterboxed, which now means a SHARP band with
+    blurred fill above and below rather than black."""
     frame = _frame(_render(tmp_path, "fit"), 1.0)
-    rows = frame.mean(axis=1)
-    dark = int((rows < 30).sum())
 
-    expected = 1920 - round(1080 * SRC_H / SRC_W)
-    assert abs(dark - expected) < 40, f"{dark}px of bars, expected ~{expected}"
+    assert _sharpness(_band(frame)) > 3 * _sharpness(_outside(frame)) + 1, (
+        f"band {_sharpness(_band(frame)):.2f} vs "
+        f"outside {_sharpness(_outside(frame)):.2f}")
+
+
+def test_the_fill_is_a_blurred_picture_not_black(tmp_path):
+    """The reviewer asked for this by name: with 1263 of 1920 rows black on a
+    4K source, the letterbox is correct and unwatchable."""
+    frame = _frame(_render(tmp_path, "fit"), 1.0)
+    outside = _outside(frame)
+
+    assert outside.mean() > 40, f"the fill is near-black ({outside.mean():.0f})"
+    assert _sharpness(outside) < 4, f"the fill is not blurred ({_sharpness(outside):.2f})"
 
 
 def test_an_ordinary_shot_is_not_letterboxed(tmp_path):
-    """The other half of the promise: the fix must not put bars on the shots
-    that were already correct."""
+    """The other half of the promise: the fix must not letterbox the shots that
+    were already correct. A crop shot fills the output, so the fill never shows
+    and the frame is sharp top to bottom."""
     frame = _frame(_render(tmp_path, "crop"), 1.0)
-    rows = frame.mean(axis=1)
 
-    assert int((rows < 30).sum()) < 40, "a crop shot picked up letterbox bars"
+    assert _sharpness(_outside(frame)) > 3, "a crop shot picked up a blurred band"
 
 
 def test_the_transition_changes_geometry_and_loses_no_frames(tmp_path):
@@ -137,6 +183,6 @@ def test_the_transition_changes_geometry_and_loses_no_frames(tmp_path):
     assert (stream["width"], stream["height"]) == (1080, 1920)
     assert int(stream["nb_read_frames"]) >= 175, stream["nb_read_frames"]
 
-    bars = [int((_frame(out, t).mean(axis=1) < 30).sum()) for t in (1.0, 3.0, 5.0)]
-    assert bars[0] < 40 and bars[2] < 40, f"crop shots letterboxed: {bars}"
-    assert bars[1] > 300, f"the fit shot was not letterboxed: {bars}"
+    outside = [_sharpness(_outside(_frame(out, t))) for t in (1.0, 3.0, 5.0)]
+    assert outside[0] > 3 and outside[2] > 3, f"crop shots letterboxed: {outside}"
+    assert outside[1] < 4, f"the fit shot was not letterboxed: {outside}"
