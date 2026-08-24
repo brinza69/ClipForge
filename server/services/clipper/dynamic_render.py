@@ -80,8 +80,14 @@ __all__ = [
 #:                             a 9:16 window on every sequence, and the crop
 #:                             following the largest face cluster in each window
 #:   render_v2_subject_aware — the whole frame when nobody is on screen, and the
-#:                             source's fixed subject when it has one
-RENDER_VERSION = "render_v2_subject_aware"
+#:                             source's fixed subject when it has one. SHIPPED
+#:                             STRETCHED: `scale` fixed its output size when the
+#:                             filter was configured, so every full-frame shot
+#:                             was squeezed into 9:16 instead of letterboxed, and
+#:                             four review sessions carried the same note
+#:   render_v3_letterbox     — the same selection, with the geometry correct and
+#:                             the bars filled with a blurred copy of the frame
+RENDER_VERSION = "render_v3_letterbox"
 
 #: How hard the letterbox fill is blurred. See `build_dynamic_filtergraph`.
 BACKDROP_SIGMA = 40
