@@ -1,0 +1,17 @@
+# Doar cat trebuie ca sa POSTEZI din Drive pe Buffer.
+#
+# Nu include nimic din randare: fara torch, fara faster-whisper, fara
+# Real-ESRGAN, fara FastAPI. Un laptop care doar distribuie n-are nevoie de GPU
+# si nici macar de ffmpeg — fisierele video sunt deja facute, pe Drive, iar
+# Buffer le descarca singur de acolo.
+#
+#     pip install -r server/requirements-postare.txt
+
+google-api-python-client>=2.100.0
+google-auth>=2.25.0
+google-auth-oauthlib>=1.2.0
+
+# Windows nu are baza de date de fusuri orare, iar sloturile de postare sunt in
+# Europe/Bucharest prin zoneinfo. Fara asta, orele s-ar muta cu o ora la
+# trecerea la ora de iarna.
+tzdata>=2024.1
