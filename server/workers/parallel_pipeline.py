@@ -88,6 +88,14 @@ def _safe_stem(s: str) -> str:
     return s.strip("._") or "output"
 
 
+def _video_args(fps: int, crf_fallback: str = "18") -> List[str]:
+    """Aceiasi parametri de codec ca in celelalte doua encodari — vezi
+    `services/encode_profile`. Taierea in parti e ULTIMA encodare, deci ea
+    decide ce ajunge pe canal."""
+    from services.encode_profile import video_args
+    return video_args(fps, crf_fallback=crf_fallback)
+
+
 def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") -> List[dict]:
     """Split the finished mp4 per _split_plan (re-encoded for exact cuts).
     Returns [] when the clip stays a single part.
@@ -116,7 +124,7 @@ def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") ->
         cmd = [
             ffmpeg, "-y", "-loglevel", "error",
             "-ss", f"{start:.3f}", "-i", str(final_path), "-t", f"{part_len:.3f}",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-preset", "medium", *_video_args(OUTPUT_FPS, crf_fallback="18"),
             "-r", str(OUTPUT_FPS),   # parts keep the forced 60fps of the final
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(dst),
@@ -150,6 +158,7 @@ _VARIANT_KEYS = (
     "commentator_preset_id", "commentator_chroma_color",
     "commentator_chroma_similarity", "commentator_chroma_blend",
     "drive_folder", "split_into_parts", "match_to_source_duration",
+    "bg_music_db",
 )
 
 

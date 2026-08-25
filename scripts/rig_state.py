@@ -27,8 +27,12 @@ CHEI = {
     "CLIPFORGE_DISPATCHER_2": "",
     "CLIPFORGE_PRESETS": "narator,comentator",
     "CLIPFORGE_DISPATCH_MIN_ROW": "2",
+    # Cate un outro pe limba. Fara cel pe limba variantei se cade pe
+    # CLIPFORGE_TTS_OUTRO, care e romanesc — iar un motor englezesc il citeste
+    # fonetic si scoate galimatie ("The likesy-follow doc of Ray Savezi").
     "CLIPFORGE_TTS_OUTRO": "",
     "CLIPFORGE_TTS_OUTRO_FR": "",
+    "CLIPFORGE_TTS_OUTRO_EN": "",
     # Muzica sursei tinuta sub voce, in dB (negativ). Gol = audio original aruncat.
     "CLIPFORGE_BG_MUSIC_DB": "",
 }
@@ -83,6 +87,7 @@ def main():
                   "--min-row": "CLIPFORGE_DISPATCH_MIN_ROW",
                   "--outro": "CLIPFORGE_TTS_OUTRO",
                   "--outro-fr": "CLIPFORGE_TTS_OUTRO_FR",
+                  "--outro-en": "CLIPFORGE_TTS_OUTRO_EN",
                   "--muzica-db": "CLIPFORGE_BG_MUSIC_DB"}
         atins = False
         for flag, cheie in mapare.items():

@@ -99,9 +99,11 @@ async def list_engines():
         SUPPORTED_LANGUAGES as ELEVEN_LANGS,
     )
     from services.local_clone import status as local_status
+    from services.f5_ro_tts import status as f5_status
     xtts_ok, xtts_hint = xtts_available()
     eleven_ok = eleven_configured()
     lc = local_status()
+    f5 = f5_status()
 
     # Build the local engine's hint
     if lc["ready"]:
@@ -146,6 +148,17 @@ async def list_engines():
                 "supports_cloning": True,
                 "cost": "free",
                 "details": lc,
+            },
+            {
+                "id": "f5_ro",
+                "label": "F5-TTS română (local)",
+                "ready": f5["ready"],
+                "hint": f5["hint"],
+                "languages": ["ro"],
+                "supports_romanian": True,
+                "supports_cloning": True,
+                "cost": "free",
+                "details": f5,
             },
         ],
     }
@@ -212,7 +225,7 @@ async def list_voice_packs(engine: str = "xtts"):
             raise HTTPException(502, f"ElevenLabs voices fetch failed: {str(e)[-200:]}")
         return {"engine": "elevenlabs", "voices": voices, "count": len(voices)}
 
-    # xtts and local_clone both source from the local data/voices/ folder
+    # xtts, local_clone and f5_ro all source from the local data/voices/ folder
     from services.tts import list_voices, voices_dir
     voices = list_voices()
     return {
@@ -309,6 +322,24 @@ async def _run_tts_job(job_id: str, req: SynthRequest):
                 style=req.style,
                 speed=req.speed,
             )
+        elif req.engine == "f5_ro":
+            # Clonare zero-shot in romana, local pe GPU (vezi services/f5_ro_tts)
+            from services.f5_ro_tts import synthesize as f5_synth
+            from config import settings
+
+            out_dir = Path(settings.data_dir) / "tts_out"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = str(out_dir / f"tts_f5_{int(time.time() * 1000)}.wav")
+
+            job.message = "F5-TTS: sintetizez în română…"
+            job.output_mime = "audio/wav"
+            await loop.run_in_executor(
+                None,
+                lambda: f5_synth(
+                    text=req.text, output_path=out_path, voice_id=req.voice_id,
+                    language="ro", speed=req.speed or 1.0,
+                ),
+            )
         elif req.engine == "local_clone":
             # Piper (RO TTS) → OpenVoice tone color converter (cloning)
             from services.local_clone import synthesize_cloned
@@ -382,6 +413,11 @@ async def start_synthesize(req: SynthRequest):
         installed, hint = is_available()
         if not installed:
             raise HTTPException(503, hint or "XTTS engine not available")
+    elif req.engine == "f5_ro":
+        from services.f5_ro_tts import status as f5_status
+        st = f5_status()
+        if not st["ready"]:
+            raise HTTPException(503, st["hint"] or "F5-TTS română nu e disponibil")
     elif req.engine == "local_clone":
         from services.local_clone import status as local_status
         st = local_status()

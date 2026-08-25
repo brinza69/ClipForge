@@ -671,6 +671,11 @@ def _bridge_segment(
 
 DRIFT_MAX_FRAC = 0.012     # held-still: centre may move < this × frame diagonal
 SPEECH_OVERLAP_MIN = 0.25  # a caption lane should overlap speech at least this
+# A doua banda se retine daca scorul ei e cel putin atat din al celei mai bune.
+# 0.20 prinde un disclaimer scurt lipit sus langa o subtitrare care ruleaza tot
+# clipul, fara sa lase inauntru un cuvant prins intamplator pe un afis.
+BAND_REL_SCORE = 0.20
+BAND_MIN_SCORE = 3.0       # sub atat sunt cateva cadre razlete, nu o banda
 
 
 def _overlap_fraction(intervals_a, intervals_b) -> float:
@@ -690,17 +695,22 @@ def _overlap_fraction(intervals_a, intervals_b) -> float:
     return min(1.0, ov / total)
 
 
-def auto_locate_caption_band(
+def auto_locate_caption_bands(
     video_path: str,
     *,
     speech_intervals: Optional[List[tuple]] = None,
     sample_fps: float = 3.0,
     min_conf: float = 0.25,
     on_progress: Optional[Callable[[float, str], None]] = None,
-) -> Optional[dict]:
-    """Find the caption lane automatically — no manual box. Returns an ROI
-    {x,y,w,h} or None if no convincing caption lane is found (caller should
-    then fall back to a default band or Thorough mode).
+) -> List[dict]:
+    """Gaseste TOATE benzile de subtitrare, nu doar una. Intoarce o lista de
+    ROI-uri {x,y,w,h}, cea mai bine punctata prima, sau [] daca nu gaseste
+    nimic convingator (apelantul cade atunci pe banda implicita sau pe Thorough).
+
+    De ce lista: un clip poate avea doua randuri de text simultan — un
+    disclaimer lipit in capul cadrului plus subtitrarea care tine ritmul vocii,
+    uneori pozitionata sus, nu jos. Varianta veche returna doar banda cu scor
+    maxim, iar a doua ramanea nestearsa sub subtitrarea noastra.
 
     Discriminators (vs scene text): held-still (captions hold, scene text
     moves), recurs in a consistent band, and — when `speech_intervals` are
@@ -764,7 +774,7 @@ def auto_locate_caption_band(
                     break
     if not held:
         logger.info("auto_locate_caption_band: no held-still text found")
-        return None
+        return []
 
     # Cluster held-still detections into lanes by Y-centre.
     lane_threshold = vh * 0.08
@@ -781,7 +791,7 @@ def auto_locate_caption_band(
             lanes.append(_Lane(y_center=d.y_center, detections=[d]))
 
     # Score each lane: distinct sample-times with text × (speech overlap if given).
-    best_lane, best_score = None, 0.0
+    punctate = []
     for lane in lanes:
         times = sorted({round(d.t, 2) for d in lane.detections})
         if len(times) < 3:
@@ -796,27 +806,60 @@ def auto_locate_caption_band(
                 score *= 0.3   # demote lanes that don't track speech (logos etc.)
             else:
                 score *= (1.0 + ov)
-        if score > best_score:
-            best_lane, best_score = lane, score
+        punctate.append((score, lane))
 
-    if best_lane is None:
+    if not punctate:
         logger.info("auto_locate_caption_band: no lane scored high enough")
-        return None
+        return []
 
-    xs0 = np.array([d.x for d in best_lane.detections], dtype=np.float32)
-    xs1 = np.array([d.x + d.w for d in best_lane.detections], dtype=np.float32)
-    ys0 = np.array([d.y for d in best_lane.detections], dtype=np.float32)
-    ys1 = np.array([d.y + d.h for d in best_lane.detections], dtype=np.float32)
-    # Vertical pad scales with the text height — a fixed 10px clipped
-    # ascenders/descenders/outlines on large caption fonts, and the clipped
-    # edge survived the erase as a thin readable relic (an S4.5 cause).
-    med_h = float(np.median(ys1 - ys0))
-    pad_x = 10
-    pad_y = max(10, int(round(med_h * 0.45)))
-    x0 = max(0, int(np.percentile(xs0, 5)) - pad_x)
-    y0 = max(0, int(np.percentile(ys0, 5)) - pad_y)
-    x1 = min(vw, int(np.percentile(xs1, 95)) + pad_x)
-    y1 = min(vh, int(np.percentile(ys1, 95)) + pad_y)
-    roi = {"x": x0, "y": y0, "w": max(1, x1 - x0), "h": max(1, y1 - y0)}
-    logger.info(f"auto_locate_caption_band: lane at {roi} (score={best_score:.1f})")
-    return roi
+    punctate.sort(key=lambda p: -p[0])
+    best_score = punctate[0][0]
+
+    def _roi(lane) -> dict:
+        xs0 = np.array([d.x for d in lane.detections], dtype=np.float32)
+        xs1 = np.array([d.x + d.w for d in lane.detections], dtype=np.float32)
+        ys0 = np.array([d.y for d in lane.detections], dtype=np.float32)
+        ys1 = np.array([d.y + d.h for d in lane.detections], dtype=np.float32)
+        # Vertical pad scales with the text height — a fixed 10px clipped
+        # ascenders/descenders/outlines on large caption fonts, and the clipped
+        # edge survived the erase as a thin readable relic (an S4.5 cause).
+        med_h = float(np.median(ys1 - ys0))
+        pad_x = 10
+        pad_y = max(10, int(round(med_h * 0.45)))
+        x0 = max(0, int(np.percentile(xs0, 5)) - pad_x)
+        y0 = max(0, int(np.percentile(ys0, 5)) - pad_y)
+        x1 = min(vw, int(np.percentile(xs1, 95)) + pad_x)
+        y1 = min(vh, int(np.percentile(ys1, 95)) + pad_y)
+        return {"x": x0, "y": y0, "w": max(1, x1 - x0), "h": max(1, y1 - y0)}
+
+    # TOATE benzile serioase, nu doar cea mai buna. Un clip poate avea doua
+    # randuri de text — de exemplu un disclaimer lipit sus plus subtitrarea
+    # propriu-zisa ceva mai jos. Pana acum se returna doar cea cu scor maxim,
+    # iar cealalta ramanea in imagine si se vedea sub subtitrarea noastra.
+    # Pragul relativ tine afara zgomotul (un cuvant prins de doua ori pe un
+    # afis din fundal), dar lasa inauntru o a doua banda reala.
+    prag = max(BAND_MIN_SCORE, best_score * BAND_REL_SCORE)
+    iesire = [_roi(lane) for sc, lane in punctate if sc >= prag]
+    for (sc, _), r in zip(punctate, iesire):
+        logger.info(f"auto_locate_caption_band: lane at {r} (score={sc:.1f})")
+    if len(iesire) > 1:
+        logger.info(f"auto_locate_caption_band: {len(iesire)} benzi retinute "
+                    f"(prag {prag:.1f} din scor maxim {best_score:.1f})")
+    return iesire
+
+
+def auto_locate_caption_band(
+    video_path: str,
+    *,
+    speech_intervals: Optional[List[tuple]] = None,
+    sample_fps: float = 3.0,
+    min_conf: float = 0.25,
+    on_progress: Optional[Callable[[float, str], None]] = None,
+) -> Optional[dict]:
+    """Doar banda cea mai bine punctata — pastrata pentru apelantii vechi care
+    lucreaza cu un singur ROI. Codul nou foloseste `auto_locate_caption_bands`."""
+    benzi = auto_locate_caption_bands(
+        video_path, speech_intervals=speech_intervals, sample_fps=sample_fps,
+        min_conf=min_conf, on_progress=on_progress,
+    )
+    return benzi[0] if benzi else None

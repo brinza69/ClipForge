@@ -92,7 +92,7 @@ class StartRequest(BaseModel):
     transcript_engine: str = "ollama"            # ollama | openai | anthropic
     transcript_target_lang: Optional[str] = None  # "en" / "ro" / null = keep original
 
-    tts_engine: str = "xtts"                     # xtts | elevenlabs | local_clone
+    tts_engine: str = "xtts"   # xtts | kokoro | elevenlabs | local_clone | f5_ro
     tts_voice_id: str
     tts_language: str = "en"
     tts_speed: float = 1.0                       # 0.7-1.2 for ElevenLabs, 0.5-2.0 for XTTS

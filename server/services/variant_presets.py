@@ -36,6 +36,9 @@ _FIELDS = (
     "split_into_parts",
     "voice_target_sec",
     "match_to_source_duration",
+    # "" pe preset = arunca audio-ul original; lipsa = foloseste
+    # CLIPFORGE_BG_MUSIC_DB. Pista franceza il vrea aruncat.
+    "bg_music_db",
 )
 
 
