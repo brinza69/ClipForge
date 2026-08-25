@@ -120,9 +120,24 @@ for f in fisiere:
                 f"?id={f['id']}&export=download&confirm=t"),
     })
 
+def fara_copii(files):
+    """Un singur fisier per nume, cel mai nou.
+
+    Pe Drive pot exista doua fisiere cu ACELASI nume si id-uri diferite (o
+    re-randare urcata langa originala). Gruparea pe NR le numara ca doua parti,
+    desi amandoua au `part=1`, iar captionul iese `(1/2)` pentru un clip care
+    n-are partea a doua — s-a intamplat pe 226 si 227, publicate asa pe 19
+    august. Pastram randarea mai noua.
+    """
+    dupa_nume = {}
+    for f in sorted(files, key=lambda x: x.get("created") or ""):
+        dupa_nume[f["name"]] = f
+    return list(dupa_nume.values())
+
+
 plan = []
 for nr in sorted(pe_nr, key=lambda n: min(x["created"] for x in pe_nr[n])):
-    files = sorted(pe_nr[nr], key=lambda x: x["part"])
+    files = sorted(fara_copii(pe_nr[nr]), key=lambda x: x["part"])
     for f in files:
         plan.append({**f, "parts": len(files), "desc": desc_by_nr[nr]})
 
