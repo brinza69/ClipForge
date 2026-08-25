@@ -15,8 +15,13 @@ Verificat pe rig la 25 august 2026.
 | `Povestitorul` | Facebook | **engleza** |
 | `povestitorul.ro` | TikTok | **engleza** |
 
-Ambele au trecut pe engleza: TikTok pe 27 august, Facebook pe 25 august (prima
-postare engleza a fost pusa manual de utilizator). **Nu mai posta romana pe ele.**
+Ambele sunt pe engleza incepand cu 25 august 2026, cand a iesit prima postare
+engleza pe Facebook. **Nu mai posta romana pe ele.**
+
+**Comenzile de mai jos sunt scrise cu `server\.venv\Scripts\python.exe` pentru
+ca asa arata pe rigul de randare.** Pe un aparat care doar posteaza nu exista
+venv si nici nu trebuie — dupa `pip install -r server/requirements-postare.txt`
+scrie simplu `python`.
 
 **NU sunt ale tale** si nu le atingi, nici macar ca sa le citesti coada:
 `Contouse` si `journal.dune.conteuse` (pista franceza) raman pe celalalt cont
@@ -82,14 +87,18 @@ nu se inventeaza text. La 25 august un singur NR (191) nu are descriere engleza.
 
 Ordinea e asta; nimic din sectiunea 7 nu functioneaza pana nu e facuta.
 
-**1. Cheia.** Buffer, Settings, API, Personal Keys. Se scrie in
-`data/buffer_config.json`:
+**1. Cheia.** Buffer, Settings, API, Personal Keys — de pe contul **NOU**.
+Se scrie in `data/buffer_config.json`:
 
 ```json
 {"api_key": "..."}
 ```
 
 Fisierul e gitignored. **Nu tipari cheia** in raspunsuri sau loguri.
+
+**Nu copia `buffer_config.json` de pe rigul de randare.** Acolo e cheia contului
+vechi, care administreaza canalele franceze — ai ajunge sa citesti si sa scrii
+exact pe canalele care nu sunt ale tale. Fisierul asta se creeaza nou.
 
 **2. Canalele se conecteaza din interfata Buffer**, de catre om — tu nu poti.
 Cere-i utilizatorului sa conecteze `Povestitorul` (Facebook) si `povestitorul.ro`
@@ -137,6 +146,20 @@ peste acele NR-uri. Nu presupune ca un istoric gol inseamna ca nu s-a postat nim
 Pentru TikTok nu ai grija asta: fisierele deja predate sunt in `posted/`, iar
 Drive pastreaza ID-ul la mutare, deci URL-ul pe care Buffer il descarca la
 publicare ramane valid.
+
+**Dar Buffer iti da singur raspunsul.** La conectarea unui canal, **importa
+istoricul de postari al contului** de pe platforma. Postarile au campul `via`:
+`network` = publicata nativ, inainte de Buffer (sau de pe contul vechi),
+`buffer` = publicata de unealta. Deci ce a iesit deja se citeste asa:
+
+```
+posts(input: {organizationId: …, filter: {channelIds: [<canal>], status: ["sent"]}})
+  { edges { node { id dueAt text via assets { ... on VideoAsset { source } } } } }
+```
+
+Scoate id-ul de Drive din `assets[].source` si potriveste-l cu `nr` din
+`data/pov_en_post_list.json`. Alea sunt NR-urile de sarit. Importul poate sa nu
+acopere chiar tot, deci confirma cu utilizatorul inainte de prima rulare reala.
 
 ---
 

@@ -93,6 +93,7 @@ def _meta_youtube(g, f, part, total):
 
 PROFILES = {
     "tiktok": {
+        "inchis": "pista romana, oprita 25 aug 2026",
         "channel": targets.get("tiktok_channel_ro"),
         "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "drive",
@@ -100,6 +101,7 @@ PROFILES = {
         "caption": _sufix_ro,
     },
     "facebook": {
+        "inchis": "pista romana, oprita 25 aug 2026",
         "channel": targets.get("facebook_channel"),
         # acelasi plan ca TikTok: fisierele sunt aceleasi, difera doar evidenta
         # a ce s-a postat (folderul posted/ vs. istoricul din Buffer)
@@ -128,6 +130,7 @@ PROFILES = {
         "caption": _sufix_ro,
     },
     "narativ": {
+        "inchis": "pista romana, oprita 25 aug 2026",
         "channel": "Narativ",          # canal YouTube, nu e in targets.json
         "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "buffer",
@@ -278,6 +281,15 @@ def main():
     doar = [s.strip() for s in argv[argv.index("--first") + 1].split(",")
             if s.strip()] if "--first" in argv else []
     prof = PROFILES[which]
+    # Profilurile romanesti indica aceleasi canale ca cele engleze (`tiktok_en`,
+    # `facebook_en`) — difera doar planul, folderul si coloana de descriere. O
+    # rulare din obisnuinta ar pune romana pe un canal trecut pe engleza, si
+    # s-ar vedea abia dupa publicare. Deci se cere spus explicit.
+    if prof.get("inchis") and "--si-inchise" not in argv:
+        print(f"profilul '{which}' e inchis: {prof['inchis']}")
+        print(f"canalul lui ({prof['channel']}) e acum pe engleza — foloseste "
+              f"'{which}_en' daca exista, sau adauga --si-inchise daca chiar asta vrei.")
+        return
 
     org = default_org()
     ch = channel_by_name(prof["channel"], org)
