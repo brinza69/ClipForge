@@ -44,7 +44,10 @@ from services.drive_upload import _resolve_credentials  # noqa: E402
 
 DRIVE_ROOT = targets.get("povestitor_drive_folder")
 POSTED = "posted"
-SLOTS_LOCAL = [(8, 0), (13, 0), (20, 30)]
+# 4 postari/zi pe toate canalele (cerut 24 aug 2026). Al patrulea slot e
+# seara, nu la pranz: mediana vizualizarilor pe ultimele 45 de zile arata
+# 20:00 cea mai buna ora pe toate cele patru canale si 13:00 cea mai slaba.
+SLOTS_LOCAL = [(8, 0), (13, 0), (18, 30), (20, 30)]
 TZ = ZoneInfo("Europe/Bucharest")   # zona reala: trecerea la ora de iarna nu muta sloturile
 # Cate postari poate tine coada UNUI canal. 10 era plafonul planului Free;
 # pe plan platit nu mai exista, deci se ridica din CLIPFORGE_QUEUE_MAX.
@@ -103,6 +106,24 @@ PROFILES = {
         "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "buffer",
         # vertical 1080x1920 -> Reel; `post` ar aparea ca video obisnuit in feed
+        "metadata": {"facebook": {"type": "reel"}},
+        "caption": _sufix_ro,
+    },
+    # Pista ENGLEZA: alt folder de Drive, descrieri din coloana L. Ambele
+    # canale povestitor au trecut pe engleza (TikTok 27 aug, Facebook 25 aug).
+    "tiktok_en": {
+        "channel": targets.get("tiktok_channel_ro"),
+        "plan": _ROOT / "data" / "pov_en_post_list.json",
+        "drive_root": targets.get("povestitor_en_drive_folder"),
+        "record": "drive",
+        "metadata": None,
+        "caption": _sufix_ro,
+    },
+    "facebook_en": {
+        "channel": targets.get("facebook_channel"),
+        "plan": _ROOT / "data" / "pov_en_post_list.json",
+        "drive_root": targets.get("povestitor_en_drive_folder"),
+        "record": "buffer",
         "metadata": {"facebook": {"type": "reel"}},
         "caption": _sufix_ro,
     },
@@ -226,8 +247,12 @@ def drive_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def posted_folder(drive, dry):
-    q = (f"'{DRIVE_ROOT}' in parents and name = '{POSTED}' "
+def posted_folder(drive, dry, root=None):
+    """`posted/` din folderul profilului. Pista engleza are alt folder de Drive,
+    deci si alta evidenta — altfel un clip englez ar parea postat pentru ca
+    exista un fisier cu acelasi NR in `posted/`-ul romanesc."""
+    root = root or DRIVE_ROOT
+    q = (f"'{root}' in parents and name = '{POSTED}' "
          f"and mimeType = 'application/vnd.google-apps.folder' and trashed = false")
     found = drive.files().list(q=q, fields="files(id)").execute().get("files", [])
     if found:
@@ -236,7 +261,7 @@ def posted_folder(drive, dry):
         return None
     fid = drive.files().create(
         body={"name": POSTED, "mimeType": "application/vnd.google-apps.folder",
-              "parents": [DRIVE_ROOT]}, fields="id").execute()["id"]
+              "parents": [root]}, fields="id").execute()["id"]
     print(f"creat folderul {POSTED}/")
     return fid
 
@@ -268,8 +293,9 @@ def main():
     # istoricul din Buffer nu-l ating deloc, deci o expirare a tokenului Google
     # (se intampla saptamanal) nu trebuie sa le blocheze si pe ele.
     drive = drive_service() if prof["record"] == "drive" else None
+    radacina = prof.get("drive_root") or DRIVE_ROOT
     if prof["record"] == "drive":
-        folder_id = posted_folder(drive, dry)
+        folder_id = posted_folder(drive, dry, radacina)
         done_names, done_ids = set(), set()
         if folder_id:
             done_names = {f["name"] for f in drive.files().list(
@@ -380,7 +406,7 @@ def main():
             if prof["record"] == "drive" and folder_id:
                 try:
                     drive.files().update(fileId=f["id"], addParents=folder_id,
-                                         removeParents=DRIVE_ROOT).execute()
+                                         removeParents=radacina).execute()
                 except Exception as e:  # noqa: BLE001
                     print(f"     ATENTIE: nu am putut muta in {POSTED}/ ({str(e)[:70]}) "
                           f"— rularea urmatoare l-ar reprograma; muta-l manual")

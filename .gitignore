@@ -94,3 +94,6 @@ videos/
 
 # Local tool installs (ComfyUI etc.) — multi-GB, never commit
 tools/
+
+# venv izolat pentru F5-TTS (torch + modele, sute de MB)
+.venv_f5/

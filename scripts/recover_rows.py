@@ -27,7 +27,7 @@ import targets  # noqa: E402
 from services.drive_upload import list_folder_files  # noqa: E402
 from services.sheets import _service, write_cell  # noqa: E402
 
-SHEET = "1QESHMIoCgnaS7fOU5ynQ7wBQ-rmqP6gGnwPG7Zll0wM"
+SHEET = targets.get("pov_sheet_id")
 TAB = "Sheet1"
 ROLE_COLS = {"narator": "F", "comentator": "G", "povestitor": "H"}
 DBS = {"data": _ROOT / "data" / "db" / "clipforge.db",

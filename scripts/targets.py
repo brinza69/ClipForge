@@ -9,13 +9,19 @@ Values go in `data/targets.json` (`data/` is gitignored, next to
 `buffer_config.json` and `drive_oauth_*.json`):
 
     {
-      "fr_sheet_id":               "…",
-      "fr_tab":                    "Victoria",
-      "fr_drive_folder":           "…",
-      "povestitor_drive_folder":   "…",
-      "tiktok_channel_ro":         "…",
-      "tiktok_channel_fr":         "…",
-      "facebook_channel":          "…"
+      "pov_sheet_id":                "…",   # sheet-ul romanesc (Sheet1)
+      "pov_tab":                     "Sheet1",
+      "fr_sheet_id":                 "…",
+      "fr_tab":                      "Victoria",
+      "fr_drive_folder":             "…",   # Victoria (franceza)
+      "povestitor_drive_folder":     "…",   # povestitor RO (contine posted/)
+      "povestitor_en_drive_folder":  "…",   # povestitor EN
+      "narator_drive_folder":        "…",
+      "comentator_drive_folder":     "…",
+      "tiktok_channel_ro":           "…",
+      "tiktok_channel_fr":           "…",
+      "facebook_channel":            "…",
+      "facebook_channel_fr":         "…"
     }
 
 Missing keys fail loudly with the key name, rather than silently pointing a

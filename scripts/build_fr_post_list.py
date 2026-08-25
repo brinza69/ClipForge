@@ -36,6 +36,19 @@ for r in vals[1:]:
     if g(0):
         desc_by_nr[g(0)] = g(3)
 
+# Ordinea ceruta pe 25 aug 2026: intai tot ce vine de la Varizz, pana se
+# epuizeaza, apoi HerStory. Harta o face `surse_franceza.py`; un NR care lipseste
+# din ea (link adaugat intre timp) cade la coada si e raportat, ca sa nu treaca
+# neobservat pe locul gresit.
+SURSE = _ROOT / "data" / "surse_franceza.json"
+surse = json.loads(SURSE.read_text(encoding="utf-8")) if SURSE.exists() else {}
+PRIORITATE = {"Varizz": 0, "HerStory": 1}
+
+
+def ordine(nr):
+    return (PRIORITATE.get(surse.get(nr), 2), int(nr))
+
+
 res = list_folder_files(targets.get("fr_drive_folder"))
 if res.get("status") != "ok":
     raise SystemExit(f"nu pot lista Drive: {res.get('reason')}")
@@ -54,7 +67,7 @@ for f in res["files"]:
     })
 
 plan, fara_desc = [], []
-for nr in sorted(by_nr, key=lambda x: int(x)):
+for nr in sorted(by_nr, key=ordine):
     files = sorted(by_nr[nr], key=lambda x: x["part"])
     d = desc_by_nr.get(nr, "")
     if not d:
@@ -68,6 +81,14 @@ print(f"videoclipuri pe Drive: {len(by_nr)}   in plan: "
       f"{len({p['nr'] for p in plan})} ({len(plan)} fisiere)")
 if fara_desc:
     print(f"sarite, fara descriere in sheet: {fara_desc}")
+pe_sursa = {}
+for nr in dict.fromkeys(p["nr"] for p in plan):
+    pe_sursa.setdefault(surse.get(nr, "NECLASIFICAT"), []).append(nr)
+for canal, lista in sorted(pe_sursa.items(), key=lambda x: PRIORITATE.get(x[0], 2)):
+    print(f"  {canal:<13} {len(lista):>3}  primele: {lista[:6]}")
+if "NECLASIFICAT" in pe_sursa:
+    print("  ^ ruleaza scripts/surse_franceza.py ca sa le aseze corect")
+
 multi = sorted({p["nr"] for p in plan if p["parts"] > 1}, key=int)
 print(f"cu mai multe parti: {multi}")
 print("scris:", OUT)
