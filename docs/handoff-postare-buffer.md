@@ -113,6 +113,23 @@ server\.venv\Scripts\python.exe scripts\buffer_api.py
 Listeaza organizatia si fiecare canal cu `id`, `service`, `type`, fus orar si
 eventuale steaguri (`isDisconnected`, `isQueuePaused`).
 
+**3bis. Conecteaza Google Drive + Sheets.** Tokenul **nu se copiaza** de pe rig
+— expira cam saptamanal, fiindca aplicatia OAuth e in modul Testing. Il faci
+local:
+
+```
+python scripts\conecteaza_drive.py
+```
+
+Se deschide browserul, omul aproba cu contul care detine folderele, iar tokenul
+se scrie in `data/drive_oauth_token.json`. Scriptul face imediat si o citire de
+proba din sheet: daca aia pica cu 403, contul aprobat n-are acces; 503 e Google,
+se reincearca. Singurul fisier care trebuie copiat de pe rig e
+`data/drive_oauth_client.json` (clientul OAuth de tip Desktop).
+
+Cand mai tarziu apar 401/403 pe Drive sau Sheets, se ruleaza din nou acelasi
+script. Nu e nevoie de backend si nici de interfata ClipForge.
+
 **4. Pune numele reale in `data/targets.json`.** Scripturile cauta canalele
 **dupa nume, exact**. Cheile care te privesc:
 
