@@ -230,6 +230,14 @@ avertisment antivirus la fisierele mari, iar Buffer o citeste ca
 **`editPost` NU face actualizare partiala.** Daca trimiti doar `dueAt`, raspunde
 "Post must have either text or media". Trimite si textul, si asset-ul.
 
+**`editPost` ignora `dueAt` daca nu trimiti si `mode` + `schedulingType`** — si
+NU da eroare: raspunde `PostActionSuccess`, cu postarea neatinsa. Schema le
+marcheaza optionale (`ShareMode`, `SchedulingType`), in practica nu sunt. Pe
+Contouse au iesit asa 76 de „mutari" raportate ca reusite, cu coada nemiscata.
+Trimite mereu `"schedulingType": "automatic", "mode": "customScheduled"`, si
+**verifica `dueAt`-ul intors de API** in loc sa te iei dupa lipsa erorii — un
+script care verifica doar `message` va minti.
+
 **`thumbnailOffset` sta pe ASSET, nu pe metadata postarii:**
 `assets: [{video: {url, metadata: {thumbnailOffset: 450}}}]`. Functioneaza doar
 pe TikTok, Instagram si Pinterest. `thumbnailUrl` e respins de API.
