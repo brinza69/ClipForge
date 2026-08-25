@@ -101,7 +101,8 @@ PROFILES = {
         "caption": _sufix_ro,
     },
     "facebook": {
-        "inchis": "pista romana, oprita 25 aug 2026",
+        # Romana pe Facebook NU e inchisa: se termina intai stocul romanesc, si
+        # abia dupa aceea trece pe `facebook_en`. Pe TikTok romana s-a incheiat.
         "channel": targets.get("facebook_channel"),
         # acelasi plan ca TikTok: fisierele sunt aceleasi, difera doar evidenta
         # a ce s-a postat (folderul posted/ vs. istoricul din Buffer)

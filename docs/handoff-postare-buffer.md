@@ -10,13 +10,24 @@ Verificat pe rig la 25 august 2026.
 
 ## 1. Ce canale sunt ale tale
 
-| canal | retea | limba |
-|---|---|---|
-| `Povestitorul` | Facebook | **engleza** |
-| `povestitorul.ro` | TikTok | **engleza** |
+| canal | retea | ce posteaza | profil |
+|---|---|---|---|
+| `povestitorul.ro` | TikTok | **engleza**, de la inceput | `tiktok_en` |
+| `Povestitorul` | Facebook | **intai stocul romanesc ramas**, apoi engleza | `facebook`, apoi `facebook_en` |
 
-Ambele sunt pe engleza incepand cu 25 august 2026, cand a iesit prima postare
-engleza pe Facebook. **Nu mai posta romana pe ele.**
+TikTok e trecut complet pe engleza. Pe Facebook se termina intai ce a mai ramas
+in romana — nu se arunca material bun — si abia dupa aceea incepe engleza.
+Cand `--channel facebook --dry` nu mai gaseste nimic de programat, ai terminat
+stocul romanesc: treci pe `facebook_en`.
+
+**Pe Drive cele doua stocuri sunt foldere separate**, ca sa nu existe confuzie:
+
+| folder pe Drive | continut | cine il ia |
+|---|---|---|
+| `POVESTITOR ENGLEZA` | 24 videoclipuri / 40 fisiere | TikTok acum, Facebook dupa |
+| folderul povestitor romanesc | 51 videoclipuri / 76 fisiere | doar Facebook |
+
+Nu le amesteca si nu muta fisiere intre ele.
 
 **Comenzile de mai jos sunt scrise cu `server\.venv\Scripts\python.exe` pentru
 ca asa arata pe rigul de randare.** Pe un aparat care doar posteaza nu exista
