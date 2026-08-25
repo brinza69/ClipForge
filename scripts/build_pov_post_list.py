@@ -39,6 +39,12 @@ TAB = targets.get("pov_tab", "Sheet1")
 NR_COL, DESC_COL = 0, 3
 NAME_RE = re.compile(r"^(\d+)(?:_p(\d+)|_part(\d+)of(\d+))?\.mp4$", re.I)
 SARITE = {"_duplicate", "_inlocuite_de_parti"}
+# Limba a fost citita din audio cu whisper (vezi pov_inventory.json): din 67 de
+# fisiere, 64 romana si DOUA engleza. Amandoua au descriere romaneasca in
+# coloana D, deci fara filtru ar ajunge pe Facebook cu audio englez sub caption
+# romanesc. Numerele stau aici pentru ca `data/` e gitignored: pe alt aparat
+# inventarul lipseste, iar filtrul ar disparea fara sa spuna nimic.
+NON_RO_CUNOSCUTE = {"101", "102"}
 
 
 def nr_din_sheet(v):
@@ -56,11 +62,15 @@ for r in vals[1:]:
         desc_by_nr[nr] = d
 
 # NR-uri care nu sunt in romana (verificate cu whisper pe audio)
-non_ro = set()
+non_ro = set(NON_RO_CUNOSCUTE)
 if INV.exists():
     for r in json.loads(INV.read_text(encoding="utf-8")):
         if r.get("lang") and r["lang"] != "ro" and r.get("nr"):
             non_ro.add(str(r["nr"]))
+else:
+    print(f"ATENTIE: lipseste {INV.name} — folosesc doar lista din cod "
+          f"({sorted(NON_RO_CUNOSCUTE, key=int)}). Daca s-au adaugat clipuri "
+          f"non-romane de atunci, NU sunt prinse. Copiaza fisierul de pe rig.")
 
 creds, _, err = _resolve_credentials()
 if not creds:
