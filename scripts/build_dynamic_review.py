@@ -15,18 +15,23 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 from pathlib import Path
 
-DATA = Path(r"D:\clipforge\data\clipper")
+# Derived, never hardcoded — see the same note in render_dynamic_clip.py.
+_REPO = Path(__file__).resolve().parent.parent
+DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_REPO / "data")) / "clipper"
 
 CAMERA_COLORS = {
     "face": "#f2a65a",
+    "face_medium": "#ef7f4a",
     "face_tight": "#e4572e",
     "game": "#4c9f9c",
     "game_tight": "#2d6a6b",
 }
 CAMERA_LABELS = {
-    "face": "facecam", "face_tight": "facecam strâns",
+    "face": "facecam", "face_medium": "facecam mediu",
+    "face_tight": "facecam strâns",
     "game": "gameplay", "game_tight": "gameplay strâns",
 }
 

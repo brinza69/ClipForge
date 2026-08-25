@@ -1,5 +1,11 @@
 # ClipForge — Session Handover (2026-05-27/28)
 
+> **This is a second copy.** The canonical file is `SESSION-HANDOVER.md` in the
+> repository root, alongside `HANDOVER-2026-06-25.md`. The two were byte-for-byte
+> identical on 2026-08-16; edit the root one, not this. Neither covers the AI
+> Stream Clipper — for that read `docs/handoff-clipper-session-4.md` and
+> `docs/clipper-map.md`.
+
 > **Purpose:** Comprehensive context dump for the next Claude conversation. The user is Romanian, prefers replies in Romanian (but Markdown / code blocks / file paths stay English). Keep messages short and concrete unless the user explicitly asks for a deep dive.
 
 ---

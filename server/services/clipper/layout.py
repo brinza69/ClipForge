@@ -47,6 +47,7 @@ from services.clipper.layout_geom import (
     _bands,
     _clamp_rect,
     _fit_aspect,
+    _fit_inside,
     _map_rect,
     _mk,
     _NEEDS_FACE,
@@ -68,7 +69,19 @@ __all__ = ["LAYOUTS", "plan_layout", "smooth_keyframes", "build_filtergraph"]
 # input normalisation
 # --------------------------------------------------------------------------
 
-def _content_type(cand: Any, regions: Any) -> str:
+def _content_type(explicit: Any, cand: Any, regions: Any) -> str:
+    """What kind of source this is, for picking a layout.
+
+    `explicit` wins. Sniffing it out of the candidate dict was the only route
+    until now, and NEITHER pipeline caller put it there — the clip row carried
+    the profile, the candidate dict did not, and neither did regions.json. So
+    this always answered "unknown", `gaming` was always False, and the whole
+    gaming branch below was unreachable in production: every gaming export came
+    out as a tracking crop with no face band. The dict lookup stays as a
+    fallback for callers that do carry it, tests included.
+    """
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip().lower()
     for source in (cand, regions):
         if isinstance(source, dict):
             for key in ("content_type", "profile"):
@@ -134,6 +147,26 @@ def _webcam_track(webcam: dict, samples: Sequence[tuple[float, list[dict]]]) -> 
                 hits += 1
                 break
     return hits / float(len(bearing))
+
+
+def _face_in(webcam: dict | None,
+             samples: Sequence[tuple[float, list[dict]]]) -> dict | None:
+    """Median face box sitting inside `webcam` — where the head actually is.
+
+    Not the biggest face in the frame: on a co-stream that is often the OTHER
+    streamer, and anchoring this facecam's crop on him would frame the wrong
+    person's shoulder.
+    """
+    if not webcam:
+        return None
+    inside = []
+    for _, rects in samples:
+        for rect in rects:
+            cx, cy = rect_centre(rect)
+            if (webcam["x"] <= cx <= webcam["x"] + webcam["w"]
+                    and webcam["y"] <= cy <= webcam["y"] + webcam["h"]):
+                inside.append(rect)
+    return median_rect(inside) if inside else None
 
 
 def _subject_rect(samples: Sequence[tuple[float, list[dict]]]) -> dict | None:
@@ -230,7 +263,8 @@ def _keyframes(samples: Sequence[tuple[float, list[dict]]], fallback: dict,
 def plan_layout(cand: dict, regions: dict, faces: list[dict],
                 src_w: int, src_h: int, *, mode: str = "auto",
                 face_pct: float = 0.35,
-                include_chat: bool = False) -> dict:
+                include_chat: bool = False,
+                content_type: str | None = None) -> dict:
     """Plan one 9:16 frame.
 
     Returns {'layout','face_rect','game_rect','chat_rect','keyframes','warnings',
@@ -240,6 +274,10 @@ def plan_layout(cand: dict, regions: dict, faces: list[dict],
 
     `include_chat=True` lets the gameplay crop keep the chat strip and reports
     its rect so captions dodge it; False slides the crop off chat instead.
+
+    `content_type` is what the classifier decided about the SOURCE. Pass it:
+    without it a gaming source cannot get a gaming layout, and the caller that
+    forgets will not see an error, only a clip with no facecam in it.
     """
     cand = cand if isinstance(cand, dict) else {}
     regions = regions if isinstance(regions, dict) else {}
@@ -263,6 +301,12 @@ def plan_layout(cand: dict, regions: dict, faces: list[dict],
     rsx = src_w / float(fw) if fw >= 2 else 1.0
     rsy = src_h / float(fh) if fh >= 2 else 1.0
     webcam = _clamp_rect(_scale_rect(regions.get("webcam"), rsx, rsy), src_w, src_h)
+    # Every facecam, not just the best one. A co-stream has one per person and
+    # a gameplay crop that only slides off the first frames the second streamer
+    # as though he were the game.
+    webcams = [r for r in (_clamp_rect(_scale_rect(w, rsx, rsy), src_w, src_h)
+                           for w in regions.get("webcams") or []) if r] or (
+        [webcam] if webcam else [])
     gameplay = _clamp_rect(_scale_rect(regions.get("gameplay"), rsx, rsy), src_w, src_h)
     chat = _clamp_rect(_scale_rect(regions.get("chat"), rsx, rsy), src_w, src_h)
     hud = [r for r in (_clamp_rect(_scale_rect(h, rsx, rsy), src_w, src_h)
@@ -279,7 +323,7 @@ def plan_layout(cand: dict, regions: dict, faces: list[dict],
         warnings.append(
             f"Facecam is {webcam['w']}px wide in the source; it will look soft at 1080p.")
 
-    content = _content_type(cand, regions)
+    content = _content_type(content_type, cand, regions)
     gaming = content == "gaming"
 
     # --- pick the layout -----------------------------------------------------
@@ -335,8 +379,9 @@ def plan_layout(cand: dict, regions: dict, faces: list[dict],
     t0, t1 = _num(cand.get("start")), _num(cand.get("end"))
 
     if layout in _STACKED:
-        face_rect = _fit_aspect(webcam, OUT_W / float(band_h), src_w, src_h)
-        game_rect = _game_crop(gameplay, avoid + [webcam],
+        face_rect = _fit_inside(webcam, OUT_W / float(band_h), src_w, src_h,
+                                anchor=_face_in(webcam, samples))
+        game_rect = _game_crop(gameplay, avoid + list(webcams),
                                OUT_W / float(rest_h), src_w, src_h)
     elif layout == "pip":
         face_rect = webcam
@@ -373,19 +418,25 @@ def plan_layout(cand: dict, regions: dict, faces: list[dict],
         subjects = ()
 
     zones = _safe_zones(layout, face_rect, game_rect, chat, hud, face_pct, subjects)
-    return _plan(layout, face_rect, game_rect, chat_rect, keyframes, warnings, face_pct, zones)
+    return _plan(layout, face_rect, game_rect, chat_rect, keyframes, warnings,
+                 face_pct, zones, src_w, src_h)
 
 
 def _plan(layout: str, face_rect: dict | None, game_rect: dict | None,
           chat_rect: dict | None, keyframes: list[dict], warnings: list[str],
-          face_pct: float, zones: dict) -> dict:
+          face_pct: float, zones: dict, src_w: int = 0, src_h: int = 0) -> dict:
     seen: list[str] = []
     for w in warnings:
         if w not in seen:
             seen.append(w)
     return {"layout": layout, "face_rect": face_rect, "game_rect": game_rect,
             "chat_rect": chat_rect, "keyframes": keyframes, "warnings": seen,
-            "face_pct": round(face_pct, 4), "safe_zones": zones}
+            "face_pct": round(face_pct, 4), "safe_zones": zones,
+            # The frame these crops were measured in. A plan is only valid for
+            # it: a 854x480 plan FITS inside a 1920x1080 frame, so a bounds
+            # check cannot tell they disagree, and the export silently crops
+            # the top-left corner as the facecam. Verified on a real export.
+            "src_w": int(src_w), "src_h": int(src_h)}
 
 
 

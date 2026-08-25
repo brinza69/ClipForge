@@ -19,13 +19,12 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from services.captioner_events import _group_words
 from services.captioner_presets import (
     DEFAULT_PRESETS,
     SAFE_CAPTION_BOTTOM,
-    SAFE_CAPTION_CENTER,
     SAFE_HOOK_MID_Y,
     SAFE_TOP,
 )
@@ -45,8 +44,30 @@ MAX_LINES = 2
 CAPTION_BOX_H_PCT = 0.10
 CAPTION_BOX_W_PCT = 0.80
 
-NUDGE_STEP_PCT = 0.04
-MAX_NUDGE_TRIES = 5
+# How finely `resolve_position` scans for a clear band. 1% of frame height is
+# ~19px at 1920 — finer than any keep-out rect's edge is meaningful, and 60-odd
+# evaluations of a handful of rectangles costs nothing.
+#
+# This replaced a ladder of six ±4% nudges. The ladder had two faults a scan
+# does not: 4% is wider than a gap can be, so it could step over a clear slot
+# and land on the far side still covered; and it accepted the FIRST y that
+# scored zero, which can be a pixel from a rect's edge.
+SCAN_STEP_PCT = 0.01
+
+# The style spec's clamp, applied only when something has to be avoided:
+# "clamped to 55-75% of frame height". It is a guard rail on the band search,
+# not a claim about where captions look best — three of the spec's own seven
+# reference measurements (50.0, 50.2, 51.1) sit below it, and an unobstructed
+# caption is left at its preset position for that reason.
+SPEC_BAND_LO, SPEC_BAND_HI = 0.55, 0.75
+
+# Where "center" actually puts the block, as a fraction of frame height.
+# Measured on all seven captioned references (docs/refs/): 50.0, 50.2, 51.1, 53,
+# 62.5, 73.5 and 77.9% — four of seven cluster at 50-53%, and none sits as high
+# as the 43.75% the shared SAFE_CAPTION_CENTER offset yields. That constant is
+# deliberately left alone: services/captioner.py uses it for the ordinary export
+# path, whose provenance is not these nine short-form clips.
+CLIPPER_CAPTION_CENTER_PCT = 0.51
 
 # A chunk shorter than this reads as a flicker; libass also rounds to ms.
 MIN_CHUNK_S = 0.12
@@ -260,7 +281,7 @@ def _base_y_pct(position: str, out_h: int) -> float:
     if pos in ("top", "upper"):
         return (SAFE_TOP / out_h) + half
     if pos in ("center", "middle", "mid"):
-        return (out_h / 2 - SAFE_CAPTION_CENTER) / out_h
+        return CLIPPER_CAPTION_CENTER_PCT
     if pos in ("hook", "mid_high"):
         return SAFE_HOOK_MID_Y / out_h
     return (out_h - SAFE_CAPTION_BOTTOM) / out_h
@@ -299,26 +320,99 @@ def resolve_position(
     if not rects:
         return (0.5, round(base, 4))
 
-    offsets = [0.0]
-    for k in range(1, MAX_NUDGE_TRIES + 1):
-        offsets.append(-NUDGE_STEP_PCT * ((k + 1) // 2) if k % 2 else NUDGE_STEP_PCT * (k // 2))
-    # -> 0, -4%, +4%, -8%, +8%, -12%
+    if _overlap_area(base, rects) <= 0.0:
+        # Nothing in the way. The preset position is a measurement in its own
+        # right, so it is not moved to satisfy a rule meant for avoidance.
+        return (0.5, round(base, 4))
 
-    best_y, best_cost = base, None
-    seen: set[float] = set()
-    for off in offsets:
-        y = round(min(max(base + off, lo), hi), 4)
-        if y in seen:
-            continue
-        seen.add(y)
-        cost = _overlap_area(y, rects)
-        if cost <= 0.0:
-            return (0.5, y)
-        if best_cost is None or cost < best_cost:
-            best_y, best_cost = y, cost
+    # Something is in the way, so the style spec's rule applies: "place the text
+    # centre in the largest vertical band that contains neither the facecam
+    # subject's head box nor the top of the game HUD, clamped to 55-75% of frame
+    # height". The clamp is not a claim about where captions look best — three
+    # of the spec's own seven measurements sit below 55% — it is the guard rail
+    # that stops a largest-band search wandering to the top of the frame.
+    #
+    # This replaces six fixed nudges of ±4%. A ladder can step over a clear gap
+    # narrower than its own step and land on the far side still covered, and it
+    # has no notion of how much room a position has around it: it took the first
+    # y that scored zero, which can be one pixel from a rect's edge.
+    grid = [round(lo + i * SCAN_STEP_PCT, 4)
+            for i in range(int((hi - lo) / SCAN_STEP_PCT) + 1)]
+    clear = [y for y in grid if _overlap_area(y, rects) <= 0.0]
 
+    inside = [y for y in clear if SPEC_BAND_LO <= y <= SPEC_BAND_HI]
+    centre = _widest_band(inside or clear)
+    if centre is not None:
+        return (0.5, round(centre, 4))
+
+    # Nothing is clear anywhere. Least covered wins, and among equals the one
+    # nearest the preset — a caption that has to sit on something should at
+    # least sit where it was asked to.
+    best_y = min(grid, key=lambda y: (round(_overlap_area(y, rects), 6), abs(y - base)))
     logger.debug("caption placement: no clear slot, least-overlap y=%.4f", best_y)
-    return (0.5, best_y)
+    return (0.5, round(best_y, 4))
+
+
+def panels_to_keep_out(panels: Sequence[dict], shots: Sequence[dict],
+                       out_h: int = 1920) -> list[dict[str, int]]:
+    """Where detected UI panels land in the OUTPUT frame, across every shot.
+
+    A static keep-out is ill-defined for a multi-shot edit: each shot crops a
+    different rectangle out of the source, so one panel lands somewhere
+    different in each. The caption is burned once for the whole clip, though, so
+    it has to clear the panel in EVERY shot the panel is visible in — hence the
+    union rather than a per-shot answer.
+
+    Only the vertical extent is honest here. The crop is 9:16 out of a 16:9
+    frame, so horizontal position survives the mapping poorly and the caption is
+    centred and nearly full width anyway; `_overlap_area` treats the caption as
+    a full-width strip, which is what makes the y the only part that decides.
+    """
+    out: list[dict[str, int]] = []
+    for shot in shots or []:
+        # A face shot is a crop around the streamer's head; the game UI is not
+        # in it at all. Mapping a panel through one is arithmetic with no
+        # referent, and because a face crop is 240-360px tall against a 1920
+        # output the scale factor is 5-8x, so a 60px panel becomes a 300-480px
+        # band placed by that arithmetic rather than by anything a viewer sees.
+        #
+        # This is not a theory. It shipped, and it made the reviewer report "66%
+        # of the caption sits on detected game UI" for a clip whose captions sit
+        # on the streamer's hoodie, well clear of the counter below them. Caught
+        # by a vision model disagreeing with it and confirmed by looking at the
+        # frames.
+        if str((shot or {}).get("camera", "")).startswith("face"):
+            continue
+        rect = (shot or {}).get("rect") or {}
+        rh, ry = _f(rect.get("h")), _f(rect.get("y"))
+        if rh <= 0:
+            continue
+        scale = out_h / rh
+        for panel in panels or []:
+            py, ph = _f(panel.get("y")), _f(panel.get("h"))
+            top = (py - ry) * scale
+            bottom = (py + ph - ry) * scale
+            if bottom <= 0 or top >= out_h:
+                continue                      # outside this shot's crop
+            out.append({"x": 0, "y": int(max(0.0, top)),
+                        "w": 1080, "h": int(min(out_h, bottom) - max(0.0, top)),
+                        "kind": "game_ui"})
+    return out
+
+
+def _widest_band(clear: list[float]) -> float | None:
+    """Centre of the longest run of consecutive clear positions."""
+    if not clear:
+        return None
+    best = run = [clear[0]]
+    for y in clear[1:]:
+        if y - run[-1] <= SCAN_STEP_PCT * 1.5:
+            run.append(y)
+        else:
+            run = [y]
+        if len(run) > len(best):
+            best = run
+    return (best[0] + best[-1]) / 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -333,11 +427,15 @@ def build_caption_plan(
     max_words: int,
     position: str,
     layout: dict,
+    entry_pop: bool = False,
 ) -> dict:
     """Word-synced caption plan for one candidate.
 
     Chunk `start`/`end` are RELATIVE TO THE CLIP (cand["start"] subtracted), because
     the burn happens on the already-trimmed clip.
+
+    `entry_pop` asks the ASS writer for the reference scale overshoot as each card
+    lands. Off by default, like the active-word highlight.
     """
     preset_key = preset_id if preset_id in DEFAULT_PRESETS else DEFAULT_PRESET_ID
     style = dict(DEFAULT_PRESETS[preset_key])
@@ -382,6 +480,7 @@ def build_caption_plan(
         "y_pct": y_pct,
         "scale": 1.0,
         "preset_id": preset_key,
+        "entry_pop": bool(entry_pop),
     }
 
 
@@ -393,6 +492,7 @@ def caption_plan_to_overlays(plan: dict) -> list[dict]:
     x_pct = _f(plan.get("x_pct"), 0.5)
     y_pct = _f(plan.get("y_pct"), 0.75)
     scale = _f(plan.get("scale"), 1.0) or 1.0
+    entry_pop = bool(plan.get("entry_pop"))
 
     overlays: list[dict] = []
     for chunk in plan.get("chunks") or []:
@@ -412,6 +512,8 @@ def caption_plan_to_overlays(plan: dict) -> list[dict]:
             "scale": scale,
             "rotation": 0.0,
         }
+        if entry_pop:
+            overlay["entry_pop"] = True
         if chunk.get("words"):
             overlay["words"] = chunk["words"]
         overlays.append(overlay)

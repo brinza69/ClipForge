@@ -312,8 +312,29 @@ def summarize_faces(signals: dict | None, fw: int = 0, fh: int = 0) -> dict[str,
 
 def speech_ratio(signals: dict | None) -> float:
     """Share of the timeline carrying speech. Accepts a ready-made float, or
-    speech spans plus a duration to divide by."""
+    speech spans plus a duration to divide by.
+
+    `speech_coverage` wins when it is there, and it is what the analyse stage
+    now writes. The spans below come from the AUDIO ENVELOPE — anything above
+    the silence floor — and on a stream carrying game audio, music and a voice
+    at once, that is nearly everything. Measured across all eleven labelled
+    sources it ran 0.863 to 1.000, a range of 0.137: it could not tell a
+    Minecraft stream from an interview, which is the only thing the classifier
+    wanted it for.
+
+    From the transcript instead, the same eleven run 0.276 to 0.918 — 4.7x the
+    spread — and they separate on the axis that matters: edited talking content
+    sits at 0.86-0.92 and live streams at 0.28-0.64.
+
+    The per-candidate path has done exactly this since session 3
+    (`candidates._spoken_ratio`, which overwrites the envelope value with one
+    derived from the words in the window). The classifier was simply never
+    given the same fix.
+    """
     signals = signals or {}
+    coverage = signals.get("speech_coverage")
+    if isinstance(coverage, (int, float)):
+        return clamp01(float(coverage))
     raw = signals.get("speech")
     if isinstance(raw, (int, float)):
         return clamp01(float(raw))
@@ -370,12 +391,26 @@ def classify_features(features: dict[str, Any]) -> dict[str, Any]:
 
     # Synthetic game art: saturated, edge-dense, full of long straight runs.
     synthetic = clamp01(0.5 * edges_n + 0.3 * lines + 0.2 * sat_n)
-    hud_signal = corner * centre  # static border + moving middle = a HUD
     vote("gaming", 1.6 * synthetic,
          f"synthetic-looking frames ({g('edge_density'):.1%} edge pixels, "
          f"{g('saturation'):.0%} saturation)")
-    if frames >= 2:
-        vote("gaming", 1.8 * hud_signal, f"static HUD corners across {frames} frames")
+    # There used to be a second gaming vote here, weight 1.8, on
+    # `corner_stability * centre_motion` — "static border + moving middle = a
+    # HUD". It contributed exactly 0.0 for its entire life, because
+    # corner_stability was pinned at 0 by an absolute threshold (see
+    # content_type._patch_motion). Un-pinning those features made it fire for
+    # the first time, and measured on five real sources it points the WRONG
+    # WAY: the highest score is a Just Chatting stream (0.397) and the gaming
+    # stream is near the bottom (0.044), because a locked-off webcam has a
+    # static border while a stream that switches between Fortnite, Minecraft
+    # and a Discord call does not. Gating it on `synthetic` does not rescue it
+    # — Just Chatting still leads 0.230 to 0.034.
+    #
+    # So the signal is real and now measurable, but "static corners" means
+    # "locked-off camera", not "game HUD". Removing the vote keeps today's
+    # behaviour exactly (it was contributing nothing) instead of activating a
+    # rule that is wrong. Deciding what it SHOULD vote for needs labelled
+    # sources, which do not exist yet.
     vote("gaming", 1.0 * motion * spiky)
     vote("gaming", 2.0 * g("kw_gaming"), "gaming vocabulary in the transcript")
     if faces <= 1 and face_area < 0.10:

@@ -18,6 +18,7 @@ Import-safe: no DB, no network, no ffmpeg.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Iterable
 
 logger = logging.getLogger("clipforge.clipper.segmentation")
@@ -28,6 +29,26 @@ PAUSE_BOUNDARY_S = 0.6
 LONG_PAUSE_S = 1.2
 # Runaway guard for transcripts where the model never emits a full stop.
 SENTENCE_MAX_S = 30.0
+# A pause alone must not end a sentence ON one of these. They are words nobody
+# stops after: the thought is demonstrably unfinished, whatever the microphone
+# heard. Measured on a real stream, the pause rule was closing sentences on
+# "let's", "oh" and "what", so clips ended one word before the payoff — "...of
+# water bro let's" | "go", "...trail chamber oh" | "my god". A speaker CAN pause
+# after these mid-thought; that is exactly the case being protected.
+_CONTINUES = frozenset("""
+a an the my your his her its our their this that these those
+to of in on at for with from by about into onto over under
+and or but so because if when while than as
+is are was were be been being am do does did have has had
+can could will would shall should may might must
+let's i'm it's we're you're they're don't can't won't didn't isn't
+i'll we'll you'll i've we've gonna wanna gotta
+very really just more most too also even still
+oh what how why who which where whose
+""".split())
+# ...unless the silence is long enough that he plainly stopped anyway.
+HARD_PAUSE_S = 2.5
+_CONTINUE_STRIP_RE = re.compile(r"^[^\w']+|[^\w']+$", re.UNICODE)
 # Boundaries closer together than this are the same event seen twice.
 MERGE_TOLERANCE_S = 0.20
 
@@ -103,6 +124,12 @@ def signal_view(signals: dict | None) -> dict:
                    if _as_float(v) is not None],
         "motion_hop": _as_float(motion_d.get("hop_s")
                                 or sig.get("motion_hop_s")) or 0.5,
+        # Read only from the motion blob, never from a top-level "ui": the
+        # series is sliced with motion_hop, and it shares that hop only because
+        # motion_timeline emits both from one decode pass. A loose top-level
+        # key would be sliced against a hop it never agreed to.
+        "ui": [_as_float(v) or 0.0 for v in (motion_d.get("ui") or [])
+               if _as_float(v) is not None],
         "faces": [f for f in (sig.get("faces") or []) if isinstance(f, dict)],
     }
 
@@ -231,7 +258,10 @@ def sentences_from_words(words: list[dict]) -> list[dict]:
 
         close = _ends_sentence(w["word"])
         if not close and nxt and gap >= LONG_PAUSE_S:
-            close = True
+            # Punctuation is authoritative; a pause is only evidence. Don't let
+            # it close the sentence on a word the speaker cannot have meant to
+            # end on, unless the silence is long enough to settle the question.
+            close = gap >= HARD_PAUSE_S or not _continues(w["word"])
         if not close and span >= SENTENCE_MAX_S and gap >= PAUSE_BOUNDARY_S:
             close = True
 
@@ -248,6 +278,15 @@ def sentence_spans(transcript: dict) -> list[dict]:
         {"start": s["start"], "end": s["end"], "text": s["text"]}
         for s in sentences_from_words(word_list(transcript))
     ]
+
+
+def _continues(token: str) -> bool:
+    """Is this a word the speaker obviously has not finished a thought on?
+
+    Strips punctuation from both ends but keeps the apostrophe, because the
+    contractions are half the list — "let's" without it is "lets".
+    """
+    return _CONTINUE_STRIP_RE.sub("", (token or "").lower()) in _CONTINUES
 
 
 def _ends_sentence(token: str) -> bool:

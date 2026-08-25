@@ -69,6 +69,9 @@ def _default_settings() -> dict[str, Any]:
         "platform": "tiktok",
         "fps": settings.clipper_export_fps,
         "language": "auto",
+        "auto_export": settings.clipper_auto_export,
+        "vision_review": settings.clipper_vision_review,
+        "vision_model": settings.clipper_vision_model,
         "caption_preset_id": "bold_impact",
         "caption_position": "bottom",
         "caption_highlight": True,
@@ -76,11 +79,12 @@ def _default_settings() -> dict[str, Any]:
         "headline_auto": True,
         "emoji_enabled": False,
         "profanity_mask": False,
-        "trim_silence": True,
+        "trim_silence": settings.clipper_trim_silence,
         "jump_cuts": False,
         "auto_zoom": True,
         "reaction_zoom": True,
         "facecam_emphasis": True,
+        "dynamic_edit": settings.clipper_dynamic_edit,
         "include_chat": False,
         "watermark_text": "",
         "min_score": 0,
@@ -108,6 +112,9 @@ def _normalise_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
             out[key] = cast(_default_settings()[key])
 
     _num("clip_count", 1, 20, int)
+    # Same ceiling as clip_count: auto-export cannot ask for more clips than the
+    # run will produce, and an unbounded value here is unattended render time.
+    _num("auto_export", 0, 20, int)
     _num("min_clip_s", 3, 600)
     _num("max_clip_s", 5, 900)
     _num("face_pct", 0.15, 0.6)

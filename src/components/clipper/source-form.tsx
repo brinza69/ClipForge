@@ -17,7 +17,7 @@
 // use. That is field-level feedback, so it renders inline next to the input;
 // only transport failures become toasts.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertCircle, Check, Link2, Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
@@ -102,6 +102,12 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
   const [lengthPreset, setLengthPreset] = useState<string>("standard");
   const [clipCount, setClipCount] = useState(8);
   const [rights, setRights] = useState(false);
+  const [handsOff, setHandsOff] = useState(false);
+  const [visionReview, setVisionReview] = useState(false);
+  // Whether an OpenAI key is saved. The vision review is the one setting that
+  // cannot work without one, and a checkbox that silently does nothing is
+  // worse than a disabled one that says why.
+  const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [advanced, setAdvanced] = useState(false);
 
   const [platform, setPlatform] = useState<TargetPlatform>("tiktok");
@@ -160,6 +166,17 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
     }
   }
 
+  useEffect(() => {
+    // Same source the Settings card reads, so the two can never disagree about
+    // whether a key exists.
+    fetch("/worker-api/transcript/engines")
+      .then((r) => (r.ok ? r.json() : { engines: [] }))
+      .then((j) => setHasKey(
+        !!(j.engines || []).find((e: { id?: string; ready?: boolean }) =>
+          e.id === "openai")?.ready))
+      .catch(() => setHasKey(false));
+  }, []);
+
   async function submit() {
     const preset = LENGTH_PRESETS.find((p) => p.id === lengthPreset) ?? LENGTH_PRESETS[1];
     const settings: ClipperSettings = {
@@ -170,6 +187,9 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
       platform,
       language,
       layout_mode: layout,
+      // 0 keeps the old behaviour exactly: the run stops at the board.
+      auto_export: handsOff ? clipCount : 0,
+      vision_review: visionReview,
     };
 
     setSubmitting(true);
@@ -192,6 +212,15 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
         return;
       }
       const project = (await r.json()) as { id: string };
+      // Hands-off means hands off. Making someone press "Start analysis" on the
+      // next screen is exactly the step this option exists to remove, and
+      // firing it here rather than on the project page keeps that page's
+      // behaviour unchanged for a normal run.
+      if (handsOff) {
+        await fetch(`${CLIPPER_API}/projects/${project.id}/analyze`, {
+          method: "POST",
+        }).catch(() => undefined);
+      }
       onCreated?.();
       router.push(`/ai-stream-clipper/${project.id}`);
     } catch (err) {
@@ -325,10 +354,69 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
             className="w-24"
           />
           <p className="text-[11px] text-muted-foreground">
-            The best {clipCount} moments, ranked. Nothing exports until you approve it.
+            The best {clipCount} moments, ranked.{" "}
+            {handsOff
+              ? "All of them render as soon as scoring finishes."
+              : "Nothing exports until you approve it."}
           </p>
         </div>
       </div>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border/50 p-3">
+        <input
+          type="checkbox"
+          checked={handsOff}
+          onChange={(e) => setHandsOff(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span className="space-y-1">
+          <span className="block text-xs font-medium">
+            Just make the clips — don&apos;t wait for me
+          </span>
+          <span className="block text-[11px] text-muted-foreground">
+            Starts the analysis immediately and renders the top {clipCount} the
+            moment scoring finishes, so a link turns into finished files with no
+            second visit. Off by default because rendering is the one stage that
+            costs real minutes and writes files — worth choosing rather than
+            being handed.
+          </span>
+        </span>
+      </label>
+
+      <label
+        className={`flex items-start gap-3 rounded-lg border border-border/50 p-3 ${
+          hasKey === false ? "opacity-60" : "cursor-pointer"
+        }`}
+      >
+        <input
+          type="checkbox"
+          checked={visionReview && hasKey !== false}
+          disabled={hasKey === false}
+          onChange={(e) => setVisionReview(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span className="space-y-1">
+          <span className="block text-xs font-medium">
+            Have a model look at each finished clip
+          </span>
+          <span className="block text-[11px] text-muted-foreground">
+            Checks what a rule cannot: whether the moment the clip was cut for
+            actually happens on screen, and whether someone who has never seen
+            the stream could follow it. It reports — it never deletes a clip.
+            {hasKey === false ? (
+              <>
+                {" "}
+                <span className="text-amber-500">
+                  Needs an OpenAI key. Add one in Settings first.
+                </span>
+              </>
+            ) : (
+              <> Measured at about 0.4¢ per clip on gpt-5.6-terra — the only
+                setting here that costs money.</>
+            )}
+          </span>
+        </span>
+      </label>
 
       <button
         type="button"

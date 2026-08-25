@@ -244,6 +244,19 @@ async def _ingest_local(
     # wipes this tree, and it must never be able to take their file with it.
     if src.resolve() == dest.resolve():
         return dest
+
+    # ...but a file ALREADY INSIDE this project's source dir is not the user's
+    # original any more: `create_project` moved it here, and delete_project()
+    # already owns it. Copying it doubles a multi-GB file for nothing.
+    #
+    # Measured before changing it: every project on this rig held its source
+    # twice, under the uploaded name and as source.mp4 — 25.8 GB of byte-identical
+    # duplication across eleven projects, confirmed by hashing both copies.
+    if src.parent.resolve() == dest.parent.resolve():
+        await _report(on_progress, 0.10, "Preparing source")
+        await _in_thread(lambda: src.replace(dest))
+        return dest
+
     await _report(on_progress, 0.10, "Downloading")
     await _in_thread(lambda: shutil.copy2(src, dest))
     return dest

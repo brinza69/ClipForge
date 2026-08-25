@@ -79,6 +79,37 @@ def _plan(start: float = 100.0, end: float = 133.0, **style):
 # Shot grammar
 # --------------------------------------------------------------------------
 
+def test_rung_steps_up_once_per_threshold_cleared():
+    fam = ("wide", "medium", "tight")
+    assert dynamic_edit._rung(fam, 0.10, [0.42, 0.72]) == "wide"
+    assert dynamic_edit._rung(fam, 0.42, [0.42, 0.72]) == "medium"
+    assert dynamic_edit._rung(fam, 0.71, [0.42, 0.72]) == "medium"
+    assert dynamic_edit._rung(fam, 0.72, [0.42, 0.72]) == "tight"
+    assert dynamic_edit._rung(fam, 1.00, [0.42, 0.72]) == "tight"
+
+
+def test_rung_is_generic_over_family_length():
+    # The game family kept two rungs and its original 0.55 boundary; the point of
+    # _rung is that neither family needs the other's arity hard-coded.
+    two = ("game", "game_tight")
+    assert dynamic_edit._rung(two, 0.54, [0.55]) == "game"
+    assert dynamic_edit._rung(two, 0.55, [0.55]) == "game_tight"
+    # More thresholds than rungs must clamp, not raise.
+    assert dynamic_edit._rung(two, 0.99, [0.42, 0.72]) == "game_tight"
+
+
+def test_the_middle_face_rung_is_actually_reachable():
+    # Adding a rung the planner never selects would be worse than not adding it.
+    cams = {s["camera"] for s in _plan()["shots"]}
+    assert "face_medium" in cams
+
+
+def test_every_planned_camera_has_a_rect():
+    plan = _plan()
+    for shot in plan["shots"]:
+        assert shot["camera"] in plan["cameras"]
+
+
 def test_adjacent_shots_never_share_a_camera():
     # A cut onto the same rectangle is invisible: it reads as a stutter, not an
     # edit. This is the single invariant the whole style rests on.
@@ -86,6 +117,35 @@ def test_adjacent_shots_never_share_a_camera():
     assert len(shots) > 5
     for a, b in zip(shots, shots[1:]):
         assert a["camera"] != b["camera"]
+
+
+def test_adjacent_shots_never_share_a_rect_either():
+    """The invariant above, checked on the geometry rather than the name.
+
+    The name check cannot see the case that actually shipped: with
+    `game_height_pct` and `game_zoom` both at 1.00 — the measured default since
+    the framing A/B — `game` and `game_tight` are two names for one rectangle,
+    so a g->G step passes the name check and cuts on nothing.
+    """
+    for style in ({}, {"game_height_pct": 1.0, "game_zoom": 1.0},
+                  {"game_height_pct": 0.86, "game_zoom": 0.64}):
+        shots = _plan(**style)["shots"]
+        for a, b in zip(shots, shots[1:]):
+            assert tuple(a["rect"][k] for k in ("x", "y", "w", "h")) != \
+                   tuple(b["rect"][k] for k in ("x", "y", "w", "h")), \
+                   f"a cut that changes nothing, at {b['t0']}s, style={style}"
+
+
+def test_merging_a_dead_cut_keeps_the_timeline_whole():
+    """Removing a cut must not remove any of the clip with it."""
+    merged = dynamic_edit._merge_dead_cuts([
+        {"index": 0, "t0": 0.0, "t1": 1.0, "rect": {"x": 0, "y": 0, "w": 10, "h": 20}},
+        {"index": 1, "t0": 1.0, "t1": 2.5, "rect": {"x": 0, "y": 0, "w": 10, "h": 20}},
+        {"index": 2, "t0": 2.5, "t1": 4.0, "rect": {"x": 8, "y": 0, "w": 10, "h": 20}},
+    ])
+    assert [s["index"] for s in merged] == [0, 1]
+    assert merged[0]["t0"] == 0.0 and merged[0]["t1"] == 2.5
+    assert merged[-1]["t1"] == 4.0
 
 
 def test_shot_lengths_stay_inside_the_configured_band():
@@ -110,6 +170,34 @@ def test_the_edit_crosses_between_subjects():
     assert "game" in families and "face" in families
 
 
+def test_a_face_shot_always_contains_the_face():
+    """Re-centring each shot on its own window's detections follows the subject,
+    which is what it is for — until a window's detections are bad and the crop
+    walks off the inset the whole-clip cluster had located correctly.
+
+    Found by Pass D on a real export rather than by reading the code: clip
+    e8fa6b35ea66 shot 15 was `face_medium` at y=260 when the camera sat at y=34
+    and the subject at cy=176. The frames were Minecraft dirt. A face shot whose
+    crop excludes the face is not a face shot.
+    """
+    plan = _plan()
+    face = plan["subject"]["face"]
+    for shot in plan["shots"]:
+        if not shot["camera"].startswith("face"):
+            continue
+        r = shot["rect"]
+        assert r["x"] <= face["cx"] <= r["x"] + r["w"], shot
+        assert r["y"] <= face["cy"] <= r["y"] + r["h"], shot
+
+
+def test_a_stray_detection_does_not_drag_the_crop_off_the_inset():
+    """The guard itself, stated on the geometry."""
+    inside = {"x": 1546, "y": 34, "w": 186, "h": 334}
+    assert dynamic_edit._contains(inside, 1640.0, 176.0)
+    walked_off = {"x": 1546, "y": 260, "w": 186, "h": 334}
+    assert not dynamic_edit._contains(walked_off, 1640.0, 176.0)
+
+
 def test_the_clip_opens_on_a_face():
     assert _plan()["shots"][0]["camera"].startswith("face")
 
@@ -121,6 +209,35 @@ def test_shots_tile_the_window_without_gaps():
     assert shots[-1]["t1"] == pytest.approx(plan["duration"], abs=0.01)
     for a, b in zip(shots, shots[1:]):
         assert a["t1"] == b["t0"]
+
+
+def test_a_blank_gameplay_band_is_never_cut_to_even_when_it_moves():
+    # Motion alone says this band is alive; detail says there is nothing in it.
+    # A shot may only cut to gameplay when BOTH agree.
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    signals = _signals(20.0)
+    moving = [0.9] * 200
+    plan = dynamic_edit.plan_dynamic_edit(
+        cand, signals, _faces(0.0, 20.0), src_w=SRC_W, src_h=SRC_H,
+        proxy_w=PROXY_W, proxy_h=PROXY_H,
+        game_motion=moving, game_focus=[900.0] * 200,
+        game_detail=[1.0] * 200, game_motion_hop=0.25)
+    assert all(s["camera"].startswith("face") for s in plan["shots"])
+
+
+def test_detail_is_ignored_when_the_caller_does_not_measure_it():
+    # The old motion-only behaviour has to survive a caller that never passes
+    # game_detail, or every existing entry point silently changes.
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    signals = _signals(20.0)
+    kwargs = dict(src_w=SRC_W, src_h=SRC_H, proxy_w=PROXY_W, proxy_h=PROXY_H,
+                  game_motion=[0.9] * 200, game_focus=[900.0] * 200,
+                  game_motion_hop=0.25)
+    without = dynamic_edit.plan_dynamic_edit(cand, signals, _faces(0.0, 20.0), **kwargs)
+    rich = dynamic_edit.plan_dynamic_edit(cand, signals, _faces(0.0, 20.0),
+                                          game_detail=[60.0] * 200, **kwargs)
+    assert [s["camera"] for s in without["shots"]] == [s["camera"] for s in rich["shots"]]
+    assert any(s["camera"].startswith("game") for s in without["shots"])
 
 
 def test_a_dead_gameplay_region_is_never_cut_to():
@@ -287,6 +404,28 @@ def test_audio_is_compressed_before_it_is_normalised():
     assert chain.index("acompressor") < chain.index("loudnorm")
 
 
+def test_the_delivered_rate_is_restored_after_loudnorm():
+    """loudnorm resamples internally to 192 kHz and does not put it back, so
+    the encoder negotiated the highest rate AAC accepts and 192 kbit/s paid for
+    a band nobody can hear. Every clip shipped at 96 kHz until this was
+    measured on a delivered file."""
+    chain = _cmd()[_cmd().index("-af") + 1]
+    assert f"aresample={dynamic_render.AUDIO_RATE}" in chain
+    assert chain.index("loudnorm") < chain.index("aresample")
+
+
+def test_the_limiter_is_the_ceiling_and_does_not_re_level():
+    """loudnorm's TP is a target it aims at, not a ceiling it guarantees — it
+    missed by 1.7 dB on an 18s clip and delivered +0.2 dBFS. And `alimiter`
+    auto-levels its output back UP by default, which measured +0.07 dBFS and
+    -11.8 LUFS: the default limiter undoes the normaliser in front of it."""
+    chain = _cmd()[_cmd().index("-af") + 1]
+    assert "alimiter" in chain
+    assert chain.index("loudnorm") < chain.index("alimiter")
+    assert "level=false" in chain, "alimiter auto-levels back to the ceiling"
+    assert f"limit={dynamic_render.LIMITER_CEILING}" in chain
+
+
 def test_hits_become_one_flash_term_each():
     plan = _plan()
     plan["hits"] = [1.0, 2.5, 4.0]
@@ -301,3 +440,94 @@ def test_a_clip_with_no_hits_still_gets_the_base_grade():
     plan["hits"] = []
     flt = dynamic_render._eq_filter(plan)
     assert "exp(" not in flt and "saturation=" in flt
+
+
+# --------------------------------------------------------------------------
+# Action band
+# --------------------------------------------------------------------------
+#
+# Observed on a co-stream: two facecams, top-left and top-right. Taking the
+# median of every detection lands between them, on the gameplay, so the band has
+# to exclude each one separately. And with a stronger detector a Minecraft
+# texture in mid-frame clustered as a third "face", shrinking the band to the
+# bottom half — which is why persistence, not tightness, decides what is a
+# facecam.
+
+from services.clipper.dynamic_cameras import ACTION_BAND, action_band, face_clusters
+
+
+def _track(boxes_per_sample):
+    return [{"t": i * 0.25, "boxes": b} for i, b in enumerate(boxes_per_sample)]
+
+
+def _steady(box, n=40, every=1):
+    """A facecam: present across the whole window."""
+    return [[box] if i % every == 0 else [] for i in range(n)]
+
+
+def test_no_faces_falls_back_to_the_constant():
+    assert action_band(_track([[]] * 40), 480, 270) == ACTION_BAND
+
+
+def test_one_facecam_is_cut_out_of_the_band():
+    band = action_band(_track(_steady([10, 10, 60, 60])), 480, 270)
+    assert band != ACTION_BAND
+    # The facecam spans x 0.02-0.15, y 0.04-0.26; the band must clear it.
+    assert band[0] >= 0.14 or band[2] >= 0.25
+
+
+def test_two_facecams_are_both_cut_out():
+    left, right = [10, 10, 60, 60], [400, 10, 60, 60]
+    track = [{"t": i * 0.25, "boxes": [left, right]} for i in range(40)]
+    clusters = face_clusters(track, 480, 270)
+    assert len(clusters) == 2, "the two facecams merged into one"
+    band = action_band(track, 480, 270)
+    for cx0, cx1, cy0, cy1 in clusters:
+        assert not (cx0 < band[1] and cx1 > band[0]
+                    and cy0 < band[3] and cy1 > band[2]), "a facecam is inside the band"
+
+
+def test_a_face_that_flashes_past_is_not_a_facecam():
+    # A mob texture the cascade likes for a moment. Enough hits to pass a count
+    # threshold, nowhere near enough of the window to be an inset.
+    track = _track([[[240, 120, 40, 40]] if 5 <= i <= 8 else [] for i in range(40)])
+    assert face_clusters(track, 480, 270) == []
+
+
+def test_a_facecam_seen_intermittently_still_counts():
+    # Detection is unreliable on a turned head; what matters is that it keeps
+    # coming back across the window, not that every sample finds it.
+    track = _track(_steady([10, 10, 60, 60], n=40, every=4))
+    assert len(face_clusters(track, 480, 270)) == 1
+
+
+def test_an_open_menu_is_never_cut_to():
+    # An inventory panel moves and is full of contrast, so motion and detail
+    # both call it alive. Only the UI share rejects it.
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    plan = dynamic_edit.plan_dynamic_edit(
+        cand, _signals(20.0), _faces(0.0, 20.0), src_w=SRC_W, src_h=SRC_H,
+        proxy_w=PROXY_W, proxy_h=PROXY_H,
+        game_motion=[0.9] * 200, game_focus=[900.0] * 200,
+        game_detail=[60.0] * 200, game_ui=[0.20] * 200, game_motion_hop=0.25)
+    assert all(s["camera"].startswith("face") for s in plan["shots"])
+
+
+def test_gameplay_below_the_ui_share_is_still_cut_to():
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    plan = dynamic_edit.plan_dynamic_edit(
+        cand, _signals(20.0), _faces(0.0, 20.0), src_w=SRC_W, src_h=SRC_H,
+        proxy_w=PROXY_W, proxy_h=PROXY_H,
+        game_motion=[0.9] * 200, game_focus=[900.0] * 200,
+        game_detail=[60.0] * 200, game_ui=[0.01] * 200, game_motion_hop=0.25)
+    assert any(s["camera"].startswith("game") for s in plan["shots"])
+
+
+def test_the_ui_guard_is_off_when_the_caller_does_not_measure_it():
+    cand = {"start": 0.0, "end": 20.0, "words": _words(0.0, 20.0)}
+    kwargs = dict(src_w=SRC_W, src_h=SRC_H, proxy_w=PROXY_W, proxy_h=PROXY_H,
+                  game_motion=[0.9] * 200, game_focus=[900.0] * 200,
+                  game_detail=[60.0] * 200, game_motion_hop=0.25)
+    plan = dynamic_edit.plan_dynamic_edit(cand, _signals(20.0), _faces(0.0, 20.0),
+                                          **kwargs)
+    assert any(s["camera"].startswith("game") for s in plan["shots"])

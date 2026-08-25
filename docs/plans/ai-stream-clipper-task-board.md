@@ -87,7 +87,7 @@ Legend for dependencies: a task cannot start until everything in *Depends on* is
 | 9.3 | Project list + source form | Frontend Editor | done | 9.1 | `src/app/ai-stream-clipper/page.tsx`, `components/clipper/source-form.tsx` | Metadata preview before analysis; simplified to 3 above-the-fold decisions |
 | 9.4 | Progress screen (SSE + poll fallback) | Frontend Editor | done | 9.3 | `components/clipper/analysis-progress.tsx` | Stage list derived from the job message; survives reload |
 | 9.5 | Candidate dashboard: sort, filter, batch | Frontend Editor | done | 9.4 | `components/clipper/candidate-grid.tsx`, `candidate-card.tsx`, `score-breakdown.tsx` | Sort/filter/reveal-alternatives/bulk-approve |
-| 9.6 | Clip editor: trim, captions, crop, headline | Frontend Editor | **not built** | 9.5 | `clip-editor.tsx`, `crop-editor.tsx`, `caption-controls.tsx` | **Backend is complete and reachable** (`PATCH /clips/{id}`, `/regenerate`, `/preview-frame`); the UI for it is not written. Editing is currently API-only. |
+| 9.6 | Clip editor: trim, captions, headline | Frontend Editor | done | 9.5 | `clip-editor.tsx` | Trim, headline, caption preset and height over a server-rendered still. **Drag-to-crop deliberately not built**: editing layout rects by hand is a canvas tool of its own, and the honest fix for a bad layout is better detection. `layout_plan` stays patchable over the API. |
 
 ## Phase 10 — Hardening & delivery
 
@@ -96,7 +96,7 @@ Legend for dependencies: a task cannot start until everything in *Depends on* is
 | 10.1 | Unit + integration tests | Test & Security | done | all | `server/tests/test_clipper_*.py` | 8 files; 208 passing incl. 15 API integration tests |
 | 10.2 | `.env.example` + runbook + CLAUDE.md update | Docs & Release | done | all | root + `docs/` | Every new env var documented |
 | 10.3 | Quality gates | Lead | done | 10.1 | — | pytest 212 passed / 2 pre-existing failures · `tsc --noEmit` clean · eslint 0 errors · `next build` compiled in 71s with both routes emitted |
-| 10.4 | Commit, push, draft PR | Lead | **not done** | 10.3 | — | Committed locally on `claude/ai-stream-clipper`; **not pushed** |
+| 10.4 | Commit, push, draft PR | Lead | done | 10.3 | — | Pushed on `claude/ai-stream-clipper`. PR #27 merged 2026-08-10; PR #29 open since 2026-08-16 with everything after it. |
 
 ---
 

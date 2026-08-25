@@ -199,7 +199,7 @@ def _group(cands: list[dict], order: list[int], overlap_threshold: float,
             # started as, and two clips 40 minutes apart end up "duplicates".
             same_time = overlap_ratio(cands[leader], cands[other]) > overlap_threshold
             same_words = _similarity(profiles[leader], profiles[other]) > text_threshold
-            if same_time or same_words:
+            if same_time or same_words or same_story(cands[leader], cands[other]):
                 claimed.add(other)
                 members.append(other)
         groups.append(members)
@@ -207,29 +207,100 @@ def _group(cands: list[dict], order: list[int], overlap_threshold: float,
     return groups
 
 
+# Two payoffs this close are one moment. Wider than it looks: the story path
+# proposes several cuts of one anchor and a model naming the same payoff twice
+# rarely picks the same second for it.
+SAME_PAYOFF_S = 6.0
+
+
+def _kinds_of(cand: Any) -> frozenset[str]:
+    story = (cand or {}).get("story")
+    if not isinstance(story, dict):
+        return frozenset()
+    return frozenset(str(k) for k in (story.get("archetypes") or []))
+
+
+def _thread_of(cand: Any) -> str | None:
+    story = (cand or {}).get("story")
+    return story.get("thread_id") if isinstance(story, dict) else None
+
+
+def same_story(a: Any, b: Any) -> bool:
+    """True when two candidates are cuts of the SAME moment.
+
+    Time overlap and shared words already catch most duplicates, and they miss
+    the case the story path creates: two windows built from one anchor, or
+    from two anchors the model placed a few seconds apart, can share little
+    text — a tight cut and a story-rich cut of one joke have different
+    openings — while being the same clip. What makes them the same is the
+    payoff, so that is what this compares.
+
+    Returns False when neither side carries a story, which is every legacy
+    candidate: this only ever adds groupings, never removes one.
+    """
+    sa = (a or {}).get("story") if isinstance(a, dict) else None
+    sb = (b or {}).get("story") if isinstance(b, dict) else None
+    if not isinstance(sa, dict) or not isinstance(sb, dict):
+        return False
+    pa, pb = sa.get("payoff_t"), sb.get("payoff_t")
+    if pa is None or pb is None:
+        return False
+    try:
+        return abs(float(pa) - float(pb)) <= SAME_PAYOFF_S
+    except (TypeError, ValueError):
+        return False
+
+
 def _diversify(winners: list[dict], source_duration: float,
                target_count: int) -> list[dict]:
-    """Order winners so the first `target_count` spread across the timeline."""
+    """Order winners so the first `target_count` spread across the source.
+
+    Three axes, tried in this order because that is how clearly each one means
+    "something else": a different STRETCH of the stream, then a different
+    STORY, then a different KIND of clip. The middle one is why threads exist —
+    a stream that spends an hour on one boss can otherwise hand back a board
+    that is entirely that boss, with every clip in a different ten-minute
+    bucket and every one of them the same arc.
+
+    All three share one ceiling: a clip is promoted for variety only while the
+    quality it costs stays under MAX_DIVERSITY_SACRIFICE. Diversity must not
+    rescue a weak clip; it exists to stop redundancy.
+    """
     buckets = max(1, target_count)
     remaining = sorted(winners, key=lambda c: -_score_of(c))
-    used: set[int] = set()
+    used_time: set[int] = set()
+    used_kind: set[str] = set()
+    used_thread: set[str] = set()
     ordered: list[dict] = []
 
     while remaining:
         best = remaining[0]
         pick = best
+        # Timeline spread first: a clip from an unseen stretch of the stream is
+        # more clearly new than one that is merely a different genre.
         fresh = next(
             (c for c in remaining
-             if _bucket_of(c, source_duration, buckets) not in used),
+             if _bucket_of(c, source_duration, buckets) not in used_time),
             None,
         )
-        # Once every bucket has a winner `fresh` is None and this degenerates
-        # to plain score order, which is what "one per bucket first" means.
+        if fresh is None:
+            fresh = next((c for c in remaining
+                          if _thread_of(c) and _thread_of(c) not in used_thread),
+                         None)
+        if fresh is None:
+            fresh = next((c for c in remaining
+                          if _kinds_of(c) and not (_kinds_of(c) & used_kind)), None)
+        # Once every bucket and every archetype has a winner `fresh` is None
+        # and this degenerates to plain score order, which is what "one per
+        # bucket first" means.
         if fresh is not None and _score_of(best) - _score_of(fresh) <= MAX_DIVERSITY_SACRIFICE:
             pick = fresh
         ordered.append(pick)
         remaining.remove(pick)
-        used.add(_bucket_of(pick, source_duration, buckets))
+        used_time.add(_bucket_of(pick, source_duration, buckets))
+        used_kind |= _kinds_of(pick)
+        if _thread_of(pick):
+            used_thread.add(_thread_of(pick))
 
     return ordered
 

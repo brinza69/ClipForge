@@ -184,6 +184,15 @@ async def init_db() -> None:
             except Exception:
                 pass
 
+        # The transcripts table's first added column, so it gets its own list
+        # rather than being smuggled into the clips one.
+        for col, col_type in [("failed_chunks", "TEXT")]:
+            try:
+                await conn.execute(
+                    text(f"ALTER TABLE transcripts ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass
+
         _clipper_clip_migrations = [
             ("overall_score", "REAL"),
             ("sub_scores", "TEXT"),
@@ -197,6 +206,8 @@ async def init_db() -> None:
             ("is_alternative", "BOOLEAN"),
             ("rank_position", "INTEGER"),
             ("feature_vector", "TEXT"),
+            ("reasoning", "TEXT"),
+            ("review", "TEXT"),
             ("ranker_version", "VARCHAR(20)"),
             ("preview_path", "TEXT"),
         ]

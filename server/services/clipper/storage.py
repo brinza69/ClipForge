@@ -37,7 +37,15 @@ logger = logging.getLogger("clipforge.clipper.storage")
 # Allowlist for the HTTP artifacts endpoint: the only names read_artifact and
 # write_artifact will ever turn into a filesystem path.
 ARTIFACT_NAMES: frozenset[str] = frozenset(
-    {"signals", "faces", "regions", "segments", "candidates", "meta"}
+    # "promises" is the story path's checkpoint: one sweep over the whole
+    # transcript for setups that could pay off later. It is written before
+    # anchor detection reads it, so a re-run does not pay for it twice.
+    # "anchors" is the story path's MODEL output. Everything else here is cheap
+    # to rebuild; that one is not. It is stored with the fingerprint of what
+    # produced it, so a re-run after a settings change recomputes instead of
+    # silently reusing an answer the new configuration would never have given.
+    {"signals", "faces", "regions", "segments", "candidates", "meta",
+     "promises", "atoms", "threads", "graph", "anchors", "segment_types", "regions_by_segment"}
 )
 
 _SUBDIRS = (
@@ -131,6 +139,13 @@ def paths(project_id: str) -> dict[str, Path]:
         "segments": analysis / "segments.json",
         "candidates": analysis / "candidates.json",
         "meta": analysis / "meta.json",
+        "promises": analysis / "promises.json",
+        "atoms": analysis / "atoms.json",
+        "threads": analysis / "threads.json",
+        "graph": analysis / "graph.json",
+        "anchors": analysis / "anchors.json",
+        "segment_types": analysis / "segment_types.json",
+        "regions_by_segment": analysis / "regions_by_segment.json",
     }
 
 

@@ -37,12 +37,10 @@ from services.clipper.content_geom import (
     _GRID_ROWS,
     _HUD_MAX,
     _MAX_FRAMES,
-    _TRACK_IOU,
     _WEBCAM_AREA,
     _WEBCAM_ASPECT,
     _WORK_WIDTH,
     aspect_ok,
-    build_tracks,
     clamp01,
     classify_features,
     corner_proximity,
@@ -52,13 +50,11 @@ from services.clipper.content_geom import (
     rect_area_frac,
     rect_aspect,
     rect_centre,
-    rect_iou,
     rect_overlap_frac,
     snap_rect,
     speech_ratio,
     summarize_faces,
     summarize_motion,
-    track_stability,
     transcript_text,
 )
 
@@ -84,23 +80,6 @@ def _cv() -> Any:
         except ImportError as exc:  # pragma: no cover - opencv is a hard dep
             logger.error("clipper: opencv unavailable (%s); visual analysis off", exc)
     return _CV
-
-
-def _face_cascade() -> Any:
-    global _CASCADE, _CASCADE_TRIED
-    if _CASCADE_TRIED:
-        return _CASCADE
-    _CASCADE_TRIED = True
-    cv = _cv()
-    if cv is None:
-        return None
-    try:
-        path = Path(cv.data.haarcascades) / "haarcascade_frontalface_default.xml"
-        clf = cv.CascadeClassifier(str(path))
-        _CASCADE = None if clf.empty() else clf
-    except Exception as exc:
-        logger.warning("clipper: Haar face cascade unavailable (%s)", exc)
-    return _CASCADE
 
 
 def _pick(items: Sequence[str], limit: int) -> list[str]:
@@ -139,19 +118,45 @@ def _load_frames(frames: Sequence[str]) -> tuple[list[Any], float, int, int]:
 
 
 def _patch_motion(grays: Sequence[Any], w: int, h: int) -> tuple[float, float]:
-    """(corner stability, centre motion), both 0..1. 0.08 mean abs diff is a
-    fully-changed patch in practice — brightness flicker sits well below it."""
+    """(corner stability, centre motion), both 0..1, both RELATIVE.
+
+    Each is measured against the same frame pair's own overall change, never
+    against a fixed amount of pixel difference.
+
+    The absolute version compared to 0.08, on the grounds that "0.08 mean abs
+    diff is a fully-changed patch in practice — brightness flicker sits well
+    below it". That is true of ADJACENT video frames, and these are not: the
+    frames handed to the classifier are sampled across the whole source, so on
+    a 4-hour VOD two consecutive ones are ~36 seconds apart and everything in
+    both patches has changed. Measured on five sources, `corner_stability` came
+    back 0.000 on four of them and `centre_motion` 1.000 on all five — so
+    `hud_signal = corner * centre` was 0 everywhere, and the 1.8-weight gaming
+    vote it feeds could never fire. `screen_like` died the same way.
+
+    Fifth time an absolute threshold has measured nothing here, after
+    audio_peak_ratio, audio_dynamic_range, game_ui_ratio and the atom marks.
+    Same fix every time: compare a thing to its own context.
+    """
     if len(grays) < 2 or w < 8 or h < 8:
         return 1.0, 0.0
     cw, ch = max(4, int(w * _CORNER_FRAC)), max(4, int(h * _CORNER_FRAC))
     boxes = [(0, 0), (w - cw, 0), (0, h - ch), (w - cw, h - ch)]
-    corner_d, centre_d = [], []
+    corner_d, centre_d, overall_d = [], [], []
     for a, b in zip(grays, grays[1:]):
         d = np.abs(a.astype(np.int16) - b.astype(np.int16))
         corner_d.append(float(np.mean([np.mean(d[y:y + ch, x:x + cw]) for x, y in boxes])) / 255.0)
         centre_d.append(float(np.mean(d[h // 4:h - h // 4, w // 4:w - w // 4])) / 255.0)
-    return (clamp01(1.0 - float(np.mean(corner_d)) / 0.08),
-            clamp01(float(np.mean(centre_d)) / 0.08))
+        overall_d.append(float(np.mean(d)) / 255.0)
+    corner = float(np.mean(corner_d))
+    centre = float(np.mean(centre_d))
+    overall = float(np.mean(overall_d))
+    if overall <= 1e-9:
+        return 1.0, 0.0  # nothing changed anywhere; no evidence either way
+    # Stability: how much LESS the corners change than the frame as a whole.
+    # Motion: how much MORE the middle changes than the border — which is the
+    # thing the HUD signal was always trying to say.
+    return (clamp01(1.0 - corner / overall),
+            clamp01(1.0 - corner / max(centre, 1e-9)))
 
 
 def frame_features(frames: Sequence[str]) -> dict[str, Any]:
@@ -178,6 +183,51 @@ def frame_features(frames: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def _scene_faces(frames: Sequence[str]) -> int | None:
+    """How many people are in the SCENE, ignoring anyone in a facecam inset.
+
+    Replaces the modal faces-per-frame for the two-people question, and both
+    halves of that matter.
+
+    The MODAL count cannot answer it. Measured on the labelled sources it
+    returns 1 or 0 everywhere — including 0 on the two Minecraft sources, which
+    demonstrably have two faces on screen, because the cascade misses in enough
+    frames that zero is the commonest answer. `two_up` needs 2 or 3, so
+    `podcast` and `interview` could never win their own vote and never once did
+    on any source. Counting stable CLUSTERS instead is robust to per-frame
+    misses: it gets both Minecraft sources right, and an edited interview that
+    cuts between speakers reads as several clusters rather than one face.
+
+    Ignoring insets is the other half. Two people in facecam insets is a
+    co-stream, not two people sitting together, and counting clusters alone
+    turned the 12-minute Minecraft slice from `gaming` into `interview`.
+    Excluding clusters that sit inside a detected webcam rect fixes that
+    without touching the case it was added for.
+
+    Measured end to end on the eight labelled sources: modal 3/8, clusters
+    alone 3/8 (one fixed, one broken), clusters outside insets **4/8**.
+
+    None when the frames cannot be read, so the caller keeps the old statistic
+    rather than being told there is nobody on screen.
+    """
+    grays, _sat, fw, fh = _load_frames(frames or [])
+    if not grays or fw < 16 or fh < 16:
+        return None
+    faces = _face_boxes(grays)
+    total = max(1, len(faces))
+    cams, _confs = _find_webcams(grays, faces, fw, fh)
+    count = 0
+    for group in _face_groups(faces, fw, fh):
+        hits = len({i for i, _ in group})
+        if hits < _FACECAM_MIN_HITS or hits / total < _FACECAM_MIN_RATE:
+            continue
+        median = median_rect([b for _, b in group])
+        if median and any(rect_overlap_frac(median, cam) > 0.5 for cam in cams):
+            continue                      # this one is a facecam, not the scene
+        count += 1
+    return count
+
+
 def detect_content_type(frames: list[str], signals: dict,
                         transcript: dict) -> dict[str, Any]:
     """{'content_type','confidence' 0..1,'evidence':[str,..]}"""
@@ -187,6 +237,9 @@ def detect_content_type(frames: list[str], signals: dict,
     fh = int(features.get("frame_height") or signals.get("frame_height") or 0)
     features.update(summarize_motion(signals))
     features.update(summarize_faces(signals, fw, fh))
+    scene = _scene_faces(frames or [])
+    if scene is not None:
+        features["face_count"] = float(scene)
     features["speech_ratio"] = speech_ratio(signals)
     features.update(keyword_scores(transcript_text(transcript)))
     return classify_features(features)
@@ -197,78 +250,240 @@ def detect_content_type(frames: list[str], signals: dict,
 # --------------------------------------------------------------------------
 
 def _face_boxes(grays: Sequence[Any]) -> list[list[dict]]:
-    clf = _face_cascade()
-    if clf is None:
-        return [[] for _ in grays]
+    """Per-frame face rects, through the ONE tuned detector in signals.py.
+
+    This used to run its own cascade at its own settings. On the co-stream that
+    detector found 0 faces in 40 frames where the tuned one finds 27, which is
+    the whole reason regions.json reported no webcam on a source with two.
+    """
+    from services.clipper.signals import detect_faces  # noqa: PLC0415 — Pass B uses Pass A
+
     out: list[list[dict]] = []
     for gray in grays:
         try:
-            side = max(12, gray.shape[1] // 24)
-            found = clf.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5,
-                                         minSize=(side, side))
+            found = detect_faces(gray)
         except Exception as exc:
             logger.warning("clipper: face detection failed on a frame (%s)", exc)
             found = []
-        out.append([make_rect(*(int(v) for v in box)) for box in (found if found is not None else [])])
+        out.append([make_rect(*box) for box in found])
     return out
 
 
-def _webcam_candidates(edges: Sequence[Any], fw: int, fh: int) -> list[list[dict]]:
-    cv = _cv()
-    min_peri = 4 * 0.06 * min(fw, fh)
-    per_frame: list[list[dict]] = []
-    for edge in edges:
-        found: list[dict] = []
-        try:
-            contours, _ = cv.findContours(edge, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
-        except Exception as exc:
-            logger.warning("clipper: contour pass failed on a frame (%s)", exc)
-            contours = []
-        for contour in contours:
-            peri = cv.arcLength(contour, True)
-            if peri < min_peri:
-                continue
-            approx = cv.approxPolyDP(contour, 0.03 * peri, True)
-            if len(approx) != 4:
-                continue
-            rect = make_rect(*cv.boundingRect(approx))
-            if not aspect_ok(rect, *_WEBCAM_ASPECT):
-                continue
-            if not _WEBCAM_AREA[0] <= rect_area_frac(rect, fw, fh) <= _WEBCAM_AREA[1]:
-                continue
-            found.append(rect)
-        per_frame.append(found)
-    return per_frame
+# A facecam that a Haar cascade sees in a THIRD of frames is doing well: the
+# streamer looks away, leans out, gets covered by an alert. Measured on the
+# co-stream's 40 sampled frames, the two real facecams landed 14 and 13 hits;
+# the busiest false position landed 1. The old gate wanted half the frames,
+# which neither real facecam could ever have cleared.
+_FACECAM_MIN_HITS = 3
+_FACECAM_MIN_RATE = 0.15
+# Faces whose centres sit this close, as a frame fraction, are one person.
+_FACECAM_TOL = 0.12
+# Where the inset's edge is looked for, as multiples of the median face box.
+# Below the inner bound is the face itself; past the outer one is the game.
+# On the co-stream the two insets measure 5.3x and 4.5x the face width, so the
+# outer bound has to be generous — a facecam frames a head with a lot of room.
+_FACECAM_INNER, _FACECAM_OUTER = 0.75, 4.0
+# ...but never further than this share of the FRAME. The outer bound is a
+# multiple of the median face box and that box wobbles between 22 and 62 px
+# across eighths of one source, so on a small box a 4x reach searches rows
+# 0-144 of a 270-row frame — and inside a window that wide the strongest
+# gradient is whatever the busiest thing in the picture is. Measured on Jynxzi,
+# it was the stream's own top chrome.
+_FACECAM_REACH_CAP = 0.30
+# An inset sits against an edge of the frame. Of nine features measured over 68
+# labelled candidates this one separates best by a wide margin — 93% with a
+# single threshold, against 73% for the next — and it is the largest weight a
+# logistic fit gives. A learned classifier over all nine scored WORSE than this
+# feature alone under leave-one-source-out validation (84% against 91%), which
+# is why there is a constant here and not a model.
+#
+# Sensitivity, on the source scoreboard: 7/9 from 0.44 to 0.52 and 5/9 from
+# 0.55. 0.48 is the middle of that plateau. The cliff is moistcr1tikal, whose
+# inset sits at the left edge at mid-height rather than in a corner — the case
+# this file already records as penalised by corner_proximity. **A plateau
+# 0.08 wide on nine sources is thin. Do not nudge this without re-running
+# scripts/score_facecam.py.**
+_FACECAM_CORNER_MIN = 0.48
+# Fallback when no border step is found in range: the face box, padded.
+_FACECAM_PAD_W, _FACECAM_PAD_H = 2.6, 2.2
+# When the search runs into the frame border there may be no edge to find: a
+# facecam flush to the corner has no drawn boundary there, so the strongest
+# step in range is whatever texture happened to be inside it. The frame border
+# therefore wins unless the interior peak is clearly a real boundary.
+#
+# Measured on both test projects, peak-over-median for edges that touch the
+# frame: real boundaries 5.8 and 3.6, interior texture 2.4, 2.4 and 2.3. Real
+# boundaries away from the frame run 6.0 to 71. 3.0 sits in the gap with room
+# on both sides.
+_FACECAM_EDGE_DOMINANCE = 3.0
+# Below this a stretch has too few frames for the face cluster to clear its own
+# hit-rate gate, and the answer would be "no facecam" for lack of evidence
+# rather than for lack of a facecam.
+_MIN_RANGE_FRAMES = 12
 
 
-def _find_webcam(edges: Sequence[Any], faces: Sequence[Sequence[dict]],
+def _step_profiles(grays: Sequence[Any]) -> tuple[Any, Any]:
+    """(|dI/dx|, |dI/dy|) averaged over frames.
+
+    Averaging before thresholding is the point. A composited border is an edge
+    at the SAME pixel in every frame, but on a compressed 480p proxy Canny
+    flickers by a pixel and per-frame edge maps do not stack — measured, a
+    persistence map of the co-stream produced no usable border lines at all.
+    The underlying gradient does not flicker: averaged, the left inset's edge
+    stands at x=122 with 26.8 against a neighbourhood under 8.
+    """
+    stack = np.stack([g.astype(np.float32) for g in grays])
+    return (np.abs(np.diff(stack, axis=2)).mean(axis=0),
+            np.abs(np.diff(stack, axis=1)).mean(axis=0))
+
+
+def _snap_edge(profile: Any, seed: float, inner: float, outer: float,
+               limit: int, forward: bool) -> int:
+    """The inset's edge on one axis: the strongest step between the face and
+    the game, or the frame border when the facecam runs into it."""
+    lo = int(round(seed + inner)) if forward else int(round(seed - inner))
+    hi = int(round(seed + outer)) if forward else int(round(seed - outer))
+    lo, hi = (lo, min(limit, hi)) if forward else (max(0, hi), lo)
+    if hi - lo < 2 or profile.size == 0:
+        return max(0, min(limit, lo if forward else hi))
+    window = profile[lo:min(hi, profile.shape[0])]
+    if window.size == 0:
+        return max(0, min(limit, lo if forward else hi))
+    at = lo + int(np.argmax(window))
+
+    touches_frame = (hi >= limit - 1) if forward else (lo <= 1)
+    if touches_frame:
+        median = float(np.median(window))
+        dominant = median > 1e-6 and float(window.max()) / median >= _FACECAM_EDGE_DOMINANCE
+        if not dominant:
+            return limit if forward else 0
+    return at
+
+
+def _snap_inset(seed: dict, gx: Any, gy: Any, fw: int, fh: int) -> dict:
+    """Grow the median face box out to the inset's real bounds.
+
+    The face cluster answers WHERE reliably and HOW BIG not at all — measured
+    on the co-stream, the insets are 4.5x and 5.3x the face box, and no single
+    padding factor covers both plus a full-screen webcam. Given a seed the
+    bounds are a well-posed search though: step outward until the picture
+    changes, which is exactly what the averaged gradient marks.
+    """
+    cx, cy = rect_centre(seed)
+    half_w, half_h = seed["w"] / 2.0, seed["h"] / 2.0
+    rows = slice(max(0, int(cy - half_h)), max(1, int(cy + half_h)))
+    cols = slice(max(0, int(cx - half_w)), max(1, int(cx + half_w)))
+
+    col_prof = gx[rows, :].mean(axis=0) if gx.size else np.zeros(0)
+    row_prof = gy[:, cols].mean(axis=1) if gy.size else np.zeros(0)
+
+    inner_x, inner_y = half_w * _FACECAM_INNER * 2, half_h * _FACECAM_INNER * 2
+    outer_x = min(half_w * _FACECAM_OUTER * 2, fw * _FACECAM_REACH_CAP)
+    outer_y = min(half_h * _FACECAM_OUTER * 2, fh * _FACECAM_REACH_CAP)
+
+    x0 = _snap_edge(col_prof, cx, inner_x, outer_x, fw, forward=False)
+    x1 = _snap_edge(col_prof, cx, inner_x, outer_x, fw, forward=True)
+    y0 = _snap_edge(row_prof, cy, inner_y, outer_y, fh, forward=False)
+    y1 = _snap_edge(row_prof, cy, inner_y, outer_y, fh, forward=True)
+
+    if x1 - x0 < seed["w"] or y1 - y0 < seed["h"]:
+        return make_rect(cx - seed["w"] * _FACECAM_PAD_W / 2.0,
+                         cy - seed["h"] * _FACECAM_PAD_H / 2.0,
+                         seed["w"] * _FACECAM_PAD_W, seed["h"] * _FACECAM_PAD_H)
+    return make_rect(x0, y0, x1 - x0, y1 - y0)
+
+
+def _face_groups(faces: Sequence[Sequence[dict]], fw: int, fh: int
+                 ) -> list[list[tuple[int, dict]]]:
+    """Detections grouped by where they sit — one group per person on screen.
+
+    A co-stream has a facecam per person, and taking the median of every
+    detection lands between them, on the gameplay.
+    """
+    groups: list[list[tuple[int, dict]]] = []
+    for i, boxes in enumerate(faces):
+        for box in boxes:
+            cx, cy = rect_centre(box)
+            for g in groups:
+                centres = [rect_centre(b) for _, b in g]
+                gx = sum(c[0] for c in centres) / len(centres)
+                gy = sum(c[1] for c in centres) / len(centres)
+                if (abs(cx - gx) <= _FACECAM_TOL * fw
+                        and abs(cy - gy) <= _FACECAM_TOL * fh):
+                    g.append((i, box))
+                    break
+            else:
+                groups.append([(i, box)])
+    return groups
+
+
+def _find_webcams(grays: Sequence[Any], faces: Sequence[Sequence[dict]],
+                  fw: int, fh: int) -> tuple[list[dict], list[float]]:
+    """Every facecam inset, best first, with a confidence each.
+
+    Built FROM the faces, not confirmed by them. The old version searched for a
+    rectangular border contour and then asked whether a face sat inside it, and
+    on the co-stream that never fired once: measured over 40 frames it produced
+    10 candidate rects, nine of them seen in a single frame, so there was no
+    stable rectangle for a face to be inside of, and regions.json reported no
+    webcam on a source with two. The faces are the reliable half of that pair —
+    27 hits against 1 false positive — so the cluster seeds the search and the
+    averaged gradient supplies the bounds.
+
+    What separates a facecam from a texture the cascade likes is that IT IS
+    ALWAYS IN THE SAME PLACE. A wandering game camera drags a false positive
+    around with it; an inset is pixel-locked.
+    """
+    frames = max(1, len(faces))
+    gx, gy = _step_profiles(grays)
+
+    scored: list[tuple[float, dict]] = []
+    for group in _face_groups(faces, fw, fh):
+        hits = len({i for i, _ in group})
+        rate = hits / float(frames)
+        if hits < _FACECAM_MIN_HITS or rate < _FACECAM_MIN_RATE:
+            continue
+        median = median_rect([b for _, b in group])
+        if median is None:
+            continue
+        snapped = snap_rect(_snap_inset(median, gx, gy, fw, fh), fw, fh)
+        if not snapped:
+            continue
+        # An inset is small and landscape. Without this a wide IRL shot with
+        # people in it reports its own right half as a facecam — measured on
+        # the gym-camera project, area 0.36 and aspect 0.78, outside both
+        # bounds. The check has to sit on the FINAL rect: the fallback padding
+        # would sail through it too.
+        if not (_WEBCAM_AREA[0] <= rect_area_frac(snapped, fw, fh) <= _WEBCAM_AREA[1]):
+            continue
+        if not aspect_ok(snapped, *_WEBCAM_ASPECT):
+            continue
+        # An inset is against an edge. This is the gate the last three sessions
+        # were looking for, and it was already in the file — as 25% of the score
+        # below, where it could be outvoted. Capping the reach above made the
+        # rects plausible enough that the area gate stopped rejecting phantoms
+        # by accident, so something has to reject them on purpose.
+        if corner_proximity(snapped, fw, fh) < _FACECAM_CORNER_MIN:
+            continue
+        # Spread of the cluster's centres, as a share of its own size: a real
+        # inset holds still, a false positive drifts with the game camera.
+        centres = [rect_centre(b) for _, b in group]
+        drift = clamp01(max(
+            (max(c[0] for c in centres) - min(c[0] for c in centres)) / max(1.0, snapped["w"]),
+            (max(c[1] for c in centres) - min(c[1] for c in centres)) / max(1.0, snapped["h"]),
+        ))
+        score = (0.45 * clamp01(rate / 0.35) + 0.30 * (1.0 - drift)
+                 + 0.25 * corner_proximity(snapped, fw, fh))
+        scored.append((round(clamp01(score), 3), snapped))
+
+    scored.sort(key=lambda s: -s[0])
+    return [r for _, r in scored], [s for s, _ in scored]
+
+
+def _find_webcam(grays: Sequence[Any], faces: Sequence[Sequence[dict]],
                  fw: int, fh: int) -> tuple[dict | None, float]:
-    """A rectangular border is not enough — every UI panel is one. The rect only
-    counts as a facecam if a face sits inside it in at least half the frames."""
-    frames = len(edges)
-    tracks = [t for t in build_tracks(_webcam_candidates(edges, fw, fh)) if t]
-    best: tuple[float, dict] | None = None
-    for track in tracks:
-        rep = median_rect(track)
-        if rep is None:
-            continue
-        hits = sum(1 for boxes in faces
-                   if any(_inside(rect_centre(b), rep) for b in boxes))
-        if frames and hits < math.ceil(frames / 2):
-            continue
-        coverage = len(track) / float(max(1, frames))
-        score = (0.35 * clamp01(coverage) + 0.30 * (hits / float(max(1, frames)))
-                 + 0.15 * track_stability(track) + 0.20 * corner_proximity(rep, fw, fh))
-        if best is None or score > best[0]:
-            best = (score, rep)
-    if best is None:
-        return None, 0.0
-    return snap_rect(best[1], fw, fh), round(clamp01(best[0]), 3)
-
-
-def _inside(point: tuple[float, float], rect: dict) -> bool:
-    x, y = point
-    return rect["x"] <= x <= rect["x"] + rect["w"] and rect["y"] <= y <= rect["y"] + rect["h"]
+    rects, confs = _find_webcams(grays, faces, fw, fh)
+    return (rects[0], confs[0]) if rects else (None, 0.0)
 
 
 def _band_stats(rect: dict, edges: Sequence[Any], diffs: Sequence[Any]) -> tuple[float, float]:
@@ -279,8 +494,13 @@ def _band_stats(rect: dict, edges: Sequence[Any], diffs: Sequence[Any]) -> tuple
     return ed, mo
 
 
+def _overlaps_any(rect: dict, others: Sequence[dict | None], limit: float) -> bool:
+    return any(rect_overlap_frac(rect, o) > limit for o in others if o)
+
+
 def _find_chat(edges: Sequence[Any], diffs: Sequence[Any], fw: int, fh: int,
-               webcam: dict | None, mean_edge: float, mean_diff: float) -> tuple[dict | None, float]:
+               webcams: Sequence[dict | None], mean_edge: float,
+               mean_diff: float) -> tuple[dict | None, float]:
     """Chat is a tall edge-dense strip at a side edge that barely moves. When
     the evidence is thin we return None — a wrong chat rect steals screen area
     from the crop, which is worse than not finding one."""
@@ -291,7 +511,7 @@ def _find_chat(edges: Sequence[Any], diffs: Sequence[Any], fw: int, fh: int,
             rect = make_rect(x, int(fh * 0.05), bw, max(8, int(fh * 0.90)))
             if rect_aspect(rect) >= _CHAT_ASPECT_MAX:
                 continue
-            if rect_overlap_frac(rect, webcam) > 0.3:
+            if _overlaps_any(rect, webcams, 0.3):
                 continue
             ed, mo = _band_stats(rect, edges, diffs)
             if ed < mean_edge * 1.35:
@@ -309,10 +529,15 @@ def _find_chat(edges: Sequence[Any], diffs: Sequence[Any], fw: int, fh: int,
 
 
 def _find_hud(edges: Sequence[Any], diffs: Sequence[Any], fw: int, fh: int,
-              webcam: dict | None, chat: dict | None,
+              webcams: Sequence[dict | None], chat: dict | None,
               mean_edge: float, mean_diff: float) -> tuple[list[dict], float]:
     """Edge-dense, near-static grid cells hugging the frame border. These become
-    caption keep-out zones, so over-detecting only costs caption real estate."""
+    caption keep-out zones, so over-detecting only costs caption real estate.
+
+    Every facecam is excluded, not just the first: on the co-stream the second
+    one landed in regions.json as a HUD rect, which is both wrong and the
+    reason nothing downstream knew a second person was on screen.
+    """
     cw, ch = max(2, fw // _GRID_COLS), max(2, fh // _GRID_ROWS)
     kept: dict[tuple[int, int], float] = {}
     for row in range(_GRID_ROWS):
@@ -320,7 +545,7 @@ def _find_hud(edges: Sequence[Any], diffs: Sequence[Any], fw: int, fh: int,
             if 0 < col < _GRID_COLS - 1 and 0 < row < _GRID_ROWS - 1:
                 continue
             rect = make_rect(col * cw, row * ch, cw, ch)
-            if rect_overlap_frac(rect, webcam) > 0.4 or rect_overlap_frac(rect, chat) > 0.4:
+            if _overlaps_any(rect, list(webcams) + [chat], 0.4):
                 continue
             ed, mo = _band_stats(rect, edges, diffs)
             if ed < mean_edge * 1.5:
@@ -358,11 +583,46 @@ def _find_hud(edges: Sequence[Any], diffs: Sequence[Any], fw: int, fh: int,
     return rects, round(strength, 3)
 
 
+def detect_regions_by_range(frames: Sequence[str], frame_times: Sequence[float],
+                            ranges: Sequence[tuple[float, float]]
+                            ) -> list[dict[str, Any]]:
+    """`detect_regions` per stretch of the stream, instead of once for the file.
+
+    Layout is detected ONCE for a whole source, and seven of the eleven sources
+    labelled by hand change layout part-way through. On slice4h00test the whole
+    file returns ONE facecam for a stream that demonstrably has two, because the
+    400 sampled frames are spread across four hours and the first 35 minutes are
+    a full-frame camera with no game in them. The detection blends two layouts
+    and fits neither.
+
+    Nothing about HOW a region is found changes here — the same function runs on
+    fewer frames at a time. The same source cut into 12-minute pieces already
+    finds both insets, which is what says the failure is the averaging.
+
+    Each entry is a regions blob with `start`/`end` added.
+    """
+    out: list[dict[str, Any]] = []
+    for start, end in ranges or []:
+        mine = [f for f, t in zip(frames, frame_times) if start <= t <= end]
+        if len(mine) < _MIN_RANGE_FRAMES:
+            continue
+        blob = detect_regions(mine)
+        blob["start"], blob["end"] = round(start, 2), round(end, 2)
+        out.append(blob)
+    return out
+
+
 def detect_regions(frames: list[str]) -> dict[str, Any]:
-    """{'webcam','gameplay','chat','hud','confidence','frame_width','frame_height'}"""
+    """{'webcam','webcams','gameplay','chat','hud','confidence','frame_*'}
+
+    `webcams` lists EVERY facecam found, best first; `webcam` is the best one
+    and stays for callers that only ever wanted the streamer. A co-stream has
+    one per person, and a layout that only knows about the first will frame the
+    second as though it were the game.
+    """
     grays, _sat, fw, fh = _load_frames(frames or [])
     out: dict[str, Any] = {
-        "webcam": None, "gameplay": None, "chat": None, "hud": [],
+        "webcam": None, "webcams": [], "gameplay": None, "chat": None, "hud": [],
         "confidence": {"webcam": 0.0, "gameplay": 0.0, "chat": 0.0, "hud": 0.0},
         "frame_width": fw, "frame_height": fh,
     }
@@ -377,9 +637,11 @@ def detect_regions(frames: list[str]) -> dict[str, Any]:
     mean_edge = float(np.mean([np.count_nonzero(e) / max(1, e.size) for e in edges]))
     mean_diff = (float(np.mean([np.mean(d) for d in diffs])) / 255.0) if diffs else 0.0
 
-    webcam, w_conf = _find_webcam(edges, _face_boxes(grays), fw, fh)
-    chat, c_conf = _find_chat(edges, diffs, fw, fh, webcam, mean_edge, mean_diff)
-    hud, h_conf = _find_hud(edges, diffs, fw, fh, webcam, chat, mean_edge, mean_diff)
+    webcams, w_confs = _find_webcams(grays, _face_boxes(grays), fw, fh)
+    webcam = webcams[0] if webcams else None
+    w_conf = w_confs[0] if w_confs else 0.0
+    chat, c_conf = _find_chat(edges, diffs, fw, fh, webcams, mean_edge, mean_diff)
+    hud, h_conf = _find_hud(edges, diffs, fw, fh, webcams, chat, mean_edge, mean_diff)
 
     # Gameplay is whatever is left. A facecam can't be subtracted rectangularly,
     # so only a side chat strip actually narrows the frame.
@@ -391,9 +653,10 @@ def detect_regions(frames: list[str]) -> dict[str, Any]:
             gw = chat["x"]
     gameplay = snap_rect(make_rect(gx, 0, max(2, gw), fh), fw, fh)
 
-    out.update({"webcam": webcam, "gameplay": gameplay, "chat": chat, "hud": hud})
+    out.update({"webcam": webcam, "webcams": webcams, "gameplay": gameplay,
+                "chat": chat, "hud": hud})
     out["confidence"] = {
-        "webcam": w_conf, "chat": c_conf, "hud": h_conf,
+        "webcam": w_conf, "webcams": w_confs, "chat": c_conf, "hud": h_conf,
         # A full-frame fallback is a default, not a detection — say so.
         "gameplay": 0.75 if gw < fw else 0.5,
     }

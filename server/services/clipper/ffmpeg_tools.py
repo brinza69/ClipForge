@@ -160,6 +160,60 @@ def even(value: float) -> int:
     return n - (n % 2)
 
 
+# --------------------------------------------------------------------------
+# loudness — one chain, both renderers
+# --------------------------------------------------------------------------
+#
+# It lives here because the static and multi-shot renderers must not drift
+# apart on it. They already had: the multi-shot path normalised and the static
+# path shipped whatever level the source happened to have, so a clip that fell
+# back to the static layout came out quieter than one that did not.
+#
+# Measured on the references: integrated around -15 LUFS with a loudness range
+# of only 2.5-3.1 LU and true peak at or over 0 dBFS. That is a compressor
+# doing most of the work, so normalising alone leaves a clip sounding limp
+# beside them — the compander runs first and loudnorm parks the result at the
+# platform target.
+LOUDNESS_I = -14.0
+LOUDNESS_TP = -1.5
+
+# Delivery sample rate. The source is 48 kHz and so is every platform; this
+# exists because loudnorm leaves the stream at its own internal rate and
+# something has to put it back.
+AUDIO_RATE = 48000
+
+# The ceiling loudnorm's TP argument only AIMS at. `alimiter` takes it
+# linearly: 0.84 is -1.51 dBFS, matching LOUDNESS_TP.
+LIMITER_CEILING = 0.84
+
+
+def loudness_chain() -> str:
+    """The audio filter chain every clipper render shares.
+
+    Three of these four filters exist because of a measurement on a delivered
+    clip that a listener said sounded wrong. Without the last two it produced a
+    true peak of +0.2 dBFS against the -1.5 asked for, at 96 kHz:
+
+      * loudnorm in single pass is a DYNAMIC normaliser. Its TP argument is a
+        target it aims at across a lookahead window, not a ceiling it enforces,
+        and on an 18s clip it missed by 1.7 dB. Over 0 dBFS is inter-sample
+        clipping on playback. `alimiter` is the enforcement.
+      * loudnorm also resamples internally to 192 kHz and does not restore the
+        input rate, so the encoder negotiates the highest rate AAC accepts, and
+        192 kbit/s then pays for a band nobody can hear instead of the one they
+        can — a quality LOSS wearing a bigger number. `aresample` puts it back.
+      * `level=false` on the limiter is load-bearing and is NOT the default.
+        `alimiter` auto-levels its output back up to the ceiling unless told
+        not to, so the default limiter does the opposite of limiting: measured,
+        it returned +0.07 dBFS and dragged the integrated loudness to
+        -11.8 LUFS, undoing the loudnorm in front of it.
+    """
+    return (f"acompressor=threshold=-20dB:ratio=4:attack=5:release=120:makeup=2,"
+            f"loudnorm=I={LOUDNESS_I}:TP={LOUDNESS_TP}:LRA=4,"
+            f"aresample={AUDIO_RATE},"
+            f"alimiter=limit={LIMITER_CEILING}:level=false:attack=5:release=50")
+
+
 def escape_filter_path(path: str | Path) -> str:
     """Escape a path for use INSIDE an ffmpeg filter argument.
 

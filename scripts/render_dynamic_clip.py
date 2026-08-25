@@ -15,28 +15,31 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
-import subprocess
+import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, r"D:\clipforge\server")
+# Derived from this file's location, never hardcoded: the repo has already been
+# checked out on at least two machines under different drive letters, and an
+# absolute path here fails with "no such clipper project" pointing at a drive
+# that does not exist. CLIPFORGE_DATA_DIR overrides for a split data volume.
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO / "server"))
 
 from services.caption_overlays import build_overlays_ass          # noqa: E402
 from services.clipper import captions as clip_captions            # noqa: E402
 from services.clipper import dynamic_edit, dynamic_render         # noqa: E402
-from services.clipper.ffmpeg_tools import ffmpeg_bin, video_info  # noqa: E402
-from services.clipper.signals import face_presence                # noqa: E402
+from services.clipper.ffmpeg_tools import video_info              # noqa: E402
 
-DATA = Path(r"D:\clipforge\data\clipper")
-FACE_HOP_S = 0.25
+DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_REPO / "data")) / "clipper"
 
-# The slice of the frame that "is something happening in the game" is measured
-# over: right of the bottom-left facecam, left of the chat strip. Fractions of
-# width/height as (x0, x1, y0, y1).
-ACTION_BAND = (0.34, 0.86, 0.04, 0.94)
+# The per-window analysis moved into the service layer when the pipeline needed
+# it too; this script drives the same code the export path runs.
+from services.clipper.dynamic_cameras import ACTION_BAND          # noqa: E402
+from services.clipper.dynamic_window import (                     # noqa: E402
+    FACE_HOP_S, analyse_window,
+)
 
 
 def load(project: Path, name: str) -> dict | list:
@@ -46,103 +49,14 @@ def load(project: Path, name: str) -> dict | list:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-MOTION_COLS = 8
-
-
-def region_motion(window: Path, hop: float, band: tuple[float, float, float, float],
-                  src_w: int) -> tuple[list[float], list[float]]:
-    """(how much is happening in the game, where it is happening) per `hop`.
-
-    Two things the whole-frame motion signal in signals.json cannot give us.
-    It cannot answer "is something happening in the GAME", because the facecam
-    is in the same frame and he moves constantly — hence the band. And it has no
-    spatial component at all, so a gameplay camera built on it points at a fixed
-    rectangle and spends half the clip framing an empty wall. Splitting the band
-    into columns and returning the busiest one turns the second camera into
-    something that actually follows the action.
-
-    The focus value is an x centre in SOURCE pixels, ready to hand to
-    `dynamic_edit`; `-1.0` means "nothing moved, no opinion".
-    """
-    import cv2
-    import numpy as np
-
-    cap = cv2.VideoCapture(str(window))
-    try:
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) or 10.0
-        step = max(1, int(round(fps * hop)))
-        band_x0, band_x1 = src_w * band[0], src_w * band[1]
-        col_w = (band_x1 - band_x0) / MOTION_COLS
-
-        totals: list[float] = []
-        focus: list[float] = []
-        previous = None
-        index = 0
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if index % step == 0:
-                h, w = frame.shape[:2]
-                crop = frame[int(h * band[2]):int(h * band[3]),
-                             int(w * band[0]):int(w * band[1])]
-                grey = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY),
-                                  (MOTION_COLS * 12, 54),
-                                  interpolation=cv2.INTER_AREA).astype(np.float32)
-                if previous is None:
-                    totals.append(0.0)
-                    focus.append(-1.0)
-                else:
-                    diff = np.abs(grey - previous)
-                    totals.append(float(diff.mean()))
-                    per_col = diff.reshape(54, MOTION_COLS, 12).mean(axis=(0, 2))
-                    hottest = int(per_col.argmax())
-                    focus.append(-1.0 if per_col.max() <= 0.0
-                                 else band_x0 + (hottest + 0.5) * col_w)
-                previous = grey
-            index += 1
-        return totals, focus
-    finally:
-        cap.release()
-
-
-def analyse_window(proxy: Path, start: float, duration: float,
-                   band: tuple[float, float, float, float], src_w: int
-                   ) -> tuple[list[dict], list[float], list[float]]:
-    """(dense face track in proxy pixels, gameplay-band motion) for one window.
-
-    The whole-VOD face track in signals.json samples roughly every 11 seconds —
-    three boxes inside a 30-second clip, nowhere near enough to anchor 20 shots.
-    Cutting the window out of the proxy first turns hundreds of random seeks on
-    a 6-hour file into one sequential read, and both measurements share it.
-    """
-    work = Path(tempfile.mkdtemp(prefix="dynwin_"))
-    try:
-        window = work / "window.mp4"
-        subprocess.run(
-            [ffmpeg_bin(), "-y", "-loglevel", "error",
-             "-ss", f"{start:.3f}", "-i", str(proxy), "-t", f"{duration:.3f}",
-             "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
-             str(window)],
-            check=True, capture_output=True, timeout=600)
-
-        times = [i * FACE_HOP_S for i in range(int(duration / FACE_HOP_S) + 1)]
-        samples = face_presence(str(window), times)
-        # Re-base onto the source clock: dynamic_edit subtracts cand["start"].
-        faces = [{"t": float(s.get("t", 0.0)) + start, "boxes": s.get("boxes") or []}
-                 for s in samples]
-        totals, focus = region_motion(window, FACE_HOP_S, band, src_w)
-        return faces, totals, focus
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-
-
 def build_ass(cand: dict, out_dir: Path, stem: str, *, preset: str,
-              max_words: int, position: str, out_w: int, out_h: int) -> str | None:
+              max_words: int, position: str, out_w: int, out_h: int,
+              entry_pop: bool = False) -> str | None:
     """Word-highlight captions for the clip, or None when there is no speech."""
     plan = clip_captions.build_caption_plan(
         cand, {}, preset_id=preset, max_words=max_words, position=position,
-        layout={"safe_zones": {}, "out_w": out_w, "out_h": out_h})
+        layout={"safe_zones": {}, "out_w": out_w, "out_h": out_h},
+        entry_pop=entry_pop)
     overlays = clip_captions.caption_plan_to_overlays(plan)
     if not overlays:
         return None
@@ -162,6 +76,12 @@ def main() -> None:
     ap.add_argument("--max-words", type=int, default=2)
     ap.add_argument("--caption-pos", default="center",
                     help="bottom | center | hook — the references sit mid-frame")
+    ap.add_argument("--caption-pop", action="store_true",
+                    help="scale overshoot as each card lands (measured on _LQ379ZhspI)")
+    ap.add_argument("--fixed-band", dest="auto_band", action="store_false",
+                    default=True,
+                    help="use the hardcoded ACTION_BAND instead of deriving it "
+                         "from the detected facecam")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--style", default=None, help="JSON overrides for DEFAULT_STYLE")
     args = ap.parse_args()
@@ -208,20 +128,27 @@ def main() -> None:
         print(f"    {(cand.get('text') or '')[:110]}")
 
         t0 = time.time()
-        faces, motion, focus = analyse_window(proxy, start, duration,
-                                              ACTION_BAND, src_w)
-        seen = sum(1 for f in faces if f["boxes"])
-        print(f"    faces {seen}/{len(faces)} samples, "
-              f"{len(motion)} motion samples  ({time.time() - t0:.1f}s)")
+        win = analyse_window(
+            proxy, start, duration, None if args.auto_band else ACTION_BAND, src_w)
+        band = win["band"]
+        print(f"    banda de actiune x {band[0]:.2f}-{band[1]:.2f}  "
+              f"y {band[2]:.2f}-{band[3]:.2f}"
+              + ("  (derivata din facecam)" if args.auto_band else "  (constanta)"))
+        seen = sum(1 for f in win["faces"] if f["boxes"])
+        print(f"    faces {seen}/{len(win['faces'])} samples, "
+              f"{len(win['motion'])} motion samples  ({time.time() - t0:.1f}s)")
 
         plan = dynamic_edit.plan_dynamic_edit(
-            cand, signals, faces, src_w=src_w, src_h=src_h,
+            cand, signals, win["faces"], src_w=src_w, src_h=src_h,
             proxy_w=int(signals.get("proxy_width") or 0),
             proxy_h=int(signals.get("proxy_height") or 0),
-            game_motion=motion, game_focus=focus, game_motion_hop=FACE_HOP_S,
-            style=style)
+            game_motion=win["motion"], game_focus=win["focus"],
+            game_detail=win["detail"], game_ui=win["ui"],
+            game_motion_hop=win["hop"], style=style)
         shots = plan["shots"]
-        letters = {"face": "f", "face_tight": "F", "game": "g", "game_tight": "G"}
+        # lowercase -> uppercase reads widest -> tightest.
+        letters = {"face": "f", "face_medium": "m", "face_tight": "F",
+                   "game": "g", "game_tight": "G"}
         print(f"    {len(shots)} shots, {len(plan['hits'])} hits  "
               f"(avg {duration / max(1, len(shots)):.2f}s)  "
               f"[{''.join(letters.get(s['camera'], '?') for s in shots)}]")
@@ -231,7 +158,7 @@ def main() -> None:
 
         ass = build_ass(cand, out_dir, stem, preset=args.preset,
                         max_words=args.max_words, position=args.caption_pos,
-                        out_w=out_w, out_h=out_h)
+                        out_w=out_w, out_h=out_h, entry_pop=args.caption_pop)
 
         (out_dir / f"{stem}.plan.json").write_text(
             json.dumps(plan, indent=1), encoding="utf-8")
