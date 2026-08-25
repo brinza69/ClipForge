@@ -57,15 +57,17 @@ def _path() -> pathlib.Path:
 
 
 def all_targets() -> dict:
+    """Continutul fisierului, sau {} daca nu exista.
+
+    Lipsa fisierului NU e fatala aici: `get()` verifica intai mediul si accepta
+    o valoare implicita, deci un aparat care doar posteaza poate rula din
+    variabile de mediu, cu doar cheile de care are nevoie. Cine chiar are nevoie
+    de o cheie si n-o gaseste nicaieri afla in `get()`, cu tot cu motiv.
+    """
     global _cache
     if _cache is None:
         p = _path()
-        if not p.exists():
-            raise SystemExit(
-                f"lipseste {p}\n"
-                f"Vezi docstring-ul din scripts/targets.py pentru forma fisierului."
-            )
-        _cache = json.loads(p.read_text(encoding="utf-8"))
+        _cache = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
     return _cache
 
 
@@ -76,5 +78,9 @@ def get(key: str, default=None):
         return env
     val = all_targets().get(key, default)
     if val is None:
-        raise SystemExit(f"lipseste cheia '{key}' din {_path()}")
+        p = _path()
+        motiv = (f"lipseste cheia '{key}' din {p}" if p.exists()
+                 else f"nu exista {p}, si nici variabila CLIPFORGE_{key.upper()}")
+        ndl = chr(10)
+        raise SystemExit(motiv + ndl + "Vezi docstring-ul din scripts/targets.py pentru forma fisierului.")
     return val

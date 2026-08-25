@@ -42,7 +42,19 @@ from buffer_api import channel_by_name, default_org, gql  # noqa: E402
 from googleapiclient.discovery import build  # noqa: E402
 from services.drive_upload import _resolve_credentials  # noqa: E402
 
-DRIVE_ROOT = targets.get("povestitor_drive_folder")
+DRIVE_ROOT = targets.get("povestitor_drive_folder", "")
+
+
+def _canal(cheie):
+    """Numele canalului, sau "" daca lipseste.
+
+    `PROFILES` se construieste la importul modulului, deci un `targets.get()`
+    strict ar omori tot scriptul din cauza unui canal pe care rularea curenta
+    nu-l atinge niciodata — un aparat care posteaza doar povestitor nu are de ce
+    sa stie numele canalelor franceze. Lipsa se semnaleaza in `main()`, pe
+    profilul care chiar are nevoie de ea.
+    """
+    return targets.get(cheie, "")
 POSTED = "posted"
 # 4 postari/zi pe toate canalele (cerut 24 aug 2026). Al patrulea slot e
 # seara, nu la pranz: mediana vizualizarilor pe ultimele 45 de zile arata
@@ -94,7 +106,8 @@ def _meta_youtube(g, f, part, total):
 PROFILES = {
     "tiktok": {
         "inchis": "pista romana, oprita 25 aug 2026",
-        "channel": targets.get("tiktok_channel_ro"),
+        "channel": _canal("tiktok_channel_ro"),
+        "channel_key": "tiktok_channel_ro",
         "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "drive",
         "metadata": None,
@@ -103,7 +116,8 @@ PROFILES = {
     "facebook": {
         # Romana pe Facebook NU e inchisa: se termina intai stocul romanesc, si
         # abia dupa aceea trece pe `facebook_en`. Pe TikTok romana s-a incheiat.
-        "channel": targets.get("facebook_channel"),
+        "channel": _canal("facebook_channel"),
+        "channel_key": "facebook_channel",
         # acelasi plan ca TikTok: fisierele sunt aceleasi, difera doar evidenta
         # a ce s-a postat (folderul posted/ vs. istoricul din Buffer)
         "plan": _ROOT / "data" / "pov_post_list.json",
@@ -115,17 +129,19 @@ PROFILES = {
     # Pista ENGLEZA: alt folder de Drive, descrieri din coloana L. Ambele
     # canale povestitor au trecut pe engleza (TikTok 27 aug, Facebook 25 aug).
     "tiktok_en": {
-        "channel": targets.get("tiktok_channel_ro"),
+        "channel": _canal("tiktok_channel_ro"),
+        "channel_key": "tiktok_channel_ro",
         "plan": _ROOT / "data" / "pov_en_post_list.json",
-        "drive_root": targets.get("povestitor_en_drive_folder"),
+        "drive_root": _canal("povestitor_en_drive_folder"),
         "record": "drive",
         "metadata": None,
         "caption": _sufix_ro,
     },
     "facebook_en": {
-        "channel": targets.get("facebook_channel"),
+        "channel": _canal("facebook_channel"),
+        "channel_key": "facebook_channel",
         "plan": _ROOT / "data" / "pov_en_post_list.json",
-        "drive_root": targets.get("povestitor_en_drive_folder"),
+        "drive_root": _canal("povestitor_en_drive_folder"),
         "record": "buffer",
         "metadata": {"facebook": {"type": "reel"}},
         "caption": _sufix_ro,
@@ -139,14 +155,16 @@ PROFILES = {
         "caption": _sufix_ro,
     },
     "facebook_fr": {
-        "channel": targets.get("facebook_channel_fr"),
+        "channel": _canal("facebook_channel_fr"),
+        "channel_key": "facebook_channel_fr",
         "plan": _ROOT / "data" / "fr_post_list.json",
         "record": "buffer",
         "metadata": {"facebook": {"type": "reel"}},
         "caption": _prefix_fr,
     },
     "franceza": {
-        "channel": targets.get("tiktok_channel_fr"),
+        "channel": _canal("tiktok_channel_fr"),
+        "channel_key": "tiktok_channel_fr",
         "plan": _ROOT / "data" / "fr_post_list.json",
         "record": "buffer",
         "metadata": None,
@@ -286,6 +304,11 @@ def main():
     # `facebook_en`) — difera doar planul, folderul si coloana de descriere. O
     # rulare din obisnuinta ar pune romana pe un canal trecut pe engleza, si
     # s-ar vedea abia dupa publicare. Deci se cere spus explicit.
+    if not prof["channel"]:
+        raise SystemExit(
+            f"profilul '{which}' n-are canal: lipseste cheia "
+            f"'{prof.get('channel_key')}' din data/targets.json "
+            f"(sau variabila CLIPFORGE_{(prof.get('channel_key') or '').upper()}).")
     if prof.get("inchis") and "--si-inchise" not in argv:
         print(f"profilul '{which}' e inchis: {prof['inchis']}")
         print(f"canalul lui ({prof['channel']}) e acum pe engleza — foloseste "
