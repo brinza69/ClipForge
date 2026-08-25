@@ -32,6 +32,35 @@ def titlu(t):
     print(f"\n{'=' * 66}\n{t}\n{'=' * 66}")
 
 
+def de_facut():
+    """Ce a ramas neterminat dintr-o sesiune anterioara.
+
+    Un supraveghetor pornit in fundal moare la oprirea calculatorului. Fara
+    urma scrisa pe disc, treaba lui dispare fara sa spuna nimeni nimic — asa a
+    ramas reordonarea Contouse pe 25 august. Se scrie in `data/de_facut.json`
+    si se sterge de acolo cand s-a rezolvat.
+    """
+    import pathlib
+    p = pathlib.Path(_ROOT) / "data" / "de_facut.json"
+    if not p.exists():
+        return
+    try:
+        lista = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return
+    if not lista:
+        return
+    titlu("DE FACUT — ramas din sesiunea anterioara")
+    for x in lista:
+        print(f"  * {x.get('ce')}")
+        if x.get("de_ce"):
+            print(f"      de ce: {x['de_ce']}")
+        if x.get("cum"):
+            print(f"      cum:   {x['cum']}")
+    print()
+    print(f"  (sterge din {p.name} ce ai rezolvat)")
+
+
 def backenduri():
     titlu("BACKEND-URI SI RANDARI")
     for nume, port in BACKENDS.items():
@@ -216,6 +245,7 @@ def procese():
 
 if __name__ == "__main__":
     print(f"STARE CLIPFORGE — {datetime.now().strftime('%d %b %Y, %H:%M')}")
+    de_facut()
     backenduri()
     credite()
     cozi()
