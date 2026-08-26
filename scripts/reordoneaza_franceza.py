@@ -1,14 +1,20 @@
-"""Rearanjeaza o coada franceza: Varizz intai, apoi HerStory, apoi restul.
+"""Rearanjeaza o coada franceza: ultimele randate primele.
 
-Coada lui Contouse avea HerStory in fata (NR 29 -> 5) si Varizz abia peste trei
-saptamani. Aici nu se sterge si nu se recreeaza nimic — se muta doar `dueAt`,
-deci nu se pierde nicio postare si nu se creeaza duplicate.
+Ordinea ceruta pe 26 august: **clipul cel mai nou randat iese primul**. NR-ul nu
+spune nimic despre cand a fost facut un clip — NR 1 e din iunie, NR 91 de ieri —
+deci se ordoneaza dupa `created`, data fisierului de pe Drive, adusa in plan de
+`build_fr_post_list.py`.
+
+Aici nu se sterge si nu se recreeaza nimic — se muta doar `dueAt`, deci nu se
+pierde nicio postare si nu se creeaza duplicate.
 
 Doua lucruri care trebuie respectate:
   - `editPost` NU face actualizare partiala: fara text si assets raspunde
     "Post must have either text or media". Se trimite postarea intreaga.
   - partile aceluiasi clip raman consecutive si in ordine. Numarul partii se
-    citeste din caption (`Partie N :`), nu se ghiceste din pozitie.
+    citeste din caption (`Partie N :`), nu se ghiceste din pozitie. Ordonarea e
+    pe GRUP, nu pe fisier: partea 2 e randata dupa partea 1, deci o sortare
+    plata dupa data ar pune partea 2 prima.
 
     python reordoneaza_franceza.py --canal Contouse --dry
 """
@@ -28,7 +34,6 @@ DRY = "--dry" in sys.argv
 CANAL = sys.argv[sys.argv.index("--canal") + 1] if "--canal" in sys.argv else "Contouse"
 TZ = ZoneInfo("Europe/Bucharest")
 SLOTURI = [(8, 0), (13, 0), (18, 30), (20, 30)]
-PRIORITATE = {"Varizz": 0, "HerStory": 1}
 ID_RE = re.compile(r"id[=%]3?D?([A-Za-z0-9_-]{25,44})")
 PARTE_RE = re.compile(r"Partie\s+(\d+)\s*:", re.I)
 EDIT = ("mutation E($i: EditPostInput!) { editPost(input: $i) { "
@@ -41,6 +46,7 @@ Q = ("query P($i: PostsInput!, $f: Int, $a: String) { posts(input: $i, first: $f
 surse = json.loads((_ROOT / "data" / "surse_franceza.json").read_text(encoding="utf-8"))
 plan = json.loads((_ROOT / "data" / "fr_post_list.json").read_text(encoding="utf-8"))
 nr_dupa_id = {p["id"]: p["nr"] for p in plan}
+creat_dupa_id = {p["id"]: (p.get("created") or "") for p in plan}
 
 
 def cu_rabdare(fn, *a, **k):
@@ -77,12 +83,20 @@ for n in out:
     n["_drive"] = m.group(1) if m else None
     n["_nr"] = nr_dupa_id.get(n["_drive"])
     n["_sursa"] = surse.get(n["_nr"] or "", "?")
+    n["_creat"] = creat_dupa_id.get(n["_drive"], "")
     pm = PARTE_RE.search(n.get("text") or "")
     n["_parte"] = int(pm.group(1)) if pm else 1
 
 fara_nr = [n for n in out if not n["_nr"]]
 lucru = [n for n in out if n["_nr"]]
-lucru.sort(key=lambda n: (PRIORITATE.get(n["_sursa"], 2), int(n["_nr"]), n["_parte"]))
+# Ordonam GRUPURI (un NR = un grup), nu fisiere: data unui grup e cea mai
+# recenta dintre partile lui. Altfel partea 2, randata dupa partea 1, ar urca
+# peste ea si captionurile ar iesi (2/2) inaintea lui (1/2).
+_grup = {}
+for n in lucru:
+    _grup[n["_nr"]] = max(_grup.get(n["_nr"], ""), n["_creat"])
+_rang = {nr: i for i, nr in enumerate(sorted(_grup, key=lambda k: _grup[k], reverse=True))}
+lucru.sort(key=lambda n: (_rang[n["_nr"]], n["_parte"]))
 
 
 def sloturi():

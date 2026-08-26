@@ -1,7 +1,11 @@
 """ClipForge dual-GPU dispatcher.
 
-Drives TWO backends concurrently — A on the RTX 3060 (:8420), B on the
-GTX 1660 SUPER (:8421) — so two sheet rows process at once (one per GPU).
+Drives TWO backends concurrently — A on the GTX 1660 SUPER (:8420), B on the
+RTX 3060 (:8421) — so two sheet rows process at once (one per GPU).
+
+Maparea vine din `watchdog.ps1`, care da UUID-urile in ordinea indexului lui A
+si lui B; pe rigul asta index 0 e 1660. Verificat in `data/watchdog.log`, pe
+liniile `started backend ... gpu=<uuid>`, nu dedus din numele placilor.
 Reads pending rows (URL set, description empty), sends one to each free
 backend via /api/auto (explicit URL), then writes the AI description back to
 the sheet. Runs forever; picks up new rows automatically. Ctrl+C / kill to stop.
@@ -25,7 +29,13 @@ TAB = _cfg.get("tab", "Sheet1")
 # 2 = tot sheet-ul. A stat pe 199 cat timp se lucra doar la lotul nou; asta ascundea
 # ~180 de randuri vechi fara narator/comentator, care nu ar fi fost randate niciodata.
 MIN_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MIN_ROW", "2"))
-# A -> :8420 (GPU 0), B -> :8421 (GPU 1). On a single-GPU PC only A is reachable;
+# Limita de sus, ca un lot sa nu se reverse peste urmatorul. Randurile din sheet
+# sunt loturi consecutive cu roluri diferite: 285-294 cer narator+comentator,
+# 295-302 cer povestitor. Fara MAX_ROW, dispecerul termina primul lot si trece
+# linistit in al doilea cu presetele gresite — pe credite ElevenLabs.
+# 0 = fara limita.
+MAX_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MAX_ROW", "0"))
+# A -> :8420 (GPU 0 = 1660 SUPER), B -> :8421 (GPU 1 = 3060). Single-GPU: only A;
 # B is auto-skipped at assign time (see backend_up). Labels are by index, not card
 # model, so the rig is portable to any machine.
 BACKENDS = {"A(:8420)": "http://127.0.0.1:8420", "B(:8421)": "http://127.0.0.1:8421"}
@@ -239,7 +249,7 @@ def read_pending():
         pend = (r[pcol].strip() if len(r) > pcol and r[pcol] else "")
         # Skip @herytstory rows — those are French content handled by
         # victoria_dispatch.py (French desc -> col E), not Romanian.
-        if i < MIN_ROW or not b.startswith("http") or "herytstory" in b.lower():
+        if i < MIN_ROW or (MAX_ROW and i > MAX_ROW)                 or not b.startswith("http") or "herytstory" in b.lower():
             continue
         # A row still needs work when its description is missing OR when any
         # role's video is not on Drive yet. Keying on the description alone

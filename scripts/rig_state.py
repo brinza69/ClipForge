@@ -27,6 +27,7 @@ CHEI = {
     "CLIPFORGE_DISPATCHER_2": "",
     "CLIPFORGE_PRESETS": "narator,comentator",
     "CLIPFORGE_DISPATCH_MIN_ROW": "2",
+    "CLIPFORGE_DISPATCH_MAX_ROW": "0",
     # Cate un outro pe limba. Fara cel pe limba variantei se cade pe
     # CLIPFORGE_TTS_OUTRO, care e romanesc — iar un motor englezesc il citeste
     # fonetic si scoate galimatie ("The likesy-follow doc of Ray Savezi").
@@ -85,6 +86,7 @@ def main():
                   "--dispatcher2": "CLIPFORGE_DISPATCHER_2",
                   "--presets": "CLIPFORGE_PRESETS",
                   "--min-row": "CLIPFORGE_DISPATCH_MIN_ROW",
+                  "--max-row": "CLIPFORGE_DISPATCH_MAX_ROW",
                   "--outro": "CLIPFORGE_TTS_OUTRO",
                   "--outro-fr": "CLIPFORGE_TTS_OUTRO_FR",
                   "--outro-en": "CLIPFORGE_TTS_OUTRO_EN",

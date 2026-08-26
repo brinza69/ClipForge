@@ -21,7 +21,10 @@ OUT = os.path.join(RADACINA, r"data\exports\dual_status.json")
 THUMBS = os.path.join(RADACINA, r"data\exports\thumbs")
 DISPATCH_LOG = os.path.join(RADACINA, r"data\dispatch.log")
 _CF = 0x08000000 if os.name == "nt" else 0
-# :8420 ruleaza pe GPU 0, :8421 pe GPU 1 — vezi CUDA_VISIBLE_DEVICES din start_all.ps1
+# :8420 ruleaza pe GPU 0, :8421 pe GPU 1. Perechea nume<->port de mai jos e
+# corecta EXACT pentru ca `watchdog.ps1` da UUID-urile in ordinea indexului, la
+# fel ca `nvidia-smi`. Pe rigul asta asta inseamna A=1660 SUPER, B=3060 —
+# invers fata de ce scria in trei comentarii pana pe 26 aug 2026.
 PORT_DB = {8420: os.path.join(RADACINA, r"data\db\clipforge.db"),
            8421: os.path.join(RADACINA, r"data_b\db\clipforge.db")}
 PORT_MEDIA = {8420: os.path.join(RADACINA, r"data\media"),

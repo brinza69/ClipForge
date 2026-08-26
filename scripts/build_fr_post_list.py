@@ -64,6 +64,9 @@ for f in res["files"]:
         "name": f["name"], "id": f["id"], "part": part,
         "url": (f.get("download_url") or f.get("link") or "").strip(),
         "mb": round(int(f.get("size") or 0) / 1048576) or None,
+        # data randarii — ordinea ceruta pe canale e "ultimele facute primele",
+        # iar NR-ul nu spune nimic despre cand a fost facut clipul
+        "created": f.get("created") or "",
     })
 
 plan, fara_desc = [], []

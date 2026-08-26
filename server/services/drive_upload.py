@@ -118,7 +118,7 @@ def list_folder_files(folder_link: str) -> dict:
         while True:
             resp = service.files().list(
                 q=f"'{folder_id}' in parents and trashed = false",
-                fields="nextPageToken, files(id,name,webViewLink,size)",
+                fields="nextPageToken, files(id,name,webViewLink,size,createdTime)",
                 pageSize=1000, pageToken=page,
                 supportsAllDrives=True, includeItemsFromAllDrives=True,
             ).execute()
@@ -128,6 +128,9 @@ def list_folder_files(folder_link: str) -> dict:
                     "id": fid,
                     "name": f.get("name", ""),
                     "size": int(f.get("size") or 0),
+                    # cand a fost randat fisierul; NR-ul nu spune nimic despre asta,
+                    # iar ordinea de postare ceruta pe canale e dupa data randarii
+                    "created": (f.get("createdTime") or "")[:19],
                     "link": f.get("webViewLink") or (f"https://drive.google.com/file/d/{fid}/view" if fid else ""),
                     # CRITICAL: the drive.google.com/uc?export=download form serves
                     # Google's virus-scan HTML page (Content-Type: text/html) for

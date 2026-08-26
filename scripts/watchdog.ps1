@@ -2,8 +2,16 @@
 # ClipForge rig watchdog — keeps the dual-GPU video factory running FOREVER.
 #
 # Cold-starts AND supervises the whole rig:
-#   - backend A : RTX 3060      (:8420, data/)
-#   - backend B : GTX 1660 SUPER(:8421, data_b/)
+#   - backend A : GTX 1660 SUPER (:8420, data/)
+#   - backend B : RTX 3060       (:8421, data_b/)
+#
+# Atentie: `Get-GpuUuids` intoarce UUID-urile in ORDINEA INDEXULUI si le da in
+# ordine lui A si lui B. Pe rigul asta `nvidia-smi` listeaza 1660 la index 0,
+# deci A primeste 1660, NU 3060 — verificat pe procesele care ruleaza, nu dedus.
+# Antetul spunea invers si a supravietuit asa luni de zile.
+# `scripts/start-dual-gpu.ps1` face invers (dupa MODEL), deci daca pornesti rigul
+# cu el, maparea se schimba in tacere. Watchdog-ul e cel care porneste in mod
+# normal backendurile.
 #   - dual_dispatch.py  (drives both backends from the Google Sheet)
 #   - dual_status_writer.py (live dashboard feed)
 #
