@@ -208,6 +208,9 @@ while ($true) {
         # urmatorului si reporneste rigul. Fara el placa B sta degeaba de la
         # primul lot terminat pana vine cineva sa schimbe presetele de mana.
         Ensure-Proc 'avanseaza_loturi\.py' "$root\scripts\avanseaza_loturi.py" "$root\data\loturi.out.log" "$root\data\loturi.err.log" "avans-loturi"
+        # Coada naratorului tine 10 postari (plafonul contului), adica 2,5
+        # zile la 4/zi. Fara realimentare, canalul tace in weekend.
+        Ensure-Proc 'umple_coada_narator\.py' "$root\scripts\umple_coada_narator.py" "$root\data\coada_narator.log" "$root\data\coada_narator.err.log" "coada-narator"
     }
 
     if ($tick % 20 -eq 0) {
