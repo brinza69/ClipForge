@@ -146,6 +146,19 @@ PROFILES = {
         "metadata": {"facebook": {"type": "reel"}},
         "caption": _sufix_ro,
     },
+    # Narator: canal conectat la Buffer pe 27 aug 2026. Numele lui trebuie pus
+    # in `data/targets.json` sub `narator_channel` — profilul se opreste cu un
+    # mesaj clar daca lipseste, nu ghiceste.
+    # `metadata` depinde de retea: Facebook cere {"facebook": {"type": "reel"}},
+    # TikTok nu cere nimic. Se completeaza cand se stie reteaua.
+    "narator": {
+        "channel": _canal("narator_channel"),
+        "channel_key": "narator_channel",
+        "plan": _ROOT / "data" / "narator_post_list.json",
+        "record": "buffer",
+        "metadata": None,
+        "caption": _sufix_ro,
+    },
     "narativ": {
         "inchis": "pista romana, oprita 25 aug 2026",
         "channel": "Narativ",          # canal YouTube, nu e in targets.json
