@@ -204,6 +204,10 @@ while ($true) {
                 "$root\data\dispatch2.err.log" "dispatcher2($($d2.Script) $($d2.Backend))" @('--backend', $d2.Backend)
         }
         Ensure-Proc 'dual_status_writer\.py' "$root\scripts\dual_status_writer.py" "$root\data\status.out.log" "$root\data\status.err.log"   "status-writer"
+        # Avanseaza loturile: cand cel curent se termina, scrie configuratia
+        # urmatorului si reporneste rigul. Fara el placa B sta degeaba de la
+        # primul lot terminat pana vine cineva sa schimbe presetele de mana.
+        Ensure-Proc 'avanseaza_loturi\.py' "$root\scripts\avanseaza_loturi.py" "$root\data\loturi.out.log" "$root\data\loturi.err.log" "avans-loturi"
     }
 
     if ($tick % 20 -eq 0) {
