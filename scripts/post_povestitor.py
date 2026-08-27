@@ -358,12 +358,24 @@ def main():
         print(f"deja pe canal: {len(done_ids)} prin Drive, {len(done_texts)} captions "
               f"(inclusiv istoricul importat, adica ce a fost postat manual)")
 
-    def is_done(f, desc=""):
+    def is_done(f, desc="", total=1):
         if f["name"] in done_names or f.get("id") in done_ids:
             return True
         # Postarile manuale nu au URL de Drive — se recunosc dupa caption.
         # Descrierile au 180-300 de caractere, deci un prefix de 40 e destul de
         # distinctiv incat sa nu dea fals pozitiv.
+        #
+        # La clipurile cu parti se compara captionul INTREG, nu descrierea:
+        # partile au aceeasi descriere si difera doar prin `(1/2)` / `(2/2)`, pus
+        # la SFARSIT. Cu prefix de 40, partea 2 parea postata de indata ce partea
+        # 1 ajungea pe canal — nu in aceeasi rulare, unde lista de captions se
+        # citeste o data la inceput, ci la urmatoarea. Adica exact cand un grup
+        # nu incapuse intreg in coada, si povestea ramanea publicata pe jumatate.
+        if total > 1:
+            # captionul INTREG, nu un prefix: sufixul e la SFARSIT, deci orice
+            # taiere il pierde si cele doua parti redevin identice.
+            plin = _norm(prof["caption"](desc, f.get("part", 1), total))
+            return bool(plin) and plin in done_texts
         key = _norm(desc)[:40]
         return bool(key) and any(x.startswith(key) for x in done_texts)
 
@@ -389,7 +401,7 @@ def main():
         if not g["desc"]:
             print(f"  sarit {g['key']}: fara descriere (captionul ar fi gol)")
             continue
-        todo = [f for f in g["files"] if not is_done(f, g["desc"])]
+        todo = [f for f in g["files"] if not is_done(f, g["desc"], len(g["files"]))]
         if not todo:
             continue
         if len(todo) > n_max - sent:
