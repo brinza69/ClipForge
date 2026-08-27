@@ -107,15 +107,19 @@ def main():
             card = LUCRU / ("card_" + nr + "_" + str(parte) + ".mp4")
             out = LUCRU / ("gata_" + nume)
             try:
-                c0 = cop.coada_pachete(orig)
+                n0, par0 = cop.amprenta(orig)
                 mf.pune_muzica(orig, cu_muzica, mel["db"], pathlib.Path(mel["fisier"]))
-                if cop.coada_pachete(cu_muzica) != c0:
-                    print("     imaginea s-a schimbat la mixaj — nu urc")
+                nm, parm = cop.amprenta(cu_muzica)
+                if (nm, parm) != (n0, par0):
+                    print("     mixajul a atins imaginea — nu urc")
                     continue
                 cop.fa_card(imagini[nr], card, parte, total)
                 cop.lipeste(card, cu_muzica, out)
-                if cop.coada_pachete(out) != c0:
-                    print("     imaginea s-a schimbat la lipire — nu urc")
+                n1, par1 = cop.amprenta(out)
+                cadre = round(cop.DURATA * cop.FPS)
+                if par1 != par0 or abs(n1 - n0 - cadre) > 2:
+                    print("     lipirea a iesit gresit: " + str(n0) + "->" + str(n1) +
+                          " pachete, " + par0 + " -> " + par1 + " — nu urc")
                     continue
                 d0, d1 = cop.durata(orig), cop.durata(out)
                 m1, x1 = mf.volum(out)

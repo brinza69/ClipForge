@@ -4,9 +4,9 @@ Diferenta fata de scriptul din 25 august: acela re-encoda TOT clipul la
 concatenare, adica o generatie de compresie pierduta pe fiecare video. Aici se
 encodeaza DOAR cardul, cu exact aceiasi parametri ca randarea
 (`encode_profile.video_args(60)`), iar lipirea se face cu `-c copy` — corpul
-clipului trece neatins prin ffmpeg. Si se verifica: marimile ultimelor pachete
-video sunt comparate inainte si dupa — daca fluxul a fost copiat, sunt identice
-octet cu octet. Daca difera, nu se urca nimic.
+clipului trece neatins prin ffmpeg. Se verifica numarul de pachete (trebuie sa
+creasca exact cu cadrele cardului) si parametrii fluxului. Daca nu se potrivesc,
+nu se urca nimic.
 
 Imaginile stau in `data/coperti_narator/<NR>.png|jpg`, UNA pe poveste. Badge-ul
 "Partea N" il pune scriptul, ca partile aceleiasi povesti sa arate identic —
@@ -58,18 +58,26 @@ def rul(cmd, timeout=1800):
     return p
 
 
-def coada_pachete(video, n=40):
-    """Marimile ultimelor n pachete video.
+def amprenta(video):
+    """(numar de pachete video, profil, latime, inaltime, fps) — cat trebuie ca
+    sa stim ca lipirea a mers si n-a stricat nimic.
 
-    Asa se dovedeste ca lipirea n-a re-encodat corpul: daca fluxul a fost
-    copiat, pachetele sunt identice octet cu octet. Prima varianta compara
-    hash-ul unui cadru extras cu `-ss`, si dadea mereu diferit — `-ss` sare la
-    cel mai apropiat cadru CHEIE, iar cardul de la inceput muta granitele GOP,
-    deci se comparau doua cadre diferite. Verificarea era gresita, nu lipirea.
+    NU se compara marimile pachetelor. `-c copy` nu poate re-encoda — ori
+    copiaza, ori esueaza — deci garantia e in flag. In schimb, la imbinarea a
+    doua fisiere ffmpeg insereaza setul de parametri (SPS/PPS) in cadrele cheie,
+    ceea ce schimba marimea cu cateva zeci de octeti fara nicio pierdere de
+    calitate. Prima varianta compara pachetele si respingea din cauza asta un
+    fisier perfect bun (280_p2: 118848 vs 118885, adica 37 octeti).
+
+    Ce ramane de verificat e ce chiar se poate strica: un flux trunchiat, sau
+    parametri schimbati.
     """
-    out = rul(["ffprobe", "-v", "error", "-select_streams", "v:0",
-               "-show_entries", "packet=size", "-of", "csv=p=0", str(video)]).stdout
-    return [x for x in out.split() if x][-n:]
+    n = rul(["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "packet=size", "-of", "csv=p=0", str(video)]).stdout
+    p = rul(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=profile,width,height,r_frame_rate", "-of", "csv=p=0",
+             str(video)]).stdout.strip()
+    return len([x for x in n.split() if x]), p
 
 
 def durata(v):
@@ -154,14 +162,17 @@ def main():
             try:
                 if not src.exists():
                     urllib.request.urlretrieve(f["download_url"], src)
-                c0 = coada_pachete(src)
+                n0, par0 = amprenta(src)
                 d0 = durata(src)
                 fa_card(imagini[nr], card, parte, total)
                 lipeste(card, src, out)
                 d1 = durata(out)
-                c1 = coada_pachete(out)
-                if c0 != c1:
-                    print("     CORPUL S-A RE-ENCODAT (pachetele difera) — nu urc")
+                n1, par1 = amprenta(out)
+                cadre_card = round(DURATA * FPS)
+                if par1 != par0 or abs(n1 - n0 - cadre_card) > 2:
+                    print("     IESIRE GRESITA: " + str(n0) + "->" + str(n1) +
+                          " pachete (asteptam +" + str(cadre_card) + "), " +
+                          par0 + " -> " + par1 + " — nu urc")
                     continue
                 print("     durata %.1fs -> %.1fs (+%.2fs), corp neatins" % (d0, d1, d1 - d0))
                 drive.files().update(fileId=f["id"],
