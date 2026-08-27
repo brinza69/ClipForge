@@ -36,17 +36,24 @@ for r in vals[1:]:
     if g(0):
         desc_by_nr[g(0)] = g(3)
 
-# Ordinea ceruta pe 25 aug 2026: intai tot ce vine de la Varizz, pana se
-# epuizeaza, apoi HerStory. Harta o face `surse_franceza.py`; un NR care lipseste
-# din ea (link adaugat intre timp) cade la coada si e raportat, ca sa nu treaca
-# neobservat pe locul gresit.
+# Ordinea ceruta pe 26 aug 2026: **ultimele randate primele**. Inlocuieste
+# regula de pe 25 aug (Varizz intai, apoi HerStory) — sursa ramane raportata mai
+# jos, fiindca e utila de stiut, dar nu mai decide ordinea.
+#
+# NR-ul nu spune nimic despre vechime: NR 1 e din iunie, NR 91 de ieri. Ordinea
+# vine din `created`, data fisierului de pe Drive. Aceeasi regula ca in
+# `reordoneaza_franceza.py` — daca cele doua nu se potrivesc, planul si coada
+# ajung in ordini diferite.
 SURSE = _ROOT / "data" / "surse_franceza.json"
 surse = json.loads(SURSE.read_text(encoding="utf-8")) if SURSE.exists() else {}
 PRIORITATE = {"Varizz": 0, "HerStory": 1}
 
 
 def ordine(nr):
-    return (PRIORITATE.get(surse.get(nr), 2), int(nr))
+    # cel mai nou fisier al NR-ului decide; minus pentru descrescator, iar
+    # NR-ul rupe egalitatile ca ordinea sa fie stabila
+    cel_mai_nou = max((f.get("created") or "") for f in by_nr[nr])
+    return (cel_mai_nou == "", [-ord(c) for c in cel_mai_nou], -int(nr))
 
 
 res = list_folder_files(targets.get("fr_drive_folder"))
