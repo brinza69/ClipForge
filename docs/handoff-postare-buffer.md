@@ -12,13 +12,16 @@ Verificat pe rig la 25 august 2026.
 
 | canal | retea | ce posteaza | profil |
 |---|---|---|---|
-| `povestitorul.ro` | TikTok | **engleza**, de la inceput | `tiktok_en` |
-| `Povestitorul` | Facebook | **intai stocul romanesc ramas**, apoi engleza | `facebook`, apoi `facebook_en` |
+| `povestitorul.ro` | TikTok | **engleza** | `tiktok_en` |
+| `Povestitorul` | Facebook | **romana, si asa ramane** | `facebook` |
 
-TikTok e trecut complet pe engleza. Pe Facebook se termina intai ce a mai ramas
-in romana — nu se arunca material bun — si abia dupa aceea incepe engleza.
-Cand `--channel facebook --dry` nu mai gaseste nimic de programat, ai terminat
-stocul romanesc: treci pe `facebook_en`.
+TikTok e pe engleza. **Facebook s-a intors pe romana pe 28 august si ramane
+acolo** — nu mai treci pe `facebook_en` cand se termina stocul romanesc, cum
+scria pana acum. Daca planul romanesc se goleste, spui, nu comuti singur pe
+engleza.
+
+**Fara coperta pe Facebook.** Clipurile romanesti se posteaza asa cum sunt, fara
+cardul de la inceput. Copertile raman doar pe TikTok englez.
 
 **Pe Drive cele doua stocuri sunt foldere separate**, ca sa nu existe confuzie:
 
