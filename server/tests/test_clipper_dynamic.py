@@ -136,18 +136,6 @@ def test_adjacent_shots_never_share_a_rect_either():
                    f"a cut that changes nothing, at {b['t0']}s, style={style}"
 
 
-def test_merging_a_dead_cut_keeps_the_timeline_whole():
-    """Removing a cut must not remove any of the clip with it."""
-    merged = dynamic_edit._merge_dead_cuts([
-        {"index": 0, "t0": 0.0, "t1": 1.0, "rect": {"x": 0, "y": 0, "w": 10, "h": 20}},
-        {"index": 1, "t0": 1.0, "t1": 2.5, "rect": {"x": 0, "y": 0, "w": 10, "h": 20}},
-        {"index": 2, "t0": 2.5, "t1": 4.0, "rect": {"x": 8, "y": 0, "w": 10, "h": 20}},
-    ])
-    assert [s["index"] for s in merged] == [0, 1]
-    assert merged[0]["t0"] == 0.0 and merged[0]["t1"] == 2.5
-    assert merged[-1]["t1"] == 4.0
-
-
 def test_shot_lengths_stay_inside_the_configured_band():
     style = {"min_shot_s": 0.6, "target_shot_s": 1.25, "max_shot_s": 2.4}
     shots = _plan(**style)["shots"]

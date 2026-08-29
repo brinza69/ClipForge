@@ -433,3 +433,34 @@ def test_a_missing_source_sizes_to_none_not_zero(tmp_path):
     real.write_bytes(b"x" * 17)
     assert jobs._size_bytes(real) == 17
     assert jobs._size_bytes(tmp_path / "gone.mp4") is None
+
+
+# --- Batch R1: removing an invisible cut must not change the renderer --------
+
+
+async def test_a_plan_merged_down_to_one_shot_stays_dynamic(wired, monkeypatch):
+    """The R1 merge joins two `fit` shots that deliver one image. A clip whose
+    only fault was that invisible cut comes back as a single shot, and counting
+    THAT would drop it onto the static path: different crop, different captions,
+    different renderer version — for a change that was supposed to remove one
+    redundant command and nothing else."""
+    dynamic_edit, _proxy = wired
+    monkeypatch.setattr(dynamic_edit, "plan_dynamic_edit", lambda *a, **k: {
+        "shots": [{"camera": "face"}], "warnings": [],
+        # What the planner decided, before the merge absorbed the second shot.
+        "shot_count_before_merge": 2, "equivalent_cuts_removed": 1})
+
+    plan = await jobs._dynamic_plan(_Clip(), _Project(), 1920, 1080)
+    assert plan is not None, "an invisible cut cost this clip the dynamic path"
+    assert len(plan["shots"]) == 1
+
+
+async def test_a_natively_single_shot_plan_still_falls_back(wired, monkeypatch):
+    """The other direction, unchanged: a planner that only ever found one shot
+    is a static crop with extra steps."""
+    dynamic_edit, _proxy = wired
+    monkeypatch.setattr(dynamic_edit, "plan_dynamic_edit", lambda *a, **k: {
+        "shots": [{"camera": "face"}], "warnings": [],
+        "shot_count_before_merge": 1, "equivalent_cuts_removed": 0})
+
+    assert await jobs._dynamic_plan(_Clip(), _Project(), 1920, 1080) is None

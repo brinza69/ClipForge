@@ -35,6 +35,7 @@ logger = logging.getLogger("clipforge.clipper.dynamic_edit")
 
 __all__ = ["DEFAULT_STYLE", "CAMERAS", "camera_rects", "plan_dynamic_edit"]
 
+from services.clipper import dynamic_geometry
 from services.clipper import dynamic_subject as subject_mod
 from services.clipper.dynamic_cameras import (   # noqa: F401  (re-exported)
     ASPECT,
@@ -116,35 +117,6 @@ def _contains(rect: dict, x: float, y: float) -> bool:
     """Is the point inside the rectangle."""
     return (rect["x"] <= x <= rect["x"] + rect["w"]
             and rect["y"] <= y <= rect["y"] + rect["h"])
-
-
-def _merge_dead_cuts(shots: list[dict]) -> list[dict]:
-    """Join neighbours that crop the identical rectangle.
-
-    A cut is only a cut if the picture changes. Two adjacent shots on the same
-    rect give the viewer a beat where the edit claims something happened and
-    nothing did, which reads worse than not cutting at all.
-
-    This became reachable when the gameplay ladder collapsed: with
-    `game_height_pct` and `game_zoom` both at 1.00 the `game` and `game_tight`
-    rungs are the same rectangle, so a g->G step is a dead cut. Measured on the
-    18s reference clip, it removes exactly one cut at that setting and none at
-    the two wider ladders — this is not a general reshaping of the edit.
-
-    The later shot's `snap` goes with it: a snap exists to land a cut.
-    """
-    if len(shots) < 2:
-        return shots
-    out = [shots[0]]
-    for shot in shots[1:]:
-        last = out[-1]
-        if all(last["rect"][k] == shot["rect"][k] for k in ("x", "y", "w", "h")):
-            last["t1"] = shot["t1"]
-            continue
-        out.append(shot)
-    for i, shot in enumerate(out):
-        shot["index"] = i
-    return out
 
 
 def _rung(family: Sequence[str], energy: float,
@@ -445,8 +417,6 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                 presence, t0, t1, presence_hop, presence_raw),
         })
 
-    shots = _merge_dead_cuts(shots)
-
     if not shots:
         warnings.append("The window was too short to cut; rendering it as one shot.")
         rect = dict(cams["face"])
@@ -458,7 +428,13 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             "energy": 0.5, "action": 0.5, "speech": 0.0, "text": "",
         }]
 
-    return {
+    # ONE merge, here, on the finished shot list — the fallback above included.
+    # It replaced `_merge_dead_cuts`, which compared the planned RECTANGLE and
+    # so could not see composition at all: two `fit` shots have different rects
+    # and deliver the identical full frame, which is how 116 invisible cuts
+    # reached the pilot corpus. A second pass after the planner would be too
+    # late; by then the plan no longer records what the absorbed shot was.
+    return dynamic_geometry.merge_equivalent_shots({
         "duration": round(duration, 3),
         "shots": shots,
         "hits": _hits(audio.get("peaks") or [], rms, hop, clip_start, duration, merged),
@@ -466,7 +442,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
         "style": merged,
         "subject": {"samples": len(samples), "face": face},
         "warnings": warnings,
-    }
+    }, src_w, src_h)
 
 
 # Split out at the 500-line limit; re-exported so the worker, the tests and the

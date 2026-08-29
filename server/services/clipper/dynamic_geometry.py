@@ -24,11 +24,20 @@ import math
 from pathlib import Path
 from typing import Any
 
-from services.clipper.dynamic_edit import ASPECT
+# From the module that OWNS it, not through `dynamic_edit`'s re-export. Going
+# the long way round made this module import the planner, and the planner could
+# not then import the geometry it plans — an accidental cycle that decided where
+# the shot merge was allowed to live.
+from services.clipper.dynamic_cameras import ASPECT
 from services.clipper.ffmpeg_tools import even
 
-__all__ = ["COMPOSITIONS", "canvas_size", "composition_of",
-           "build_sendcmd", "write_sendcmd"]
+__all__ = ["COMPOSITIONS", "canvas_size", "composition_of", "visual_key",
+           "merge_equivalent_shots", "build_sendcmd", "write_sendcmd"]
+
+# Two shots are contiguous when the second starts where the first ended. Float
+# noise from json, not an editorial judgement — the same tolerance the audit
+# uses, for the same reason.
+JOIN_EPS = 0.001
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +199,98 @@ def _position_exprs(shot: dict, biggest: tuple[int, int],
         x += f"+{shake:.2f}*sin({wx:.3f}*t)"
         y += f"+{shake * 0.7:.2f}*sin({wy:.3f}*t+1.1)"
     return x, y
+
+
+# ---------------------------------------------------------------------------
+# what the viewer actually receives
+# ---------------------------------------------------------------------------
+
+def visual_key(shot: dict, style: dict, src_w: int, src_h: int) -> tuple | None:
+    """The delivered image of one shot, or None when it cannot be compared.
+
+    This is the whole of R1. A cut exists only if the picture changes, and the
+    picture is not the plan's rectangle — it is what `build_sendcmd` schedules:
+    a size timeline and a pair of position expressions. Two `fit` shots have
+    different rects and deliver the identical full frame, which is why 116 cuts
+    in the pilot corpus were invisible.
+
+    None means "has a size timeline with more than one point", i.e. the shot
+    SNAPS or PUSHES. Its size changes across its own length, so joining it to a
+    neighbour would restart that movement mid-shot, and the join is refused
+    whatever else matches.
+
+    The timestamp of the single point is deliberately dropped: it is the shot's
+    own start, so keeping it would make every shot unique and the key useless.
+
+    Shake does NOT break equivalence, and the reason is worth keeping: the shake
+    term is a function of ABSOLUTE `t`, so an identical expression continues
+    unbroken across a join. A single point therefore means static SIZE, not a
+    static image — a shaking shot still qualifies, provided the anchor and the
+    amplitude are the same, because then the two expressions are the same
+    expression.
+
+    Exact comparison only. No IoU, no rect proximity, no perceptual threshold:
+    those need a measurement first, and R1 is the batch that removes the cuts
+    nobody can defend, not the ones somebody might.
+    """
+    timeline = _size_timeline(shot, style, src_w, src_h)
+    if len(timeline) != 1:
+        return None
+    _t, w, h = timeline[0]
+    return (w, h) + _position_exprs(shot, (w, h), src_w, src_h)
+
+
+def merge_equivalent_shots(plan: dict, src_w: int, src_h: int) -> dict:
+    """A new plan in which no cut is invisible. Pure: the input is not touched.
+
+    The first shot of a group keeps its geometry AND its metadata; only `t1`
+    grows, to the end of the group. Nothing here picks a "dominant" reason:
+    shots carry no `reason` or `confidence` yet, so choosing between two sets of
+    energies would be an invented rule dressed as a measurement. That
+    consolidation belongs to the batch that gives a shot a reason to state.
+
+    Runs ONCE, inside the planner. It replaced a merge that compared rectangles,
+    which could not see composition at all — and a second pass afterwards would
+    be too late, because by then the plan no longer records what the absorbed
+    shot's composition had been.
+    """
+    shots = (plan or {}).get("shots") or []
+    style = (plan or {}).get("style") or {}
+    merged: list[dict] = []
+    for shot in shots:
+        if merged and _joins(merged[-1], shot, style, src_w, src_h):
+            merged[-1] = {**merged[-1], "t1": shot.get("t1")}
+            continue
+        merged.append(dict(shot))
+    for i, shot in enumerate(merged):
+        shot["index"] = i
+    # How many shots the PLANNER decided on, kept because a later reader cannot
+    # recover it: `clipper_render_plan` refuses a plan of fewer than two shots
+    # and renders it statically, and without this a clip whose only fault was an
+    # invisible cut would silently change renderer, crop and captions. Removing
+    # a command nobody could see must not change the picture.
+    # Idempotent in the PROVENANCE too, not just in the shot list. Recomputing
+    # this from `len(shots)` made a second application report the merged count
+    # as the planned one, and the count is the only thing standing between a
+    # clip with one invisible cut and the static renderer.
+    before = int((plan or {}).get("shot_count_before_merge") or len(shots))
+    return {**(plan or {}), "shots": merged,
+            "shot_count_before_merge": before,
+            "equivalent_cuts_removed": before - len(merged)}
+
+
+def _joins(previous: dict, shot: dict, style: dict, src_w: int, src_h: int) -> bool:
+    """Whether `shot` continues the image `previous` is already showing."""
+    try:
+        gap = abs(float(previous.get("t1")) - float(shot.get("t0")))
+    except (TypeError, ValueError):
+        return False
+    if gap > JOIN_EPS:
+        # A hole between them means something else was on screen. Two shots
+        # either side of it are not one shot however alike they look.
+        return False
+    key = visual_key(previous, style, src_w, src_h)
+    return key is not None and key == visual_key(shot, style, src_w, src_h)
 
 
 # ---------------------------------------------------------------------------

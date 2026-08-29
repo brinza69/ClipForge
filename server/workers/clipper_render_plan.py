@@ -343,11 +343,18 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
             stable_track=stable),
     )
     shots = plan.get("shots") or []
-    if len(shots) < 2:
+    # What the PLANNER decided, not what survived the merge. A clip whose only
+    # fault was an invisible cut — two `fit` shots delivering one image — comes
+    # back from `merge_equivalent_shots` as a single shot, and counting that
+    # would drop it onto the static path: different crop, different captions,
+    # different renderer version, for a change that was supposed to remove one
+    # redundant command and nothing else.
+    planned = int(plan.get("shot_count_before_merge") or len(shots))
+    if planned < 2:
         # One shot is a static crop with extra steps, and the static path does
         # that better — it keeps the face band and the chat exclusion.
         logger.info("clip %s: the dynamic editor planned %d shot(s); using the "
-                    "static layout instead", clip.id, len(shots))
+                    "static layout instead", clip.id, planned)
         return None
     plan["src_w"], plan["src_h"] = src_w, src_h
     plan["band"] = list(window["band"])

@@ -20,7 +20,11 @@ duble și UI de browser. Motorul nu este încă aprobat pentru publicare automat
 (`python scripts/audit_clipper_exports.py pilotf81b pilotee0e pilot6b38 pilot2c8a`) și reproduce
 baseline-ul exact: 58 clipuri, 1.341 shot-uri, 29,3349/min, 116 tăieturi `fit → fit`. Este un gate,
 nu un raport — iese cu 2 pe artefacte corupte, sidecar-uri care numesc alt clip sau alt proiect și
-fingerprint-uri care nu mai corespund planului. Punctul de reluare este **Batch R1** din
+fingerprint-uri care nu mai corespund planului. **Batch R1 este de asemenea închis:** o tăietură
+există acum numai dacă imaginea livrată se schimbă, iar pe cele 58 de planuri 1.341 shot-uri devin
+1.225 — exact cele 116 invizibile. Exporturile randate le mai poartă până la re-randarea piloturilor,
+fiindcă auditul citește sidecar-urile, iar R1 a schimbat plannerul. Punctul de reluare este
+**Batch R2** din
 [`plans/ai-stream-clipper-production-engine-v1.md`](../plans/ai-stream-clipper-production-engine-v1.md).
 Detaliile și cifrele sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURRENT.md).
 
@@ -81,8 +85,8 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 
 ## Priorități globale
 
-1. Clipper Batch R1: o tăietură există numai dacă imaginea livrată se schimbă — cele 116 trebuie să
-   ajungă 0 fără ca restul baseline-ului să se miște.
+1. Clipper Batch R2: resolverul de profile și controlul din aplicație. R1 a scos cele 116 tăieturi
+   invizibile din planner; exporturile le mai poartă până la re-randarea piloturilor.
 2. Clipper R2–R7: montaj content-aware și gate tehnic separat de reasoning.
 3. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
 4. Consistență între DB și filesystem și idempotency pentru job-urile de export.

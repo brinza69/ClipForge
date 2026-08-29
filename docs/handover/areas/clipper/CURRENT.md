@@ -160,8 +160,10 @@ Ce trebuie știut înainte să te bazezi pe el:
 - **`captions_duplicate_declared` iese `unavailable` pe tot corpusul, și e corect.** Nimic din
   sidecar nu declară că sursa avea deja subtitrări arse; cei 15/15 pe go ghost au fost o observație
   umană. R6 trebuie să producă semnalul.
-- **Un trim refuză jumătatea bazată pe shot-uri.** `drop_spans` schimbă montajul, nu doar ceasul;
-  reconstrucția secvenței livrate este a lui R1. Ceasul, lead-in-ul și tail-ul rămân exacte.
+- **Un trim refuză jumătatea bazată pe shot-uri.** `drop_spans` schimbă montajul, nu doar ceasul, iar
+  evaluatorul marchează `trimmed_edit_not_reconstructed` în loc să ghicească. Reconstrucția secvenței
+  livrate este **Batch R8**, un batch propriu — nu a lui R1, care este despre echivalență. Ceasul,
+  lead-in-ul și tail-ul rămân exacte.
 - Sidecar-ul poartă acum `render_version` (care renderer a rulat, static sau dinamic),
   `input_fingerprint`, `drop_spans`, `caption_y` și dimensiunea sursei. Nimic nu este ștampilat
   retroactiv.
@@ -170,15 +172,33 @@ Ce a rămas deliberat în afara R0: `width`/`height` nu sunt în sidecar, fiindc
 comună pentru dimensiunea de ieșire — ambele renderere o poartă ca default de parametru. Se rezolvă
 cu o constantă comună transmisă explicit ambelor căi, într-un batch ulterior.
 
+## Batch R1 — ÎNCHIS, 29 august 2026
+
+O tăietură există numai dacă imaginea livrată se schimbă. Cheia nu mai este dreptunghiul planificat,
+ci ce emite rendererul: timeline-ul de dimensiuni plus expresiile de poziție. Pe cele 58 de planuri,
+**1.341 shot-uri devin 1.225** — exact cele 116 tăieturi invizibile, zero rămase:
+
+```bash
+python scripts/build_shot_merge_fixture.py
+```
+
+Trei lucruri de reținut:
+
+- **Auditul R0 va raporta în continuare 116 pe exporturile existente.** El citește sidecar-urile
+  randate, iar R1 a schimbat plannerul. Cifra devine 0 abia după re-randarea piloturilor.
+- **Un shot care se mișcă nu se unește niciodată** — la tăietură mișcarea ar reporni. Un shake
+  identic se unește: expresia folosește timpul absolut, deci continuă neîntreruptă peste joncțiune.
+- **Merge-ul păstrează `shot_count_before_merge`.** `clipper_render_plan` respinge planurile cu mai
+  puțin de două shot-uri și le randează static; fără provenență, un clip a cărui singură vină era o
+  tăietură invizibilă și-ar fi schimbat rendererul, crop-ul și captions-urile.
+
 ## Punctul exact de reluare
 
-Următoarea sesiune începe cu **Batch R1** — echivalența vizuală după compoziția finală — din
-[`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md).
-Gate-ul lui: zero tăieturi exact echivalente pe cele 58 de planuri, aceeași durată, aceleași
-captions, zero regresii de geometrie. Adică cele 116 trebuie să ajungă 0 fără ca restul tabelului de
-mai sus să se miște.
+Următoarea sesiune începe cu **Batch R2** — resolverul de profile și controlul din aplicație — din
+[`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md),
+acum versionat în repo.
 
-Nu porni Batch R1–R7 în paralel și nu activa `story_v2`. Planul separă gate-ul de selecție de gate-ul
+Nu porni Batch R2–R8 în paralel și nu activa `story_v2`. Planul separă gate-ul de selecție de gate-ul
 de randare tocmai fiindcă review-ul existent le-a amestecat.
 
 ## Starea artefactului curent
