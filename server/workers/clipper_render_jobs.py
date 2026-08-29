@@ -331,6 +331,10 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         # them off detected game UI, `null` when the stored position stood.
         "caption_y": caption_y,
         "content_type": clip.content_type,
+        # What grammar this clip WOULD be cut with, why, and whether the mode in
+        # force actually applied it. Recorded on every export since R2 so the
+        # profile can be compared against the delivered edit without changing it.
+        "edit_profile": decision["edit_profile"],
         "analysis_version": project.analysis_version,
         "ranker_version": clip.ranker_version,
         # The dead seconds this render removed. Without them the sidecar

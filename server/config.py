@@ -240,6 +240,14 @@ class Settings(BaseSettings):
     # Blank means "derive it from the two legacy keys above", so an operator who
     # already set CLIPFORGE_CLIPPER_LLM_SELECT keeps exactly what they had.
     clipper_reasoning_mode: str = ""
+    # WHICH editing grammar the renderer uses (Batch R2):
+    #   "legacy_dynamic"        — the renderer exactly as it is today
+    #   "content_aware_shadow"  — resolve and record the profile, deliver legacy
+    #   "content_aware"         — not selectable yet; see edit_profiles.SELECTABLE
+    #
+    # Blank means `legacy_dynamic`. Set to shadow to make the profile observable
+    # on this rig without changing a single export.
+    clipper_edit_mode: str = ""
     # How long any one model call may take before the next engine is tried.
     # A provider that never answers is the failure the engine list cannot route
     # around on its own: without a deadline the whole run waits on it and the

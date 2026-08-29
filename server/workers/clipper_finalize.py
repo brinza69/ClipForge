@@ -23,6 +23,7 @@ from config import settings
 from database import async_session
 from job_queue import JobCancelledError
 from models import ClipModel, ClipStatus, JobType, ProjectModel
+from services.clipper import edit_profiles
 from services.clipper import feedback as feedback_mod
 from services.clipper import reasoning_trace, storage
 
@@ -263,6 +264,13 @@ async def _write_clips(
                     headline_text=cand.get("headline") or None,
                     transcript_text=(cand.get("text") or "")[:20000],
                     content_type=cand.get("content_type") or profile,
+                    # Coerced HERE, at the persistence boundary. The column is
+                    # a Float, and a classifier that hands back "high" or [0.9]
+                    # raises on the way in — taking the whole board's clips with
+                    # it, for a diagnostic field nothing depends on.
+                    content_confidence=edit_profiles.confidence_value(
+                        cand.get("content_confidence")),
+                    content_type_origin=cand.get("content_type_origin"),
                     layout_plan=layout,
                     caption_plan=cand.get("captions") if planned else None,
                     warnings=(layout or {}).get("warnings") or [],

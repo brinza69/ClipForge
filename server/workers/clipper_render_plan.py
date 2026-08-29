@@ -22,7 +22,7 @@ from typing import Any, Sequence
 from config import settings
 from database import async_session
 from models import ClipModel, ProjectModel
-from services.clipper import storage
+from services.clipper import edit_profiles, storage
 from services.clipper.serialize import effective_content_type
 
 logger = logging.getLogger("clipforge.clipper.render")
@@ -440,9 +440,28 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     # caption position the render did not use — it would go on reporting a
     # caption it had already caused to move.
     caption_y = _caption_y(clip, dyn)
+    # Resolved on every render, applied on none of them yet. In
+    # `content_aware_shadow` this is the whole of R2: the profile becomes
+    # observable beside every export while the delivered plan stays exactly what
+    # it was, so the two can be compared without anyone's clip changing.
+    #
+    # Deliberately NOT part of the render fingerprint. The fingerprint covers
+    # what changes the picture, and in shadow this changes nothing; adding it
+    # now would invalidate every stamped export for a field with no effect. The
+    # batch that makes the profile apply is the one that adds it.
+    # `available_mode`, not `resolve_mode`: config.py and a hand-edited settings
+    # row are two more doors into this setting, and the router's refusal only
+    # guards the third. A rig set to `content_aware` used to produce
+    # `applied: true` on every render while no new grammar was connected.
+    edit_mode = edit_profiles.available_mode(cfg, default=settings.clipper_edit_mode)
+    profile = edit_profiles.resolve(
+        clip.content_type, clip.content_confidence, clip.content_type_origin)
+
     return {
         "cfg": cfg,
         "drop": drop,
+        "edit_profile": {**profile, "mode": edit_mode,
+                         "applied": edit_profiles.delivers_profile(edit_mode)},
         "plan": plan,
         "dyn": dyn,
         "fps": fps,

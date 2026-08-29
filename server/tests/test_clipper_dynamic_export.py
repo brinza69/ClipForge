@@ -29,6 +29,12 @@ class _Clip:
     # same answer it gives when there is nothing to do, so a test could "pass"
     # while proving nothing.
     layout_plan: dict | None = None
+    # The three R2 carries into the render decision. `content_confidence` is
+    # None here on purpose: that is the state most real clips are in, and it is
+    # the one that must resolve to the conservative profile.
+    content_type: str | None = "gaming"
+    content_confidence: float | None = None
+    content_type_origin: str | None = None
 
 
 class _Project:
@@ -464,3 +470,65 @@ async def test_a_natively_single_shot_plan_still_falls_back(wired, monkeypatch):
         "shot_count_before_merge": 1, "equivalent_cuts_removed": 0})
 
     assert await jobs._dynamic_plan(_Clip(), _Project(), 1920, 1080) is None
+
+
+# --- Batch R2: the shadow must be inert -------------------------------------
+
+
+async def _decide_in(mode: str, wired, monkeypatch, tmp_path):
+    dynamic_edit, _proxy = wired
+    monkeypatch.setattr(dynamic_edit, "plan_dynamic_edit", lambda *a, **k: {
+        "shots": [{"camera": "face", "t0": 0.0, "t1": 2.0, "composition": "crop",
+                   "rect": {"x": 0, "y": 0, "w": 540, "h": 960}, "anchor": [270, 480]},
+                  {"camera": "game", "t0": 2.0, "t1": 4.0, "composition": "crop",
+                   "rect": {"x": 700, "y": 0, "w": 606, "h": 1080}, "anchor": [1003, 540]}],
+        "warnings": [], "style": {}})
+
+    class _P(_Project):
+        clipper_settings = {"edit_mode": mode}
+
+    return await jobs._decide_render(_Clip(), _P(), tmp_path)
+
+
+async def test_the_shadow_changes_nothing_about_the_render(wired, monkeypatch, tmp_path):
+    """R2's gate, end to end rather than by reading source. The profile is
+    resolved and recorded in both modes; every decision the renderer acts on —
+    the plan, the crop, the captions, the trim, the fps, the watermark — has to
+    come back identical, or "shadow" is not a shadow."""
+    from services.clipper import edit_profiles, render_input
+
+    legacy = await _decide_in(edit_profiles.LEGACY_DYNAMIC, wired, monkeypatch, tmp_path)
+    shadow = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired, monkeypatch, tmp_path)
+
+    assert legacy["edit_profile"]["profile"] == shadow["edit_profile"]["profile"]
+    assert legacy["edit_profile"]["mode"] != shadow["edit_profile"]["mode"]
+    # Neither mode applies it, and that is the point of the batch.
+    assert not legacy["edit_profile"]["applied"]
+    assert not shadow["edit_profile"]["applied"]
+
+    for key in ("plan", "dyn", "drop", "fps", "caption_y", "watermark"):
+        assert legacy[key] == shadow[key], key
+
+    # And the digest the audit rechecks does not move either.
+    def _fingerprint(decision):
+        return render_input.input_fingerprint({
+            "layout_plan": decision["plan"], "dynamic_plan": decision["dyn"],
+            "drop_spans": decision["drop"],
+            "render": {"fps": decision["fps"], "watermark": decision["watermark"]},
+        })
+
+    assert _fingerprint(legacy) == _fingerprint(shadow)
+
+
+async def test_a_rig_configured_to_an_unavailable_mode_still_delivers_legacy(
+        wired, monkeypatch, tmp_path):
+    """config.py is a second door into this setting, and the router's refusal
+    only guards the third. A rig set to `content_aware` used to produce
+    `applied: true` on every render while no grammar was connected to it."""
+    from config import settings
+    from services.clipper import edit_profiles
+
+    monkeypatch.setattr(settings, "clipper_edit_mode", edit_profiles.CONTENT_AWARE)
+    decision = await _decide_in("", wired, monkeypatch, tmp_path)
+    assert decision["edit_profile"]["mode"] == edit_profiles.DEFAULT_MODE
+    assert not decision["edit_profile"]["applied"]

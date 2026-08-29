@@ -179,6 +179,8 @@ async def init_db() -> None:
 
         # Column migrations for clips table
         _clip_migrations = [
+            ("content_confidence", "REAL"),
+            ("content_type_origin", "VARCHAR(20)"),
             ("hook_text", "TEXT"),
             ("explanation", "TEXT"),
             ("thumbnail_path", "TEXT"),

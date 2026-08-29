@@ -23,8 +23,10 @@ nu un raport — iese cu 2 pe artefacte corupte, sidecar-uri care numesc alt cli
 fingerprint-uri care nu mai corespund planului. **Batch R1 este de asemenea închis:** o tăietură
 există acum numai dacă imaginea livrată se schimbă, iar pe cele 58 de planuri 1.341 shot-uri devin
 1.225 — exact cele 116 invizibile. Exporturile randate le mai poartă până la re-randarea piloturilor,
-fiindcă auditul citește sidecar-urile, iar R1 a schimbat plannerul. Punctul de reluare este
-**Batch R2** din
+fiindcă auditul citește sidecar-urile, iar R1 a schimbat plannerul. **Batch R2 este închis:** fiecare clip își rezolvă gramatica de montaj din tipul lui de conținut, cu
+regula că o clasificare slabă cumpără un montaj mai sigur, niciodată unul mai agresiv — profilul este
+înregistrat lângă fiecare export și aplicat pe niciunul. Punctul de reluare este
+**Batch R3** din
 [`plans/ai-stream-clipper-production-engine-v1.md`](../plans/ai-stream-clipper-production-engine-v1.md).
 Detaliile și cifrele sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURRENT.md).
 
@@ -85,8 +87,8 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 
 ## Priorități globale
 
-1. Clipper Batch R2: resolverul de profile și controlul din aplicație. R1 a scos cele 116 tăieturi
-   invizibile din planner; exporturile le mai poartă până la re-randarea piloturilor.
+1. Clipper Batch R3: regimul secvenței și prezența reală a creatorului — `stable_track` nu garantează
+   încă faptul că subiectul urmărit este creatorul.
 2. Clipper R2–R7: montaj content-aware și gate tehnic separat de reasoning.
 3. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
 4. Consistență între DB și filesystem și idempotency pentru job-urile de export.

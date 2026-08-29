@@ -334,7 +334,14 @@ async def patch_settings(
 
     body = dict(payload or {})
     if "settings" in body:
-        body["clipper_settings"] = _normalise_settings(body.pop("settings"))
+        # Merged over what the project ALREADY has, not over the defaults. A
+        # PATCH is allowed to be partial, and normalising the partial dict on
+        # its own silently reverted every key it did not mention — including the
+        # two whose whole design is that an unrelated edit must not move them.
+        # The browser happens to post the entire object, which is why this went
+        # unseen; a hand-rolled call is not obliged to.
+        body["clipper_settings"] = _normalise_settings(
+            {**(project.clipper_settings or {}), **dict(body.pop("settings") or {})})
 
     changed = apply_patch(project, body, PROJECT_PATCHABLE, PROJECT_PATCHABLE_JSON)
     if changed:

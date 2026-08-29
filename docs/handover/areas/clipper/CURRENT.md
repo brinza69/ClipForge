@@ -192,11 +192,48 @@ Trei lucruri de reținut:
   puțin de două shot-uri și le randează static; fără provenență, un clip a cărui singură vină era o
   tăietură invizibilă și-ar fi schimbat rendererul, crop-ul și captions-urile.
 
+## Batch R2 — ÎNCHIS, 29 august 2026
+
+Fiecare clip primește acum o gramatică potrivită tipului său — **rezolvată și înregistrată, aplicată
+pe niciun clip**. Cele zece content types existente se mapează pe șase profile; nu există al doilea
+clasificator.
+
+Regula pe care se sprijină totul: **o clasificare slabă cumpără un montaj mai sigur, niciodată unul
+mai agresiv.** Iar „mică" și „nemăsurată" sunt răspunsuri diferite:
+
+| ce știm despre tip | profil | motiv |
+|---|---|---|
+| tip cunoscut, încredere ≥ 0,5 | al tipului | `type` |
+| încredere sub prag | `conservative` | `low_confidence` — numărul se păstrează |
+| încredere absentă | `conservative` | `missing_confidence` — nu se inventează din scorul sursei |
+| încredere în afara lui 0..1 | `conservative` | `invalid_confidence` — un clasificator stricat nu e unul foarte sigur |
+| tip necunoscut | `conservative` | `unknown_type` |
+| tipul setat de om | al tipului | `override` — proveniența ține loc de număr |
+
+Ce trebuie știut înainte să te bazezi pe el:
+
+- **`content_aware` nu livrează nimic și nu poate.** `delivers_profile` verifică singur
+  disponibilitatea, deci întoarce fals pentru toate modurile azi și devine adevărat de la sine în
+  ziua în care gate-ul final adaugă modul în `SELECTABLE`. Nu există al doilea comutator de ținut minte.
+- **Benzile de ritm sunt guardrail-uri ALESE, nu măsurate.** Codul o spune, testele refuză să le
+  asserteze, iar UI-ul o scrie pe ecran. Nu le cita ca rezultate înainte de gate-ul uman din §7.
+- **Shadow-ul e inert, demonstrat end-to-end:** `_decide_render` în ambele moduri dă același plan,
+  crop, captions, trim, fps, watermark și fingerprint. Singura diferență e câmpul diagnostic.
+- Profilul e în sidecar și în panoul de reasoning, rezolvat **în backend**. Frontendul doar îl
+  afișează — o a doua mapare în TypeScript ar devia de la prima.
+- Profilul NU e în fingerprint. În shadow nu schimbă imaginea; batch-ul care îl aplică îl adaugă.
+
+Un bug găsit de testul de round-trip peste HTTP, fără legătură cu R2 dar reparat aici:
+`patch_settings` normaliza dicționarul **parțial** primit, deci un PATCH pe orice altă cheie reseta
+tăcut `edit_mode` și `reasoning_mode` la valorile rig-ului. Trecuse neobservat fiindcă browserul
+trimite tot obiectul.
+
 ## Punctul exact de reluare
 
-Următoarea sesiune începe cu **Batch R2** — resolverul de profile și controlul din aplicație — din
+Următoarea sesiune începe cu **Batch R3** — regimul secvenței și prezența reală a creatorului — din
 [`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md),
-acum versionat în repo.
+acum versionat în repo. Vocabularul de regimuri pe care R3 îl atribuie există deja, ca listă închisă,
+în `edit_profiles.REGIMES`.
 
 Nu porni Batch R2–R8 în paralel și nu activa `story_v2`. Planul separă gate-ul de selecție de gate-ul
 de randare tocmai fiindcă review-ul existent le-a amestecat.

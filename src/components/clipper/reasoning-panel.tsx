@@ -12,7 +12,7 @@
 // show what it has rather than a wall of blanks.
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { ClipperClip, ClipReview, ClipStory } from "@/types/clipper";
+import type { ClipperClip, ClipReview, ClipStory, EditProfile } from "@/types/clipper";
 
 // Timestamps are stored on the SOURCE clock, which is what makes them useful:
 // they point into the original VOD, not into the cut.
@@ -201,6 +201,45 @@ function StoryBlock({ story }: { story: ClipStory }) {
   );
 }
 
+/** WHY this clip would be cut the way it would be.
+ *
+ * Displays what the backend resolved. The type-to-profile map is not repeated
+ * here: a second copy in TypeScript would drift from `edit_profiles.py` the
+ * first time either changed, and the browser would confidently show a grammar
+ * the renderer never used.
+ */
+const PROFILE_REASONS: Record<EditProfile["reason"], string> = {
+  type: "the content type, classified with confidence",
+  low_confidence: "the classification was too weak to trust with a bolder edit",
+  missing_confidence: "nothing measured how sure the classification was",
+  unknown_type: "the content type is unknown",
+  override: "you set the content type yourself",
+  invalid_confidence: "the classifier returned an impossible confidence",
+};
+
+function EditProfileBlock({ profile }: { profile: EditProfile }) {
+  const [low, high] = profile.cuts_per_min;
+  return (
+    <div className="mb-4 space-y-1.5 rounded-lg border border-border/40 bg-muted/20 p-3">
+      <Row label="Editing grammar">
+        <span className="font-medium">{profile.profile}</span>
+        {profile.confidence !== null && (
+          <span className="text-muted-foreground">
+            {" "}
+            · confidence {profile.confidence.toFixed(2)}
+          </span>
+        )}
+      </Row>
+      <Row label="Because">{PROFILE_REASONS[profile.reason]}</Row>
+      <Row label="Pace">
+        {low}–{high} cuts/min
+        <span className="text-muted-foreground"> · a chosen guardrail, not a measurement</span>
+      </Row>
+      <Row label="Rule">{profile.rule}</Row>
+    </div>
+  );
+}
+
 export function ReasoningPanel({
   clip,
   open,
@@ -231,6 +270,10 @@ export function ReasoningPanel({
             <ReviewBlock review={clip.review} />
           </div>
         )}
+
+        {/* Also outside the `!r` branch: the grammar a clip resolves to is a
+            fact about the clip, not about whether a model reasoned over it. */}
+        {clip.edit_profile && <EditProfileBlock profile={clip.edit_profile} />}
 
         {!r ? (
           <p className="rounded-lg border border-border/40 bg-muted/20 p-3 text-xs text-muted-foreground">

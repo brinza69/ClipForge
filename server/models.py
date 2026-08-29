@@ -355,6 +355,13 @@ class ClipModel(Base):
     # The optional context hook. Distinct from `hook_text` (legacy editor).
     headline_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # How sure the classifier was about THIS stretch, and where the verdict came
+    # from. Both travel with the type since R2: an edit profile must be able to
+    # tell "measured, and low" from "never measured", and a person's override
+    # from a machine's guess. NULL confidence is a legitimate state and is never
+    # filled in from the source's own score.
+    content_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    content_type_origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
     warnings: Mapped[list | dict | None] = mapped_column(JSON, nullable=True)
     # Near-duplicates share a dedupe_group; the winner is shown and the rest
     # are kept as retrievable alternatives rather than thrown away.

@@ -165,6 +165,16 @@ export interface ClipperSettings {
    * selectable yet.
    */
   reasoning_mode?: ReasoningMode;
+  /**
+   * WHICH editing grammar the renderer uses. Optional and absent from
+   * DEFAULT_SETTINGS for exactly the same reason as `reasoning_mode`: the
+   * backend resolves its default from config.py, and a value posted wholesale
+   * would take an operator's choice back off.
+   *
+   * `content_aware` is absent from EditMode — it is refused until the profiles
+   * have been compared against the legacy render on a corpus.
+   */
+  edit_mode?: EditMode;
 }
 
 /**
@@ -184,6 +194,10 @@ export type ReasoningMode =
   | "story_v1"
   | "story_v2_shadow";
 
+import type { EditMode, EditProfile } from "./clipper-editing";
+
+export type { EditMode, EditProfile } from "./clipper-editing";
+
 export interface Rect {
   x: number;
   y: number;
@@ -201,22 +215,9 @@ export interface LayoutPlan {
   face_pct: number;
 }
 
-export interface CaptionChunk {
-  text: string;
-  start: number;
-  end: number;
-}
+import type { CaptionPlan } from "./clipper-captions";
 
-export interface CaptionPlan {
-  chunks: CaptionChunk[];
-  style: Record<string, unknown>;
-  x_pct: number;
-  y_pct: number;
-  scale: number;
-  preset_id: string;
-}
-
-// ── Entities ─────────────────────────────────────────────────────────────────
+export type { CaptionChunk, CaptionPlan } from "./clipper-captions";
 
 export interface SourceMetadata {
   title: string;
@@ -239,66 +240,17 @@ export interface SourceMetadata {
   suggestion?: string;
 }
 
-// Why a clip was picked, as the backend recorded it. Written by the story
-// engine (`reasoning_version = "story_v1"`); legacy clips carry only `reasons`
-// and the judge's verdict, and everything here is optional for that reason.
-export interface ClipStory {
-  anchor_t?: number;
-  payoff_t?: number;
-  hook_t?: number;
-  reaction_end?: number;
-  archetypes?: string[];
-  why?: string;
-  edit_reason?: string;
-  required_context?: { t?: number; fact?: string }[];
-  unresolved_refs?: { text?: string; resolved?: boolean }[];
-  context_debt?: number;
-  hook_latency?: number;
-  thread_id?: string;
-  story_version?: string;
-  callback_to?: { t?: number; text?: string; kind?: string } | null;
-  callback_debt?: number;
-}
+// Split out at the 500-line limit and re-exported, so every existing
+// `from "@/types/clipper"` keeps working. See clipper-reasoning.ts.
+import type { ClipReasoning, ClipReview } from "./clipper-reasoning";
 
-export interface ClipVerdict {
-  story_editor?: string;
-  cold_viewer?: string;
-  critic?: string;
-  reject_reasons?: string[];
-  prompt_version?: string;
-}
-
-export interface ClipReasoning {
-  reasons?: string[];
-  story?: ClipStory;
-  variant?: string;
-  llm_score?: number;
-  llm_rank?: number;
-  llm_reason?: string;
-  llm_verdict?: ClipVerdict;
-}
-
-// Pass D. `reasoning` says why the MOMENT was chosen; this says what is wrong
-// with the CUT, and it only exists after an export, because that is when there
-// is a shot list and a caption position to be wrong about.
-export interface ClipFinding {
-  kind: string;
-  /** "revise" — something can act on it. "reject" — the clip is mostly dead. */
-  severity: "revise" | "reject";
-  /** Seconds from the start of the clip, so the reader can jump to it. */
-  at: number;
-  detail: string;
-  value: number;
-}
-
-export interface ClipReview {
-  version: string;
-  verdict: "APPROVE" | "REVISE" | "REJECT";
-  findings: ClipFinding[];
-  /** How many frames were sampled. `0` means the review could not look. */
-  sampled: number;
-  warnings: string[];
-}
+export type {
+  ClipStory,
+  ClipVerdict,
+  ClipReasoning,
+  ClipFinding,
+  ClipReview,
+} from "./clipper-reasoning";
 
 export interface ClipperClip {
   id: string;
@@ -313,6 +265,15 @@ export interface ClipperClip {
   headline_text: string | null;
   transcript_text: string | null;
   content_type: ContentType | null;
+  /** How sure the classifier was about THIS clip's stretch, and where the
+   * verdict came from. `null` confidence means never measured — which is not
+   * the same as low, and is why such a clip gets the conservative grammar. */
+  content_confidence: number | null;
+  content_type_origin: "segment" | "source" | "override" | null;
+  /** Resolved by the backend from the three fields above. The mapping lives in
+   * `services/clipper/edit_profiles.py` and is deliberately NOT duplicated
+   * here: two copies would drift the first time either changed. */
+  edit_profile: EditProfile | null;
   layout_plan: LayoutPlan | null;
   caption_plan: CaptionPlan | null;
   warnings: string[] | null;
@@ -468,6 +429,8 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   // story engine on through the old environment variables. A value here would
   // silently take it back off. The form sends the key only when the user picks
   // one; see _BACKEND_ONLY in server/tests/test_settings_parity.py.
+  //
+  // `edit_mode` is absent for the same reason.
 };
 
 export const CONTENT_TYPE_LABELS: Record<ContentType, string> = {

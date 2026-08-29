@@ -106,6 +106,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 
 | file | what |
 |---|---|
+| `edit_profiles.py` | Batch R2: which editing grammar a clip gets. Maps the ten EXISTING content types onto six profiles (`talking_head`, `conversation`, `action`, `exploration`, `instructional`, `conservative`) and holds the closed regime list R3 will assign from. A weak classification buys a SAFER edit, never a bolder one: missing or low confidence resolves to `conservative`, and a missing confidence is never reconstructed from the source's score — "low" and "never measured" are different answers. A person's override is trusted without a number, because the provenance is the evidence. **The pace bands are chosen guardrails, not measurements**; the file says so and the tests refuse to assert them. Also holds `edit_mode` — `legacy_dynamic` / `content_aware_shadow` / `content_aware`, the last refused until the gate — with the same shape as `reasoning_mode` |
 | `reasoning_mode.py` | WHICH engine a project runs, as one setting. Also the compatibility mapping for the `llm_select` + `reasoning_version` pair it replaced — both of which `_normalise_settings` used to drop in silence, which is why the story engine could not be turned on from the API at all |
 | `reasoning_trace.py` | what a scoring run DID: `reasoning_run.json` (versions, chunk plan, every provider attempt and fallback, the settings actually in force) and `selection_trace.json` (why each candidate ended where it did, including the ones the judge never saw). Pure; the worker feeds it and `storage.py` writes it |
 | `chunking.py` | how a long stream is handed to a model: chunks bounded by the CLOCK as well as the byte budget, an overlap so a moment on a seam is whole somewhere, coverage accounting that names the gaps, and a quota that follows the span. Replaces the character-only split that turned four hours into 3h21m + 38m |
@@ -122,7 +123,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `content_type.py` | the parts that need a decoded image: frame features, face boxes, chat/HUD/gameplay regions |
 | `content_facecam.py` | finding the facecam, and the only place its constants live. Four sessions and sixteen approaches are in the comments; `scripts/score_facecam.py` is the scoreboard. Read them before changing a number. **Patch THIS module when sweeping a constant** — `content_type` re-exports them, and assigning there binds a copy the detector never reads |
 | `content_geom.py` | the pure half — rect maths, signal summaries, the classifier itself, and `scene_independence`: whether a candidate rect holds a second camera or a piece of the same picture. That is what says a facecam is there when it has no border to find |
-| `segment_type.py` | content type per stretch rather than per file, and the signal slicing that allows it |
+| `segment_type.py` | content type per stretch rather than per file, and the signal slicing that allows it. `verdict_at` returns the type WITH its confidence and provenance — `type_at` throws the confidence away, which was fine until an edit profile needed to tell a measured verdict from a fallback |
 | `layout.py` | plan one 9:16 frame: which layout, which rects, which safe zones |
 | `layout_geom.py` | the rect arithmetic behind it |
 
@@ -155,6 +156,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `clipper_judging.py` | running the judge over pools of moments: which get asked about, how many rounds, and the verdict propagated to every cut of a judged moment |
 | `clipper_cache.py` | what a previous run left on disk and whether it can still be trusted: the anchor stamp (prompt, mode, engines, duration, chunk plan) and the per-stretch content types. A checkpoint without a stamp is worse than no checkpoint |
 | `clipper_finalize.py` | everything after the winners are chosen: layout + caption planning, headlines, the two trace artefacts, the `clips` rows, and auto-export. Split out when Batch 0 took `clipper_build` past 500 lines; re-exported from there |
+| `clipper_scoring.py` | one run's candidates, scored: feature extraction, the local content verdict with its confidence and provenance, the heuristic score, and the optional blend with the learned ranker. Split from `clipper_build.py` when R2's propagation pushed it past 500 lines |
 | `clipper_render_plan.py` | WHAT a render will contain: window, shot list, layout, caption file, dead-air spans. `_decide_render` is the entry point and both handlers consume its one answer |
 | `clipper_render_jobs.py` | the export and preview jobs themselves: one ffmpeg encode each, plus Pass D. Also writes the sidecar the audit reads: since R0 it carries `render_version` (whichever renderer actually ran), `input_fingerprint` (computed through `edit_quality.input_fingerprint` over the recipe only — no titles, scores or ids), `drop_spans`, `caption_y`, and the source size. The caption plan stays STORED and the render-time height rides beside it, so the two decisions can still be told apart. Stamped at write time; the 58 pilot exports predate the keys and stay `unavailable` |
 
@@ -177,14 +179,18 @@ operations). Split to stay under the 500-line limit.
 | `server/routers/clipper_runs.py` | starting, cancelling, resuming and inspecting a run. Mounted under the same prefix; no URL changed |
 | `src/components/clipper/pill.tsx` | the choice-group toggle every settings row is built from |
 | `src/components/clipper/reasoning-mode-field.tsx` | which reasoning engine to use. Offers ONLY the modes the API accepts, and defaults to sending nothing so a rig configured in `config.py` is not overridden by the browser |
+| `src/components/clipper/edit-mode-field.tsx` | which editing grammar to use, same shape and same reasons. `content_aware` is left out because the API refuses it |
 | `src/components/clipper/analysis-progress.tsx` | the stage list during a run |
 | `src/components/clipper/project-card.tsx` | one project in the list |
 | `src/components/clipper/candidate-grid.tsx` | the board: sort, filter, bulk actions |
 | `src/components/clipper/candidate-card.tsx` | one clip, with its actions |
 | `src/components/clipper/clip-editor.tsx` | trim, headline, caption preset and height, over a server-rendered still |
 | `src/components/clipper/score-breakdown.tsx` | the 16 sub-scores behind the number |
-| `src/components/clipper/reasoning-panel.tsx` | why this clip — anchor, payoff, verdicts (§34) |
-| `src/types/clipper.ts` | every clipper type, including `ClipReasoning` |
+| `src/components/clipper/reasoning-panel.tsx` | why this clip — anchor, payoff, verdicts (§34), and since R2 the editing grammar it resolved to, with the reason in words. Displays what the backend resolved; the type-to-profile map is NOT repeated in TypeScript |
+| `src/types/clipper.ts` | the clip, the project and the settings. No longer every clipper type: R2 took it to the 500-line limit and three groups moved out. It re-exports all of them, so `from "@/types/clipper"` still works everywhere |
+| `src/types/clipper-reasoning.ts` | what the engine DECIDED and what Pass D thought: `ClipStory`, `ClipVerdict`, `ClipReasoning`, `ClipFinding`, `ClipReview` |
+| `src/types/clipper-captions.ts` | `CaptionChunk` and `CaptionPlan` |
+| `src/types/clipper-editing.ts` | `EditMode` and `EditProfile` — the editing decision, not the clip |
 
 ## Scripts
 

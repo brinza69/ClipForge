@@ -387,3 +387,58 @@ async def test_a_staged_file_with_a_disallowed_suffix_is_refused(client, clipper
     )
     assert r.status_code == 400, r.text
     assert "unsupported_upload" in r.text
+
+
+async def test_the_edit_mode_survives_a_real_round_trip(client, clipper_tmp):
+    """Batch R2's gate, over HTTP and the DB rather than in memory.
+
+    `_normalise_settings` returning the right dict proves the function; it does
+    not prove the mode is stored, read back, or left alone by an unrelated
+    PATCH — which is the failure the reasoning mode actually had.
+    """
+    from services.clipper import edit_profiles
+
+    staged = _stage(clipper_tmp, "staged_edit_mode.mp4")
+    created = await client.post(
+        "/api/clipper/projects",
+        json={
+            "source_kind": "upload",
+            "upload_path": str(staged),
+            "rights_confirmed": True,
+            "settings": {"edit_mode": edit_profiles.CONTENT_AWARE_SHADOW},
+        },
+    )
+    assert created.status_code == 200
+    pid = created.json()["id"]
+    try:
+        assert created.json()["clipper_settings"]["edit_mode"] == (
+            edit_profiles.CONTENT_AWARE_SHADOW)
+
+        fetched = await client.get(f"/api/clipper/projects/{pid}")
+        assert fetched.json()["clipper_settings"]["edit_mode"] == (
+            edit_profiles.CONTENT_AWARE_SHADOW), "the mode did not survive the DB"
+
+        # An edit to something else must not move it. The BROWSER posts the
+        # whole settings object, which is why this went unseen — but the API
+        # contract allows a partial PATCH, and a key that is not merged over
+        # what is stored is a key that quietly reverts.
+        patched = await client.patch(
+            f"/api/clipper/projects/{pid}/settings",
+            json={"settings": {"clip_count": 6}},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["project"]["clipper_settings"]["edit_mode"] == (
+            edit_profiles.CONTENT_AWARE_SHADOW)
+
+        # And the refused mode is refused over HTTP too, without touching what
+        # is stored.
+        refused = await client.patch(
+            f"/api/clipper/projects/{pid}/settings",
+            json={"settings": {"edit_mode": edit_profiles.CONTENT_AWARE}},
+        )
+        assert refused.status_code == 400
+        still = await client.get(f"/api/clipper/projects/{pid}")
+        assert still.json()["clipper_settings"]["edit_mode"] == (
+            edit_profiles.CONTENT_AWARE_SHADOW)
+    finally:
+        await client.delete(f"/api/clipper/projects/{pid}")

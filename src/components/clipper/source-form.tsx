@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Pill } from "@/components/clipper/pill";
+import { EditModeField } from "@/components/clipper/edit-mode-field";
 import { ReasoningModeField } from "@/components/clipper/reasoning-mode-field";
 import { readApiError, errorDescription } from "@/lib/api-error";
 import {
@@ -36,6 +37,7 @@ import {
   formatTimecode,
   type ClipperSettings,
   type LayoutMode,
+  type EditMode,
   type ReasoningMode,
   type SourceMetadata,
   type TargetPlatform,
@@ -93,6 +95,8 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
   const [language, setLanguage] = useState("auto");
   const [layout, setLayout] = useState<LayoutMode>("auto");
   const [reasoning, setReasoning] = useState<ReasoningMode | null>(null);
+  // Null on purpose: see EditModeField. Sending a value would override the rig.
+  const [editMode, setEditMode] = useState<EditMode | null>(null);
 
   const metaError = meta?.error ? meta : null;
   const metaOk = meta && !meta.error ? meta : null;
@@ -172,6 +176,7 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
       vision_review: visionReview,
       // Omitted unless the user picked one, so the server's own default wins.
       ...(reasoning ? { reasoning_mode: reasoning } : {}),
+      ...(editMode ? { edit_mode: editMode } : {}),
     };
 
     setSubmitting(true);
@@ -448,6 +453,7 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
           </div>
 
           <ReasoningModeField value={reasoning} onChange={setReasoning} />
+          <EditModeField value={editMode} onChange={setEditMode} />
         </div>
       )}
 

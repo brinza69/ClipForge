@@ -202,13 +202,25 @@ piloturilor.
 
 **Scop:** fiecare clip primește o gramatică potrivită tipului său, cu fallback conservator.
 
-**Fișiere:** nou `edit_profiles.py`, `clipper_render_plan.py`, setările Clipper,
-`src/types/clipper.ts`, controlul Advanced din formular.
+**Fișiere, lista reală.** Nou: `edit_profiles.py`, `workers/clipper_scoring.py` (split la 500 de
+linii), `src/types/clipper-reasoning.ts`, `src/types/clipper-captions.ts` și `src/types/clipper-editing.ts`
+(același motiv), `src/components/clipper/edit-mode-field.tsx`. Atinse: `clipper_render_plan.py`,
+`clipper_render_jobs.py` (sidecar), setările Clipper și `config.py`, `segment_type.py`,
+`clipper_build.py`, `clipper_finalize.py`, `serialize.py`, `models.py` și `database.py` (două coloane
+noi pe clip), `src/types/clipper.ts`, `source-form.tsx`, `reasoning-panel.tsx`, plus `routers/clipper.py` și
+`tests/test_clipper_api.py` — testul de round-trip peste HTTP a arătat că `patch_settings` normaliza
+dicționarul PARȚIAL primit, deci un PATCH pe orice altă cheie reseta tăcut `edit_mode` și
+`reasoning_mode` la valorile rig-ului.
+
+Prima versiune a listei omitea tot lanțul de propagare. Fără el încrederea nu ajunge niciodată la
+clip, iar resolverul nu poate distinge o clasificare măsurată de una moștenită.
 
 **Contract setare:** `edit_mode = legacy_dynamic | content_aware_shadow | content_aware`.
 
 - `legacy_dynamic` păstrează rendererul actual pentru rollback;
-- `content_aware_shadow` calculează și salvează planul nou, dar livrează planul legacy;
+- `content_aware_shadow` rezolvă și înregistrează PROFILUL, dar livrează planul legacy. În R2 nu se
+  calculează un plan nou: profilul stabilește gramatica, iar plannerul care o aplică apare în
+  batch-urile următoare;
 - `content_aware` livrează planul nou numai după gate-ul final;
 - browserul pornește pe `Server default` și nu suprascrie configurația rig-ului;
 - verdictul local din `segment_types` propagă la candidat și încrederea lui; override-ul manual are
@@ -218,8 +230,11 @@ piloturilor.
 **Teste:** toate cele zece content types, confidence lipsă, unknown, setare invalidă, round-trip
 UI/API/worker, proiect vechi fără cheie.
 
-**Gate:** în shadow, planul legacy livrat rămâne identic; profilul nou este observabil și poate fi
-comparat fără să schimbe exportul utilizatorului.
+**Gate:** în shadow, planul legacy livrat rămâne identic — demonstrat rulând `_decide_render` în
+ambele moduri și cerând egalitate pe plan, crop, captions, trim, fps, watermark și fingerprint, cu
+singura diferență în câmpul diagnostic `edit_profile`. `applied` rămâne fals pentru orice mod care
+poate ajunge în producție, inclusiv un rig configurat greșit pe `content_aware`: routerul și workerul
+folosesc același resolver de mod disponibil.
 
 ### Batch R3 — regimul secvenței și prezența reală a creatorului
 

@@ -41,6 +41,10 @@ _BACKEND_ONLY = {
     # decides which reasoning engine runs. The form sends it only when the user
     # picks one.
     "reasoning_mode",
+    # Same argument, one batch later: the rig chooses the editing grammar
+    # through config.py, and a browser that posts the whole settings object
+    # would silently move every project back to `legacy_dynamic`.
+    "edit_mode",
 }
 
 

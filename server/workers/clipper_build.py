@@ -39,6 +39,7 @@ from services.clipper.serialize import effective_content_type
 # runbook reach for these by their old names.
 # Running the judge over pools of moments. Split out when this file crossed
 # 500 lines; re-exported because the tests reach for these by their old names.
+from workers import clipper_scoring
 from workers.clipper_judging import _judge_pool, _judge_rounds  # noqa: F401
 from workers.clipper_cache import (  # noqa: F401
     _anchor_stamp, _cache, _cached, _reasoning_mode, _segment_types,
@@ -72,9 +73,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     from services.clipper import atoms as atoms_mod
     from services.clipper import llm_select
     from services.clipper import promises as promises_mod
-    from services.clipper import ranker, scoring, segmentation
-    from services.clipper import segment_type as seg_type_mod
-    from services.clipper.candidate_terms import _num
+    from services.clipper import segmentation
     from services.clipper import threads as threads_mod
 
     async with async_session() as session:
@@ -268,46 +267,12 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     _guard(queue, job_id)
 
     await queue.update_progress(job_id, 0.40, "Scoring candidates")
-    model = ranker.load_model() if settings.clipper_ranker_enabled else None
-    use_learned = False
-    if model:
-        async with async_session() as session:
-            from services.clipper import feedback
-
-            rows = await feedback.training_rows(session)
-        use_learned = ranker.should_use_learned(model, len(rows))
-
-    for cand in refined:
-        features = cand_mod.extract_features(cand, transcript, sig, duration)
-        # The profile of the stretch this candidate sits in, at its midpoint.
-        here = seg_type_mod.type_at(
-            seg_types, (_num(cand.get("start")) + _num(cand.get("end"))) / 2.0,
-            profile)
-        cand["content_type"] = here
-        scored = scoring.score_candidate(cand, features, profile=here, platform=platform)
-        cand["features"] = features
-        cand["sub_scores"] = scored["sub_scores"]
-        cand["reason"] = scored["reason"]
-        # FOUR NAMES, FOUR MEANINGS. `overall` used to be all of them at once:
-        # the heuristic, then the heuristic blended with the ranker, then that
-        # blended with the judge — and by the time a candidate reached the board
-        # nothing could tell which reading it held. Each now has its own field
-        # and keeps its value; `overall` remains the blended number every
-        # existing reader expects, but it is no longer the only record.
-        heuristic = float(scored["overall"])
-        cand["heuristic_score"] = round(heuristic, 2)
-        cand["eligibility"] = scored["eligibility"]
-        if use_learned:
-            # Blend rather than replace: the learned model is trained on this
-            # user's taste but on a small dataset, so the transparent heuristic
-            # keeps half the vote.
-            learned = ranker.predict(model, features) * 100.0
-            cand["learned_score"] = round(learned, 2)
-            cand["overall"] = round(0.5 * heuristic + 0.5 * learned, 2)
-            cand["ranker_version"] = model.get("version")
-        else:
-            cand["overall"] = round(heuristic, 2)
-            cand["ranker_version"] = "heuristic-1"
+    model, use_learned = await clipper_scoring.use_learned_ranker()
+    clipper_scoring.score_candidates(
+        refined, transcript=transcript, signals=sig, duration=duration,
+        profile=profile, platform=platform, seg_types=seg_types,
+        overridden=bool(project.content_type_override),
+        model=model, use_learned=use_learned)
     # The frontier pass, over the union. Blended into `overall`, so a failure
     # here costs the judgement, not the run.
     judged = False

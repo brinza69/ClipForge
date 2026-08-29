@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from models import ClipModel, ProjectModel
+from services.clipper import edit_profiles
 
 # Fields a PATCH /clips/{id} is allowed to touch, mapped to a coercer. Anything
 # not in here is ignored rather than 400-ing, so a newer frontend talking to an
@@ -95,6 +96,13 @@ def clip_to_dict(clip: ClipModel) -> dict[str, Any]:
         "headline_text": clip.headline_text,
         "transcript_text": clip.transcript_text,
         "content_type": clip.content_type,
+        "content_confidence": clip.content_confidence,
+        "content_type_origin": clip.content_type_origin,
+        # Resolved HERE, not in the browser. The frontend displays this; it does
+        # not own a second copy of the type-to-profile map, which would drift
+        # from `edit_profiles` the first time either changed.
+        "edit_profile": edit_profiles.resolve(
+            clip.content_type, clip.content_confidence, clip.content_type_origin),
         "layout_plan": clip.layout_plan,
         "caption_plan": clip.caption_plan,
         "warnings": clip.warnings or [],

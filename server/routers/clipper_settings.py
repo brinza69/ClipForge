@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from config import settings
-from services.clipper import reasoning_mode
+from services.clipper import edit_profiles, reasoning_mode
 
 logger = logging.getLogger("clipforge.clipper.api")
 
@@ -37,6 +37,11 @@ def _err(status: int, code: str, message: str, details: str = "") -> HTTPExcepti
 # Modes the pipeline knows but does not implement yet, and why. Refused with a
 # distinct error code so a client can tell "not yet" from "no such thing".
 _NOT_AVAILABLE_YET: dict[str, str] = {
+    edit_profiles.CONTENT_AWARE: (
+        "The profiles resolve and are recorded, but no clip has been cut to "
+        "them yet. Run content_aware_shadow first: it writes the resolved "
+        "profile beside every export while your render stays exactly as it is."
+    ),
     reasoning_mode.STORY_V2: (
         "The rule it names works, but it has not been compared against legacy "
         "on a corpus yet. Run story_v2_shadow first: it writes the v2 ordering "
@@ -71,6 +76,21 @@ def _rig_reasoning_mode() -> str:
             mode, reasoning_mode.LEGACY, ", ".join(reasoning_mode.SELECTABLE),
         )
         return reasoning_mode.LEGACY
+    return mode
+
+
+def _rig_edit_mode() -> str:
+    """The rig's default edit mode, clamped to one that exists yet.
+
+    The same second door `_rig_reasoning_mode` guards: the availability gate
+    below refuses an unimplemented mode to a CLIENT, and config.py would
+    otherwise grant it to every new project on the machine.
+    """
+    asked = edit_profiles.resolve_mode(None, default=settings.clipper_edit_mode)
+    mode = edit_profiles.available_mode(None, default=settings.clipper_edit_mode)
+    if mode != asked:
+        logger.warning("CLIPFORGE_CLIPPER_EDIT_MODE=%s is not available yet; "
+                       "using %s", asked, mode)
     return mode
 
 
@@ -109,6 +129,7 @@ def _default_settings() -> dict[str, Any]:
         # engine on through the old environment variables must keep it. See
         # services/clipper/reasoning_mode.py for why that pair still exists.
         "reasoning_mode": _rig_reasoning_mode(),
+        "edit_mode": _rig_edit_mode(),
     }
 
 
@@ -121,6 +142,7 @@ def _normalise_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     """
     out = _default_settings()
     rig_mode = str(out["reasoning_mode"])
+    rig_edit_mode = str(out["edit_mode"])
     for key, value in (raw or {}).items():
         if key in out and value is not None:
             out[key] = value
@@ -191,4 +213,24 @@ def _normalise_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         version_default=settings.clipper_reasoning_version,
         mode_default=rig_mode,
     )
+
+    # Refused, not clamped, for the same reason as the reasoning mode: it
+    # decides which grammar the renderer uses, and a request that reads back as
+    # something else is the defect that made the story engine unreachable from
+    # the API for four months.
+    asked = str((raw or {}).get("edit_mode") or "").strip().lower()
+    if asked in _NOT_AVAILABLE_YET:
+        raise _err(400, "edit_mode_unavailable",
+                   f"{asked} is not available yet.", _NOT_AVAILABLE_YET[asked])
+    if asked and asked not in edit_profiles.SELECTABLE:
+        raise _err(
+            400, "edit_mode_invalid",
+            f"Unknown edit mode {asked!r}.",
+            "Valid modes: " + ", ".join(edit_profiles.SELECTABLE) + ".",
+        )
+    # A project saved before this key existed has no `edit_mode`, and PATCH
+    # sends the whole dict: resolving against the RIG default is what stops an
+    # unrelated edit from silently moving such a project onto a mode nobody
+    # chose for it.
+    out["edit_mode"] = edit_profiles.resolve_mode(raw, default=rig_edit_mode)
     return out
