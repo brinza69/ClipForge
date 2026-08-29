@@ -57,7 +57,17 @@ def _model_dir() -> Path:
 
 
 def _ckpt() -> Path:
-    return _model_dir() / "model_last.pt"
+    """Fisierul de inferenta cand exista, altfel checkpointul de antrenare.
+
+    `model_inferenta.safetensors` (1,35 GB) tine doar greutatile EMA si se
+    citeste memory-mapped; `model_last.pt` (5,39 GB) e checkpointul de
+    antrenare intreg, si `utils_infer` il trage tot prin RAM — pe rigul asta
+    aia inseamna OOM sau segfault cand mai randeaza ceva. Vezi
+    `scripts/f5_model_inferenta.py`, care il produce.
+    """
+    d = _model_dir()
+    subtire = d / "model_inferenta.safetensors"
+    return subtire if subtire.exists() else d / "model_last.pt"
 
 
 def _vocab() -> Path:
@@ -82,7 +92,8 @@ def status() -> dict:
     if not py.exists():
         hints.append(f"lipseste venv-ul {py.parent.parent.name} — vezi docs/voce-locala.md")
     if not ck.exists():
-        hints.append("lipseste model_last.pt (5.39 GB) din data/models/f5_ro/")
+        hints.append("lipsesc si model_inferenta.safetensors, si model_last.pt "
+                     "din data/models/f5_ro/")
     if not vo.exists():
         hints.append("lipseste vocab.txt din data/models/f5_ro/")
     return {
