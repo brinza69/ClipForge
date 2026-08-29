@@ -351,6 +351,13 @@ face snap în zona cozii (una la 9,2s dintr-un clip de 10s se muta la 9,5s, era 
 raportată ca imposibilă, deși propriul ei moment lasă un shot legal de 0,8s). Plus: o tăietură scoasă
 la coadă păstrează acum TOATE motivele pe care le răspundea, nu doar primul.
 
+**Simetria, găsită punând întrebarea inversă:** un snap nu poate trece de o schimbare obligatorie
+**în niciun sens**. Înainte pierde tratamentul dintre cele două; înapoi, tăietura care introduce
+schimbarea asta se întâmplă înainte ca precedenta să fi început. Ordinea tăieturilor nu prinde
+niciunul — o tăietură dinaintea schimbării precedente dar de după TĂIETURA precedentă e în ordine.
+Marginea cozii e însă inclusivă: `duration - min_shot_s` e ultimul loc legal, iar un `<` strict
+arunca exact singura graniță pe care regula o permite.
+
 **Split nou:** `services/clipper/dynamic_rhythm_vocab.py` (listele închise),
 `services/clipper/dynamic_rhythm_pace.py` (benzile) și
 `workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe

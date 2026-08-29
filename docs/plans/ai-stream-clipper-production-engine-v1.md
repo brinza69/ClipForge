@@ -400,9 +400,16 @@ obligatorie care se putea materializa:
   muta la 9,5s, era scoasă de walk-back-ul cozii și raportată ca imposibilă, deși propriul ei moment
   lasă un shot perfect legal de 0,8s.
 
-Consecință: `required_collision` a devenit **de neatins** — cu plafonul de snap, o schimbare
-ulterioară are întotdeauna momentul propriu liber. Ramura se păstrează ca a doua linie de apărare,
-documentată ca atare, exact ca garda de ordine.
+**A treia rundă, simetria:** snap-ul e mărginit de schimbările obligatorii **în ambele sensuri**.
+Înapoi, tăietura care introduce schimbarea curentă s-ar întâmpla înainte ca precedenta să fi început;
+ordinea tăieturilor nu prinde asta, fiindcă o tăietură dinaintea schimbării precedente dar de după
+TĂIETURA precedentă e perfect în ordine. Marginea cozii e inclusivă — `duration - min_shot_s` e
+ultimul loc legal — iar conflictele ies sortate temporal, fiindcă walk-back-ul le adăuga invers.
+
+`required_collision` nu mai e revendicat drept „de neatins": cu marginile puse, o schimbare
+ulterioară ar trebui să găsească întotdeauna momentul propriu liber, dar asta e un argument, nu o
+demonstrație. Ramura rămâne ca **gardă de integritate** — alternativa la o constantă nefolosită e un
+tratament care dispare în tăcere.
 
 **A treia rundă (P2):** o tăietură scoasă la coadă păstrează TOATE motivele pe care le răspundea, nu
 doar primul — o cerință care nu mai apare nicăieri în raport e mai rea decât una raportată ca

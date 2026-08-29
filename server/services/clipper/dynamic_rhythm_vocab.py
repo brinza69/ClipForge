@@ -66,12 +66,14 @@ CONFLICT_TAIL = "tail_min_shot"
 #: shown, and the flicker `min_shot_violations` exists to expose becomes
 #: invisible instead.
 #:
-#: UNREACHABLE under today's placement rule, and deliberately kept. Once a snap
-#: may not cross the next required moment, a later change always has its own
-#: moment free — the earlier cut landed strictly before it. This is the second
-#: line of defence: the argument that makes it unreachable is subtle, and a
-#: relaxed ceiling would otherwise lose a treatment in silence rather than
-#: report one. Same call as the ordering guard in `place`.
+#: AN INTEGRITY GUARD, not a case anyone has produced. With the snap bounded on
+#: both sides by the neighbouring required moments, a later change should always
+#: find its own moment free — the earlier cut lands strictly before it. That is
+#: an argument, not a proof, and it is exactly the kind that stops holding the
+#: first time a bound is relaxed. The branch stays so the failure would be
+#: REPORTED rather than swallowed: the alternative to an unused constant here is
+#: a treatment that disappears in silence. Same call as the ordering guard in
+#: `place`.
 CONFLICT_COLLISION = "required_collision"
 CONFLICTS: tuple[str, ...] = (CONFLICT_TAIL, CONFLICT_COLLISION)
 

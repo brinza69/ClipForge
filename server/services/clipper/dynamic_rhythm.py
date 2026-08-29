@@ -36,7 +36,7 @@ product gate until the missing signal exists.
 
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from typing import Any, Sequence
 
 from services.clipper import dynamic_regimes, dynamic_rhythm_pace, edit_profiles
@@ -220,23 +220,36 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
         own, reason = round(float(want["t"]), 3), str(want["reason"])
         required = reason in REQUIRED
 
-        # A SNAP MAY NOT CROSS THE NEXT REQUIRED CHANGE. Moving a cut forward
-        # past one keeps the list in order and still loses the treatment: the
-        # shot before the cut shows the framing from BEFORE this change, so the
-        # stretch between the two changes is never on screen at all. Found by
-        # review on this file's own fixture — 5.000 and 5.050 with a pause at
-        # 5.300 kept one cut at 5.300 and called the second change conflictual,
-        # while the first change's cut had already passed beyond both states.
+        # A SNAP MAY NOT CROSS A REQUIRED CHANGE, IN EITHER DIRECTION. Moving a
+        # cut past one keeps the list in order and still loses the treatment:
+        # forwards, the shot before the cut shows the framing from BEFORE this
+        # change, so the stretch between the two changes is never on screen;
+        # backwards, the cut that introduces this change happens before the
+        # previous change has begun, so that one is shown early and briefly, or
+        # not at all. Both were found by review — the forward case on this
+        # file's own fixture (5.000 and 5.050 with a pause at 5.300 kept one cut
+        # at 5.300 and called the second change conflictual, while the first
+        # change's cut had already passed beyond both states), the backward case
+        # by asking the symmetric question. Cut ORDER catches neither: a cut
+        # before the previous change but after the previous CUT is in order.
         after = bisect_right(required_at, own)
         ceiling = required_at[after] if after < len(required_at) else float("inf")
+        before = bisect_left(required_at, own)
+        floor = required_at[before - 1] if before else float("-inf")
         # ...and a required change may not snap INTO the tail zone either. A
         # change at 9.2 that snapped to 9.5 of a 10s clip was dropped by the tail
         # walk-back and reported as unmaterialisable, when its own moment leaves
         # a perfectly legal 0.8s shot. The conflict was manufactured by the snap.
-        if required:
-            ceiling = min(ceiling, round(duration - min_shot_s, 3))
+        #
+        # INCLUSIVE, unlike the change bounds. `duration - min_shot_s` is the
+        # last legal place for a cut — the shot after it is exactly the minimum,
+        # which passes — and a strict bound threw away the one boundary the rule
+        # allows. The change bounds stay strict because landing ON a required
+        # moment is landing on the change itself.
+        tail_limit = round(duration - min_shot_s, 3) if required else float("inf")
         near = [(bw, bt) for bt, bw in boundaries or []
-                if abs(bt - own) <= snap_s and bt < ceiling]
+                if abs(bt - own) <= snap_s and floor < bt < ceiling
+                and bt <= tail_limit]
         if near:
             # The strongest boundary in the window, and the closest one among
             # equals — so a cut moves as little as the evidence allows.
@@ -320,6 +333,10 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
                 held.append({"t": moment, "reason": reason,
                              "hold": HOLD_TAIL_MIN_SHOT})
 
+    # In time order. The walk-back appends from the end, so two conflicts at 9.3
+    # and 9.7 came out reversed — a timeline that reads backwards is not one an
+    # auditor can follow.
+    conflicts.sort(key=lambda c: c["t"])
     return {"cuts": cuts, "held": held, "required_conflicts": conflicts,
             "min_shot_violations": violations}
 

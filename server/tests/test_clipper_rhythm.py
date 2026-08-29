@@ -302,6 +302,22 @@ def test_a_cut_may_not_snap_past_the_next_required_change():
     assert view["required_conflicts"] == []
 
 
+def test_a_cut_may_not_snap_back_before_the_previous_required_change():
+    """The mirror of the rule above, and cut ORDER does not catch it: a cut
+    placed before the previous CHANGE but after the previous CUT is still in
+    order. Here the change at 5.0 snaps back to 4.8 and the one at 5.2 could
+    follow it to 4.9 — in order, and delivering the second treatment before the
+    first has begun. The floor keeps 4.9 out of the second's reach."""
+    view = _propose(_segments(("speaker", 0.0, 5.0), ("visual_evidence", 5.0, 5.2),
+                              ("action", 5.2, 10.0)),
+                    duration=10.0, boundaries=[(4.8, 5.0), (4.9, 4.0)],
+                    scenes=[], beats=[])
+    times = [c["t"] for c in view["cuts"]]
+    assert times == [4.8, 5.2]
+    assert view["cuts"][1]["placement"] == "unsnapped"
+    assert view["required_conflicts"] == []
+
+
 def test_a_snap_may_not_manufacture_a_tail_conflict():
     """A required change at 9.2 of a 10s clip is materialisable: cutting at its
     own moment leaves an 0.8s shot. Letting it snap forward to the pause at 9.5
@@ -312,6 +328,30 @@ def test_a_snap_may_not_manufacture_a_tail_conflict():
     assert [c["t"] for c in view["cuts"]] == [9.2]
     assert view["cuts"][0]["placement"] == "unsnapped"
     assert view["required_conflicts"] == []
+
+
+def test_the_last_legal_place_for_a_cut_is_still_a_place():
+    """`duration - min_shot_s` is legal: the shot after it is exactly the
+    minimum, which passes. Excluding it threw away the only boundary the rule
+    allows and sent the change to its own moment for no reason."""
+    view = _propose(_segments(("speaker", 0.0, 9.2), ("visual_evidence", 9.2, 10.0)),
+                    duration=10.0, boundaries=_pauses(9.4), scenes=[], beats=[])
+    assert [c["t"] for c in view["cuts"]] == [9.4]
+    assert view["cuts"][0]["placement"] == "snapped"
+    assert view["required_conflicts"] == []
+
+
+def test_the_conflicts_come_out_in_time_order():
+    """The tail walk-back appends from the end, so two conflicts came out
+    reversed. A timeline that reads backwards is not one an auditor follows."""
+    view = _propose(_segments(("speaker", 0.0, 9.5), ("visual_evidence", 9.5, 9.8),
+                              ("action", 9.8, 10.0)),
+                    duration=10.0, boundaries=[], scenes=[], beats=[])
+    # Both are dropped, and dropping the later one leaves the earlier just as
+    # close to the end — which is why the walk-back is a loop.
+    times = [c["t"] for c in view["required_conflicts"]]
+    assert times == [9.5, 9.8]
+    assert view["cuts"] == [] and view["min_shot_violations"] == []
 
 
 def test_a_dropped_tail_cut_keeps_every_reason_it_answered():
