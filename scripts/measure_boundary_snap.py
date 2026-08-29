@@ -8,6 +8,21 @@ minimum, the maximum or the media.
 
     python scripts/measure_boundary_snap.py --all
 
+IT NAMES THE RISKIEST MOVES, not just their distribution. A move of five
+seconds and a move of fifty milliseconds are both "the end left the word", and
+only one of them is worth a human looking. Each named move carries the token,
+its duration, where that duration sits in THIS transcript's own distribution,
+and the transcriber's probability for it — the only evidence the transcript
+itself offers about whether the timestamp can be trusted.
+
+NO THRESHOLD IS APPLIED IN `_fit`, and the measurement is why. On the corpus,
+p99 of token duration flags 19 of the 261 moves and p99.9 flags exactly the
+three extremes — so picking p99.9 would be choosing the cut-off after seeing
+which answer it gives. The audio does not settle it either: all three extremes
+sit in intervals classified as speech with the RMS active, so "it adds seconds
+of silence" is not something anybody has shown. A statistical rule can say the
+timestamp is odd; it cannot say where the word really ends.
+
 WHAT THIS IS AND IS NOT. It measures the MOVE, not the consequence of the move.
 A window whose end shifts 0.3s gets different boundary features, a different
 score, possibly a different place in the dedupe group and possibly a different
@@ -43,6 +58,13 @@ from sqlalchemy import select  # noqa: E402
 
 from services.clipper import boundary_completion as bc  # noqa: E402
 from services.clipper.candidate_terms import _num, _snap, _words_for  # noqa: E402
+
+
+#: How many of the largest moves to name per project, and how large a move has
+#: to be to be worth naming. Reporting thresholds, not decision thresholds —
+#: nothing here changes what `_fit` does.
+TOP_N = 5
+NOTABLE_S = 1.0
 
 
 def _percentile(ordered: list[float], q: float) -> float | None:
@@ -81,7 +103,7 @@ def _measure(project_id: str) -> dict | None:
     ceiling = max([duration] + [_num(w.get("end")) for w in words[-1:]]) or duration
 
     out = {"project": project_id, "windows": len(rows), "truncated_before": 0,
-           "truncated_after": 0, "moved": 0, "shifts": [],
+           "truncated_after": 0, "moved": 0, "shifts": [], "moves": [],
            "refused_min": 0, "refused_max": 0, "refused_media": 0}
     for cand in rows:
         start, end = _num(cand.get("start")), _num(cand.get("end"))
@@ -103,6 +125,27 @@ def _measure(project_id: str) -> dict | None:
         else:
             out["moved"] += 1
             out["shifts"].append(round(snapped - end, 3))
+            token = bc._straddled(words, end) or {}
+            out["moves"].append({
+                "shift": round(snapped - end, 3),
+                "at": round(end, 3),
+                "word": str(token.get("word") or ""),
+                # The token's own duration and the transcriber's confidence in
+                # it. A five-second "word" is a timestamp nobody should trust,
+                # and the probability is the only evidence the transcript itself
+                # offers about that.
+                "token_s": round(_num(token.get("end"))
+                                 - _num(token.get("start")), 3),
+                "probability": token.get("probability"),
+            })
+    # The token-duration percentile of each move, from THIS transcript rather
+    # than from a threshold: p99 flags 19 of the corpus's 261 and p99.9 flags
+    # exactly the three extremes, which is why no cut-off is applied in `_fit` —
+    # choosing it after seeing the answer would be calibrating on the gate.
+    lengths = sorted(_num(w.get("end")) - _num(w.get("start")) for w in words)
+    for move in out["moves"]:
+        below = sum(1 for L in lengths if L <= move["token_s"])
+        move["token_pct"] = round(100.0 * below / max(1, len(lengths)), 2)
     return out
 
 
@@ -122,6 +165,14 @@ def _report(row: dict) -> None:
     if shifts:
         print(f"{'':14} shift: median {_percentile(shifts, 0.50)}s  "
               f"p90 {_percentile(shifts, 0.90)}s  max {round(shifts[-1], 3)}s")
+    for move in sorted(row["moves"], key=lambda m: -abs(m["shift"]))[:TOP_N]:
+        if abs(move["shift"]) < NOTABLE_S:
+            break
+        prob = move["probability"]
+        print(f"{'':14} +{move['shift']}s at {move['at']}s on {move['word']!r} "
+              f"(token {move['token_s']}s, p{move['token_pct']} of this "
+              f"transcript, whisper "
+              f"{'unavailable' if prob is None else round(float(prob), 3)})")
 
 
 def main() -> int:

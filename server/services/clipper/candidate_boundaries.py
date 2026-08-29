@@ -236,11 +236,19 @@ def _fit(start: float, end: float, words: Sequence[dict], lo: float, hi: float,
     `TAIL_PAD_S`, which is exactly the mid-word case.
 
     Pushing OUT to the end of the straddled word is what the corpus wants:
-    measured, all 261 fit inside their own maximum, median move 0.31s and p90
-    0.50s. `_snap` falls back to pulling in to the word's start when the push
-    would breach `limit`, and the guard below refuses that when it would take the
-    clip under the minimum — a truncated word is a defect, and a clip shorter
-    than the floor is a different one.
+    measured over all 261, every one fits inside its own maximum, 260 are pushed
+    out and one is pulled back. The move is NOT small — median 0.10s, p90 0.66s,
+    and 120 of the 261 exceed 0.15s. Three exceed three seconds, on transcripts
+    carrying a five-second token; no word-length guard is applied, because the
+    audio does not confirm that those extensions are silence (all three sit in
+    intervals classified as speech with the RMS active), so a statistical
+    threshold would flag an odd timestamp without knowing where the word really
+    ends. `scripts/measure_boundary_snap.py` reproduces every figure here.
+
+    `_snap` falls back to pulling in to the word's start when the push would
+    breach `limit`, and the guard below refuses that when it would take the clip
+    under the minimum — a truncated word is a defect, and a clip shorter than the
+    floor is a different one.
     """
     start = max(floor, start)
     end = min(ceiling, max(end, start + 0.1))

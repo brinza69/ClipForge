@@ -441,13 +441,24 @@ words" de la început; era adevărat doar pentru început, iar asimetria 261/0 e
 **Măsurat înainte/după cu `scripts/measure_boundary_snap.py`: 261 → 0**, zero refuzate pentru minim,
 maxim sau mediu, 260 împinse înainte și 1 trasă înapoi. Deplasare mediană 0,10s, p90 0,66s — dar
 **120 din 261 depășesc 0,15s**, deci presupunerea inițială („mutare deterministă sub 0,15s") era
-greșită. Trei cazuri depășesc 3s și sunt artefacte de timestamp verificate individual: transcriptul
-conține un „don`t" de 5,72s, un „love" de 5,14s, un „Melkso" de 3,54s. Nu am pus gardă pe durata
-cuvântului — ar fi o constantă nouă necalibrată.
+greșită. Trei cazuri depășesc 3s, pe transcripte care conțin un token de 5,72s, unul de 5,14s și unul de
+3,54s. **Nu am pus gardă pe durata cuvântului, și motivul e măsurat, nu de principiu:** p99 al
+duratelor de token marchează 19 din cele 261 de mutări, p99.9 marchează exact cele trei extreme —
+deci alegerea pragului s-ar face după ce vezi ce răspuns dă. Nici audio-ul nu tranșează: toate trei
+extremele cad în intervale clasificate drept vorbire, cu RMS-ul activ, deci „adaugă secunde de
+tăcere" nu e ceva ce a arătat cineva. Nici probabilitatea Whisper nu separă — 0,292 pentru „love" de
+5,14s, dar 0,886 pentru un token de 3,54s și 0,997 pentru unul de 1,56s. O regulă statistică poate
+spune că timestamp-ul e ciudat; nu poate spune unde se termină cuvântul.
+
+`scripts/measure_boundary_snap.py` numește acum cele mai mari mutări per proiect, cu tokenul, durata
+lui, percentila în distribuția transcriptului însuși și probabilitatea Whisper — ca un om să se poată
+uita la ele, nu ca un prag să decidă în locul lui.
 
 **Ce NU e măsurat, și e următorul pas:** efectul celor 261 de mutări asupra scorurilor de graniță,
 dedupe-ului, shortlist-ului, judge-ului și board-ului. Cere un re-score end-to-end pe o **CLONĂ**, nu
-pe proiectele-baseline. Baseline-ul R0 rămâne dovada despre cele 58 de fișiere vechi; rezultatele noi
+pe proiectele-baseline. **Și nu doar pe cele patru piloturi:** cele trei mutări extreme sunt în
+`39c89ae2e16e` și `43a509687a33`, deci clonele acelor două surse trebuie incluse, altfel gate-ul nu
+testează chiar riscul tocmai descoperit. Baseline-ul R0 rămâne dovada despre cele 58 de fișiere vechi; rezultatele noi
 se ștampilează cu versiunea nouă de boundary și nu se amestecă în aceeași comparație. S8 vine după.
 
 ## Punctul exact de reluare

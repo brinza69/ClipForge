@@ -66,6 +66,10 @@ REQUIRED_KEYS = ("defects", "blocking", "unknown", "measurements", "repair",
 
 MISSING = "missing_boundary_view"
 MALFORMED = "malformed_boundary_view"
+#: An entry in `candidates.json` that is not a record at all. Counted rather
+#: than filtered: it occupies a slot in the file, and a slot nobody could read
+#: is a hole in the corpus, not one fewer candidate.
+NOT_A_CANDIDATE = "not_a_candidate_record"
 #: EVERY candidate in the project lacks the view. That is not the same finding:
 #: it means the project was scored before R5 existed and needs a re-score, which
 #: is a thing to do rather than a bug to chase. A project where only SOME are
@@ -124,11 +128,14 @@ def _candidates(project_id: str) -> list[dict] | None:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+    # RETURNED WHOLE, including entries that are not records. Filtering them
+    # here dropped them before the denominator, so a file half full of junk
+    # printed a verdict for the other half and the junk simply was not there.
     if isinstance(loaded, list):
-        return [c for c in loaded if isinstance(c, dict)]
+        return list(loaded)
     for key in ("candidates", "items"):
         if isinstance(loaded, dict) and isinstance(loaded.get(key), list):
-            return [c for c in loaded[key] if isinstance(c, dict)]
+            return list(loaded[key])
     return None
 
 
@@ -146,7 +153,10 @@ def _well_formed(view: dict) -> bool:
         return False
     if not isinstance(view["measurements"], dict):
         return False
-    if view["eligible"] not in (True, False, None):
+    # `x in (True, False, None)` is a TRAP: `1 == True` and `0 == False` in
+    # Python, so an integer 1 passed as a verdict and was counted as eligible.
+    # Identity and type, not equality.
+    if not (view["eligible"] is None or isinstance(view["eligible"], bool)):
         return False
     for key in ("defects", "blocking", "unknown"):
         if not isinstance(view[key], list):
@@ -214,6 +224,9 @@ def _measure(project_id: str, *, recompute: bool = False) -> dict:
     out["refused"] = {name: 0 for name in REFUSALS}
     out["technical"] = 0
     for cand in rows:
+        if not isinstance(cand, dict):
+            out["integrity"].append(NOT_A_CANDIDATE)
+            continue
         view = cand.get("boundary_view")
         if not isinstance(view, dict):
             out["integrity"].append(MISSING)

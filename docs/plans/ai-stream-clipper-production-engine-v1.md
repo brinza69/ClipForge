@@ -576,14 +576,26 @@ maxim și de mediu, cu pull-back refuzat când ar coborî sub minim. Docstring-u
 | peste 1s | 13 |
 | peste 3s | 3 |
 
-**Deplasarea NU e mică**, contrar a ce presupusesem („sub 0,15s"): 120 din 261 o depășesc. Cele trei
-cazuri peste 3s sunt artefacte de timestamp, verificate individual — transcriptul conține un „don`t"
-de 5,72s, un „love" de 5,14s și un „Melkso" de 3,54s. Snap-ul rămâne corect (nu taie în interiorul
-tokenului), dar acolo adaugă secunde de material probabil tăcut. **Nu am pus o gardă pe durata
-cuvântului**: ar fi o constantă nouă necalibrată, exact ce planul refuză.
+**Deplasarea NU e mică**, contrar a ce presupusesem („sub 0,15s"): 120 din 261 o depășesc. Trei
+cazuri depășesc 3s, pe transcripte care conțin tokenuri de 5,72s, 5,14s și 3,54s.
+
+**Nu am pus gardă pe durata cuvântului, și motivul e măsurat:** p99 al duratelor de token marchează
+19 din cele 261 de mutări, p99.9 marchează exact cele trei extreme — deci pragul s-ar alege după ce
+vezi ce răspuns dă, ceea ce e calibrare pe gate. Nici audio-ul nu tranșează: toate trei extremele cad
+în intervale clasificate drept vorbire, cu RMS-ul activ, deci afirmația mea inițială că „adaugă
+secunde de material probabil tăcut" **era prea tare — nimeni nu a arătat asta**. Nici probabilitatea
+Whisper nu separă: 0,292 pentru un token de 5,14s, dar 0,886 pentru unul de 3,54s și 0,997 pentru
+unul de 1,56s. O regulă statistică poate spune că timestamp-ul e ciudat; nu poate spune unde se
+termină cuvântul. Dacă un review demonstrează defectul, soluția aparține alinierii transcriptului sau
+unui detector audio de graniță, nu unei limite p99 în `_fit`.
+
+Scriptul numește acum cele mai mari mutări per proiect, cu tokenul, durata lui, percentila în
+distribuția transcriptului însuși și probabilitatea Whisper.
 
 **Ce NU e măsurat:** ce fac cele 261 de mutări scorurilor de graniță, dedupe-ului, shortlist-ului și
-board-ului. Nu se poate ști fără un re-score pe o **clonă** — nu pe proiectele-baseline. Baseline-ul
+board-ului. Nu se poate ști fără un re-score pe o **clonă** — nu pe proiectele-baseline, și nu doar
+pe cele patru piloturi: cele trei mutări extreme sunt în `39c89ae2e16e` și `43a509687a33`, deci
+clonele acelor două surse trebuie incluse, altfel gate-ul nu testează riscul tocmai descoperit. Baseline-ul
 R0 nu se pierde: rămâne dovada despre cele 58 de fișiere vechi, iar rezultatele noi se ștampilează cu
 versiunea nouă de boundary și nu se amestecă în aceeași comparație. Review-ul orb S8 vine după.
 

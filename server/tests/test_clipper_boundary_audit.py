@@ -144,6 +144,33 @@ def test_an_eligible_that_is_not_a_verdict_is_malformed(tmp_path, monkeypatch):
 # --- the two ways a project can carry nothing --------------------------------
 
 
+def test_an_integer_is_not_a_verdict(tmp_path, monkeypatch):
+    """`x in (True, False, None)` is a trap: `1 == True` and `0 == False` in
+    Python, so an integer sailed through the strict check and was counted as
+    eligible. Identity and type, not equality."""
+    for value in (1, 0, 1.0):
+        cand = _scored(0.0, 1.4)
+        cand["boundary_view"]["eligible"] = value
+        audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
+        row = audit._measure("p1")
+        assert row["integrity"] == [audit.MALFORMED], f"{value!r} passed as a verdict"
+        assert row["eligible"] == 0
+
+
+def test_an_entry_that_is_not_a_record_is_counted_not_filtered(tmp_path,
+                                                               monkeypatch):
+    """Filtering junk out of the file dropped it before the denominator, so a
+    file half full of it printed a verdict for the other half and the junk
+    simply was not there. It occupies a slot; a slot nobody could read is a hole
+    in the corpus, not one fewer candidate."""
+    audit = _audit_module(monkeypatch, _project(
+        tmp_path, "p1", [_scored(0.0, 1.4), "not a record", None]))
+    row = audit._measure("p1")
+    assert row["candidates"] == 3
+    assert row["integrity"] == [audit.NOT_A_CANDIDATE] * 2
+    assert row["eligible"] == 1
+
+
 def test_every_candidate_missing_is_a_rescore_not_a_bug(tmp_path, monkeypatch):
     """A project scored before R5 is a thing to do, not a bug to chase. A
     project where only SOME records are missing is the bug."""
