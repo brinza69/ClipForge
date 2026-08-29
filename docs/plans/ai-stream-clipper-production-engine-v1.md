@@ -339,7 +339,7 @@ regimurilor separat, chiar dacă rezultă un singur shot vizual.
 **Gate:** zero cazuri cunoscute în care browserul este confundat cu creatorul; cele două comutări
 false `fit` dispar; cadrele Jensen și vlog folosite în audit trec verificarea vizuală.
 
-### Batch R4 — ritmul content-aware, fără alternare forțată — INSTRUMENTAT 29 aug 2026
+### Batch R4 — ritmul content-aware, fără alternare forțată — INSTRUMENTAT 30 aug 2026
 
 **Scop:** camera se schimbă pentru că informația vizuală o cere, nu pentru că a trecut 1,8s.
 
@@ -450,7 +450,9 @@ ori — contrastul rulează funcția livrată, nu îl descrie), slide de 8s, bur
 graniță de regim cu aceeași cheie vizuală, beat în afara acțiunii măsurate, semnale absente.
 
 **Gate:** rămâne deschis. Cifrele pe corpus se pot obține doar re-randând piloturile, iar „auditul
-uman nu mai descrie montajul drept agitat" cere același om ca gate-urile R3a/R3b.
+uman nu mai descrie montajul drept agitat" cere același om ca gate-urile R3a/R3b. Review-ul extern
+(șase runde) a închis batch-ul **ca instrumentare shadow, nu ca motor activ** — cele două nu se
+confundă: finalizarea lui R4 nu este validare pentru producție.
 
 ### Batch R5 — completion check și boundary repair determinist
 

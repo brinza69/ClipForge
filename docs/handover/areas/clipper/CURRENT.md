@@ -295,7 +295,12 @@ Cheile sunt `crop_anchor`, `crop_subject`, `fit_full`; sidecar-ul spune `target`
 spune dacă a fost `stable_anchor` sau `unanchored_face`. `crop_creator` poate exista abia după o
 verificare reală de identitate sau după gate-ul vizual uman.
 
-## Batch R4 — INSTRUMENTAT, gate PENDING, 29 august 2026
+## Batch R4 — INSTRUMENTAT, gate PENDING, 29-30 august 2026
+
+**Review Codex, șase runde, verdict final:** „Nu mai văd blocante. Consider R4 închis corect ca
+**instrumentare shadow**, nu ca motor activ." Toate cele opt constatări au fost reparate; niciuna nu
+era în regula batch-ului, toate erau în plasare — ce moment compari, la ce rezoluție, față de care
+margine. Regula „motiv plus loc" a rezistat de la început.
 
 **Nu este închis**, ca R3a și R3b — dar dintr-un motiv în plus. Gramatica există complet și e
 verificată automat; nimic nu a fost aplicat, `legacy_dynamic` rămâne înghețat, iar propunerea se
@@ -365,8 +370,8 @@ adică unde a ajuns tăietura după snap, nu momentul cererii; se compară acum 
 motive împart o tăietură doar dacă au fost CERUTE în același moment.
 
 **Split nou:** `services/clipper/dynamic_rhythm_vocab.py` (listele închise),
-`services/clipper/dynamic_rhythm_pace.py` (benzile) și
-`workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe
+`services/clipper/dynamic_rhythm_pace.py` (benzile), `tests/test_clipper_rhythm_place.py` (plasarea,
+unde e fiecare constatare din review) și `workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe
 care nu l-a făcut (R3a + R3b + R4). `clipper_render_plan.py` trecuse de 500 de linii.
 
 ## Punctul exact de reluare
