@@ -204,15 +204,25 @@ def main() -> int:
     if args.all or not names:
         names = sorted(p.name for p in DATA.glob("*") if p.is_dir())
     rows = [r for r in (_measure(n) for n in names) if r]
+    left = sum(r.get("truncated_after", 0) + r.get("refused_min", 0)
+               + r.get("refused_max", 0) + r.get("refused_media", 0) for r in rows)
+    # A truncation the snap could not clear fails the gate, and so do an
+    # artefact the script could not read and a project it could not measure:
+    # all three leave the number unproven.
+    invalid = sum(r.get("invalid", 0) for r in rows)
+    refused = sum(1 for r in rows if r.get("refused"))
+    # COMPUTED BEFORE THE OUTPUT MODE BRANCHES, because it belongs to the run
+    # rather than to how it is printed. `--json` used to return 0 unconditionally
+    # — a machine-readable report of a corpus nobody could measure, exiting green.
+    code = 0 if left == 0 and invalid == 0 and refused == 0 else 2
+
     if args.json:
         print(json.dumps(rows, indent=2))
-        return 0
+        return code
 
     for row in rows:
         _report(row)
     before = sum(r.get("truncated_before", 0) for r in rows)
-    left = sum(r.get("truncated_after", 0) + r.get("refused_min", 0)
-               + r.get("refused_max", 0) + r.get("refused_media", 0) for r in rows)
     shifts = sorted(s for r in rows for s in r.get("shifts") or [])
     print(f"\n{'POOLED':14} truncated {before} -> {left} over "
           f"{sum(r.get('windows', 0) for r in rows)} windows")
@@ -220,15 +230,14 @@ def main() -> int:
         print(f"{'':14} shift: median {_percentile(shifts, 0.50)}s  "
               f"p90 {_percentile(shifts, 0.90)}s  max {round(shifts[-1], 3)}s  "
               f"(n={len(shifts)})")
+    if invalid:
+        print(f"{'':14} {invalid} unreadable entries across the corpus")
+    if refused:
+        print(f"{'':14} {refused} project(s) could not be measured at all")
     print(f"{'':14} This is the MOVE. What it does to scores, dedupe groups, "
           f"the shortlist and the board is not measured here and cannot be "
           f"without a re-score on a clone.")
-    # A truncation the snap could not clear fails the gate, and so does an
-    # artefact the script could not read: both leave the number unproven.
-    invalid = sum(r.get("invalid", 0) for r in rows)
-    if invalid:
-        print(f"{'':14} {invalid} unreadable entries across the corpus")
-    return 0 if left == 0 and invalid == 0 else 2
+    return code
 
 
 if __name__ == "__main__":
