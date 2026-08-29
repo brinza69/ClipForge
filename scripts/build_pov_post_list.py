@@ -45,6 +45,13 @@ SARITE = {"_duplicate", "_inlocuite_de_parti"}
 # romanesc. Numerele stau aici pentru ca `data/` e gitignored: pe alt aparat
 # inventarul lipseste, iar filtrul ar disparea fara sa spuna nimic.
 NON_RO_CUNOSCUTE = {"101", "102"}
+# VERIFICAT 30 aug 2026: inventarul complet nu adauga NIMIC peste perechea asta —
+# din cele 67 de intrari, singurele non-romane sunt tot 101 si 102. Deci pe un
+# aparat fara `pov_inventory.json` filtrul e la fel de bun, iar avertismentul de
+# mai jos e formal, nu o gaura. Nu mai cauta fisierul: nu-ti da nimic in plus.
+# Ce NU acopera inventarul sunt fisierele randate dupa el (67 atunci, 105 acum),
+# dar alea vin din presetul romanesc si se urca in folderul romanesc — engleza
+# merge in `povestitor_en_drive_folder`, alt folder.
 
 # Fisiere STRICATE, nu doar in alta limba: randarea a iesit fara flux video
 # valid (127.mp4 are 9 MB fata de ~100 MB cat au celelalte clipuri de 60s, iar
@@ -82,9 +89,10 @@ if INV.exists():
         if r.get("lang") and r["lang"] != "ro" and r.get("nr"):
             non_ro.add(str(r["nr"]))
 else:
-    print(f"ATENTIE: lipseste {INV.name} — folosesc doar lista din cod "
-          f"({sorted(NON_RO_CUNOSCUTE, key=int)}). Daca s-au adaugat clipuri "
-          f"non-romane de atunci, NU sunt prinse. Copiaza fisierul de pe rig.")
+    print(f"nota: lipseste {INV.name}, folosesc lista din cod "
+          f"({sorted(NON_RO_CUNOSCUTE, key=int)}). Verificat pe 30 aug 2026: "
+          f"inventarul complet nu adauga nimic peste ea, deci NU e o gaura si "
+          f"nu merita copiat de pe rig.")
 
 creds, _, err = _resolve_credentials()
 if not creds:
