@@ -46,6 +46,19 @@ SARITE = {"_duplicate", "_inlocuite_de_parti"}
 # inventarul lipseste, iar filtrul ar disparea fara sa spuna nimic.
 NON_RO_CUNOSCUTE = {"101", "102"}
 
+# Fisiere STRICATE, nu doar in alta limba: randarea a iesit fara flux video
+# valid (127.mp4 are 9 MB fata de ~100 MB cat au celelalte clipuri de 60s, iar
+# Drive raporteaza width=0 si durationMillis=0). Buffer le respinge, si opresc
+# rularea cand posterul ajunge la ele.
+#
+# Stau aici, nu intr-un fisier din `data/`, fiindca `data/` e gitignored: pe
+# aparatul care doar posteaza filtrul ar disparea fara sa spuna nimic. Sesiunea
+# de distributie le-a scos de mana din planul local de DOUA ori, si fiecare
+# rebuild le aducea inapoi.
+#
+# Daca vreunul se re-randeaza cum trebuie, se sterge de aici — nu se ocoleste.
+STRICATE = {"127"}
+
 
 def nr_din_sheet(v):
     m = re.match(r"^(\d+)", (v or "").strip())
@@ -61,8 +74,9 @@ for r in vals[1:]:
     if nr and d:
         desc_by_nr[nr] = d
 
-# NR-uri care nu sunt in romana (verificate cu whisper pe audio)
-non_ro = set(NON_RO_CUNOSCUTE)
+# NR-uri care nu sunt in romana (verificate cu whisper pe audio), plus cele
+# stricate — ambele se exclud la fel, dar din motive diferite.
+non_ro = set(NON_RO_CUNOSCUTE) | set(STRICATE)
 if INV.exists():
     for r in json.loads(INV.read_text(encoding="utf-8")):
         if r.get("lang") and r["lang"] != "ro" and r.get("nr"):

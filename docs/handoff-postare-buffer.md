@@ -203,7 +203,7 @@ posts(input: {organizationId: …, filter: {channelIds: [<canal>], status: ["sen
 ```
 
 Scoate id-ul de Drive din `assets[].source` si potriveste-l cu `nr` din
-`data/pov_en_post_list.json`. Alea sunt NR-urile de sarit. Importul poate sa nu
+`data/pov_post_list.json`. Alea sunt NR-urile de sarit. Importul poate sa nu
 acopere chiar tot, deci confirma cu utilizatorul inainte de prima rulare reala.
 
 ---
@@ -294,7 +294,7 @@ consuma din fereastra.
 
 ---
 
-## 9. Starea la 25 august 2026
+## 9. Starea la 29 august 2026
 
 **Cat incape in coada.** Plafonul de 10 postari/canal era al planului Free. Pe
 25 august `Povestitorul` avea **38 de postari programate**, deci pe planul platit
@@ -303,11 +303,25 @@ cu variabila de mediu `CLIPFORGE_QUEUE_MAX=40`, ca sa umpli pe doua saptamani in
 loc de doua zile. Daca totusi exista o limita, posterul **se opreste singur la
 prima eroare**, cu ce a apucat sa programeze deja pus — nu strica sa incerci.
 
-In folderul EN: 42 de fisiere, din care **24 de videoclipuri (40 de fisiere) au
-descriere engleza** si intra in plan. NR 191 nu are descriere in coloana L.
+**Stocul romanesc:** 103 fisiere pe Drive, din care planul retine **59 de
+videoclipuri / 89 de fisiere**. Creste in continuare — pe rig randeaza
+povestitorul romanesc cu voce locala gratuita.
 
-16 dintre ele sunt taiate in parti: 193, 200, 201, 203, 206, 252, 253, 254, 256,
-257, 258, 259, 260, 271, 272, 273. Fiecare ocupa doua sloturi consecutive.
+**Excluse permanent, in codul builderului** (nu in `data/`, care e gitignored,
+ca filtrul sa nu dispara tacut pe aparatul care doar posteaza):
+
+| NR | de ce |
+|---|---|
+| 101, 102 | nu sunt in romana — limba citita din audio cu whisper |
+| 127 | randare stricata: 9 MB fata de ~100, `width=0`, `durationMillis=0` |
+
+Daca 127 se re-randeaza cum trebuie, se scoate din `STRICATE` in
+`build_pov_post_list.py`. **Nu-l scoate de mana din planul local** — urmatorul
+rebuild il aduce inapoi, si asa s-a intamplat deja de doua ori.
+
+Sectiunea asta descria pana pe 29 august inventarul ENGLEZESC (42 de fisiere,
+24 de videoclipuri, NR 191 fara descriere). Pista aia e inchisa; daca o cauti,
+acolo era.
 
 ---
 
@@ -349,17 +363,23 @@ descriere a postarii, nu inventa alta.
 
 **Forma ceruta de Buffer e `assets: [{image: {url}}]`** — nu `photo`, nu `video`.
 Verificat pe viu pe 29 august, cu o postare de proba creata si stearsa imediat.
-`post_povestitor.py` trimite doar `video`, deci **nu il folosi pentru carduri**;
-pe rig exista `scripts/posteaza_carduri.py` care face exact asta:
-
-```
-server\.venv\Scripts\python.exe scripts\posteaza_carduri.py --canal povestitor --dry
-```
+`post_povestitor.py` trimite doar `video`, deci **nu il folosi pentru carduri**.
 
 Ora e **12:00**, aleasa in afara sloturilor de video (08:00, 13:00, 18:30,
 20:30), ca sa nu cada pe acelasi minut si sa fie respinsa ca slot ocupat.
-Evidenta e in `data/carduri_postate.json`, pe canal si nume de fisier, deci o a
-doua rulare nu repeta nimic.
+
+**ATENTIE — doua implementari, si a ta e cea care conteaza.** Contul de postare
+si-a scris propriul `post_carduri.py`, cu evidenta pe captionul din Buffer. Pe
+rigul de randare exista `scripts/posteaza_carduri.py`, cu evidenta intr-un
+`data/carduri_postate.json` local. **Foloseste-l pe al tau**: pe un cont nou, un
+fisier de stare local n-are de unde sa stie ce s-a publicat deja, pe cand
+captionul din Buffer stie. Cel de pe rig are ambele profiluri inchise oricum
+(naratorul n-are pagina de Facebook, iar povestitorul e pe contul tau), deci nu
+posteaza nimic de acolo.
+
+Versiunea din §12 de pana pe 29 august descria scriptul de pe rig ca si cum ar
+fi al tau. Era gresit — documentul plecase inaintea codului, care nici nu era
+impins pe GitHub.
 
 **Cardurile mananca din plafonul de postari programate.** Daca vezi coada plina
 si clipuri neprogramate, asta e cauza — nu un defect.

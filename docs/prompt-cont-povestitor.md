@@ -89,9 +89,9 @@ Cele 20 de carduri sunt in subfolderul `CARDURI TEXT - Facebook` din folderul
 romanesc. Textul fiecaruia e in `data/carduri_catalog.json`, potrivit dupa numele
 fisierului — foloseste-l ca descriere, nu inventa alta.
 
-```
-server\.venv\Scripts\python.exe scripts\posteaza_carduri.py --canal povestitor --dry
-```
+Foloseste **scriptul tau de carduri** (`post_carduri.py`), nu cel de pe rig:
+evidenta pe captionul din Buffer stie ce s-a publicat deja, pe cand un fisier de
+stare local, pe un cont nou, n-are de unde.
 
 Forma ceruta de Buffer pentru imagini e `assets: [{image: {url}}]` — **nu**
 `photo` si **nu** `video`. Verificat pe viu, cu o postare de proba creata si
