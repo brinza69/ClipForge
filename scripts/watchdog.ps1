@@ -211,6 +211,11 @@ while ($true) {
         # Coada naratorului tine 10 postari (plafonul contului), adica 2,5
         # zile la 4/zi. Fara realimentare, canalul tace in weekend.
         Ensure-Proc 'umple_coada_narator\.py' "$root\scripts\umple_coada_narator.py" "$root\data\coada_narator.log" "$root\data\coada_narator.err.log" "coada-narator"
+        # Muzica de fundal pe randarile narator noi. Fara ea, un lot proaspat
+        # ajunge pe Drive fara melodie si `umple_coada_narator` il programeaza
+        # asa — diferit de tot ce e deja publicat. Pornit DUPA coada-narator
+        # inadins: aia realimenteaza la 3 ore, asta prinde fisierul inainte.
+        Ensure-Proc 'pune_muzica_narator\.py' "$root\scripts\pune_muzica_narator.py" "$root\data\muzica_narator.log" "$root\data\muzica_narator.err.log" "muzica-narator" @('--bucla')
     }
 
     if ($tick % 20 -eq 0) {

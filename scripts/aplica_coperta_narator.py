@@ -49,6 +49,23 @@ W, H, FPS = 1080, 1920, 60
 DRY = "--dry" in sys.argv
 DOAR = sys.argv[sys.argv.index("--nr") + 1] if "--nr" in sys.argv else None
 
+# INCHIS 29 aug 2026: omul a cerut clipurile fara card la inceput, si asa raman.
+# Copertile au fost scoase de pe toate cele 29 de fisiere narator in aceeasi zi
+# (`scoate_coperta_narator.py`), deci o rulare din obisnuinta a scriptului asta
+# le-ar pune la loc pe cele urmatoare.
+#
+# Fisierul NU se sterge: comentariile de mai sus tin masuratorile care au costat
+# o sesiune — de ce nu se compara marimile pachetelor, cei 37 de octeti de
+# SPS/PPS, cele 0,9 secunde ale cardului. Daca revine cererea de coperti, aici e
+# tot ce trebuie stiut.
+#
+# Verificarea sta in `main()`, NU la nivel de modul: `pune_muzica_narator.py` si
+# `scoate_coperta_narator.py` importa fisierul asta pentru `amprenta()`,
+# `durata()` si `lipeste()`. Un SystemExit la import le-ar rupe exact pe cele
+# care trebuie sa mearga mai departe.
+INCHIS = ("fara coperti din 29 aug 2026 — cerut explicit. "
+          "Pentru muzica singura foloseste scripts/pune_muzica_narator.py")
+
 
 def rul(cmd, timeout=1800):
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
@@ -115,6 +132,10 @@ def lipeste(card, video, dest):
 
 
 def main():
+    if "--si-inchise" not in sys.argv:
+        print("scriptul e inchis: " + INCHIS)
+        print("adauga --si-inchise daca chiar asta vrei.")
+        return
     LUCRU.mkdir(parents=True, exist_ok=True)
     facute = json.loads(STARE.read_text(encoding="utf-8")) if STARE.exists() else {}
     imagini = {}

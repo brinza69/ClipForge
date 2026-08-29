@@ -9,14 +9,14 @@ de proba, creata si stearsa imediat: forma buna e `assets: [{image: {url}}]`,
 NU `photo` si nici `video`. `post_povestitor.py` trimite doar `video`, de aia
 cardurile au nevoie de scriptul asta si nu merg prin acela.
 
-CE MANANCA SLOTURI: contul asta are plafon de **10 postari programate pe canal**.
-Naratorul e deja pe 4 videoclipuri/zi, adica 2,5 zile de acoperire. Un card pe
-zi urca la 5/zi, deci 2 zile. `umple_coada_narator.py` realimenteaza la 3 ore,
-deci se descurca — dar daca vezi coada plina si videoclipuri neprogramate, asta
-e cauza, nu un defect.
+CE MANANCA SLOTURI: fiecare card ocupa un loc in coada programata a canalului,
+alaturi de clipuri. Daca vezi coada plina si videoclipuri neprogramate, asta e
+cauza, nu un defect.
 
-Ora e aleasa in afara sloturilor video (05:00, 10:00, 15:30, 17:30), ca sa nu se
-bata pe acelasi minut si sa fie respinse ca duplicat de slot.
+Ora 12:00 e aleasa in afara sloturilor de video ale AMBELOR roluri: povestitorul
+posteaza la 08:00, 13:00, 18:30 si 20:30 (`SLOTS_LOCAL` in `post_povestitor.py`),
+naratorul la 05:00, 10:00, 15:30 si 17:30. Doua postari pe acelasi minut s-ar
+bate pe slot.
 
     server\.venv\Scripts\python.exe scripts\posteaza_carduri.py --canal narator [--dry] [--limit 3]
 """
@@ -47,8 +47,14 @@ ORA = (12, 0)                                      # in afara sloturilor video
 PLAFON = int(os.environ.get("CLIPFORGE_QUEUE_MAX", "10"))
 
 CANALE = {
-    "narator": ("narator_channel", "narator_drive_folder", "CARDURI TEXT - narator"),
-    "povestitor": ("facebook_channel", "povestitor_drive_folder", "CARDURI TEXT - Facebook"),
+    # `narator` e INCHIS: singurul canal narator conectat e naratorul.ro, care e
+    # TikTok, iar cardurile nu se pun pe TikTok (cerut pe 29 aug 2026). Cele 20
+    # de carduri raman pe Drive in `CARDURI TEXT - narator` — daca apare o pagina
+    # de Facebook pentru narator, se sterge doar linia `inchis`.
+    "narator": ("narator_channel", "narator_drive_folder", "CARDURI TEXT - narator",
+                "cardurile nu se pun pe TikTok; naratorul n-are pagina de Facebook"),
+    "povestitor": ("facebook_channel", "povestitor_drive_folder",
+                   "CARDURI TEXT - Facebook", None),
 }
 
 CREATE = """
@@ -98,7 +104,12 @@ def main():
     dry = "--dry" in argv
     limita = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 99
 
-    cheie_canal, cheie_folder, nume_sub = CANALE[care]
+    cheie_canal, cheie_folder, nume_sub, inchis = CANALE[care]
+    if inchis and "--si-inchise" not in argv:
+        print("canalul '" + care + "' e inchis pentru carduri: " + inchis)
+        print("deschise: " + ", ".join(k for k, v in CANALE.items() if not v[3])
+              + ". Cu --si-inchise merge oricum.")
+        return
     canal = targets.get(cheie_canal)
     org = default_org()
     ch = channel_by_name(canal, org)

@@ -16,13 +16,19 @@ Implicit se lucreaza de la NR 284 in sus. Pe Drive sunt 174 de fisiere, din care
 ~140 publicate demult — a le redescarca si reurca pe toate ar insemna zeci de GB
 pentru clipuri pe care nu le mai vede nimeni.
 
+Cu `--bucla` ramane pornit si verifica din cand in cand, ca `umple_coada_narator`.
+Fara el, un lot proaspat randat (NR 299-304 e in coada) ar ajunge pe Drive fara
+melodie si posterul l-ar programa asa — diferit de toate cele 29 publicate.
+
     server\.venv\Scripts\python.exe scripts\pune_muzica_narator.py [--dry] [--de-la 284]
+    server\.venv\Scripts\python.exe scripts\pune_muzica_narator.py --bucla
 """
 import json
 import os
 import pathlib
 import re
 import sys
+import time
 import urllib.request
 
 os.environ.setdefault("CLIPFORGE_DATA_DIR", "data")
@@ -44,7 +50,9 @@ FINALIZAT = _ROOT / "data" / "narator_finalizat.json"
 NAME_RE = re.compile(r"^(\d+)(?:_p(\d+))?\.mp4$", re.I)
 
 DRY = "--dry" in sys.argv
+BUCLA = "--bucla" in sys.argv
 DE_LA = int(sys.argv[sys.argv.index("--de-la") + 1]) if "--de-la" in sys.argv else 284
+PAUZA = 3 * 3600        # cat la umple_coada_narator: randarea unui lot tine ore
 
 
 def main():
@@ -115,4 +123,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if BUCLA and not DRY:
+        print(time.strftime("%d %b %H:%M") + " supraveghez muzica narator "
+              "(de la NR " + str(DE_LA) + ", verific la 3h)", flush=True)
+        while True:
+            # O trecere care pica nu opreste supravegherea: Drive-ul da 401 cand
+            # expira tokenul, iar aia se repara singur dupa reconectare.
+            try:
+                main()
+            except Exception as e:  # noqa: BLE001
+                print(time.strftime("%d %b %H:%M") + " trecere esuata: "
+                      + str(e)[:200], flush=True)
+            time.sleep(PAUZA)
+    else:
+        main()

@@ -45,8 +45,20 @@ NAME_RE = re.compile(r"^(\d+)(?:_p(\d+))?\.mp4$", re.I)
 DRY = "--dry" in sys.argv
 DOAR = sys.argv[sys.argv.index("--nr") + 1] if "--nr" in sys.argv else None
 
+# INCHIS 29 aug 2026, acelasi motiv ca la `aplica_coperta_narator.py`: lantul de
+# aici pune muzica SI coperta, iar copertile nu se mai vor. Nu se transforma in
+# "doar muzica" — aia exista deja, curata, in `pune_muzica_narator.py`, care in
+# plus ia originalul de pe Drive si deci merge si pentru clipurile randate dupa
+# introducerea muzicii, care n-au backup local.
+INCHIS = ("fara coperti din 29 aug 2026 — cerut explicit. "
+          "Pentru muzica singura foloseste scripts/pune_muzica_narator.py")
+
 
 def main():
+    if "--si-inchise" not in sys.argv:
+        print("scriptul e inchis: " + INCHIS)
+        print("adauga --si-inchise daca chiar asta vrei.")
+        return
     LUCRU.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(MELODII.read_text(encoding="utf-8"))
     facute = json.loads(STARE.read_text(encoding="utf-8")) if STARE.exists() else {}

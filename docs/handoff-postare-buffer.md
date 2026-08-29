@@ -26,7 +26,7 @@ trebuie sa ramana. Fisierele engleze raman pe Drive, nepostate.
 la inceput. Copertile mai exista doar pe 19 fisiere ENGLEZE care nu se mai
 posteaza — le ignori.
 
-**Un singur stoc conteaza: folderul romanesc.** 51 de videoclipuri / 74 de
+**Un singur stoc conteaza: folderul romanesc.** 60 de videoclipuri / 90 de
 fisiere la 29 august, si creste — pe rig randeaza povestitorul romanesc cu voce
 locala gratuita (F5), rand cu rand din sheet.
 
@@ -67,7 +67,7 @@ Cheia e in `data/targets.json`, sub `povestitor_drive_folder`.
 
 Folderul romanesc **este al tau**. Pana pe 28 august pista romana era inchisa si
 documentul asta spunea sa nu te atingi de el — nu mai e adevarat. La 29 august
-are 87 de fisiere, din care planul retine 51 de videoclipuri (74 de fisiere);
+are 103 fisiere, din care planul retine 60 de videoclipuri (90 de fisiere);
 restul sunt fisiere straine sau in alta limba, iar `build_pov_post_list.py` le
 sare singur.
 
