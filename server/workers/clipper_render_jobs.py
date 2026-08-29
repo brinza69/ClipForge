@@ -209,6 +209,7 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         finally:
             dyn.pop("_review_faces", None)
             dyn.pop("_panels", None)
+            dyn.pop("_stable_track", None)
 
     out = storage.export_path(project_id, clip.id)
     try:
@@ -335,6 +336,10 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         # force actually applied it. Recorded on every export since R2 so the
         # profile can be compared against the delivered edit without changing it.
         "edit_profile": decision["edit_profile"],
+        # R3a: the composition the creator's own presence would have chosen,
+        # beside the one that shipped. Recorded on every export, applied on
+        # none — the difference is the measurement.
+        "creator_view": decision["creator_view"],
         "analysis_version": project.analysis_version,
         "ranker_version": clip.ranker_version,
         # The dead seconds this render removed. Without them the sidecar

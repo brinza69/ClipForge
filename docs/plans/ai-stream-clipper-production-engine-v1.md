@@ -236,23 +236,73 @@ singura diferență în câmpul diagnostic `edit_profile`. `applied` rămâne fa
 poate ajunge în producție, inclusiv un rig configurat greșit pe `content_aware`: routerul și workerul
 folosesc același resolver de mod disponibil.
 
-### Batch R3 — regimul secvenței și prezența reală a creatorului
+### Batch R3a — prezența și compoziția ancorate pe creator
 
 **Scop:** separă „există o față undeva” de „creatorul pe care trebuie să-l urmărim este prezent”.
 
-**Fișiere:** `dynamic_subject.py`, `dynamic_window.py`, `dynamic_edit.py`, testele dynamic.
+**Măsurat înainte de implementare**, pe `analysis/faces.json`: `stable_track` găsește o ancoră pe
+**unul** din cele patru piloturi. Pe acela — Moist, `pilot2c8a` — doar **464 din cele 1.285 de
+eșantioane cu față, adică 36%, sunt COMPATIBILE CU ANCORA** — nu „sunt creatorul": nimeni nu a
+etichetat cutiile, iar geometria e tot ce știm. Ancora e la (34, 141), lată de 25px, deci toleranța
+efectivă e podeaua de 40px, nu lățimea feței; un overlay în
+colțul din stânga sus. Pe celelalte trei piloturi nu există ancoră și nimic nu se filtrează.
+`scripts/measure_creator_presence.py` reproduce cifrele.
+
+**Ce NU spune măsurătoarea, și de ce.** Prima versiune a scriptului raporta și „821 din 1.999 de
+eșantioane de prezență se schimbă". Cifra era lipsită de sens: `faces.json` are pe piloturi un pas
+median de **6,7 secunde**, la care `ENTER_S` de 3,0s se rotunjește la un eșantion, adică histerezis
+zero, în timp ce producția aplică douăsprezece eșantioane de histerezis pe track-ul de 0,25s. Este
+exact capcana pe care docstring-ul din `dynamic_subject` o descrie deja. Compatibilitatea cu ancora
+este o proprietate a cutiilor și nu depinde de rata de eșantionare; efectul asupra prezenței se poate
+măsura doar pe track-ul dens, la randare.
+
+**Fișiere:** `dynamic_subject.py`, `clipper_render_plan.py`, `clipper_render_jobs.py` (sidecar),
+`scripts/measure_creator_presence.py`, testele dynamic.
 
 **Modificări:**
 
 - când există `stable_track`, prezența creatorului se calculează numai din detectări compatibile cu
-  ancora; fețele din materialul reacționat nu țin artificial modul `crop` activ;
-- `stable_track` controlează și decizia de compoziție, nu doar centrul familiei face-cam;
+  ancora; fețele din materialul reacționat nu mai țin artificial modul `crop` activ;
+- eșantioanele nu se elimină niciodată, doar cutiile lor: timeline-ul e indexat pozițional, iar
+  comprimarea lui ar deplasa fiecare timp de după prima eliminare;
+- fără ancoră, track-ul rezultat este identic cu cel brut — cazul care deja funcționează;
+- histerezisul devine RETROSPECTIV: după confirmarea unei absențe, tot run-ul e marcat absent,
+  inclusiv primele trei secunde. Doar dispariția se antedatează; revenirea are deja regula de dovadă
+  unanimă din `span_has_subject`;
+- compoziția propusă se calculează peste shot-urile EXISTENTE și se scrie în sidecar ca `creator_view`,
+  lângă cea livrată. **Înregistrată, niciodată aplicată:** `legacy_dynamic` rămâne înghețat și
+  exportul shadow rămâne ce a înghețat R2.
+
+**Gate automat:** zero cutii incompatibile cu ancora contribuie la prezența creatorului; fără ancoră
+track-ul e identic cu intrarea; run-urile confirmate sunt marcate de la începutul lor; planul și
+fingerprint-ul livrate rămân identice între `legacy_dynamic` și `content_aware_shadow`; sidecar-ul
+păstrează separat propunerea, ancora, numărul de eșantioane compatibile și motivul.
+
+**Gate vizual: rămâne DESCHIS.** Nu există substitut automat — un face box sau un crop valid geometric
+nu demonstrează că persoana corectă e în cadru. Formularea corectă până se uită un om este
+„implementare terminată, gate vizual pending".
+
+### Batch R3b — regimurile și topologia shot-urilor
+
+**Scop:** regimul secvenței devine unitatea de decizie, fără să reintroducă tăieturi invizibile.
+
+**Fișiere:** `dynamic_cuts.py`, `dynamic_edit.py`, `dynamic_window.py`, testele dynamic.
+
+**Modificări:**
+
+- lista închisă `speaker | conversation | action | visual_evidence | reaction | safe`, care există
+  deja în `edit_profiles.REGIMES`;
+- fiecare segment are `regime`, `reason` și `confidence`/`evidence`;
 - o secvență fără creator poate deveni `visual_evidence`/`fit`, nu „game camera” forțată;
-- pe interviu fără active-speaker sigur se folosește cadru comun sau hold, nu două crop-uri ghicite;
-- histerezisul rămâne, dar granița confirmată se aplică întregii rulări fără subiect, nu lasă primele
-  trei secunde tăiate greșit;
-- regimul este decis per secvență, apoi shot-urile sunt tăiate pe granițele lui; nu se votează
-  majoritar peste un shot care amestecă două regimuri.
+- fără active-speaker verificabil, `conversation` folosește cadru comun sau hold, nu două crop-uri
+  ghicite;
+- regimul e decis înainte de tratamentul vizual; nu se votează majoritar peste un shot mixt.
+
+**Contractul care evită regresia R1.** Nu orice graniță de regim are voie să forțeze o tăietură
+fizică — asta ar reintroduce exact tăieturile invizibile pe care le-a scos R1. Ordinea corectă:
+construiești `regime_segments` contigue și fără goluri; calculezi tratamentul vizual pentru fiecare;
+**unești segmentele adiacente când cheia vizuală finală este identică**; păstrezi proveniența
+regimurilor separat, chiar dacă rezultă un singur shot vizual.
 
 **Teste de regresie pe cazurile măsurate:**
 
@@ -491,7 +541,8 @@ Un test care verifică doar că MP4-ul există sau că JSON-ul este valid nu est
 R0 evaluator
  → R1 dedupe după geometria livrată
  → R2 profile în shadow
- → R3 regimuri/subiect
+ → R3a subiectul ancorat pe creator
+ → R3b regimuri și topologia shot-urilor
  → R4 ritm
  → R5 boundaries
  → R6 captions

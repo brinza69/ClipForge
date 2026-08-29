@@ -228,9 +228,43 @@ Un bug găsit de testul de round-trip peste HTTP, fără legătură cu R2 dar re
 tăcut `edit_mode` și `reasoning_mode` la valorile rig-ului. Trecuse neobservat fiindcă browserul
 trimite tot obiectul.
 
+## Batch R3a — INSTRUMENTAT, gate vizual PENDING, 29 august 2026
+
+**Nu este închis.** Codul e livrat și verificat automat; verdictul vizual nu a fost dat de nimeni,
+iar formularea corectă până atunci este exact asta: instrumentare shadow implementată, gate vizual
+pending.
+
+Ce face: `anchored_track` elimină din track detectările care nu stau pe ancora fixă găsită de
+`stable_track` — niciun eșantion nu dispare, doar cutiile lui, fiindcă timeline-ul e indexat
+pozițional. Histerezisul a devenit **retrospectiv**: o absență confirmată se marchează de unde a
+început, nu trei secunde mai târziu. Rezultatul intră în sidecar ca `creator_view`, **înregistrat și
+niciodată aplicat** — planul livrat rămâne ce a înghețat R2.
+
+```bash
+python scripts/measure_creator_presence.py pilotf81b pilotee0e pilot6b38 pilot2c8a
+```
+
+**Cum se citește măsurătoarea, fiindcă e ușor de citit greșit:**
+
+- `stable_track` găsește o ancoră pe **unul** din patru piloturi. Pe celelalte trei nu se filtrează
+  nimic și track-ul e identic — cazul care deja funcționa.
+- Pe Moist, 464 din 1.285 de eșantioane cu față sunt **compatibile cu ancora**. Asta NU înseamnă „464
+  sunt creatorul": nimeni nu a etichetat cutiile, iar geometria e tot ce știe codul. Compatibilitatea
+  e măsurată; identitatea e dedusă.
+- **Fără ancoră, compatibilitatea e `null`, nu 100%.** Nu s-a comparat nimic cu nimic.
+- `faces.json` are pe piloturi un pas median de **6,7s**, la care `ENTER_S` se rotunjește la un
+  eșantion. Orice cifră despre timeline-ul de prezență calculată acolo măsoară alt algoritm decât cel
+  care rulează în producție. Efectul asupra prezenței se poate măsura doar pe track-ul dens.
+- Toleranța efectivă e `max(lățimea ancorei, 40px)`. Pe pilotul măsurat ancora are 25px, deci decide
+  podeaua, nu lățimea feței.
+
+**Ce trebuie să verifice un om înainte ca R3a să fie închis:** Moist — creatorul, nu fața din browser;
+Jensen — diagramă lizibilă, vorbitor bine încadrat; vlog — obiectele în `fit`, persoana reală în
+`crop`; go ghost — fără comutări false.
+
 ## Punctul exact de reluare
 
-Următoarea sesiune începe cu **Batch R3** — regimul secvenței și prezența reală a creatorului — din
+Următoarea sesiune începe cu **Batch R3b** — regimurile și topologia shot-urilor — din
 [`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md),
 acum versionat în repo. Vocabularul de regimuri pe care R3 îl atribuie există deja, ca listă închisă,
 în `edit_profiles.REGIMES`.

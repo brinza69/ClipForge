@@ -22,7 +22,15 @@ from typing import Any, Sequence
 from config import settings
 from database import async_session
 from models import ClipModel, ProjectModel
-from services.clipper import edit_profiles, storage
+from services.clipper import dynamic_subject, edit_profiles, storage
+
+# Split out at the 500-line limit and re-exported: both render handlers and the
+# tests that pin today's fixes reach for these through this module.
+from workers.clipper_captions import (  # noqa: F401
+    _caption_y,
+    _clip_words,
+    _write_ass,
+)
 from services.clipper.serialize import effective_content_type
 
 logger = logging.getLogger("clipforge.clipper.render")
@@ -47,41 +55,6 @@ def _source_path(project: ProjectModel) -> str:
     return src
 
 
-def _clip_words(clip: ClipModel) -> list[dict]:
-    """The clip's word timings, on the SOURCE clock.
-
-    `dynamic_edit` needs these and had never been given them: `_boundaries`
-    places its cuts on speech pauses and `_speech_ratio` decides whether the
-    streamer is talking in a shot, and both were reading an empty list on every
-    export. Measured on clip 6b34b8d37259: with words the planner cuts 11 shots
-    on the pauses, without them 9 on audio peaks and scene changes alone — and
-    the second is exactly what shipped.
-
-    `transcript_segments` is the obvious home for this and is NULL on every clip
-    the pipeline writes, so the words come from the caption plan, which carries
-    them because the word-highlight overlay needs them. That also keeps the cut
-    grid and the burned captions reading the same timings.
-
-    The caption plan's clock is clip-relative and `dynamic_edit` subtracts
-    `clip_start` from every word, so the offset has to go back on here.
-    """
-    plan = clip.caption_plan if isinstance(clip.caption_plan, dict) else None
-    if not plan:
-        return []
-    offset = float(clip.start_time or 0.0)
-    out: list[dict] = []
-    for chunk in plan.get("chunks") or []:
-        for word in (chunk or {}).get("words") or []:
-            try:
-                start = float(word["start"]) + offset
-                end = float(word.get("end", word["start"])) + offset
-            except (KeyError, TypeError, ValueError):
-                continue
-            out.append({"word": str(word.get("word") or ""),
-                        "start": start, "end": end})
-    return out
-
-
 def _candidate(clip: ClipModel) -> dict:
     """The shape the render/caption/layout helpers expect from a candidate."""
     return {
@@ -91,90 +64,6 @@ def _candidate(clip: ClipModel) -> dict:
         "headline": clip.headline_text or "",
         "words": _clip_words(clip),
     }
-
-
-def _caption_y(clip: ClipModel, dyn: dict | None) -> float | None:
-    """Where the caption should sit given the UI panels THIS cut exposes.
-
-    The stored `y_pct` was resolved at score time against `regions.json`, whose
-    `hud` list is empty on the source where a caption demonstrably landed on the
-    game UI. The panels are detected per clip and the shot list says where each
-    one lands in the output frame, so both halves only exist here, at export.
-
-    Returns None when there is nothing new to say, and the stored position
-    stands.
-    """
-    panels = (dyn or {}).get("_panels") or []
-    if not panels or not clip.caption_plan:
-        return None
-    if (clip.caption_plan or {}).get("y_pct_manual"):
-        # Somebody moved it in the editor. Re-placing it around detected UI is
-        # right when nobody has expressed a preference and wrong the moment
-        # somebody has — an edit that the next export silently undoes is worse
-        # than no editor at all.
-        return None
-    try:
-        from services.clipper.captions import panels_to_keep_out, resolve_position
-
-        keep = panels_to_keep_out(panels, (dyn or {}).get("shots") or [])
-        if not keep:
-            return None
-        existing = ((clip.layout_plan or {}).get("safe_zones") or {}).get("keep_out") or []
-        _x, y = resolve_position(
-            str((clip.caption_plan or {}).get("position") or "bottom"),
-            {"safe_zones": {"keep_out": list(existing) + keep}})
-        return y
-    except Exception:
-        logger.warning("clip %s: could not re-place the caption around the UI "
-                       "panels; keeping the stored position", clip.id, exc_info=True)
-        return None
-
-
-def _write_ass(clip: ClipModel, out_dir: Path,
-               drop_spans: Sequence[tuple[float, float]] | None = None,
-               y_pct: float | None = None) -> str | None:
-    """Render the stored caption plan to an .ass file. Returns None when the
-    clip has no captions, which is a legitimate state (the user can turn them
-    off) — the render then simply skips the subtitles filter.
-
-    `drop_spans` are the dead seconds the render is about to remove. The
-    overlays have to move with them: libass positions against absolute times,
-    so a caption left on the untrimmed clock drifts further out of sync with
-    every second cut.
-
-    `y_pct` overrides the stored caption height when the export found game UI
-    the score-time plan could not have known about. The plan itself is left
-    alone: it is a record of what was decided then, and a re-score would
-    recompute it anyway.
-    """
-    from services.caption_overlays import build_overlays_ass
-    from services.clipper.captions import caption_plan_to_overlays
-
-    if not clip.caption_plan:
-        return None
-    plan = clip.caption_plan
-    if y_pct is not None and abs(float(plan.get("y_pct") or 0.0) - y_pct) > 1e-4:
-        logger.info("clip %s: caption moved %.3f -> %.3f to clear detected game UI",
-                    clip.id, float(plan.get("y_pct") or 0.0), y_pct)
-        plan = {**plan, "y_pct": y_pct}
-    try:
-        overlays = caption_plan_to_overlays(plan)
-    except Exception:
-        logger.warning("could not turn the caption plan into overlays", exc_info=True)
-        return None
-    if drop_spans:
-        from services.clipper.dead_air import remap_overlays
-
-        overlays = remap_overlays(overlays, drop_spans)
-    if not overlays:
-        return None
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ass_path = out_dir / f"{clip.id}.ass"
-    # The ASS canvas is the OUTPUT canvas: libass positions against PlayRes, and
-    # the plan's x_pct/y_pct were resolved against 1080x1920 safe zones.
-    build_overlays_ass(overlays, 1080, 1920, str(ass_path))
-    return str(ass_path)
 
 
 def _plan_fits(plan: Any, src_w: int, src_h: int) -> bool:
@@ -363,6 +252,11 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
     # popped before the sidecar is written — the track is dozens of samples of
     # box coordinates and belongs in neither the plan nor the deliverable.
     plan["_review_faces"] = window["faces"]
+    # The anchor the planner framed on, handed over rather than recomputed:
+    # `_decide_render` would otherwise read `faces.json` a second time and could
+    # disagree with the plan it is describing. Popped before the sidecar with
+    # the rest of the working data.
+    plan["_stable_track"] = stable
     plan["_panels"] = window.get("panels") or []
     for warning in plan.get("warnings") or []:
         logger.info("clip %s dynamic edit: %s", clip.id, warning)
@@ -457,9 +351,18 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     profile = edit_profiles.resolve(
         clip.content_type, clip.content_confidence, clip.content_type_origin)
 
+    # R3a, recorded and not applied: what each shot's composition would be if
+    # only the CREATOR counted as a subject. The delivered plan is untouched —
+    # `legacy_dynamic` stays frozen and the shadow export must stay byte-for-byte
+    # what it was, or R2's contract is broken.
+    creator_view = dynamic_subject.proposed_compositions(
+        (dyn or {}).get("shots") or [], (dyn or {}).get("_review_faces") or [],
+        (dyn or {}).get("_stable_track")) if dyn else None
+
     return {
         "cfg": cfg,
         "drop": drop,
+        "creator_view": creator_view,
         "edit_profile": {**profile, "mode": edit_mode,
                          "applied": edit_profiles.delivers_profile(edit_mode)},
         "plan": plan,

@@ -19,9 +19,9 @@ wins, and for a speaking shot it clearly loses.
 So the question this module answers is narrow: FOR EACH SPAN, IS ANYONE THERE.
 
 THE THRESHOLDS ARE MEASURED, NOT CHOSEN. Face presence at the resolution
-production actually uses — `dynamic_window` samples every 0.25s, not the 2s of
-the whole-VOD `faces.json`, and reading the wrong one produced a gap analysis
-that meant nothing. On three Jensen windows:
+production actually uses — `dynamic_window` samples every 0.25s, while the
+whole-VOD `faces.json` has a median gap of 6.7s on these pilots, and reading the
+wrong one produced a gap analysis that meant nothing. On three Jensen windows:
 
     detection dropouts inside good content   at most 1.75s  (7 samples)
     real face-less sequences                 7.50s, 8.50s, 12.25s
@@ -45,7 +45,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Sequence
 
-__all__ = ["ENTER_S", "LEAVE_S", "presence_timeline", "span_has_subject"]
+__all__ = ["ENTER_S", "LEAVE_S", "ANCHOR_FACE_WIDTHS", "presence_timeline",
+           "span_has_subject", "anchored_track", "creator_presence"]
 
 #: How long the frame must go without a face before the shot gives up on
 #: pointing at one. See the measurements above.
@@ -53,6 +54,17 @@ ENTER_S = 3.0
 
 #: ...and how long a face must be back before it counts again.
 LEAVE_S = 1.0
+
+#: How far from the fixed anchor a detection may sit and still be treated as the
+#: same fixed subject, in multiples of the anchor's own width.
+#:
+#: CHOSEN, not calibrated, and the FLOOR usually decides. The tolerance is
+#: `max(anchor width, _CELL) * this`, and on the one pilot with an anchor the
+#: width is 25px against a 40px cell — so the effective tolerance there is 40px,
+#: not "one face width". Calling it a face width would be wrong on the only
+#: source that exercises it. What would recalibrate either number: the
+#: anchor-compatible counts `scripts/measure_creator_presence.py` prints.
+ANCHOR_FACE_WIDTHS = 1.0
 
 #: What fraction of a span must have a subject for the span to be framed on one.
 #: A span that straddles a boundary is mostly one thing or mostly the other; at
@@ -68,13 +80,21 @@ def _hop_of(samples: Sequence[dict], default: float = 0.25) -> float:
 
 
 def presence_timeline(face_track: Iterable[dict], *, hop: float | None = None,
-                      enter_s: float = ENTER_S, leave_s: float = LEAVE_S
-                      ) -> list[bool]:
+                      enter_s: float = ENTER_S, leave_s: float = LEAVE_S,
+                      retrospective: bool = False) -> list[bool]:
     """One flag per sample: is a subject worth framing on screen right now.
 
     Hysteresis, not a threshold on each sample. A raw per-sample answer flips on
     every blink of the detector, and every flip is a composition change the
     viewer sees as a jump cut with no cut.
+
+    `retrospective` back-dates a CONFIRMED disappearance to where it actually
+    began. Waiting `ENTER_S` before believing the subject is gone is what stops
+    a blink from splitting a shot — but it also leaves the first three seconds
+    of every real absence framed on a subject who is not there, which is
+    exactly the wrong three seconds. Only the disappearance is back-dated: the
+    return already has `span_has_subject`'s unanimous-raw-evidence rule, and
+    back-dating it too would eat into an absence that genuinely happened.
     """
     samples = [s for s in (face_track or ()) if isinstance(s, dict)]
     if not samples:
@@ -96,6 +116,10 @@ def presence_timeline(face_track: Iterable[dict], *, hop: float | None = None,
             run += 1
             if (state and run >= enter) or (not state and run >= leave):
                 state = present
+                if retrospective and not state:
+                    # The run we just confirmed started `run` samples ago.
+                    for i in range(len(out) - run + 1, len(out)):
+                        out[i] = False
                 run = 0
         out.append(state)
     return out
@@ -256,3 +280,129 @@ def _variance(values: Sequence[float]) -> float:
 def _mean(values: Iterable[float]) -> float:
     vals = list(values)
     return round(sum(vals) / len(vals), 2) if vals else 0.0
+
+
+def anchored_track(face_track: Iterable[dict], stable: dict | None) -> list[dict]:
+    """The same track, with every detection that is not the creator removed.
+
+    The other half of the Just Chatting failure. `stable_track` already found
+    the fixed overlay; until now it only moved the CENTRE of the face-cam
+    family, so the faces in the video being reacted to still counted as a
+    subject and held the crop. On the Moist pilot only 464 of the 1.285 samples
+    that carry a face are ANCHOR-COMPATIBLE — they sit on the fixed cluster. The
+    rest are not: nobody has labelled those boxes, and geometry is all this
+    knows. "Not on the anchor" is the claim; "not the creator" is the inference,
+    and the two must not be written as if they were the same sentence.
+
+    BOTH SIDES ARE IN PROXY PIXELS, which is the only reason this comparison is
+    meaningful. `stable_track` is computed from the proxy-resolution face track,
+    and `dynamic_window`'s dense track carries its boxes through unscaled —
+    `dynamic_edit` is where they get multiplied up to source pixels, and it does
+    that to the ANCHOR too, separately. Compare one against the other in the
+    wrong space and every detection lands outside the tolerance.
+
+    Two rules that decide whether this is safe:
+
+    - **Samples are never dropped, only their boxes.** A sample with no
+      compatible face stays in the list with an empty box list, because the
+      timeline is indexed by position and compressing it would shift every time
+      after the first removal.
+    - **No anchor means no filtering.** `stable_track` returns None for three of
+      the four pilots, and on those the raw track IS the identity track. This
+      must be the same object's content, not a subtly different one: a source
+      with one subject is the case that already works.
+    """
+    samples = [s for s in (face_track or ()) if isinstance(s, dict)]
+    if not isinstance(stable, dict) or stable.get("cx") is None:
+        return samples
+
+    cx, cy = float(stable["cx"]), float(stable["cy"])
+    tolerance = max(float(stable.get("w") or 0.0), float(_CELL)) * ANCHOR_FACE_WIDTHS
+    out: list[dict] = []
+    for sample in samples:
+        kept = []
+        for box in sample.get("boxes") or []:
+            if not box or len(box) < 4:
+                continue
+            bx, by = box[0] + box[2] / 2.0, box[1] + box[3] / 2.0
+            if abs(bx - cx) <= tolerance and abs(by - cy) <= tolerance:
+                kept.append(box)
+        out.append({**sample, "boxes": kept})
+    return out
+
+
+def creator_presence(face_track: Iterable[dict], stable: dict | None, *,
+                     hop: float | None = None) -> list[bool]:
+    """Presence of THE CREATOR, second by second, with a retrospective flip.
+
+    `presence_timeline` answers "is anyone there"; this answers "is anyone on
+    the fixed anchor there", which on a reaction stream is a different question
+    with a different answer for most of the detections. How different, on real
+    material, is what `scripts/measure_creator_presence.py` reports — and only
+    as anchor compatibility, never as an identity.
+    """
+    return presence_timeline(anchored_track(face_track, stable), hop=hop,
+                             retrospective=True)
+
+
+def proposed_compositions(shots: Sequence[dict], face_track: Iterable[dict],
+                          stable: dict | None, *, hop: float | None = None) -> dict:
+    """What each existing shot's composition WOULD be if the creator decided it.
+
+    Recorded, never applied. R3a's whole job is to make the difference
+    observable beside every export while the delivered plan stays exactly what
+    it was — the same contract R2 established for the edit profile, and the
+    reason a shadow is worth having at all.
+
+    Computed over the shots the planner already produced: no regimes, no
+    active-speaker, no new boundaries. Those are R3b, and mixing them in here
+    would make it impossible to tell which change moved which frame.
+    """
+    samples = [s for s in (face_track or ()) if isinstance(s, dict)]
+    anchored = anchored_track(samples, stable)
+    step = float(hop or _hop_of(samples))
+    tolerance = (max(float((stable or {}).get("w") or 0.0), float(_CELL))
+                 * ANCHOR_FACE_WIDTHS) if stable else None
+    creator = presence_timeline(anchored, hop=step, retrospective=True)
+    raw = raw_presence(anchored)
+
+    proposed: list[dict] = []
+    changed = 0
+    for shot in shots or []:
+        if not isinstance(shot, dict):
+            continue
+        t0, t1 = float(shot.get("t0") or 0.0), float(shot.get("t1") or 0.0)
+        want = composition_for(creator, t0, t1, step, raw=raw)
+        now = str(shot.get("composition") or "crop")
+        if want != now:
+            changed += 1
+        proposed.append({"index": shot.get("index"), "t0": t0, "t1": t1,
+                         "composition": want, "delivered": now})
+
+    return {
+        # Enough to audit the number without re-deriving how it was produced.
+        # A proposal whose rule nobody can reconstruct is a number, not evidence.
+        "schema": "creator_view_v1",
+        "scope": "composition_only_existing_shots",
+        "sample_hop_s": step,
+        "enter_s": ENTER_S,
+        "leave_s": LEAVE_S,
+        "retrospective": True,
+        "anchor": stable,
+        # Both sides of the comparison live here. `dynamic_edit` scales them to
+        # source pixels separately, and comparing across the two spaces would
+        # silently reject every detection.
+        "anchor_coordinate_space": "proxy",
+        "anchor_tolerance_px": tolerance,
+        "total_samples": len(samples),
+        "face_samples": sum(1 for s in samples if s.get("boxes")),
+        # NULL without an anchor, not the face count. With nothing to compare
+        # against, compatibility was never tested — that is unknown, and
+        # reporting it as 100% would be the same lie in the other direction.
+        "compatible_samples": (sum(1 for s in anchored if s.get("boxes"))
+                               if stable else None),
+        "shots": proposed,
+        "changed": changed,
+        # Why the answer is what it is, as a closed set rather than prose.
+        "reason": "anchored" if stable else "no_anchor",
+    }

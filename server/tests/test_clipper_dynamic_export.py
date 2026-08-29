@@ -532,3 +532,59 @@ async def test_a_rig_configured_to_an_unavailable_mode_still_delivers_legacy(
     decision = await _decide_in("", wired, monkeypatch, tmp_path)
     assert decision["edit_profile"]["mode"] == edit_profiles.DEFAULT_MODE
     assert not decision["edit_profile"]["applied"]
+
+
+# --- Batch R3a: the shadow instrumentation, executed rather than read --------
+
+
+async def test_the_creator_view_reaches_the_export_and_the_working_key_does_not(
+        wired, monkeypatch, tmp_path):
+    """Grepping the source proves the line exists, not that it runs. This runs
+    the decision and looks at what would be written."""
+    from services.clipper import edit_profiles
+
+    decision = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
+                                monkeypatch, tmp_path)
+    view = decision["creator_view"]
+    assert view is not None
+    assert view["schema"] == "creator_view_v1"
+    assert view["scope"] == "composition_only_existing_shots"
+    # One entry per shot the planner produced, each carrying both answers.
+    assert len(view["shots"]) == len(decision["dyn"]["shots"])
+    assert all("composition" in s and "delivered" in s for s in view["shots"])
+    assert all(s["composition"] in ("crop", "fit") for s in view["shots"])
+
+    # The anchor rides on the plan to get here, and must not ride any further:
+    # the sidecar is a deliverable, and a face track is not part of it.
+    dyn = decision["dyn"]
+    dyn.pop("_review_faces", None)
+    dyn.pop("_panels", None)
+    dyn.pop("_stable_track", None)
+    assert not [k for k in dyn if k.startswith("_")], "working data in the plan"
+
+
+async def test_the_creator_view_changes_nothing_the_renderer_reads(
+        wired, monkeypatch, tmp_path):
+    """R3a is instrumentation. If the proposal moved a single delivered frame,
+    the shadow would stop being comparable with what R2 froze."""
+    from services.clipper import edit_profiles, render_input
+
+    legacy = await _decide_in(edit_profiles.LEGACY_DYNAMIC, wired, monkeypatch, tmp_path)
+    shadow = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
+                              monkeypatch, tmp_path)
+
+    for key in ("plan", "dyn", "drop", "fps", "caption_y", "watermark"):
+        assert legacy[key] == shadow[key], key
+
+    # And a fingerprint taken over the recipe does not move when only the
+    # proposal differs — which is why `creator_view` is not one of its keys.
+    assert "creator_view" not in render_input.FINGERPRINT_KEYS
+    fingerprints = {
+        render_input.input_fingerprint({
+            "layout_plan": d["plan"], "dynamic_plan": d["dyn"],
+            "drop_spans": d["drop"],
+            "render": {"fps": d["fps"], "watermark": d["watermark"]},
+        })
+        for d in (legacy, shadow)
+    }
+    assert len(fingerprints) == 1
