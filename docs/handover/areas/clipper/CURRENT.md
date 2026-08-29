@@ -358,6 +358,12 @@ niciunul — o tăietură dinaintea schimbării precedente dar de după TĂIETUR
 Marginea cozii e însă inclusivă: `duration - min_shot_s` e ultimul loc legal, iar un `<` strict
 arunca exact singura graniță pe care regula o permite.
 
+**Ultimele două, de precizie:** marginile testau timpul BRUT al graniței în timp ce tăietura se plasa
+la cel rotunjit, deci o pauză la 5,0499996 trecea de un plafon de 5,05 și ateriza exact pe el — pe
+chiar schimbarea pe care nu avea voie s-o traverseze. Și egalitatea de moment compara `existing["t"]`,
+adică unde a ajuns tăietura după snap, nu momentul cererii; se compară acum cu `requests`. Două
+motive împart o tăietură doar dacă au fost CERUTE în același moment.
+
 **Split nou:** `services/clipper/dynamic_rhythm_vocab.py` (listele închise),
 `services/clipper/dynamic_rhythm_pace.py` (benzile) și
 `workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe

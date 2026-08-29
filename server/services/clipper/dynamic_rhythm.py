@@ -215,6 +215,13 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
     # The moments a REQUIRED change asks for, so no cut may be moved across one.
     required_at = sorted({round(float(w["t"]), 3) for w in wanted
                           if str(w["reason"]) in REQUIRED})
+    # ROUNDED ONCE, HERE. The bounds below used to filter the raw boundary time
+    # while the cut was placed at the rounded one, so a boundary at 5.0499996
+    # passed a ceiling of 5.05 and then landed exactly on it — putting the cut
+    # on the very change it was forbidden to cross, where the next change merged
+    # into it and the treatment between the two vanished again. One resolution
+    # for the test and the placement, or the test is not testing the placement.
+    places = [(round(_num(bt), 3), _num(bw)) for bt, bw in boundaries or []]
 
     for want in wanted:
         own, reason = round(float(want["t"]), 3), str(want["reason"])
@@ -247,14 +254,14 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
         # allows. The change bounds stay strict because landing ON a required
         # moment is landing on the change itself.
         tail_limit = round(duration - min_shot_s, 3) if required else float("inf")
-        near = [(bw, bt) for bt, bw in boundaries or []
+        near = [(bw, bt) for bt, bw in places
                 if abs(bt - own) <= snap_s and floor < bt < ceiling
                 and bt <= tail_limit]
         if near:
             # The strongest boundary in the window, and the closest one among
             # equals — so a cut moves as little as the evidence allows.
-            weight, chosen = max(near, key=lambda b: (b[0], -abs(b[1] - own)))
-            placed, placement = round(float(chosen), 3), "snapped"
+            weight, placed = max(near, key=lambda b: (b[0], -abs(b[1] - own)))
+            placement = "snapped"
         elif required:
             weight, placed, placement = None, own, "unsnapped"
         else:
@@ -262,9 +269,13 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
             continue
 
         existing = at.get(placed)
-        # EXACT, because both sides are already rounded to 3dp. `abs(...) <= 1e-3`
-        # read as a rounding equality and was a 1ms tolerance.
-        if existing is not None and existing["t"] == own:
+        # AGAINST THE REQUESTS, not against where the cut landed. `existing["t"]`
+        # is where it ended up after snapping, which may be nowhere near the
+        # moment anything asked for: a change asked at 5.0 and placed at 5.2 made
+        # a second change asked at 5.2 look like the same moment, and the
+        # treatment between them was folded away. Exact, because both sides are
+        # already rounded to 3dp.
+        if existing is not None and any(m == own for _r, m in existing["requests"]):
             # One instant, two reasons for it. Both are kept: a treatment change
             # that also falls on a source cut is better evidence than either.
             if reason not in existing["reasons"]:

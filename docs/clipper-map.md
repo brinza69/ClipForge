@@ -235,7 +235,8 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_storage.py` · `test_clipper_captions.py` · `test_clipper_api.py` ·
 `test_clipper_urlguard.py` · `test_clipper_resume.py` · `test_job_claim.py` ·
 `test_clipper_regenerate.py` ·
-`test_clipper_rhythm.py` (R4: a cut needs a reason and a place) ·
+`test_clipper_rhythm.py` (R4: what earns a cut) ·
+`test_clipper_rhythm_place.py` (R4: where it lands — every review finding) ·
 `test_clipper_rhythm_pace.py` (R4: the §4 bands, compared not enforced) ·
 `test_clipper_rhythm_export.py` (R4 on the wire) ·
 `test_clipper_transcribe_progress.py` · `test_transcriber_resilience.py` ·

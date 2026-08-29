@@ -406,6 +406,14 @@ ordinea tăieturilor nu prinde asta, fiindcă o tăietură dinaintea schimbării
 TĂIETURA precedentă e perfect în ordine. Marginea cozii e inclusivă — `duration - min_shot_s` e
 ultimul loc legal — iar conflictele ies sortate temporal, fiindcă walk-back-ul le adăuga invers.
 
+**A patra rundă, de precizie.** Marginile filtrau timpul BRUT al graniței în timp ce tăietura se
+plasa la cel rotunjit: o pauză la 5,0499996 trecea de un plafon de 5,05 și ateriza exact pe el, pe
+chiar schimbarea pe care nu avea voie s-o traverseze, unde schimbarea aceea se contopea în ea și
+intervalul dintre tratamente dispărea din nou. Granițele se rotunjesc acum o singură dată, înainte de
+orice test. Și egalitatea de moment compara `existing["t"]` — unde a ajuns tăietura după snap, care
+poate fi departe de ce a cerut cineva; se compară acum cu `requests`, deci două motive împart o
+tăietură doar dacă au fost CERUTE în același moment.
+
 `required_collision` nu mai e revendicat drept „de neatins": cu marginile puse, o schimbare
 ulterioară ar trebui să găsească întotdeauna momentul propriu liber, dar asta e un argument, nu o
 demonstrație. Ramura rămâne ca **gardă de integritate** — alternativa la o constantă nefolosită e un
