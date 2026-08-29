@@ -561,7 +561,8 @@ async def test_the_creator_view_reaches_the_export_and_the_working_key_does_not(
     # The anchor rides on the plan to get here, and must not ride any further:
     # the sidecar is a deliverable, and a face track is not part of it.
     dyn = decision["dyn"]
-    for key in ("_review_faces", "_panels", "_stable_track", "_motion", "_motion_hop"):
+    for key in ("_review_faces", "_panels", "_stable_track", "_motion",
+                "_motion_hop", "_rhythm"):
         dyn.pop(key, None)
     assert not [k for k in dyn if k.startswith("_")], "working data in the plan"
 
@@ -630,3 +631,4 @@ async def test_neither_proposal_moves_the_delivered_plan(wired, monkeypatch, tmp
     for key in ("plan", "dyn", "drop", "fps", "caption_y", "watermark"):
         assert legacy[key] == shadow[key], key
     assert legacy["regime_view"] == shadow["regime_view"]
+    assert legacy["rhythm_view"] == shadow["rhythm_view"]

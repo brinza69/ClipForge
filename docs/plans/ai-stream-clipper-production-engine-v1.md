@@ -339,30 +339,60 @@ regimurilor separat, chiar dacă rezultă un singur shot vizual.
 **Gate:** zero cazuri cunoscute în care browserul este confundat cu creatorul; cele două comutări
 false `fit` dispar; cadrele Jensen și vlog folosite în audit trec verificarea vizuală.
 
-### Batch R4 — ritmul content-aware, fără alternare forțată
+### Batch R4 — ritmul content-aware, fără alternare forțată — INSTRUMENTAT 29 aug 2026
 
 **Scop:** camera se schimbă pentru că informația vizuală o cere, nu pentru că a trecut 1,8s.
 
-**Fișiere:** `dynamic_cuts.py`, `dynamic_edit.py`, `edit_profiles.py`, teste.
+**Fișiere, corectate la implementare:** nou `dynamic_rhythm.py`, nou `clipper_shadow_views.py`
+(split la 500 de linii), `edit_profiles.py` (`band_for`), `clipper_render_plan.py`,
+`clipper_render_jobs.py`, teste noi `test_clipper_rhythm.py`, `test_clipper_rhythm_pace.py`,
+`test_clipper_rhythm_export.py`.
 
-**Modificări:**
+**`dynamic_cuts.py` și `dynamic_edit.py` NU sunt atinse, și asta este deliberat.** Planul le lista,
+dar a le modifica ar schimba planul livrat — pe care R2 l-a înghețat și de care depind gate-urile
+vizuale încă deschise pentru R3a și R3b. Gramatica nouă există complet, pură și testată; ea devine
+livrabilă abia când `content_aware` intră în `SELECTABLE`, iar `delivers_profile()` face comutarea
+singur. Până atunci propunerea se scrie în sidecar ca `rhythm_view` și nu mișcă niciun cadru.
 
-- elimină regula globală „shot-urile adiacente trebuie să difere” și alternarea obligatorie după
-  două shot-uri;
-- un cut candidat trebuie să aibă atât o graniță temporală acceptabilă, cât și un motiv vizual sau
-  narativ declarat;
-- `talking_head` și `conversation` pot ține cadrul peste mai multe propoziții;
-- `action` poate accelera numai în intervale cu acțiune măsurată;
-- `visual_evidence` rămâne stabil cât timp textul/diagrama trebuie citită;
-- schimbarea de profil în interiorul clipului nu produce singură o tăietură;
-- guardrail-urile din §4 sunt raportate, nu ascunse prin clamp.
+**Regula, și este tot batch-ul: o tăietură are nevoie de un MOTIV și de un LOC.**
 
-**Teste:** același talking-head liniștit, aceeași scenă de interviu, burst de gaming, slide de 8s,
-cut de scenă IRL, semnale absente.
+- Motivul e o schimbare declarată în ce trebuie văzut: `treatment_change` (de la R3b),
+  `source_scene_cut` (sursa a tăiat ea însăși), `action_beat` (un onset într-un interval pe care R3b
+  l-a măsurat ca acțiune). Listă închisă.
+- Locul e o graniță unde tăietura nu cade în mijlocul unui cuvânt — `_boundaries`, reutilizat, nu
+  reimplementat.
+- **O pauză fără nimic în spate este exact tăietura pe care batch-ul o elimină.**
 
-**Gate:** niciun profil non-action nu depășește guardrail-ul fără warning; minimum shot respectat;
-auditul uman nu mai descrie montajul drept agitat; numărul de tăieturi scade fără să apară cadre
-moarte lungi.
+**Asimetria dintre cele două feluri de motiv.** `treatment_change` e OBLIGATORIU: cadrul a devenit
+greșit, deci taie chiar și fără graniță (`placement: unsnapped`) și chiar peste `min_shot_s`, cu
+violarea înregistrată. A ține un crop pe o ancoră goală ca să protejezi o lungime minimă schimbă un
+defect vizibil pe o metrică invizibilă. Restul sunt oportunități, iar o oportunitate care nu poate fi
+luată curat nu se ia.
+
+**Guardrail-urile sunt raportate, nu impuse.** Nimic nu adaugă o tăietură ca să atingă o bandă și
+nimic nu scoate una ca să rămână în ea — o propunere umplută până la bandă ar face banda
+nefalsificabilă. `action` e singurul profil judecat pe două benzi, împărțind clipul în secundele pe
+care R3b le-a numit `action` și restul; fără măsurătoarea de mișcare ambele partiții ies
+`unavailable`, niciodată contopite. `indeterminate` este un verdict real: sub `60 / lo` secunde
+propria podea a benzii nu așteaptă încă nicio tăietură.
+
+**Ce refuză să ghicească.** `UNMEASURED` numește, per profil, ce cere §4 și nimic din repo nu
+măsoară: `talking_head` cere reframe „la o idee sau emoție clară", iar cel mai apropiat lucru care
+există e un regex de cuvinte-cheie — o listă care conține „bro" și „lol" nu este o emoție, iar
+promovarea ei la motiv de tăiere ar fi exact semnalul inventat pe care §3.4 îl interzice pentru
+vorbitorul activ. De aceea `talking_head` și `conversation` ies `below` banda lor. **Golul e
+măsurătoarea care lipsește, nu un ritm care are nevoie de umplutură.**
+
+**Profilul nu se schimbă în interiorul clipului**, fiindcă `edit_profiles.resolve` răspunde o
+singură dată per clip din tipul lui de conținut. Regula planului e satisfăcută pentru că schimbarea
+nu există, nu pentru că e suprimată — și niciun motiv din lista închisă nu derivă din profil.
+
+**Teste:** talking-head liniștit (aceleași granițe, `_cut_times` livrat taie de opt ori, R4 de zero
+ori — contrastul rulează funcția livrată, nu îl descrie), slide de 8s, burst de gaming, scenă IRL,
+graniță de regim cu aceeași cheie vizuală, beat în afara acțiunii măsurate, semnale absente.
+
+**Gate:** rămâne deschis. Cifrele pe corpus se pot obține doar re-randând piloturile, iar „auditul
+uman nu mai descrie montajul drept agitat" cere același om ca gate-urile R3a/R3b.
 
 ### Batch R5 — completion check și boundary repair determinist
 

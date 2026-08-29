@@ -212,6 +212,7 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
             dyn.pop("_stable_track", None)
             dyn.pop("_motion", None)
             dyn.pop("_motion_hop", None)
+            dyn.pop("_rhythm", None)
 
     out = storage.export_path(project_id, clip.id)
     try:
@@ -347,6 +348,10 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         # to nothing — forcing a cut on every regime change would put back the
         # 116 invisible cuts R1 removed.
         "regime_view": decision["regime_view"],
+        # R4: which boundaries would earn a cut and why, against the §4 band for
+        # this profile. The band is compared, never enforced — a proposal padded
+        # to reach a guardrail would make the guardrail unfalsifiable.
+        "rhythm_view": decision["rhythm_view"],
         "analysis_version": project.analysis_version,
         "ranker_version": clip.ranker_version,
         # The dead seconds this render removed. Without them the sidecar

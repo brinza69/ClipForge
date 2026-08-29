@@ -87,14 +87,14 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 
 ## Priorități globale
 
-1. Gate-ul vizual pentru R3a și R3b: ambele sunt instrumentate și niciunul nu e închis, fiindcă
-   verdictul cere un om care se uită la patru clipuri.
-2. Clipper Batch R4: ritmul content-aware, fără alternare forțată.
-2. Clipper R2–R7: montaj content-aware și gate tehnic separat de reasoning.
-3. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
-4. Consistență între DB și filesystem și idempotency pentru job-urile de export.
-5. Upload streaming și limite reale de memorie/disk.
-6. Readiness checks și teste de reziliență pentru aplicația întreagă.
+1. Gate-ul vizual pentru R3a, R3b și R4: toate trei sunt instrumentate și niciunul nu e închis,
+   fiindcă verdictul cere un om care se uită la patru clipuri.
+2. Clipper Batch R5: completion check și boundary repair determinist.
+3. Clipper R6–R8: captions, preflight și reconstrucția montajului după trim.
+4. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
+5. Consistență între DB și filesystem și idempotency pentru job-urile de export.
+6. Upload streaming și limite reale de memorie/disk.
+7. Readiness checks și teste de reziliență pentru aplicația întreagă.
 
 ## Handover pe module
 

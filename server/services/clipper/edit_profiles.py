@@ -200,6 +200,22 @@ REASONS: tuple[str, ...] = (BY_TYPE, BY_LOW_CONFIDENCE, BY_MISSING_CONFIDENCE,
                             BY_UNKNOWN_TYPE, BY_OVERRIDE, BY_INVALID_CONFIDENCE)
 
 
+def band_for(profile: str, *, quiet: bool = False) -> tuple[float, float] | None:
+    """The §4 cuts-per-minute band, or None when this profile has no quiet one.
+
+    THE accessor, so nothing outside this module has to know that `action` is
+    the one profile with two bands. A caller reading `PROFILES[...]["cuts_per_min"]`
+    for a gaming clip would judge its lulls against the busy band without ever
+    being wrong-looking enough to notice.
+
+    None for `quiet` is "this profile has one pace", not "its quiet pace is
+    zero". R4 branches on exactly that.
+    """
+    spec = PROFILES.get(str(profile or ""), PROFILES[CONSERVATIVE])
+    band = spec.get("cuts_per_min_quiet") if quiet else spec.get("cuts_per_min")
+    return tuple(band) if band else None
+
+
 def confidence_value(value: object) -> float | None:
     """A confidence, or None. None is a legitimate answer and stays one.
 

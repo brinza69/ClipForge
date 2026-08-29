@@ -295,10 +295,53 @@ Cheile sunt `crop_anchor`, `crop_subject`, `fit_full`; sidecar-ul spune `target`
 spune dacă a fost `stable_anchor` sau `unanchored_face`. `crop_creator` poate exista abia după o
 verificare reală de identitate sau după gate-ul vizual uman.
 
+## Batch R4 — INSTRUMENTAT, gate PENDING, 29 august 2026
+
+**Nu este închis**, ca R3a și R3b — dar dintr-un motiv în plus. Gramatica există complet și e
+verificată automat; nimic nu a fost aplicat, `legacy_dynamic` rămâne înghețat, iar propunerea se
+scrie în sidecar ca `rhythm_view`. Gate-ul lui §6 („auditul uman nu mai descrie montajul drept
+agitat, numărul de tăieturi scade fără cadre moarte lungi") nu poate fi nici măcar ÎNCERCAT până
+când `content_aware` nu devine livrabil: cere piloturile re-randate cu gramatica aplicată. Până
+atunci se poate compara doar propunerea cu cadența livrată, în sidecar, clip cu clip.
+
+**Regula, și este tot batch-ul: o tăietură are nevoie de un MOTIV și de un LOC.** Motivul e o
+schimbare declarată în ce trebuie văzut — `treatment_change` de la R3b, `source_scene_cut` când
+sursa a tăiat ea însăși, `action_beat` doar într-un interval pe care R3b l-a măsurat ca acțiune.
+Locul e o graniță unde tăietura nu cade în mijlocul unui cuvânt, luată din `_boundaries`, nu
+reimplementată. **O pauză fără nimic în spate este exact tăietura pe care batch-ul o elimină.**
+
+Măsurat prin funcția livrată, nu descris: pe același talking-head liniștit cu șase pauze naturale,
+`_cut_times` taie de opt ori — ultimele două (16,8s și 18,6s) fără nicio graniță, pur pe ceas — iar
+R4 taie de zero ori.
+
+**Asimetria contează.** `treatment_change` e obligatoriu și taie chiar și fără graniță
+(`placement: unsnapped`) și chiar peste `min_shot_s`, cu violarea înregistrată în
+`min_shot_violations`. A ține un crop pe o ancoră goală ca să protejezi o lungime minimă schimbă un
+defect vizibil pe o metrică invizibilă — și lista de violări e felul în care un timeline de prezență
+care pâlpâie devine ceva ce i se poate arăta unui om.
+
+**Benzile din §4 se compară, nu se impun.** Nimic nu adaugă o tăietură ca să atingă o bandă, nimic nu
+scoate una ca să rămână în ea. `action` e singurul profil judecat pe două benzi — secundele numite
+`action` și restul; fără măsurătoarea de mișcare ambele partiții ies `unavailable`, niciodată
+contopite într-un număr care ar judeca liniștea cu banda agitată. `indeterminate` e un verdict real:
+sub `60 / lo` secunde propria podea a benzii nu așteaptă încă nicio tăietură.
+
+**Ce lipsește, spus pe față.** `UNMEASURED` numește per profil ce cere §4 și nimic nu măsoară:
+`talking_head` cere reframe „la o idee sau emoție clară", iar singurul lucru care există e un regex
+de cuvinte-cheie. O listă cu „bro" și „lol" nu e o emoție. De aceea `talking_head` și `conversation`
+ies `below` banda lor — golul e măsurătoarea care lipsește, nu un ritm care are nevoie de umplutură.
+
+**`dynamic_cuts.py` și `dynamic_edit.py` nu au fost atinse.** Planul le lista; a le modifica ar
+schimba planul livrat, pe care R2 l-a înghețat și de care depind gate-urile vizuale deschise.
+`delivers_profile()` face comutarea singur în ziua în care `content_aware` intră în `SELECTABLE`.
+
+**Split nou:** `workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe
+care nu l-a făcut (R3a + R3b + R4). `clipper_render_plan.py` trecuse de 500 de linii.
+
 ## Punctul exact de reluare
 
-Următoarea sesiune are două opțiuni, în ordinea asta: **gate-ul vizual pentru R3a și R3b**, care nu se
-poate închide fără un om, sau **Batch R4** — ritmul content-aware — din
+Următoarea sesiune are două opțiuni, în ordinea asta: **gate-ul vizual pentru R3a, R3b și R4**, care
+nu se poate închide fără un om, sau **Batch R5** — completion check și boundary repair — din
 [`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md),
 acum versionat în repo. Vocabularul de regimuri pe care R3 îl atribuie există deja, ca listă închisă,
 în `edit_profiles.REGIMES`.
