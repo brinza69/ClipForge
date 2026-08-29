@@ -65,6 +65,33 @@ def _guard(queue, job_id: str) -> None:
         raise JobCancelledError("Cancelled by user.")
 
 
+def _record_completeness(refined: list[dict], transcript: dict, *,
+                         max_s: float, duration: float) -> None:
+    """Attach R5's `boundary_view` to every candidate. Never fails the run.
+
+    `next_start` is the first candidate that begins AFTER this one ends — the
+    only neighbour a bounded repair could newly collide with. The field is not
+    a timeline and windows overlap on purpose, so an overlap that already
+    exists is not a bound; creating one that did not is.
+    """
+    from services.clipper import boundary_completion
+    from services.clipper.candidate_terms import _num as _n
+    from services.clipper.candidate_terms import _words_for
+
+    starts = sorted(_n(c.get("start")) for c in refined)
+    for cand in refined:
+        try:
+            end = _n(cand.get("end"))
+            after = next((s for s in starts if s > end + 1e-6), None)
+            cand["boundary_view"] = boundary_completion.boundary_view(
+                cand, _words_for(cand, transcript), max_s=max_s,
+                ceiling=duration, next_start=after)
+        except Exception:
+            # An observability field must never cost the run it describes.
+            logger.warning("boundary completeness failed for a candidate",
+                           exc_info=True)
+
+
 async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     from services.clipper import candidates as cand_mod
     from services.clipper import captions as cap_mod
@@ -265,6 +292,13 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
             logger.warning("boundary refinement failed for a candidate", exc_info=True)
             refined.append(cand)
     _guard(queue, job_id)
+
+    # R5, recorded and applied to nothing: is each window a COMPLETE thought,
+    # and what would the one bounded repair be. `eligible` rides in
+    # `candidates.json` and decides nothing — the plan gates it on this
+    # validator passing the corpus first, because a rule that silently removes
+    # moments has to be measured before it is trusted, not after.
+    _record_completeness(refined, transcript, max_s=max_s, duration=duration)
 
     await queue.update_progress(job_id, 0.40, "Scoring candidates")
     model, use_learned = await clipper_scoring.use_learned_ranker()

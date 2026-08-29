@@ -454,27 +454,56 @@ uman nu mai descrie montajul drept agitat" cere același om ca gate-urile R3a/R3
 (șase runde) a închis batch-ul **ca instrumentare shadow, nu ca motor activ** — cele două nu se
 confundă: finalizarea lui R4 nu este validare pentru producție.
 
-### Batch R5 — completion check și boundary repair determinist
+### Batch R5 — completion check și boundary repair determinist — INSTRUMENTAT 30 aug 2026
 
 **Scop:** momentul ales devine o fereastră completă, nu o propoziție tăiată la scor maxim.
 
-**Fișiere:** nou `boundary_completion.py`, `candidate_boundaries.py`, `story_evidence.py`,
-`clipper_finalize.py`, teste.
+**Fișiere, corectate la implementare:** nou `boundary_completion.py`, nou
+`scripts/audit_clipper_boundaries.py`, `candidate_terms.py` (`SENTENCE_EDGE_S`), `candidates.py`
+(literalul promovat), `clipper_build.py` (înregistrarea), test nou
+`test_clipper_boundary_completion.py`.
 
-**Modificări:**
+**`candidate_boundaries.py` și `story_evidence.py` NU sunt atinse.** Planul le lista, dar ele fac
+deja ce cerea lista de modificări: `refine_boundaries` MUTĂ ambele margini — snap pe propoziție,
+lead-in, payoff, reacție, răspuns, trim de coadă, drop de orfan, pad de release — iar
+`story_evidence.remeasure` recalculează deja context/payoff/reaction coverage după fiecare mutare. Ce
+lipsea nu era o mutare în plus, ci un **verdict**: nimic nu putea spune cu voce tare „clipul ăsta se
+oprește în mijlocul unui cuvânt".
 
-- verifică începutul și finalul pe cuvinte, punctuație, pauze și dovezile story;
-- adaugă lead-in și tail controlate, fără să taie foneme: valorile se calibrează, nu se hardcodează
-  din PRP-ul vechi;
-- dacă finalul este incomplet, extinde o singură dată până la următoarea graniță sigură, bounded de
-  durata maximă și de overlap;
-- după schimbare, recalculează context/payoff/reaction coverage și toate scorurile dependente;
-- dacă nu poate obține o fereastră completă fără să strice momentul, marchează `ineligible` cu motiv;
-- `eligibility` începe să influențeze board-ul numai după ce acest validator trece corpusul;
-- un LLM poate propune o completare, dar verificarea și timestamp-ul final sunt deterministe.
+**Gaura pe care o închide, aceeași ca la fiecare batch de la R0 încoace.**
+`extract_features` calculează `ends_on_sentence = 1.0 if text.endswith(".!?…")`. Pe un transcript
+FĂRĂ punctuație asta e 0.0 pentru fiecare clip tăiat vreodată — iar 0.0 acolo nu înseamnă „se termină
+la mijlocul propoziției", înseamnă că nimeni nu a putut ști. Clipper-ul transcrie cu
+`keep_punctuation=True`, dar `transcriber._clean_text` scoate punctuația implicit și un transcript mai
+vechi poate să nu o aibă. Acum verificările de propoziție ies `unavailable`, iar `eligible` e `None`:
+board-ul nu are voie să piardă un moment din cauza felului în care a fost transcris. O tăietură în
+mijlocul unui cuvânt rămâne măsurabilă oricum.
 
-**Gate:** zero cuvinte trunchiate; ≥95% începuturi și finaluri acceptate la review uman; cele 22 de
-finaluri cu ≤50ms scad fără a introduce tăceri lungi; context coverage rămâne peste gate-ul existent.
+**Liste închise:** nouă defecte, dintre care patru blocante — `start_inside_word`, `end_inside_word`,
+`end_mid_sentence`, `orphan_tail`. `start_mid_sentence` NU e blocant: un hook deschide legitim la
+mijlocul unei propoziții, iar gate-ul cere un OM să spună dacă începutul e acceptabil.
+`clipped_release` nu e blocant: se repară prin padding, ceea ce `_keep_release` face deja, nu prin
+refuzarea momentului.
+
+**O singură reparație, bounded (§3.5):** extinderea finalului până la următoarea graniță de
+propoziție, mărginită de durata maximă, de mediu și de prima fereastră care începe DUPĂ aceasta —
+singura vecină cu care o reparație ar putea intra în coliziune nouă. Câmpul de candidați nu e un
+timeline și ferestrele se suprapun intenționat, deci o suprapunere care există deja nu e o margine;
+crearea uneia care nu exista, da. Ce rămâne după reparație se **măsoară pe fereastra reparată**, nu se
+presupune: o extindere care ajunge la o graniță de propoziție poate ateriza tot pe un orfan.
+
+**Nimic nu se aplică.** `eligible` intră în `candidates.json` și nu decide nimic — planul însuși
+condiționează asta de trecerea corpusului, fiindcă o regulă care scoate momente în tăcere trebuie
+măsurată înainte să fie crezută, nu după.
+
+**Constantele nu sunt încă recalibrate, și scriptul spune asta.** `TAIL_PAD_S = 0.40` e moștenit de la
+o singură sursă (median 0,16s, p90 0,40s). Auditul tipărește distribuția reală a cozii pe corpus,
+adică exact numerele din care s-ar re-deriva.
+
+**Gate:** **NU e măsurat.** Toate cele 22 de proiecte de pe disc au fost scorate înainte de R5 și
+niciun candidat nu poartă verdict; auditul le numește `predates_r5_rescore_needed` și iese cu 2.
+„Zero cuvinte trunchiate" și „cele 22 de finaluri cu ≤50ms scad" devin verificabile abia după un
+re-score, iar „≥95% începuturi și finaluri acceptate" cere oricum un om.
 
 ### Batch R6 — captions și source hygiene
 

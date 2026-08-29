@@ -374,10 +374,44 @@ motive împart o tăietură doar dacă au fost CERUTE în același moment.
 unde e fiecare constatare din review) și `workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe
 care nu l-a făcut (R3a + R3b + R4). `clipper_render_plan.py` trecuse de 500 de linii.
 
+## Batch R5 — INSTRUMENTAT, gate NEMĂSURAT, 30 august 2026
+
+Fiecare fereastră aleasă primește un **verdict de completitudine** în `candidates.json`, ca
+`boundary_view`. Nimic nu se aplică: `eligible` nu decide nimic, fiindcă planul însuși condiționează
+asta de trecerea corpusului.
+
+**De ce era nevoie de un verdict, nu de încă o mutare.** `refine_boundaries` mută deja ambele margini
+și `extract_features` le scorează deja. Un scor e un număr după care sortezi — nu poate spune cu voce
+tare „clipul ăsta se oprește în mijlocul unui cuvânt". De aceea `candidate_boundaries.py` și
+`story_evidence.py` nu au fost atinse, deși planul le lista.
+
+**Gaura închisă:** `ends_on_sentence = 1.0 if text.endswith(".!?…")` e 0.0 pentru fiecare clip tăiat
+vreodată dintr-un transcript fără punctuație — iar 0.0 acolo nu înseamnă „se termină la mijlocul
+propoziției", înseamnă că nimeni nu a putut ști. `transcriber._clean_text` scoate punctuația implicit.
+Acum verificările de propoziție ies `unavailable` și `eligible` e `None`; o tăietură în mijlocul unui
+cuvânt rămâne măsurabilă oricum, fiindcă nu depinde de punctuație sau de limbă.
+
+**Nouă defecte, patru blocante:** `start_inside_word`, `end_inside_word`, `end_mid_sentence`,
+`orphan_tail`. `start_mid_sentence` nu blochează — un hook deschide legitim la mijloc, iar gate-ul
+cere un om. `clipped_release` nu blochează — se repară prin padding, nu prin refuzarea momentului. E
+pragul `TAIL_TIGHT_S` importat din `edit_quality`, ca partea de selecție și cea de randare să numere
+ACELAȘI defect (22 din 58 la baseline).
+
+**O singură reparație, bounded:** extinderea finalului la următoarea graniță de propoziție, mărginită
+de durata maximă, de mediu și de prima fereastră care începe DUPĂ aceasta. Ce rămâne după reparație se
+măsoară pe fereastra reparată, nu se presupune.
+
+**Gate-ul NU e măsurat, și asta e starea, nu o scăpare.** Toate cele 22 de proiecte de pe disc au fost
+scorate înainte de R5; `scripts/audit_clipper_boundaries.py` le numește
+`predates_r5_rescore_needed`, tipărește numitorul înaintea numărătorii („0 din 144 candidați poartă
+un verdict") și iese cu 2. Scriptul tipărește și distribuția reală a cozii pe corpus — numerele din
+care s-ar re-deriva `TAIL_PAD_S = 0.40`, moștenit azi de la o singură sursă.
+
 ## Punctul exact de reluare
 
-Următoarea sesiune are două opțiuni, în ordinea asta: **gate-ul vizual pentru R3a, R3b și R4**, care
-nu se poate închide fără un om, sau **Batch R5** — completion check și boundary repair — din
+Următoarea sesiune are trei opțiuni, în ordinea asta: **un re-score al piloturilor**, care e singurul
+lucru care face gate-ul R5 măsurabil și nu cere pe nimeni; **gate-ul vizual pentru R3a, R3b și R4**,
+care nu se poate închide fără un om; sau **Batch R6** — captions și source hygiene — din
 [`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md),
 acum versionat în repo. Vocabularul de regimuri pe care R3 îl atribuie există deja, ca listă închisă,
 în `edit_profiles.REGIMES`.

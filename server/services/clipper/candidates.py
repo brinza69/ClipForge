@@ -35,7 +35,8 @@ from services.clipper.candidate_boundaries import (
 )
 from services.clipper import vocal_bursts
 from services.clipper.candidate_terms import (
-    FEATURE_KEYS, PAUSE_KEEP_S, PAYOFF_WINDOW_S, _CLOSERS, _CUES, _EMOTION, _FILLER, _HOOK,
+    FEATURE_KEYS, PAUSE_KEEP_S, PAYOFF_WINDOW_S, SENTENCE_EDGE_S,
+    _CLOSERS, _CUES, _EMOTION, _FILLER, _HOOK,
     _LAUGH, _LEAD_IN, _PROFANITY, _SENTIMENT, _bounds, _clamp01, _clean_words,
     _div, _hits, _mean, _neighbourhood, _num, _snap, _source, _text_of,
     _tokens, _words_for,
@@ -167,7 +168,8 @@ def _structure(inside: Sequence[dict], sentences: Sequence[dict], before: dict |
     opening = _first_tokens(first)
     clip_tokens = _tokens(inside)
 
-    starts_on = 1.0 if (first is not None and abs(_num(first["start"]) - start) <= 0.35) else 0.0
+    starts_on = 1.0 if (first is not None
+                    and abs(_num(first["start"]) - start) <= SENTENCE_EDGE_S) else 0.0
     ends_on = 1.0 if text.endswith((".", "!", "?", "…")) else 0.0
     pronoun_start = 1.0 if (clip_tokens and clip_tokens[0] in _LEAD_IN) else 0.0
     dangling = 1.0 if text.endswith("?") else 0.0

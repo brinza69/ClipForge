@@ -89,12 +89,14 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 
 1. Gate-ul vizual pentru R3a, R3b și R4: toate trei sunt instrumentate și niciunul nu e închis,
    fiindcă verdictul cere un om care se uită la patru clipuri.
-2. Clipper Batch R5: completion check și boundary repair determinist.
-3. Clipper R6–R8: captions, preflight și reconstrucția montajului după trim.
-4. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
-5. Consistență între DB și filesystem și idempotency pentru job-urile de export.
-6. Upload streaming și limite reale de memorie/disk.
-7. Readiness checks și teste de reziliență pentru aplicația întreagă.
+2. Re-score al piloturilor: singurul lucru care face gate-ul R5 măsurabil, și nu cere
+   pe nimeni.
+3. Clipper Batch R6: captions și source hygiene.
+4. Clipper R7–R8: preflight și reconstrucția montajului după trim.
+5. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
+6. Consistență între DB și filesystem și idempotency pentru job-urile de export.
+7. Upload streaming și limite reale de memorie/disk.
+8. Readiness checks și teste de reziliență pentru aplicația întreagă.
 
 ## Handover pe module
 
