@@ -210,6 +210,8 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
             dyn.pop("_review_faces", None)
             dyn.pop("_panels", None)
             dyn.pop("_stable_track", None)
+            dyn.pop("_motion", None)
+            dyn.pop("_motion_hop", None)
 
     out = storage.export_path(project_id, clip.id)
     try:
@@ -340,6 +342,11 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         # beside the one that shipped. Recorded on every export, applied on
         # none — the difference is the measurement.
         "creator_view": decision["creator_view"],
+        # R3b: what each stretch is, and the gap between how many regime
+        # boundaries exist and how many the viewer would see. Recorded, applied
+        # to nothing — forcing a cut on every regime change would put back the
+        # 116 invisible cuts R1 removed.
+        "regime_view": decision["regime_view"],
         "analysis_version": project.analysis_version,
         "ranker_version": clip.ranker_version,
         # The dead seconds this render removed. Without them the sidecar

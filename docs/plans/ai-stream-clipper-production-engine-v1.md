@@ -286,7 +286,16 @@ nu demonstrează că persoana corectă e în cadru. Formularea corectă până s
 
 **Scop:** regimul secvenței devine unitatea de decizie, fără să reintroducă tăieturi invizibile.
 
-**Fișiere:** `dynamic_cuts.py`, `dynamic_edit.py`, `dynamic_window.py`, testele dynamic.
+**Fișiere, lista reală.** Nou: `dynamic_regimes.py`, `series.py`,
+`tests/test_clipper_regimes.py`, `tests/test_clipper_regime_signals.py`. Atinse: `dynamic_subject.py`
+(prezența off-anchor), `dynamic_window.py` (pasul real al seriei de mișcare), `dynamic_edit.py`
+(folosește scalarea comună), `clipper_render_plan.py` și `clipper_render_jobs.py` (sidecar).
+`dynamic_cuts.py` NU este atins: R3b nu taie nimic.
+
+**R3b este o propunere shadow.** Segmentarea regimurilor și topologia de tratament se calculează și se
+înregistrează; planul livrat rămâne exact ce a înghețat R2. Materializarea lor în planul livrat
+aparține căii care construiește complet planul `content_aware`, înainte ca modul să devină selectabil
+— altfel se încalcă înghețul stabilit în R2.
 
 **Modificări:**
 
@@ -297,6 +306,22 @@ nu demonstrează că persoana corectă e în cadru. Formularea corectă până s
 - fără active-speaker verificabil, `conversation` folosește cadru comun sau hold, nu două crop-uri
   ghicite;
 - regimul e decis înainte de tratamentul vizual; nu se votează majoritar peste un shot mixt.
+
+**Ce a fost măsurat, nu presupus.** Regimurile se decid PE EȘANTION, nu pe shot: un verdict ponderat
+peste un shot este chiar votul majoritar pe care planul îl interzice, iar coprezența — singurul lucru
+care distinge `reaction` de un talking head — este un fapt la nivel de eșantion, pe care două ponderi
+de 50% dintr-un shot îl declară adevărat pentru două jumătăți care nu se suprapun niciodată.
+
+**Ce refuză să ghicească**, fiecare descoperit prin măsurare: seria de mișcare e pe alt ceas (cadre
+întregi, deci un proxy de 10 FPS eșantionează la 0,2s, nu 0,25; indexul 0 e o santinelă, iar valoarea
+`j` acoperă intervalul DINAINTE), acoperirea și variabilitatea sunt axe independente, lipsa
+timestamp-urilor de cuvinte nu e tăcere, un track mai scurt decât clipul lasă `target_unknown`, iar
+evidența se mediază doar peste eșantioanele măsurate și e `None` acolo unde nu s-a măsurat nimic.
+
+**Ce nu are voie să pretindă.** `stable_track` găsește un cluster geometric stabil, nu o persoană.
+Cheile vizuale sunt `crop_anchor`, `crop_subject` și `fit_full`; `crop_creator` poate exista abia după
+o verificare reală de identitate sau după gate-ul vizual uman. Tot ce persistă sidecar-ul spune
+`target`, iar `target_basis` spune ce fel de țintă a fost.
 
 **Contractul care evită regresia R1.** Nu orice graniță de regim are voie să forțeze o tăietură
 fizică — asta ar reintroduce exact tăieturile invizibile pe care le-a scos R1. Ordinea corectă:

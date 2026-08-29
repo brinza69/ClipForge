@@ -47,8 +47,14 @@ _CUT_TIMEOUT_S = 600
 
 def region_motion(window: Path | str, hop: float,
                   band: tuple[float, float, float, float], src_w: int
-                  ) -> tuple[list[float], list[float], list[float], list[float]]:
-    """(how much is happening, where, and how much there is to look at) per `hop`.
+                  ) -> tuple[list[float], list[float], list[float], list[float], float]:
+    """(how much is happening, where, how much there is to look at, and AT WHAT STEP).
+
+    The fifth value is the REAL sampling interval, and it is rarely the `hop`
+    asked for: frames are whole, so the step is `round(fps * hop)` of them. On a
+    10 FPS proxy a 0.25s hop becomes 2 frames — 0.2s. Anything that indexes this
+    series by a 0.25s clock is reading values from the wrong moments, which is
+    what R3b did until it was measured.
 
     Two things the whole-frame motion signal in signals.json cannot give us.
     It cannot answer "is something happening in the GAME", because the facecam
@@ -124,7 +130,9 @@ def region_motion(window: Path | str, hop: float,
                                  else band_x0 + (hottest + 0.5) * col_w)
                 previous = grey
             index += 1
-        return totals, focus, detail, ui
+        # `step` frames at `fps`, which is what the samples above are actually
+        # spaced by — not the `hop` that was asked for.
+        return totals, focus, detail, ui, (step / fps if fps > 0 else float(hop))
     finally:
         cap.release()
 
@@ -242,11 +250,13 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
             info = video_info(str(window))
             band = action_band(samples, int(info.get("width") or 0),
                                int(info.get("height") or 0))
-        totals, focus, detail, ui = region_motion(window, FACE_HOP_S, band, src_w)
+        totals, focus, detail, ui, motion_hop = region_motion(
+            window, FACE_HOP_S, band, src_w)
         info = video_info(str(window))
         src_h = int(src_w * (int(info.get("height") or 0) or 1)
                     / max(1, int(info.get("width") or 0) or 1))
-        return {"faces": faces, "motion": totals, "focus": focus,
+        return {"faces": faces, "motion": totals, "motion_hop": motion_hop,
+                "focus": focus,
                 "detail": detail, "ui": ui, "band": tuple(band),
                 "panels": ui_panels(window, src_w, src_h),
                 "hop": FACE_HOP_S}

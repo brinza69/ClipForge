@@ -46,7 +46,8 @@ from __future__ import annotations
 from typing import Any, Iterable, Sequence
 
 __all__ = ["ENTER_S", "LEAVE_S", "ANCHOR_FACE_WIDTHS", "presence_timeline",
-           "span_has_subject", "anchored_track", "creator_presence"]
+           "span_has_subject", "anchored_track", "creator_presence",
+           "off_anchor_presence"]
 
 #: How long the frame must go without a face before the shot gives up on
 #: pointing at one. See the measurements above.
@@ -81,12 +82,19 @@ def _hop_of(samples: Sequence[dict], default: float = 0.25) -> float:
 
 def presence_timeline(face_track: Iterable[dict], *, hop: float | None = None,
                       enter_s: float = ENTER_S, leave_s: float = LEAVE_S,
-                      retrospective: bool = False) -> list[bool]:
+                      retrospective: bool = False,
+                      starts_present: bool = True) -> list[bool]:
     """One flag per sample: is a subject worth framing on screen right now.
 
     Hysteresis, not a threshold on each sample. A raw per-sample answer flips on
     every blink of the detector, and every flip is a composition change the
     viewer sees as a jump cut with no cut.
+
+    `starts_present` is the opening assumption, and it is only right for the
+    question this was written for. "Is anyone there" starts TRUE because the
+    first shot of every clip opens on a face by design. "Is someone ELSE there"
+    must start FALSE: presuming a second person at the top of a clip invents a
+    reaction out of nothing, which is what it did.
 
     `retrospective` back-dates a CONFIRMED disappearance to where it actually
     began. Waiting `ENTER_S` before believing the subject is gone is what stops
@@ -105,9 +113,9 @@ def presence_timeline(face_track: Iterable[dict], *, hop: float | None = None,
 
     raw = [bool(s.get("boxes")) for s in samples]
     out: list[bool] = []
-    # Starts TRUE: the first shot of every clip opens on a face by design
-    # (`plan_dynamic_edit` forces it), so starting false would fight that.
-    state = True
+    # See `starts_present`: TRUE for "is anyone there", FALSE for "is someone
+    # else there".
+    state = bool(starts_present)
     run = 0
     for present in raw:
         if present == state:
@@ -406,3 +414,32 @@ def proposed_compositions(shots: Sequence[dict], face_track: Iterable[dict],
         # Why the answer is what it is, as a closed set rather than prose.
         "reason": "anchored" if stable else "no_anchor",
     }
+
+
+def off_anchor_presence(face_track: Iterable[dict], stable: dict | None, *,
+                        hop: float | None = None) -> list[bool] | None:
+    """Presence of a face that is NOT on the anchor, or None when unknowable.
+
+    The other half of what R3a made computable, and the half R3b needs: a
+    creator plus someone else on screen is a reaction, and a creator alone is
+    not, and before the anchor existed those two were the same signal.
+
+    None WITHOUT AN ANCHOR, never an empty timeline. With nothing to be "off"
+    of, no detection can be classified — and returning all-False would claim
+    "there is nobody else here", which is exactly the unproven claim this whole
+    batch was written to stop making.
+    """
+    samples = [s for s in (face_track or ()) if isinstance(s, dict)]
+    if not isinstance(stable, dict) or stable.get("cx") is None:
+        return None
+
+    on_anchor = anchored_track(samples, stable)
+    off = [{**s, "boxes": [b for b in (s.get("boxes") or [])
+                           if b not in (kept.get("boxes") or [])]}
+           for s, kept in zip(samples, on_anchor)]
+    # STARTS ABSENT. `presence_timeline`'s opening TRUE exists because the first
+    # shot of a clip is framed on a face; nothing makes a SECOND person likely at
+    # the top of a clip, and assuming one invented a reaction on a track that
+    # contained only the creator.
+    return presence_timeline(off, hop=hop, retrospective=True,
+                             starts_present=False)

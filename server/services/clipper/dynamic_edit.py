@@ -36,6 +36,7 @@ logger = logging.getLogger("clipforge.clipper.dynamic_edit")
 __all__ = ["DEFAULT_STYLE", "CAMERAS", "camera_rects", "plan_dynamic_edit"]
 
 from services.clipper import dynamic_geometry
+from services.clipper import series
 from services.clipper import dynamic_subject as subject_mod
 from services.clipper.dynamic_cameras import (   # noqa: F401  (re-exported)
     ASPECT,
@@ -69,16 +70,16 @@ _EMPHATIC = re.compile(r"[!?]")
 
 
 def _pct(sorted_values: Sequence[float], q: float) -> float:
-    if not sorted_values:
-        return 0.0
-    idx = min(len(sorted_values) - 1, max(0, int(q * (len(sorted_values) - 1))))
-    return float(sorted_values[idx])
+    # Shared with `dynamic_regimes` through `series`, for the reason written
+    # there: two copies of one rule are one drift away from being two rules.
+    return series.percentile(sorted_values, q)
 
 
 def _norm(value: float, lo: float, hi: float) -> float:
-    if hi - lo <= 1e-9:
-        return 0.5
-    return min(1.0, max(0.0, (value - lo) / (hi - lo)))
+    # THE shared implementation, not a copy of it. `dynamic_regimes` scales a
+    # different population — samples rather than per-shot means — and that
+    # difference is deliberate; the arithmetic underneath must not diverge.
+    return series.scale(value, lo, hi)
 
 
 def _series_mean(values: Sequence[float], hop: float, t0: float, t1: float) -> float:

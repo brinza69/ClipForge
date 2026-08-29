@@ -87,8 +87,9 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 
 ## Priorități globale
 
-1. Clipper Batch R3: regimul secvenței și prezența reală a creatorului — `stable_track` nu garantează
-   încă faptul că subiectul urmărit este creatorul.
+1. Gate-ul vizual pentru R3a și R3b: ambele sunt instrumentate și niciunul nu e închis, fiindcă
+   verdictul cere un om care se uită la patru clipuri.
+2. Clipper Batch R4: ritmul content-aware, fără alternare forțată.
 2. Clipper R2–R7: montaj content-aware și gate tehnic separat de reasoning.
 3. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
 4. Consistență între DB și filesystem și idempotency pentru job-urile de export.

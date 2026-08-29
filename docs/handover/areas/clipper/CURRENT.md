@@ -262,9 +262,43 @@ python scripts/measure_creator_presence.py pilotf81b pilotee0e pilot6b38 pilot2c
 Jensen — diagramă lizibilă, vorbitor bine încadrat; vlog — obiectele în `fit`, persoana reală în
 `crop`; go ghost — fără comutări false.
 
+## Batch R3b — INSTRUMENTAT, gate vizual PENDING, 29 august 2026
+
+**Nu este închis**, ca și R3a: propunerea există și e verificată automat, dar nimic nu a fost aplicat
+și nimeni nu s-a uitat.
+
+Fiecare stretch al unui clip primește un regim — `speaker`, `conversation`, `action`,
+`visual_evidence`, `reaction`, `safe` — decis **pe eșantion**, nu pe shot, iar segmentele adiacente cu
+aceeași cheie vizuală se unesc. Rezultatul intră în sidecar ca `regime_view`.
+
+**De ce pe eșantion.** Un verdict ponderat peste un shot este votul majoritar pe care planul îl
+interzice, și producea `reaction` din doi oameni care nu erau niciodată pe ecran împreună.
+Coprezența e un fapt la nivel de eșantion.
+
+**Ce refuză să ghicească, și de ce contează:**
+
+- **Seria de mișcare e pe alt ceas.** Cadrele sunt întregi, deci un proxy de 10 FPS eșantionează la
+  **0,2s**, nu 0,25. În plus indexul 0 e o santinelă — nu există cadru anterior — iar valoarea `j`
+  descrie intervalul DINAINTE. Se resamplează pe bins-urile canonice înainte de orice.
+- **Acoperire și variabilitate sunt axe independente.** O serie completă dar plată e o stare reală, un
+  ecran static măsurat cap la cap; un singur cuvânt pentru ambele ascundea pe care dintre ele.
+- **Lipsa timestamp-urilor de cuvinte nu e tăcere**, un track mai scurt decât clipul lasă
+  `target_unknown`, iar evidența se mediază **doar peste eșantioanele măsurate** și e `None` unde nu
+  s-a măsurat nimic — cu `evidence_coverage` alături, ca o medie peste două eșantioane să nu fie
+  citită ca una peste douăzeci.
+- **Nu orice graniță de regim e o tăietură.** Se unesc segmentele cu aceeași cheie vizuală, altfel
+  s-ar reintroduce exact cele 116 tăieturi invizibile scoase de R1. Se raportează separat
+  `regime_boundaries` și `treatment_boundaries`.
+
+**Nimic nu spune „creator".** `stable_track` găsește un cluster geometric stabil, nu o persoană.
+Cheile sunt `crop_anchor`, `crop_subject`, `fit_full`; sidecar-ul spune `target`, iar `target_basis`
+spune dacă a fost `stable_anchor` sau `unanchored_face`. `crop_creator` poate exista abia după o
+verificare reală de identitate sau după gate-ul vizual uman.
+
 ## Punctul exact de reluare
 
-Următoarea sesiune începe cu **Batch R3b** — regimurile și topologia shot-urilor — din
+Următoarea sesiune are două opțiuni, în ordinea asta: **gate-ul vizual pentru R3a și R3b**, care nu se
+poate închide fără un om, sau **Batch R4** — ritmul content-aware — din
 [`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md),
 acum versionat în repo. Vocabularul de regimuri pe care R3 îl atribuie există deja, ca listă închisă,
 în `edit_profiles.REGIMES`.

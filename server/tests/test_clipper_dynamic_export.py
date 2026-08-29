@@ -32,6 +32,10 @@ class _Clip:
     # The three R2 carries into the render decision. `content_confidence` is
     # None here on purpose: that is the state most real clips are in, and it is
     # the one that must resolve to the conservative profile.
+    # The clip's own length. R3b clamps the proposal's timeline to it, so a
+    # sample at the end of the dense track cannot describe video that is not
+    # there.
+    duration = 30.0
     content_type: str | None = "gaming"
     content_confidence: float | None = None
     content_type_origin: str | None = None
@@ -557,9 +561,8 @@ async def test_the_creator_view_reaches_the_export_and_the_working_key_does_not(
     # The anchor rides on the plan to get here, and must not ride any further:
     # the sidecar is a deliverable, and a face track is not part of it.
     dyn = decision["dyn"]
-    dyn.pop("_review_faces", None)
-    dyn.pop("_panels", None)
-    dyn.pop("_stable_track", None)
+    for key in ("_review_faces", "_panels", "_stable_track", "_motion", "_motion_hop"):
+        dyn.pop(key, None)
     assert not [k for k in dyn if k.startswith("_")], "working data in the plan"
 
 
@@ -588,3 +591,42 @@ async def test_the_creator_view_changes_nothing_the_renderer_reads(
         for d in (legacy, shadow)
     }
     assert len(fingerprints) == 1
+
+
+async def test_the_regime_view_is_recorded_beside_the_creator_view(
+        wired, monkeypatch, tmp_path):
+    """R3b, executed rather than read. Both proposals describe the same
+    timeline: the hop comes from the first, so they cannot drift apart."""
+    from services.clipper import edit_profiles
+
+    decision = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
+                                monkeypatch, tmp_path)
+    view = decision["regime_view"]
+    assert view["schema"] == "regime_view_v2"
+    assert view["scope"] == "regime_segments_at_timeline_resolution"
+    assert view["sample_hop_s"] == decision["creator_view"]["sample_hop_s"]
+
+    # Contiguous and gapless, and at the SAMPLE rate rather than the shot's:
+    # the boundaries fall where the signals change, not where the legacy edit
+    # happened to cut.
+    segments = view["segments"]
+    assert segments[0]["t0"] == 0.0
+    for a, b in zip(segments, segments[1:]):
+        assert a["t1"] == b["t0"], "a gap between segments is time nobody owns"
+    assert sum(s["samples"] for s in segments) == view["samples"]
+
+    # And the treatment merge never asks for more cuts than there are regimes.
+    assert view["treatment_boundaries"] <= view["regime_boundaries"]
+
+
+async def test_neither_proposal_moves_the_delivered_plan(wired, monkeypatch, tmp_path):
+    """Two batches of instrumentation now ride on every render. If either had
+    moved a frame, the shadow would stop being comparable with what R2 froze."""
+    from services.clipper import edit_profiles
+
+    legacy = await _decide_in(edit_profiles.LEGACY_DYNAMIC, wired, monkeypatch, tmp_path)
+    shadow = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
+                              monkeypatch, tmp_path)
+    for key in ("plan", "dyn", "drop", "fps", "caption_y", "watermark"):
+        assert legacy[key] == shadow[key], key
+    assert legacy["regime_view"] == shadow["regime_view"]
