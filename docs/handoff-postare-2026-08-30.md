@@ -68,8 +68,11 @@ Puse pana la 30 aug: card_01, card_11, card_02, card_12. Raman 16.
 
 ## Deschise
 
-- `data/pov_inventory.json` lipseste pe masina de postare; lista din cod acopera
-  101/102. Clipuri non-romane adaugate ulterior NU sunt prinse.
+- `pov_inventory.json` — INCHIS, nu-l mai cauta. Are 67 de intrari, si singurele
+  non-romanesti sunt 101 si 102, adica exact lista din cod. Verificat prin
+  mutarea lui deoparte si reconstruire: acelasi plan, aceleasi excluderi. Nici
+  fisierele randate dupa el (67 atunci, 105 acum) nu lasa gaura: vin din presetul
+  romanesc si se urca in folderul romanesc, iar engleza merge in alt folder.
 - Stocul romanesc creste in timp ce postezi (rig-ul randeaza cu voce locala F5),
   deci cifrele planului nu sunt fixe: 103 fisiere pe 29 aug, 105 pe 30 aug.
 - Tokenul Google expira cam saptamanal (OAuth in mod Testing):
