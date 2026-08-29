@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -168,9 +169,12 @@ def _well_formed(view: dict) -> bool:
         return False
     if not all(isinstance(n, str) and n in UNKNOWNS for n in view["unknown"]):
         return False
-    # `blocking` is a SUBSET of what was found. A record claiming a blocking
-    # defect it does not list is a record that cannot be reconciled with itself.
-    if not set(view["blocking"]) <= set(view["defects"]):
+    # `blocking` is DERIVED, so it has exactly one correct value: the found
+    # defects that are in `BLOCKING`. A subset check let both halves through —
+    # an omitted blocker (a window that should have been refused reading as
+    # eligible) and a technical defect promoted into `blocking` (a window
+    # refused for something a render pad fixes).
+    if set(view["blocking"]) != set(view["defects"]) & BLOCKING:
         return False
     repair = view["repair"]
     if not isinstance(repair, dict) or "kind" not in repair:
@@ -180,10 +184,12 @@ def _well_formed(view: dict) -> bool:
             return False
     elif repair["kind"] != REPAIR_EXTEND:
         return False
-    # A measurement is a number or an honest absence — never a string that
-    # would sort, compare and average as if it meant something.
+    # A measurement is a FINITE number or an honest absence — never a string
+    # that would sort and average as if it meant something, and never a NaN or
+    # an infinity, which survive every arithmetic check and poison a median.
     return all(v is None or (isinstance(v, (int, float))
-                             and not isinstance(v, bool))
+                             and not isinstance(v, bool)
+                             and math.isfinite(v))
                for v in view["measurements"].values())
 
 

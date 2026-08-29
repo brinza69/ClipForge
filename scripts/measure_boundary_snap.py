@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -94,15 +95,21 @@ def _measure(project_id: str) -> dict | None:
     path = DATA / project_id / "analysis" / "candidates.json"
     if not path.exists():
         return None
-    rows = [c for c in json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(c, dict)]
+    # RAW, including entries that are not records. Filtering them here would
+    # shrink the corpus without saying so — the same hole the boundary audit
+    # had, repeated one script along, and a corrupt artefact would quietly make
+    # the gate easier to pass.
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    rows = [c for c in raw if isinstance(c, dict)]
+    invalid = len(raw) - len(rows)
     transcript, lo, hi, duration = asyncio.run(_load(project_id))
     if not transcript:
         return {"project": project_id, "refused": "no_transcript_in_db"}
     words = _words_for({}, transcript)
     ceiling = max([duration] + [_num(w.get("end")) for w in words[-1:]]) or duration
 
-    out = {"project": project_id, "windows": len(rows), "truncated_before": 0,
+    out = {"project": project_id, "windows": len(raw), "invalid": invalid,
+           "truncated_before": 0,
            "truncated_after": 0, "moved": 0, "shifts": [], "moves": [],
            "refused_min": 0, "refused_max": 0, "refused_media": 0}
     for cand in rows:
@@ -142,7 +149,13 @@ def _measure(project_id: str) -> dict | None:
     # than from a threshold: p99 flags 19 of the corpus's 261 and p99.9 flags
     # exactly the three extremes, which is why no cut-off is applied in `_fit` —
     # choosing it after seeing the answer would be calibrating on the gate.
-    lengths = sorted(_num(w.get("end")) - _num(w.get("start")) for w in words)
+    # FINITE AND STRICTLY POSITIVE only. The transcript already carries
+    # zero-duration tokens, and folding them into the distribution shifts every
+    # percentile this report prints. It changes nothing about the snap; it
+    # changes what the diagnostic claims.
+    lengths = sorted(
+        L for L in (_num(w.get("end")) - _num(w.get("start")) for w in words)
+        if math.isfinite(L) and L > 0.0)
     for move in out["moves"]:
         below = sum(1 for L in lengths if L <= move["token_s"])
         move["token_pct"] = round(100.0 * below / max(1, len(lengths)), 2)
@@ -158,6 +171,9 @@ def _report(row: dict) -> None:
         + row["refused_media"]
     print(f"{name:14} {row['windows']:5} windows   truncated {row['truncated_before']:4}"
           f" -> {left:4}   moved {row['moved']}")
+    if row.get("invalid"):
+        print(f"{'':14} {row['invalid']} entries are not records — the corpus is "
+              f"smaller than the file and the gate cannot be read as passed")
     if row["refused_min"] or row["refused_max"] or row["refused_media"]:
         print(f"{'':14} refused: min {row['refused_min']}  max {row['refused_max']}"
               f"  media {row['refused_media']}")
@@ -207,7 +223,12 @@ def main() -> int:
     print(f"{'':14} This is the MOVE. What it does to scores, dedupe groups, "
           f"the shortlist and the board is not measured here and cannot be "
           f"without a re-score on a clone.")
-    return 0 if left == 0 else 2
+    # A truncation the snap could not clear fails the gate, and so does an
+    # artefact the script could not read: both leave the number unproven.
+    invalid = sum(r.get("invalid", 0) for r in rows)
+    if invalid:
+        print(f"{'':14} {invalid} unreadable entries across the corpus")
+    return 0 if left == 0 and invalid == 0 else 2
 
 
 if __name__ == "__main__":

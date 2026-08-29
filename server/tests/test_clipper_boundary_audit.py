@@ -96,15 +96,37 @@ def test_a_defect_name_nobody_declared_is_malformed(tmp_path, monkeypatch):
     assert audit._measure("p1")["integrity"] == [audit.MALFORMED]
 
 
-def test_a_blocking_defect_the_record_does_not_list_is_malformed(tmp_path,
-                                                                 monkeypatch):
-    """A record that claims a blocking defect it does not list cannot be
-    reconciled with itself, and the audit would count the claim without the
-    evidence."""
-    cand = _scored(0.0, 1.4)
-    cand["boundary_view"]["blocking"] = [bc.END_IN_WORD]
-    audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
-    assert audit._measure("p1")["integrity"] == [audit.MALFORMED]
+def test_blocking_has_exactly_one_correct_value(tmp_path, monkeypatch):
+    """`blocking` is DERIVED — the found defects that are in `BLOCKING` — so a
+    subset check let both halves through: an OMITTED blocker, which reads as an
+    eligible window, and a TECHNICAL defect promoted into it, which refuses a
+    window for something a render pad fixes."""
+    claimed = _scored(0.0, 1.4)
+    claimed["boundary_view"]["blocking"] = [bc.END_IN_WORD]
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [claimed]))
+    assert audit._measure("p1")["integrity"] == [audit.MALFORMED], "claimed"
+
+    omitted = _scored(0.2, 2.15)
+    assert omitted["boundary_view"]["blocking"], "the fixture must have one"
+    omitted["boundary_view"]["blocking"] = []
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p2", [omitted]))
+    assert audit._measure("p2")["integrity"] == [audit.MALFORMED], "omitted"
+
+    promoted = _scored(0.0, 0.92)
+    assert bc.CLIPPED_RELEASE in promoted["boundary_view"]["defects"]
+    promoted["boundary_view"]["blocking"] = [bc.CLIPPED_RELEASE]
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p3", [promoted]))
+    assert audit._measure("p3")["integrity"] == [audit.MALFORMED], "promoted"
+
+
+def test_a_measurement_that_is_not_finite_is_malformed(tmp_path, monkeypatch):
+    """NaN and infinity survive every arithmetic check and poison a median. The
+    tail distribution is what `TAIL_PAD_S` would be calibrated from."""
+    for value in (float("nan"), float("inf"), float("-inf")):
+        cand = _scored(0.0, 1.4)
+        cand["boundary_view"]["measurements"]["tail_s"] = value
+        audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
+        assert audit._measure("p1")["integrity"] == [audit.MALFORMED], repr(value)
 
 
 def test_an_unknown_in_the_defect_list_is_malformed(tmp_path, monkeypatch):

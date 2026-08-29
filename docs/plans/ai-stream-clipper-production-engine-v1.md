@@ -532,7 +532,7 @@ verdict: 261 de ferestre se termină în interiorul unui cuvânt și ZERO încep
 care îl trecusem printr-un `tail` — adică agregasem o vedere trunchiată și publicasem suma ca cifră
 de corpus. Exact clasa de eroare împotriva căreia e scris tot planul. Codex a prins-o recalculând
 independent; 261 e cifra verificată, din JSON-ul complet.)*
-Asimetria 171/0 e chiar demonstrația cauzei: `refine_boundaries` aplică `_snap` pe început și
+Asimetria 261/0 e chiar demonstrația cauzei: `refine_boundaries` aplică `_snap` pe început și
 niciodată pe finalul final. `_reaction_end` întoarce `min(w1, limit)`, deci când reacția lovește
 plafonul `REACTION_MAX_S` la mijlocul unui cuvânt tăietura cade acolo; `_fit` snapează doar la
 depășirea maximului, iar `_keep_release` nu ajută fiindcă `end - inside_end > TAIL_PAD_S` e fals
