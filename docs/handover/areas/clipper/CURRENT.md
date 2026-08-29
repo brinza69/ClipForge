@@ -408,9 +408,9 @@ un verdict"). Cu `--recompute` încarcă transcriptul din DB și rulează ACEEA�
 (`boundary_completion.attach`) peste ferestrele stocate, fără re-score și fără să atingă vreun scor
 sau board. Măsoară REGULA, nu pipeline-ul — un verde acolo lasă integrarea end-to-end nedemonstrată.
 
-**PRIMA MĂSURĂTOARE, pe tot corpusul (6.762 de candidați, 22 de proiecte, toți cu verdict): 171 de
+**PRIMA MĂSURĂTOARE, pe tot corpusul (6.762 de candidați, 13 proiecte, toți cu verdict): 261 de
 ferestre se termină în interiorul unui cuvânt și ZERO încep așa.** Gate-ul cere zero. Asimetria
-171/0 e chiar demonstrația cauzei — `refine_boundaries` aplică `_snap` pe început și niciodată pe
+261/0 e chiar demonstrația cauzei — `refine_boundaries` aplică `_snap` pe început și niciodată pe
 finalul final. Verificat manual pe patru cazuri:
 `_reaction_end` întoarce `min(w1, limit)`, iar când reacția lovește plafonul `REACTION_MAX_S` la
 mijlocul unui cuvânt tăietura cade acolo; `_snap` nu se aplică niciodată pe finalul final, iar `_fit`
@@ -418,10 +418,21 @@ snapează doar la depășirea maximului. Toate patru poartă `reaction_kept`. **
 mutarea ferestrelor afectate schimbă scorurile de graniță, dedupe-ul și board-ul, adică axa de
 selecție. E prima intrare pentru continuarea lui R5.
 
-Restul, ca bază de comparație: 4.118 defecte blocante, majoritatea `end_mid_sentence`. Coada e
-median 0,40s / p90 0,40s pe majoritatea proiectelor — chiar `TAIL_PAD_S`, deci `_keep_release`
-saturează — dar pe `slice4h00test` e median 0,0s cu 880 din 920 de ferestre `clipped_release`, un fir
-separat de tras.
+**`--recompute` rulează regula de AZI peste ferestre produse de codul de atunci**, deci o cifră
+agregată amestecă generații. Verificat: artefactul lui `slice4h00test` e din 14 august, iar
+`_keep_release` a intrat a doua zi în `4a136de` — de acolo vin cele 880 din 920 de `clipped_release`
+ale lui: pad-ul nu a rulat niciodată pentru el. Pe ferestrele lui vechi, implementarea de azi ar
+adăuga padding la 748 din 880, deci proiectul demonstrează lipsa de proveniență a artefactelor, nu
+că funcția curentă ar fi ocolită. Cele patru piloturi sunt din 22 august și **nu au
+scuza asta**, deci trunchierea de acolo e defect viu, nu artefact vechi.
+
+*(Am raportat întâi 171. Însumasem liniile unui raport trecut printr-un `tail`, adică o vedere
+trunchiată — 261 e cifra din JSON-ul complet. Merită păstrat ca avertisment: agregarea unei vederi
+parțiale arată exact ca o măsurătoare.)*
+
+Restul, din JSON-ul complet: `end_mid_sentence` 3.681, `clipped_release` 1.855,
+`start_mid_sentence` 573, `start_on_continuation` 432, `end_inside_word` 261, `orphan_tail` 176,
+`required_context_outside` 76, `dead_tail` 55. Coada: median 0,40s / p90 0,40s pe 6.742 de ferestre.
 
 ## Punctul exact de reluare
 

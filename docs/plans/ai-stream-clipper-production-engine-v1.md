@@ -525,18 +525,30 @@ adică exact numerele din care s-ar re-deriva.
 
 **Gate:** măsurabil de acum, prin `--recompute`, care încarcă transcriptul din DB și rulează ACEEAȘI
 funcție canonică peste ferestrele stocate — fără re-score, fără să atingă vreun scor sau board.
-**Prima măsurătoare, pe tot corpusul — 6.762 de candidați din 22 de proiecte, toți cu verdict:
-171 de ferestre se termină în interiorul unui cuvânt și ZERO încep așa.** Gate-ul cere zero.
+**Prima măsurătoare, pe tot corpusul — 6.762 de candidați din 13 proiecte cu candidați, toți cu
+verdict: 261 de ferestre se termină în interiorul unui cuvânt și ZERO încep așa.** Gate-ul cere zero.
+
+*(Prima cifră raportată aici a fost 171, și era greșită. O obținusem însumând liniile unui raport pe
+care îl trecusem printr-un `tail` — adică agregasem o vedere trunchiată și publicasem suma ca cifră
+de corpus. Exact clasa de eroare împotriva căreia e scris tot planul. Codex a prins-o recalculând
+independent; 261 e cifra verificată, din JSON-ul complet.)*
 Asimetria 171/0 e chiar demonstrația cauzei: `refine_boundaries` aplică `_snap` pe început și
 niciodată pe finalul final. `_reaction_end` întoarce `min(w1, limit)`, deci când reacția lovește
 plafonul `REACTION_MAX_S` la mijlocul unui cuvânt tăietura cade acolo; `_fit` snapează doar la
 depășirea maximului, iar `_keep_release` nu ajută fiindcă `end - inside_end > TAIL_PAD_S` e fals
 acolo. Cele patru exemple verificate manual poartă toate `reaction_kept`.
 
-Restul, ca bază de comparație pentru o rulare viitoare: 4.118 defecte blocante în total,
-`end_mid_sentence` fiind majoritatea. Coada e median 0,40s și p90 0,40s pe majoritatea proiectelor —
-adică `TAIL_PAD_S` însuși, deci `_keep_release` saturează — dar pe `slice4h00test` e median 0,0s cu
-880 din 920 de ferestre `clipped_release`, ceea ce e un fir separat de tras.
+Restul, ca bază de comparație pentru o rulare viitoare, din JSON-ul complet: `end_mid_sentence`
+3.681, `clipped_release` 1.855, `start_mid_sentence` 573, `start_on_continuation` 432,
+`end_inside_word` 261, `orphan_tail` 176, `required_context_outside` 76, `dead_tail` 55. Reparații
+refuzate: `nothing_to_repair` 2.054, `would_overlap_the_next_window` 1.283,
+`defect_is_not_an_unfinished_end` 1.006, `would_exceed_max_duration` 298. Coada: median 0,40s,
+p90 0,40s pe 6.742 de ferestre măsurate.
+
+**`slice4h00test` NU e un fir de bug actual.** Artefactul lui e din 14 august, iar `_keep_release` a
+intrat pe 15 în `4a136de` — de acolo vin cele 880 de cozi zero ale lui. Pe ferestrele lui vechi,
+implementarea de azi ar adăuga padding la 748 din 880; 132 n-au spațiu. Proiectul demonstrează lipsa
+de proveniență/versionare a artefactelor, nu că funcția curentă e ocolită.
 
 **Nu am reparat-o în acest batch**, fiindcă mutarea fiecărei ferestre afectate schimbă scorurile de
 graniță, dedupe-ul și board-ul — adică axa de selecție, pe care planul o separă deliberat de cea de

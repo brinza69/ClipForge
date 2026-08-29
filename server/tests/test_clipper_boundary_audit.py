@@ -96,6 +96,42 @@ def test_a_defect_name_nobody_declared_is_malformed(tmp_path, monkeypatch):
     assert audit._measure("p1")["integrity"] == [audit.MALFORMED]
 
 
+def test_a_blocking_defect_the_record_does_not_list_is_malformed(tmp_path,
+                                                                 monkeypatch):
+    """A record that claims a blocking defect it does not list cannot be
+    reconciled with itself, and the audit would count the claim without the
+    evidence."""
+    cand = _scored(0.0, 1.4)
+    cand["boundary_view"]["blocking"] = [bc.END_IN_WORD]
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
+    assert audit._measure("p1")["integrity"] == [audit.MALFORMED]
+
+
+def test_an_unknown_in_the_defect_list_is_malformed(tmp_path, monkeypatch):
+    """Each list against its OWN vocabulary. Checking the union let an unknown
+    appear as a defect — the one distinction the batch is built on."""
+    cand = _scored(0.0, 1.4)
+    cand["boundary_view"]["defects"] = [bc.NO_PUNCTUATION]
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
+    assert audit._measure("p1")["integrity"] == [audit.MALFORMED]
+
+
+def test_a_measurement_that_is_not_a_number_is_malformed(tmp_path, monkeypatch):
+    """A string sorts, compares and averages as if it meant something. The tail
+    distribution is what `TAIL_PAD_S` would be calibrated from."""
+    cand = _scored(0.0, 1.4)
+    cand["boundary_view"]["measurements"]["tail_s"] = "0.5"
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
+    assert audit._measure("p1")["integrity"] == [audit.MALFORMED]
+
+
+def test_a_repair_with_no_reason_for_refusing_is_malformed(tmp_path, monkeypatch):
+    cand = _scored(2.0, 2.35)
+    cand["boundary_view"]["repair"] = {"kind": None}
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
+    assert audit._measure("p1")["integrity"] == [audit.MALFORMED]
+
+
 def test_an_eligible_that_is_not_a_verdict_is_malformed(tmp_path, monkeypatch):
     """True, False and None are the three answers. A string that happens to be
     truthy would be counted as eligible by anything reading it loosely."""
@@ -162,6 +198,22 @@ def test_the_technical_axis_is_counted_apart_from_eligibility(tmp_path, monkeypa
     audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [_scored(0.0, 0.92)]))
     row = audit._measure("p1")
     assert row["technical"] == 1 and row["eligible"] == 1
+
+
+def test_an_unreadable_candidate_does_not_vanish_from_the_denominator(
+        tmp_path, monkeypatch, capsys):
+    """A record the audit could not read was skipped before it reached any of
+    the three counts, so a project with half its records corrupt printed a
+    verdict for the other half and the missing half simply was not there."""
+    audit = _audit_module(monkeypatch, _project(
+        tmp_path, "p1", [_scored(0.0, 1.4), {"start": 2.0, "end": 2.8}]))
+    row = audit._measure("p1")
+    judged = row["eligible"] + row["ineligible"] + row["undecidable"]
+    assert judged == 1 and row["candidates"] == 2
+    audit._report(row)
+    printed = capsys.readouterr().out
+    assert "1 of 2 judged" in printed
+    assert "1 not measured at all" in printed
 
 
 def test_the_exit_code_reports_holes_not_defects(tmp_path, monkeypatch):

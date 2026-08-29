@@ -18,6 +18,14 @@ without touching a score or a board. It is a measurement of the rule, not of the
 pipeline: a green `--recompute` still leaves the end-to-end integration
 unproven, and the report says so rather than letting one stand for the other.
 
+AND THE WINDOWS ARE NOT ALL THE SAME AGE. `--recompute` runs TODAY'S rule over
+windows produced by whatever the boundary code was when each project was scored,
+so a pooled figure mixes vintages. Measured: `slice4h00test`'s artefact is from
+2026-08-14 and `_keep_release` landed the next day in 4a136de, which is the
+whole of its 880-of-920 `clipped_release` — the pad never ran for it. The four
+pilots are from 2026-08-22 and carry no such excuse. Check the artefact's date
+before reading a per-project number as a defect in the current code.
+
 WHAT IT REFUSES TO AVERAGE. A candidate with no `boundary_view` is `missing`,
 not "clean": the field is written by the build, and its absence means the
 project predates R5 or the record failed, neither of which is evidence about
@@ -46,7 +54,7 @@ sys.path.insert(0, str(_ROOT / "server"))
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 
 from services.clipper.boundary_completion import (  # noqa: E402
-    BLOCKING, DEFECTS, REFUSALS, TECHNICAL, UNKNOWNS,
+    BLOCKING, DEFECTS, REFUSALS, REPAIR_EXTEND, TECHNICAL, UNKNOWNS,
 )
 
 #: Every key `boundary_view_v1` promises. A view missing one is MALFORMED, not
@@ -138,16 +146,35 @@ def _well_formed(view: dict) -> bool:
         return False
     if not isinstance(view["measurements"], dict):
         return False
-    if not isinstance(view["repair"], dict):
-        return False
     if view["eligible"] not in (True, False, None):
         return False
     for key in ("defects", "blocking", "unknown"):
         if not isinstance(view[key], list):
             return False
-    known = set(DEFECTS) | set(UNKNOWNS)
-    return all(isinstance(name, str) and name in known
-               for name in view["defects"] + view["unknown"])
+    # EACH LIST AGAINST ITS OWN VOCABULARY, not against the union. Checking the
+    # union let an unknown appear as a defect and a defect as an unknown, which
+    # is the one distinction the whole batch is built on.
+    if not all(isinstance(n, str) and n in DEFECTS for n in view["defects"]):
+        return False
+    if not all(isinstance(n, str) and n in UNKNOWNS for n in view["unknown"]):
+        return False
+    # `blocking` is a SUBSET of what was found. A record claiming a blocking
+    # defect it does not list is a record that cannot be reconciled with itself.
+    if not set(view["blocking"]) <= set(view["defects"]):
+        return False
+    repair = view["repair"]
+    if not isinstance(repair, dict) or "kind" not in repair:
+        return False
+    if repair["kind"] is None:
+        if repair.get("refused") not in REFUSALS:
+            return False
+    elif repair["kind"] != REPAIR_EXTEND:
+        return False
+    # A measurement is a number or an honest absence — never a string that
+    # would sort, compare and average as if it meant something.
+    return all(v is None or (isinstance(v, (int, float))
+                             and not isinstance(v, bool))
+               for v in view["measurements"].values())
 
 
 def _percentile(ordered: list[float], q: float) -> float | None:
@@ -224,9 +251,18 @@ def _report(row: dict) -> None:
         print(f"{name:12} no candidates.json — nothing to audit")
         return
     total = row["candidates"]
-    print(f"{name:12} {total:4} candidates ({row.get('source', 'recorded')})   "
+    judged = row["eligible"] + row["ineligible"] + row["undecidable"]
+    print(f"{name:12} {judged:4} of {total} judged ({row.get('source', 'recorded')})   "
           f"eligible {row['eligible']}  ineligible {row['ineligible']}  "
           f"undecidable {row['undecidable']}")
+    # THE NUMBERS HAVE TO ADD UP ON THE ROW. A candidate the audit could not
+    # read was skipped before it reached any of the three counts, so a project
+    # with fifty unreadable records printed a verdict for the other fifty and
+    # the missing half simply was not there.
+    if judged != total:
+        print(f"{'':12} {total - judged} not measured at all — see the "
+              f"integrity line below, and do not read the counts above as a "
+              f"share of {total}")
     if row.get("technical"):
         print(f"{'':12} technical (a render pad fixes, R7 decides if it blocks): "
               f"{row['technical']}")
