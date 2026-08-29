@@ -27,8 +27,8 @@ cardul de la inceput. Copertile raman doar pe TikTok englez.
 
 | folder pe Drive | continut | cine il ia |
 |---|---|---|
-| `POVESTITOR ENGLEZA` | 24 videoclipuri / 40 fisiere | TikTok acum, Facebook dupa |
-| folderul povestitor romanesc | 51 videoclipuri / 76 fisiere | doar Facebook |
+| `POVESTITOR ENGLEZA` | 24 videoclipuri / 40 fisiere | doar TikTok |
+| folderul povestitor romanesc | 51 videoclipuri / 74 fisiere, si creste | doar Facebook |
 
 Nu le amesteca si nu muta fisiere intre ele.
 
@@ -56,17 +56,24 @@ Daca lipseste un videoclip, **nu il produce** — raporteaza ca lipseste.
 
 ## 3. De unde se iau videoclipurile
 
-**Un singur folder conteaza pentru tine:**
+**Doua foldere, unul pentru fiecare canal:**
 
 ```
-Povestitor EN = <povestitor_en_drive_folder>
+Povestitor EN = <povestitor_en_drive_folder>   -> TikTok  povestitorul.ro
+Povestitor RO = <povestitor_drive_folder>      -> Facebook Povestitorul
 ```
 
-42 de fisiere `.mp4` acolo la 25 august. Cheia e in `data/targets.json`, sub
-`povestitor_en_drive_folder`.
+Cheile sunt in `data/targets.json`, sub `povestitor_en_drive_folder` si
+`povestitor_drive_folder`.
 
-Folderul romanesc (`targets.json` -> `povestitor_drive_folder`) **nu e al tau** — e pista
-veche, inchisa.
+Folderul romanesc **este al tau**, incepand cu 28 august. Pana atunci pista
+romana era inchisa si documentul asta spunea sa nu te atingi de el — nu mai e
+adevarat. La 29 august are 87 de fisiere, din care planul retine 51 de
+videoclipuri (74 de fisiere); restul sunt fisiere straine sau in alta limba, iar
+`build_pov_post_list.py` le sare singur.
+
+Folderul mai creste: pe rig randeaza acum povestitorul romanesc cu voce locala
+gratuita (F5), rand cu rand din sheet. Nu astepta un stoc fix.
 
 ### CAPCANA care a produs deja o greseala
 
@@ -89,8 +96,12 @@ Sheet-ul romanesc — `targets.json` -> `pov_sheet_id`, tab `Sheet1`:
 | coloana | continut |
 |---|---|
 | A | NR (numele fisierului pe Drive) |
-| D | descriere ROMANA — **nu o folosi**, pista romana e inchisa |
-| L | **descriere ENGLEZA** — captionul tau |
+| D | **descriere ROMANA** — captionul pentru Facebook |
+| L | **descriere ENGLEZA** — captionul pentru TikTok |
+
+Coloana potrivita se alege dupa CANAL, nu dupa ce ai la indemana: Facebook ia D,
+TikTok ia L. Pana pe 28 august coloana D era marcata "nu o folosi" — asta era
+valabil cat pista romana a fost inchisa.
 
 **Fara descriere nu se posteaza** — captionul ar iesi gol. Se raporteaza randul,
 nu se inventeaza text. La 25 august un singur NR (191) nu are descriere engleza.
@@ -201,12 +212,21 @@ Intai se construieste planul, apoi se posteaza din el:
 ```
 server\.venv\Scripts\python.exe scripts\build_pov_en_post_list.py
 server\.venv\Scripts\python.exe scripts\post_povestitor.py --channel tiktok_en --dry
-server\.venv\Scripts\python.exe scripts\post_povestitor.py --channel facebook_en --dry
+
+server\.venv\Scripts\python.exe scripts\build_pov_post_list.py
+server\.venv\Scripts\python.exe scripts\post_povestitor.py --channel facebook --dry
 ```
 
-Profilurile tale sunt **`tiktok_en`** si **`facebook_en`**. (`tiktok` si
-`facebook`, fara sufix, sunt pista romana inchisa — nu le folosi.) Ele citesc
-`data/pov_en_post_list.json` si folderul EN, cu descrierile din coloana L.
+Profilurile tale sunt **`tiktok_en`** (engleza) si **`facebook`** (romana).
+
+| profil | plan | folder | descriere |
+|---|---|---|---|
+| `tiktok_en` | `data/pov_en_post_list.json` | EN | coloana L |
+| `facebook` | `data/pov_post_list.json` | RO | coloana D |
+
+`facebook_en` exista si posteaza engleza pe Facebook — **nu-l folosi**, Facebook
+a revenit pe romana pe 28 august. `tiktok` fara sufix e pista romana oprita si
+refuza sa porneasca fara `--si-inchise`; asa si trebuie.
 
 Ruleaza **intai cu `--dry`**, mereu. Fara `--dry` trimite pe bune.
 `--limit N` opreste dupa N postari, `--first 252,253` pune anumite NR-uri in fata.
