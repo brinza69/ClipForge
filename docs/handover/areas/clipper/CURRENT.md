@@ -344,7 +344,15 @@ ies `below` banda lor — golul e măsurătoarea care lipsește, nu un ritm care
 schimba planul livrat, pe care R2 l-a înghețat și de care depind gate-urile vizuale deschise.
 `delivers_profile()` face comutarea singur în ziua în care `content_aware` intră în `SELECTABLE`.
 
-**Split nou:** `services/clipper/dynamic_rhythm_pace.py` (benzile) și
+**Două corecții suplimentare, tot din review, ambele „conflict fabricat de plasare":** un snap nu
+mai poate trece dincolo de următoarea schimbare obligatorie (mutarea unei tăieturi peste ea păstrează
+ordinea numerică și tot pierde tratamentul dintre cele două), și o schimbare obligatorie nu mai poate
+face snap în zona cozii (una la 9,2s dintr-un clip de 10s se muta la 9,5s, era scoasă de walk-back și
+raportată ca imposibilă, deși propriul ei moment lasă un shot legal de 0,8s). Plus: o tăietură scoasă
+la coadă păstrează acum TOATE motivele pe care le răspundea, nu doar primul.
+
+**Split nou:** `services/clipper/dynamic_rhythm_vocab.py` (listele închise),
+`services/clipper/dynamic_rhythm_pace.py` (benzile) și
 `workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe
 care nu l-a făcut (R3a + R3b + R4). `clipper_render_plan.py` trecuse de 500 de linii.
 

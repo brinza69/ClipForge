@@ -273,17 +273,58 @@ def test_two_required_changes_never_collapse_into_one_clean_cut():
     assert [v["shot_s"] for v in view["min_shot_violations"]] == [0.1]
 
 
-def test_a_required_change_that_cannot_be_separated_is_a_conflict():
-    """When the second change's own moment is BEHIND the cut that absorbed it,
-    there is nowhere left to put it. Recorded rather than dropped: a requirement
-    nobody can materialise is not the same as one that was met."""
+def test_two_required_changes_fifty_milliseconds_apart_each_get_a_cut():
+    """The rule at the resolution where it is hardest, and the case that caught
+    the snap ceiling. 5.0 and 5.05, with the only pause at 5.3: the first may
+    not move past the second, so it stays at its own moment and the second takes
+    the pause. Both treatments reach the screen, and the 300ms shot between them
+    is recorded as the flicker it is rather than dissolved into one clean cut."""
     view = _propose(_segments(("speaker", 0.0, 5.0), ("visual_evidence", 5.0, 5.05),
                               ("speaker", 5.05, 10.0)),
                     duration=10.0, boundaries=_pauses(5.3), scenes=[], beats=[])
-    assert [c["t"] for c in view["cuts"]] == [5.3]
-    conflict = view["required_conflicts"][0]
-    assert conflict["conflict"] == rhythm.CONFLICT_COLLISION
-    assert conflict["t"] == 5.05 and conflict["collides_with"] == 5.3
+    assert [c["t"] for c in view["cuts"]] == [5.0, 5.3]
+    assert [c["placement"] for c in view["cuts"]] == ["unsnapped", "snapped"]
+    assert view["required_conflicts"] == [], "both are materialisable"
+    assert [v["shot_s"] for v in view["min_shot_violations"]] == [0.3]
+
+
+def test_a_cut_may_not_snap_past_the_next_required_change():
+    """Moving a cut forward over a later requirement keeps the list in order and
+    still loses the treatment: the shot before it shows the framing from BEFORE
+    this change, so the stretch between the two is never on screen at all. The
+    pause at 5.35 is inside the first change's reach and beyond the second's
+    moment, so it is not available to the first."""
+    view = _propose(_segments(("speaker", 0.0, 5.0), ("visual_evidence", 5.0, 5.1),
+                              ("speaker", 5.1, 10.0)),
+                    duration=10.0, boundaries=_pauses(5.35), scenes=[], beats=[])
+    assert [c["t"] for c in view["cuts"]] == [5.0, 5.35]
+    assert view["cuts"][0]["placement"] == "unsnapped"
+    assert view["required_conflicts"] == []
+
+
+def test_a_snap_may_not_manufacture_a_tail_conflict():
+    """A required change at 9.2 of a 10s clip is materialisable: cutting at its
+    own moment leaves an 0.8s shot. Letting it snap forward to the pause at 9.5
+    made the tail walk-back drop it and report a requirement as impossible — a
+    conflict invented by the placement rather than found in the timeline."""
+    view = _propose(_segments(("speaker", 0.0, 9.2), ("visual_evidence", 9.2, 10.0)),
+                    duration=10.0, boundaries=_pauses(9.5), scenes=[], beats=[])
+    assert [c["t"] for c in view["cuts"]] == [9.2]
+    assert view["cuts"][0]["placement"] == "unsnapped"
+    assert view["required_conflicts"] == []
+
+
+def test_a_dropped_tail_cut_keeps_every_reason_it_answered():
+    """One cut can answer a treatment change and a source cut at once. Routing
+    only the first reason threw the other provenance away, and a requirement
+    that appears nowhere in the report is worse than one reported as impossible."""
+    view = _propose(_segments(("speaker", 0.0, 9.9), ("visual_evidence", 9.9, 10.0)),
+                    profile="exploration", duration=10.0,
+                    boundaries=[(9.9, 2.0)], scenes=[9.9], beats=[])
+    assert view["cuts"] == []
+    assert [c["reason"] for c in view["required_conflicts"]] == [rhythm.REASON_TREATMENT]
+    assert view["held_reasons"] == {rhythm.HOLD_TAIL_MIN_SHOT: 1}
+    assert view["held"][0]["reason"] == rhythm.REASON_SCENE
 
 
 def test_the_cuts_come_out_in_order_whatever_the_snap_windows_overlap():

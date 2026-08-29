@@ -36,6 +36,7 @@ product gate until the missing signal exists.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from typing import Any, Sequence
 
 from services.clipper import dynamic_regimes, dynamic_rhythm_pace, edit_profiles
@@ -48,113 +49,34 @@ from services.clipper.candidate_terms import _num
 # import order decide whether the planner loads at all.
 from services.clipper.dynamic_edit import _boundaries
 from services.clipper.edit_profiles import CONSERVATIVE
+# The closed lists, split out at the 500-line limit and re-exported so the
+# worker, the tests and the sidecar keep one import for "the R4 grammar".
+# Same pattern as `dynamic_edit` re-exporting `dynamic_cuts`.
+from services.clipper.dynamic_rhythm_vocab import (  # noqa: F401
+    ADMITS,
+    CONFLICTS,
+    CONFLICT_COLLISION,
+    CONFLICT_TAIL,
+    EVENT_REGIME_CHANGE,
+    HOLDS,
+    HOLD_MIN_SHOT,
+    HOLD_NO_BOUNDARY,
+    HOLD_NOT_MEASURED_ACTION,
+    HOLD_PROFILE,
+    HOLD_SAME_PLACE,
+    HOLD_SAME_TREATMENT,
+    HOLD_TAIL_MIN_SHOT,
+    REASONS,
+    REASON_BEAT,
+    REASON_SCENE,
+    REASON_TREATMENT,
+    REQUIRED,
+    SNAP_S,
+    UNMEASURED,
+)
 
 __all__ = ["REASONS", "HOLDS", "CONFLICTS", "ADMITS", "UNMEASURED", "SNAP_S",
            "cut_boundaries", "candidates", "place", "rhythm_view"]
-
-# --- why a cut is allowed to exist -------------------------------------------
-
-#: R3b says the delivered image has to change here. REQUIRED: holding the old
-#: framing past this point is the R3a bug — a crop kept on an anchor nobody is
-#: standing on any more.
-REASON_TREATMENT = "treatment_change"
-#: The source cut. Following a cut the source already made invents nothing.
-REASON_SCENE = "source_scene_cut"
-#: An audio onset INSIDE a stretch R3b classified as measured action. The only
-#: acceleration in the batch, and it is gated on the measurement, not on the
-#: label: `classify_samples` only answers `action` when the motion series was
-#: both covered and variable there.
-REASON_BEAT = "action_beat"
-
-REASONS: tuple[str, ...] = (REASON_TREATMENT, REASON_SCENE, REASON_BEAT)
-#: Required reasons cut even without a place, and even against `min_shot_s`.
-#: Everything else is an opportunity, and an opportunity that cannot be taken
-#: cleanly is not taken.
-REQUIRED: frozenset[str] = frozenset({REASON_TREATMENT})
-
-# --- why a candidate did not become a cut ------------------------------------
-
-HOLD_MIN_SHOT = "min_shot"
-HOLD_NO_BOUNDARY = "no_boundary"
-#: The regime changed and the image would not. R1's rule, one level up: forcing
-#: a physical cut on every regime change puts back the 116 invisible cuts.
-HOLD_SAME_TREATMENT = "same_treatment"
-HOLD_NOT_MEASURED_ACTION = "not_measured_action"
-HOLD_PROFILE = "profile_forbids"
-#: An optional reason whose place is already taken by a cut at a DIFFERENT
-#: moment. Merging it in would credit that cut with a reason it does not have.
-HOLD_SAME_PLACE = "same_place"
-#: An optional cut close enough to the end that the shot after it is a flash.
-HOLD_TAIL_MIN_SHOT = "tail_min_shot"
-HOLDS: tuple[str, ...] = (HOLD_MIN_SHOT, HOLD_NO_BOUNDARY, HOLD_SAME_TREATMENT,
-                          HOLD_NOT_MEASURED_ACTION, HOLD_PROFILE,
-                          HOLD_SAME_PLACE, HOLD_TAIL_MIN_SHOT)
-
-#: A REQUIRED change that could not be honoured at all. Its own list, not a
-#: hold: a hold is an opportunity declined, and this is a visual requirement the
-#: timeline cannot materialise. Burying the two together would let a frame the
-#: report calls wrong disappear into a column of things that were fine.
-#:
-#: The cut would leave a runt final shot. Reporting the violation and keeping
-#: the cut is not enough — a cut at 9.9s of a 10s clip is a 100ms flash, and a
-#: requirement impossible to materialise must not be presented as a valid edit.
-#: R5 decides whether to extend the window or move the boundary.
-CONFLICT_TAIL = "tail_min_shot"
-#: Two DISTINCT required changes that would collapse onto one cut. They cannot
-#: both be satisfied by it: a treatment that exists only between them is never
-#: shown, and the flicker `min_shot_violations` exists to expose becomes
-#: invisible instead.
-CONFLICT_COLLISION = "required_collision"
-CONFLICTS: tuple[str, ...] = (CONFLICT_TAIL, CONFLICT_COLLISION)
-
-#: An OBSERVED event that is deliberately not in `REASONS`, because on its own
-#: it never earns a cut. It is what a `same_treatment` hold is a hold OF.
-EVENT_REGIME_CHANGE = "regime_change"
-
-#: Two placements this far apart are the same instant, at the 3dp everything
-#: here rounds to. Not a tolerance — a rounding equality.
-_SAME_MOMENT = 1e-3
-
-#: Which reasons each profile's grammar admits. CHOSEN from §4's rules, and the
-#: only difference today is the beat: §4 gives the pace to events for `action`
-#: and to nothing else. Every profile takes a source cut, because following the
-#: source is never an invention — including `instructional`, where a scene change
-#: IS the next step rather than an interruption of one.
-ADMITS: dict[str, tuple[str, ...]] = {
-    "talking_head":  (REASON_TREATMENT, REASON_SCENE),
-    "conversation":  (REASON_TREATMENT, REASON_SCENE),
-    "action":        (REASON_TREATMENT, REASON_SCENE, REASON_BEAT),
-    "exploration":   (REASON_TREATMENT, REASON_SCENE),
-    "instructional": (REASON_TREATMENT, REASON_SCENE),
-    CONSERVATIVE:    (REASON_TREATMENT, REASON_SCENE),
-}
-
-#: What §4 asks each profile to do that NOTHING in this repo measures yet.
-#:
-#: Written down rather than approximated. `talking_head` is told to reframe on a
-#: clear idea or emotion, and the nearest thing that exists is a keyword regex
-#: over the transcript — a word list containing "bro" and "lol" is not an
-#: emotion, and promoting it to a cut reason would be the invented signal §3.4
-#: forbids for the active speaker. `conversation` is told to switch on a sure
-#: active-speaker signal, which §3.4 names explicitly as the thing not to guess.
-#:
-#: This is why those two profiles read `below` their band. The gap is the
-#: measurement that is missing, not a pace that needs padding.
-UNMEASURED: dict[str, tuple[str, ...]] = {
-    "talking_head":  ("reframe_on_idea_or_emotion",),
-    "conversation":  ("active_speaker",),
-    "action":        (),
-    "exploration":   (),
-    "instructional": ("step_boundary",),
-    CONSERVATIVE:    (),
-}
-
-#: How far a required cut may be MOVED to land on a pause. CHOSEN, not measured
-#: — one named constant so the calibration has exactly one thing to change. Past
-#: it, moving the cut would describe a different moment instead of the same one
-#: said more cleanly, so the cut stays where the change was and says so.
-SNAP_S = 0.40
-
 
 def cut_boundaries(words: Sequence[dict], peaks: Sequence[float],
                    scenes: Sequence[float], clip_start: float, duration: float,
@@ -290,11 +212,31 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
     at: dict[float, dict] = {}
     last = 0.0
 
+    # The moments a REQUIRED change asks for, so no cut may be moved across one.
+    required_at = sorted({round(float(w["t"]), 3) for w in wanted
+                          if str(w["reason"]) in REQUIRED})
+
     for want in wanted:
         own, reason = round(float(want["t"]), 3), str(want["reason"])
         required = reason in REQUIRED
 
-        near = [(bw, bt) for bt, bw in boundaries or [] if abs(bt - own) <= snap_s]
+        # A SNAP MAY NOT CROSS THE NEXT REQUIRED CHANGE. Moving a cut forward
+        # past one keeps the list in order and still loses the treatment: the
+        # shot before the cut shows the framing from BEFORE this change, so the
+        # stretch between the two changes is never on screen at all. Found by
+        # review on this file's own fixture — 5.000 and 5.050 with a pause at
+        # 5.300 kept one cut at 5.300 and called the second change conflictual,
+        # while the first change's cut had already passed beyond both states.
+        after = bisect_right(required_at, own)
+        ceiling = required_at[after] if after < len(required_at) else float("inf")
+        # ...and a required change may not snap INTO the tail zone either. A
+        # change at 9.2 that snapped to 9.5 of a 10s clip was dropped by the tail
+        # walk-back and reported as unmaterialisable, when its own moment leaves
+        # a perfectly legal 0.8s shot. The conflict was manufactured by the snap.
+        if required:
+            ceiling = min(ceiling, round(duration - min_shot_s, 3))
+        near = [(bw, bt) for bt, bw in boundaries or []
+                if abs(bt - own) <= snap_s and bt < ceiling]
         if near:
             # The strongest boundary in the window, and the closest one among
             # equals — so a cut moves as little as the evidence allows.
@@ -307,7 +249,9 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
             continue
 
         existing = at.get(placed)
-        if existing is not None and abs(existing["t"] - own) <= _SAME_MOMENT:
+        # EXACT, because both sides are already rounded to 3dp. `abs(...) <= 1e-3`
+        # read as a rounding equality and was a 1ms tolerance.
+        if existing is not None and existing["t"] == own:
             # One instant, two reasons for it. Both are kept: a treatment change
             # that also falls on a source cut is better evidence than either.
             if reason not in existing["reasons"]:
@@ -362,14 +306,19 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
         dropped = cuts.pop()
         at.pop(dropped["t"], None)
         violations = [v for v in violations if v["t"] != dropped["t"]]
-        row = {"t": dropped["t"], "reason": dropped["reasons"][0],
-               "shot_s": round(duration - dropped["t"], 3),
-               "min_shot_s": min_shot_s}
-        if any(r in REQUIRED for r in dropped["reasons"]):
-            conflicts.append({**row, "conflict": CONFLICT_TAIL})
-        else:
-            held.append({"t": row["t"], "reason": row["reason"],
-                         "hold": HOLD_TAIL_MIN_SHOT})
+        # EVERY request the dropped cut answered, not just the first. A cut can
+        # carry a treatment change and a source cut at once, and routing only
+        # `reasons[0]` threw the other provenance away — the report would then
+        # show a requirement that no longer appears anywhere.
+        tail = round(duration - dropped["t"], 3)
+        for reason, moment in dropped["requests"]:
+            if reason in REQUIRED:
+                conflicts.append({"t": moment, "reason": reason,
+                                  "conflict": CONFLICT_TAIL, "cut_at": dropped["t"],
+                                  "shot_s": tail, "min_shot_s": min_shot_s})
+            else:
+                held.append({"t": moment, "reason": reason,
+                             "hold": HOLD_TAIL_MIN_SHOT})
 
     return {"cuts": cuts, "held": held, "required_conflicts": conflicts,
             "min_shot_violations": violations}

@@ -389,6 +389,25 @@ luată curat nu se ia.
   față de un plafon de 28, iar durata scurtă nu face asta ambiguu. Doar podeaua are nevoie de spațiu,
   deci `above` se verifică primul.
 
+**A doua rundă, două „conflicte fabricate de plasare".** Ambele declarau imposibilă o cerință
+obligatorie care se putea materializa:
+
+- **Snap-ul nu mai trece dincolo de următoarea schimbare obligatorie.** Mutarea unei tăieturi peste
+  ea păstrează ordinea numerică și tot pierde tratamentul: shot-ul de dinainte arată încadrarea de
+  DINAINTEA acestei schimbări, deci intervalul dintre cele două nu apare deloc pe ecran. Găsit pe
+  chiar fixture-ul din testele batch-ului — 5,000s și 5,050s cu pauză la 5,300s.
+- **O schimbare obligatorie nu mai face snap în zona cozii.** Una la 9,2s dintr-un clip de 10s se
+  muta la 9,5s, era scoasă de walk-back-ul cozii și raportată ca imposibilă, deși propriul ei moment
+  lasă un shot perfect legal de 0,8s.
+
+Consecință: `required_collision` a devenit **de neatins** — cu plafonul de snap, o schimbare
+ulterioară are întotdeauna momentul propriu liber. Ramura se păstrează ca a doua linie de apărare,
+documentată ca atare, exact ca garda de ordine.
+
+**A treia rundă (P2):** o tăietură scoasă la coadă păstrează TOATE motivele pe care le răspundea, nu
+doar primul — o cerință care nu mai apare nicăieri în raport e mai rea decât una raportată ca
+imposibilă.
+
 **A cincea, de atribuire:** o tăietură la granița `action → speaker` nu e o tăietură `quiet`, e o
 **tranziție**. Se numără separat, creditată niciunei benzi — altfel montajul liniștit pare mai agitat
 dintr-un motiv care nu are legătură cu materialul liniștit.
