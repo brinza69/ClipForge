@@ -129,6 +129,20 @@ async def _vision_review(clip: ClipModel, cfg: dict, rendered: Path,
     return merged
 
 
+def _size_bytes(path: str | Path) -> int | None:
+    """The source file's size, or None when it cannot be read.
+
+    Part of the render fingerprint: two runs against the same path are only the
+    same input if the file behind it has not been replaced. None rather than 0,
+    because a source that is gone and a source that is empty are different
+    facts and the audit refuses to spell absence as a measurement.
+    """
+    try:
+        return Path(path).stat().st_size
+    except OSError:
+        return None
+
+
 def _job_origin(metadata: object) -> str:
     """Who asked for this render, from the job that carries it.
 
@@ -267,42 +281,73 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # timestamps, scores, the layout and caption plans, and the model versions
     # that produced them (brief §25).
     sidecar = out.with_suffix(".json")
+
+    # Imported here, not at module scope, for the reason the dynamic branch
+    # above already does it: this module is imported to register job handlers
+    # long before any render runs.
+    from services.clipper import dynamic_render, edit_quality, render as static_render
+
+    render = {"fps": fps, "crf": settings.clipper_export_crf,
+              "preset": settings.clipper_export_preset,
+              "watermark": decision["watermark"]}
+    source = {"path": src, "url": project.source_url,
+              "size_bytes": _size_bytes(src)}
+
+    body = {
+        "clip_id": clip.id,
+        "project_id": project_id,
+        # WHICH renderer made this file. The two paths produce different videos
+        # from the same plan, so one constant for both would file a static
+        # export under a grammar of shots it never had.
+        "render_version": (dynamic_render.RENDER_VERSION if dyn
+                           else static_render.RENDER_VERSION),
+        "source": source,
+        "source_start": clip.start_time,
+        "source_end": clip.end_time,
+        "duration": clip.duration,
+        "title": clip.title,
+        "headline": clip.headline_text,
+        "transcript": clip.transcript_text,
+        "overall_score": clip.overall_score,
+        "sub_scores": clip.sub_scores,
+        "score_reason": clip.score_reason,
+        "layout_plan": plan,
+        # Present only when the multi-shot path rendered this file. The
+        # static layout_plan above is still written either way, because
+        # it is what a re-render falls back to.
+        "dynamic_plan": dyn,
+        # Pass D's verdict on this exact cut. Written whether or not it
+        # found anything: "APPROVE, twelve frames sampled" is a fact
+        # about the file, and an absent key would be ambiguous between
+        # "clean" and "never reviewed".
+        "review": review_result,
+        # The plan as STORED, plus the two things the export decided about it.
+        # Not a pre-merged "effective" plan: merging here would put a second
+        # copy of `_write_ass`'s rule in this file, and the merged result cannot
+        # be taken apart again by anything that needs to know what was decided
+        # at score time and what was decided at render time.
+        "caption_plan": clip.caption_plan,
+        # The height the captions were actually burned at when the export moved
+        # them off detected game UI, `null` when the stored position stood.
+        "caption_y": caption_y,
+        "content_type": clip.content_type,
+        "analysis_version": project.analysis_version,
+        "ranker_version": clip.ranker_version,
+        # The dead seconds this render removed. Without them the sidecar
+        # describes a longer clip than the file: every downstream time —
+        # captions, shot boundaries — is on a clock the mp4 does not keep.
+        "drop_spans": drop,
+        "render": render,
+    }
+
+    # Computed from the sidecar itself, through the ONE projection the audit
+    # uses to recheck it. Building a separate payload here is how a fingerprint
+    # stops meaning anything: the two definitions drift, and the check passes
+    # for a file whose plan has changed underneath it.
+    body["input_fingerprint"] = edit_quality.input_fingerprint(body)
+
     storage.atomic_write_json(
-        sidecar,
-        {
-            "clip_id": clip.id,
-            "project_id": project_id,
-            "source": {"path": src, "url": project.source_url},
-            "source_start": clip.start_time,
-            "source_end": clip.end_time,
-            "duration": clip.duration,
-            "title": clip.title,
-            "headline": clip.headline_text,
-            "transcript": clip.transcript_text,
-            "overall_score": clip.overall_score,
-            "sub_scores": clip.sub_scores,
-            "score_reason": clip.score_reason,
-            "layout_plan": plan,
-            # Present only when the multi-shot path rendered this file. The
-            # static layout_plan above is still written either way, because
-            # it is what a re-render falls back to.
-            "dynamic_plan": dyn,
-            # Pass D's verdict on this exact cut. Written whether or not it
-            # found anything: "APPROVE, twelve frames sampled" is a fact
-            # about the file, and an absent key would be ambiguous between
-            # "clean" and "never reviewed".
-            "review": review_result,
-            "caption_plan": clip.caption_plan,
-            "content_type": clip.content_type,
-            "analysis_version": project.analysis_version,
-            "ranker_version": clip.ranker_version,
-            "render": {"fps": fps, "crf": settings.clipper_export_crf,
-                       "preset": settings.clipper_export_preset},
-        },
-        indent=2,
-        ensure_ascii=False,
-        default=str,
-    )
+        sidecar, body, indent=2, ensure_ascii=False, default=str)
 
     async with async_session() as session:
         # The review goes on the row as well as the sidecar. Sidecar-only was

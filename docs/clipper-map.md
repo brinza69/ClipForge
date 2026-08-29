@@ -2,7 +2,7 @@
 
 **Read this first.** Every file in the clipper, what it is for, and which
 document holds the reasoning behind it. Verified against the tree on
-2026-08-16.
+2026-08-28.
 
 It exists because four sessions in a row began by grepping the codebase to
 rediscover where things live, and because the old map in `CLAUDE.md` listed
@@ -21,6 +21,7 @@ five files that do not exist.
 | what every file is (this document) | you are here |
 | why the reasoning works the way it does | `story-engine.md` |
 | planul auditat pentru Reasoning v2 | `plans/ai-stream-clipper-reasoning-v2.md` |
+| următorul plan: selecție + montaj content-aware până la activarea în produs | `plans/ai-stream-clipper-production-engine-v1.md` |
 | ce anume din acel plan a fost verificat în cod, și cu ce dovadă | `plans/ai-stream-clipper-reasoning-v2-review.md` |
 | which brief requirement is built, section by section | `story-engine-spec-status.md` |
 | ground truth for the detectors — what each source actually is | `source-labels.md` |
@@ -129,16 +130,19 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 
 | file | what |
 |---|---|
-| `render.py` | the static path: one filtergraph, one encode, optional dead-air cuts |
+| `render.py` | the static path: one filtergraph, one encode, optional dead-air cuts. Holds `RENDER_VERSION = render_static_split_v1`, the counterpart to `dynamic_render`'s — a static export stamped with the dynamic version is attributable to a grammar of shots it never had |
 | `captions.py` | the caption plan and its overlays |
 | `dynamic_edit.py` | the multi-shot planner: which camera, where the subject is |
-| `dynamic_subject.py` | two questions about the subject. Per span: is anyone there — hysteresis over the 0.25s face track, deciding `crop` vs `fit`. Per source: `stable_track` finds a fixed webcam overlay, which is what stops the crop following the faces in a reacted-to video |
+| `dynamic_subject.py` | two questions about the subject. Per span: is any face present — hysteresis over the 0.25s track, deciding `crop` vs `fit`. Per source: `stable_track` anchors face-family crops on a fixed webcam overlay. Known limit: composition still sees any face, including one in reacted content, so this does **not** yet guarantee the creator; see CURRENT and production-engine Batch R3 |
 | `dynamic_cuts.py` | WHERE the edit cuts, on the clock — sentence ends, peaks, rhythm. Split from `dynamic_edit.py` at 500 lines; knows nothing about cameras |
 | `dynamic_cameras.py` | the camera rungs and the action band |
 | `dynamic_window.py` | the per-window signals the planner needs — dense face track, motion inside the game region, and `ui_panels`, the per-clip UI rectangles the caption keeps out of |
-| `dynamic_render.py` | the shot list as one `-filter_complex` with `sendcmd` |
+| `dynamic_render.py` | the shot list as one `-filter_complex` with `sendcmd`; current `RENDER_VERSION` is `render_v3_letterbox`, with full-frame `fit` over a blurred backdrop |
 | `dynamic_geometry.py` | the arithmetic on a plan: sizes, anchors, crop expressions and the `sendcmd` script. Holds `composition` — `crop` (a 9:16 window on a subject) and `fit` (the whole frame, letterboxed, for sequences with no subject) |
 | `serialize.py` | DB rows to API dicts, and `effective_content_type` |
+| `edit_quality.py` | Batch R0: the export audit as code. Per-clip structural metrics off the sidecar — shots/min, shortest shot, `fit → fit` cuts that show the same image, lead-in and tail, composition and regime mix. The composition list is CLOSED (`crop`, `fit`). An ABSENT composition is age — an old plan, undecidable, not a defect; a composition that is present and impossible (`null`, a number, an unknown string) is corruption and fails the gate. Same rule for `duration` and `drop_spans`: absent is unknown, present and unusable is a defect. Reads shot order AS PERSISTED, refuses a malformed plan instead of repairing it, and spells a missing measurement `unavailable`, never 0 — one undecidable boundary makes the whole count `unavailable`, and a time that parses is not a time that happened: shots and words are checked against the WINDOW for finite, in-range, ordered values (a zero-length word is normal — 156 of 8.249 in the pilots — a backwards one is not), and a shot, word or trim span that fails refuses that half outright — an absent `drop_spans` is not a defect, a corrupt one is. `defects` is a LIST: a clip can be wrong in more than one way. When `drop_spans` are present the shot half is refused outright: a trim changes the edit, not just the clock, and reconstructing the delivered sequence is R1's. Exact equivalence only |
+| `edit_quality_totals.py` | the aggregation: project and corpus figures. Split from `edit_quality.py` at 500 lines. It imports that module and that module must NOT import it back — the re-export it started with made the pair a cycle that worked only if you imported them in the right order. A rate is built only from clips carrying BOTH shots and duration; a total is a total or it is `unavailable`, with the lower bound published under its own name. Pooled and per-source rates are different questions and both are printed |
+| `render_input.py` | what an export was made FROM, and the digest over it: `FINGERPRINT_KEYS`, `render_input`, `input_fingerprint`. The ONE projection — `clipper_render_jobs` stamps with it, `audit_clipper_exports` recomputes and compares. Re-exported from `edit_quality` |
 
 ---
 
@@ -152,7 +156,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `clipper_cache.py` | what a previous run left on disk and whether it can still be trusted: the anchor stamp (prompt, mode, engines, duration, chunk plan) and the per-stretch content types. A checkpoint without a stamp is worse than no checkpoint |
 | `clipper_finalize.py` | everything after the winners are chosen: layout + caption planning, headlines, the two trace artefacts, the `clips` rows, and auto-export. Split out when Batch 0 took `clipper_build` past 500 lines; re-exported from there |
 | `clipper_render_plan.py` | WHAT a render will contain: window, shot list, layout, caption file, dead-air spans. `_decide_render` is the entry point and both handlers consume its one answer |
-| `clipper_render_jobs.py` | the export and preview jobs themselves: one ffmpeg encode each, plus Pass D |
+| `clipper_render_jobs.py` | the export and preview jobs themselves: one ffmpeg encode each, plus Pass D. Also writes the sidecar the audit reads: since R0 it carries `render_version` (whichever renderer actually ran), `input_fingerprint` (computed through `edit_quality.input_fingerprint` over the recipe only — no titles, scores or ids), `drop_spans`, `caption_y`, and the source size. The caption plan stays STORED and the render-time height rides beside it, so the two decisions can still be told apart. Stamped at write time; the 58 pilot exports predate the keys and stay `unavailable` |
 
 Not clipper: `remix_pipeline.py`, `parallel_pipeline.py`, `doodle_pipeline.py`,
 `utility_jobs.py`.
@@ -190,6 +194,7 @@ operations). Split to stay under the 500-line limit.
 | `scripts/export_clipper_state.py` | transcripts to disk plus `data/clipper/MANIFEST.md` |
 | `scripts/render_dynamic_clip.py` | drive the multi-shot renderer by hand |
 | `scripts/build_dynamic_review.py` | the review page for a project's `dynamic/` |
+| `scripts/audit_clipper_exports.py` | rerun the v3 export audit on any set of projects. Reads only; `--all`, `--clips`, `--json`, `--output`. ENUMERATES the union of mp4s and sidecars and MEASURES their intersection, so `missing_sidecar` / `orphan_sidecar` / `unreadable_sidecar` / `mislabelled_sidecar` / `unidentified_sidecar` are findings rather than clips, and each measured sidecar is tied to the file it was found in — `clip_id` must match the filename and `project_id` the project being audited. **Exits 2** on any of those, on a refused artifact, on shots that do not join, or on a fingerprint that no longer matches its plan (an UNDECIDABLE boundary does not fail it — an old plan is old, not corrupt) (`unavailable` is fine — the pilots predate the key); a gate that always exits 0 is a report. Baseline on the four pilots: **58 clips, 1.341 shots, 29,3349/min pooled (29,5930/min as the mean of the four sources — different questions, both printed), 116 `fit → fit`, shortest 0,605s, 58/58 starting on the first word, 22/58 with ≤50ms of tail** |
 | `scripts/prune_clipper.py` | reclaim disk from finished projects. Dry-run by default; never touches exports or analysis |
 | `scripts/score_contribution.py` | weight x sd per sub-score — which one actually orders the board. Found dead features twice, three sessions apart |
 | `scripts/score_content_type.py` | the content classifier scored against `source-labels.md` — 6/11 |
@@ -250,10 +255,16 @@ default. Full table in `handover/archive/clipper/handoff-clipper-session-4.md`.
 | `trim_silence` | off | dead-air removal from inside a window (§15) |
 | `vision_review` | off | a vision model judges the rendered clip — the only part of the pipeline that spends money (~0.4 cents/clip on gpt-5.6-terra) |
 | `auto_export` | 0 (off) | render the top N as soon as scoring finishes, instead of stopping at the board. With the source form's "don't wait for me" box, a pasted link becomes finished files with no second visit |
-| `reasoning_mode` | resolved from config, `legacy` on a stock rig | which reasoning engine runs. Selectable: `legacy`, `llm_nominate`, `story_v1`. Known but REFUSED by the API: `story_v2_shadow` (until Batch 2 makes shadow stop reordering the board) and `story_v2` (until Batch 5). Replaces `llm_select` + `reasoning_version`, still read for the projects that predate it — see `services/clipper/reasoning_mode.py`. The form omits the key unless the user picks one, so a rig configured in `config.py` is not overridden by the browser |
+| `reasoning_mode` | resolved from config, `legacy` on a stock rig | which reasoning engine runs. Selectable: `legacy`, `llm_nominate`, `story_v1`, `story_v2_shadow`. Shadow computes and persists `shadow_rank` but keeps the delivered board legacy. `story_v2` is known but REFUSED until the golden review proves it better. Replaces `llm_select` + `reasoning_version`, still read for old projects; the form omits the key unless the user picks one, so it does not override server config |
 
 `dynamic_edit` being on is what makes the rest of the multi-shot work reachable
 — cuts on speech pauses, the wide gameplay framing, Pass D and the audio
 ceiling all live on that path and nowhere else. It still falls back to the
 static layout on a missing proxy, a plan with fewer than two shots, or any
 exception.
+
+The current dynamic planner is **not production-approved** merely because v3
+fixed geometry. The 58-export audit found 1,341 shots (29.3/minute), 116 exact
+`fit → fit` no-op cuts, aggressive boundaries and source-awareness defects.
+Implementation resumes at production-engine Batch R0, not by tuning constants
+ad hoc.

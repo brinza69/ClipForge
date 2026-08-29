@@ -53,11 +53,14 @@ source → ingest → proxy/audio → transcription → analysis → scoring →
 - DB: proiecte, job-uri, clips, transcript și feedback.
 - Disc: source, proxy, transcript, analysis, scoring, previews și exports.
 
-## Stare, 2026-08-22
+## Stare, 2026-08-28
 
 **Reasoning v2 este implementat până la Batch 6 inclusiv.** Rulează în `story_v2_shadow`, care
 calculează ordinea v2 și o înregistrează, dar livrează în continuare ordinea legacy. `story_v2` este
-**refuzat de API** — regula funcționează, dar nu a fost comparată orb pe corpus, ceea ce este Batch 10.
+**refuzat de API** — regula funcționează, dar review-ul existent a fost contaminat de defectele de
+randare și nu poate deschide gate-ul Batch 10. Shadow este acum inert: verdictul judge-ului merge în
+`selection_score`, ordinea livrată rămâne cea euristică, iar alegerile v2 se păstrează separat prin
+`shadow_rank` și `shadow_run_id`.
 
 Ce s-a livrat, cu măsurătoarea care justifică fiecare. **Fiecare rând este snapshot-ul de la
 momentul batch-ului respectiv, nu o singură rulare** — numărul de candidați diferă de la un batch la
@@ -74,6 +77,109 @@ mai jos.
 | 5 | momente, nu variante | 943 variante → **295 grupuri de momente**; variante story care poartă verdict **1 → 47 din 61** |
 | 2b | board = ce a ales judge-ul | 7/10 câștigători legacy erau `not_evaluated`; sub regula v2, **0** — v2 nu are backfill |
 | 6 | patru scale de scor, eligibilitate separată | exact **80** din 946 au `overall != heuristic_score`, și aceia sunt pool-ul judecat |
+
+## Ce s-a schimbat după snapshot-ul Batch 6
+
+### Pilot multi-gen și review orb
+
+- `story_v2_shadow` a rulat pe patru surse diverse: talking-head EN, vlog IRL în română, interviu
+  și Just Chatting, plus baseline-ul gaming. Motorul a produs momente story pe toate tipurile și
+  româna nu a produs colaps. Acesta este un diagnostic de coverage, **nu dovadă de calitate**.
+- Pagina `/clipper-review` compară legacy cu v2 fără a expune board-ul în payload înainte de verdict.
+  Sesiunile sunt persistente și fiecare este ștampilată cu versiunea rendererului.
+- Prima sesiune a fost invalidă: ruta servise preview-ul de maximum 12s în locul exportului complet.
+  Ruta cere acum exportul și răspunde 409 dacă lipsește; sesiunea veche rămâne marcată invalid.
+- Corpusul de review are 58 de clipuri: `pilotf81b` 15, `pilotee0e` 14, `pilot6b38` 15,
+  `pilot2c8a` 14. Board-urile diferă aproape complet, deci review-ul nu este formalitate.
+- Review-ul pe `render_v2_subject_aware` a raportat probleme tehnice la **45/58**. Orice precizie
+  legacy/v2 calculată pe acele sesiuni amestecă selecția cu randarea și nu aprobă `story_v2`.
+
+### Rendererul curent
+
+`RENDER_VERSION = render_v3_letterbox`, rezultat din commiturile `24862b7` → `b6e7ea7`:
+
+- shot-urile au `composition: crop | fit`;
+- `fit` păstrează cadrul complet, cu o copie blurată în fundal în locul benzilor negre;
+- `stable_track` ancorează familia face-cam pe clusterul fix al creatorului când dovada este
+  decisivă;
+- rendererul și planificarea au fost separate în `dynamic_cuts.py`, `dynamic_geometry.py` și
+  `dynamic_subject.py`, iar fișierele de producție rămân sub 500 de linii;
+- versiunea randării este ștampilată la crearea sesiunii de review, nu reconstruită retroactiv.
+
+Toate cele 58 de exporturi au fost re-randate și verificate: **58/58 complete**, decalaj maxim între
+durata DB și MP4 **0,030s**; pe șase clipuri cu `fit`, luminozitatea benzii este 53–183, deci fundal
+blur, nu negru. Geometria este închisă; plannerul nu este.
+
+### Audit critic al celor 58 de exporturi v3
+
+| metrică | rezultat | ce demonstrează |
+|---|---:|---|
+| durată totală | 45m43s | corpusul randat |
+| shot-uri | 1.341 | **29,3/minut**, aproximativ unul la 2,04s |
+| cel mai scurt shot | 0,605s | aceeași gramatică agresivă pe toate tipurile |
+| tăieturi `fit → fit` fără schimbare finală | **116** | dedupe-ul rulează înainte de compoziția finală |
+| început fără lead-in | **58/58** | fiecare clip pornește exact pe primul cuvânt |
+| final la ≤50ms după ultimul cuvânt | **22/58** | boundary fără aer; uneori propoziție incompletă |
+| captions duble pe go ghost | **15/15** | sursa are deja subtitrări arse |
+| UI/overlays în clipurile Moist | **14/14** | `stable_track` nu garantează singur creatorul |
+
+Concluzia: v3 a reparat întinderea și letterbox-ul, dar motorul nu este încă production-ready.
+Problemele dominante sunt montajul forțat, echivalența calculată prea devreme, regimul `crop|fit`
+bazat pe orice față, boundaries agresive și captions fără source-awareness.
+
+## Batch R0 — ÎNCHIS, 29 august 2026
+
+Evaluatorul repetabil există și reproduce baseline-ul exact. Rulează-l înainte și după orice
+modificare a plannerului:
+
+```bash
+python scripts/audit_clipper_exports.py pilotf81b pilotee0e pilot6b38 pilot2c8a
+```
+
+| metrică | valoare | unde |
+|---|---:|---|
+| clipuri | 58 | cele patru piloturi |
+| shot-uri | 1.341 | 29,3349/min **pooled** |
+| aceleași shot-uri, media celor patru surse | 29,5930/min | altă întrebare, nu alt răspuns |
+| shot minim | 0,605s | |
+| tăieturi `fit → fit` echivalente | 116 | echivalență **exactă**, nu perceptuală |
+| granițe undecidable / necontigue | 0 / 0 | |
+| clipuri care încep pe primul cuvânt | 58/58 | |
+| clipuri cu ≤50ms după ultimul cuvânt | 22/58 | |
+
+Ce trebuie știut înainte să te bazezi pe el:
+
+- **Scriptul este un gate, nu un raport: iese cu 2.** Export incomplet, sidecar care numește alt clip
+  sau alt proiect, artefact refuzat, shot-uri care nu se leagă, fingerprint care nu mai corespunde
+  planului. `fingerprint: unavailable` NU pică — cele 58 de exporturi preced cheia.
+- **Absent și corupt sunt lucruri diferite, peste tot.** `composition`, `duration` și `drop_spans`
+  lipsă înseamnă necunoscut și nu pică gate-ul; prezente și imposibile sunt defecte. Un plan vechi
+  este vechi, nu stricat, iar corpusul e plin de ele.
+- **O măsurătoare lipsă este `unavailable`, niciodată 0**, iar un total care ar fi doar o limită
+  inferioară se raportează ca `unavailable`, cu limita publicată separat.
+- **`captions_duplicate_declared` iese `unavailable` pe tot corpusul, și e corect.** Nimic din
+  sidecar nu declară că sursa avea deja subtitrări arse; cei 15/15 pe go ghost au fost o observație
+  umană. R6 trebuie să producă semnalul.
+- **Un trim refuză jumătatea bazată pe shot-uri.** `drop_spans` schimbă montajul, nu doar ceasul;
+  reconstrucția secvenței livrate este a lui R1. Ceasul, lead-in-ul și tail-ul rămân exacte.
+- Sidecar-ul poartă acum `render_version` (care renderer a rulat, static sau dinamic),
+  `input_fingerprint`, `drop_spans`, `caption_y` și dimensiunea sursei. Nimic nu este ștampilat
+  retroactiv.
+
+Ce a rămas deliberat în afara R0: `width`/`height` nu sunt în sidecar, fiindcă nu există o autoritate
+comună pentru dimensiunea de ieșire — ambele renderere o poartă ca default de parametru. Se rezolvă
+cu o constantă comună transmisă explicit ambelor căi, într-un batch ulterior.
+
+## Punctul exact de reluare
+
+Următoarea sesiune începe cu **Batch R1** — echivalența vizuală după compoziția finală — din
+[`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md).
+Gate-ul lui: zero tăieturi exact echivalente pe cele 58 de planuri, aceeași durată, aceleași
+captions, zero regresii de geometrie. Adică cele 116 trebuie să ajungă 0 fără ca restul tabelului de
+mai sus să se miște.
+
+Nu porni Batch R1–R7 în paralel și nu activa `story_v2`. Planul separă gate-ul de selecție de gate-ul
+de randare tocmai fiindcă review-ul existent le-a amestecat.
 
 ## Starea artefactului curent
 
@@ -131,13 +237,15 @@ Reparat, dar artefactul existent păstrează cifra veche: la o comparație, ia `
   Vezi `scripts/measure_grounding.py`.
 - **`eligibility` nu e citită de nimeni.** Se scrie și se înregistrează; nicio decizie nu depinde de
   ea, iar `ineligible` nu s-a declanșat niciodată pe acest corpus (0 din 946).
-- **Inerția lui shadow e parțială.** `apply_ranking` mută `overall` pentru pool-ul de 80 —
-  comportament pre-2b, identic în `story_v1`. Ca `overall` să devină alias, trebuie decis dacă
-  `dedupe` se mută pe `heuristic_score`; el își alege liderii după `overall` și exact asta
-  retrograda candidații judecați.
+- **Gate-ul de activare rămâne deschis.** Shadow nu mai mută board-ul livrat, dar cele 58 de
+  verdicte existente nu pot demonstra calitatea selecției cât timp 45 au fost evaluate cu defecte
+  tehnice. `story_v2` rămâne refuzat până la review-ul separat din Batch S8.
 - **Batch 8 e blocat pe date.** `training_rows()` întoarce 0 de la 2a încoace, corect: un set cu o
   singură clasă e mai periculos decât niciunul. Ranker-ul rămâne dormant.
-- **Batch 7, 9 și 10 nu au început.** 10 cere etichetare umană.
+- **Reasoning Batch 7, 9 și 10 nu sunt închise.** Noul plan le continuă ca S7/S8 după stabilizarea
+  randării; nu se șterg și nu se consideră înlocuite.
+- **Rendererul v3 nu este aprobat pentru publicare automată.** Geometria trece, dar auditul a găsit
+  116 tăieturi invizibile, ritm de 29,3/min, boundaries fără padding, captions duble și browser UI.
 
 ## Riscuri de urmărit
 
@@ -146,14 +254,21 @@ Reparat, dar artefactul existent păstrează cifra veche: la o comparație, ia `
 - cleanup-ul nu trebuie să șteargă exporturi valide;
 - uploadul prin proxy are o limită diferită de limita backend-ului;
 - job-urile de export trebuie să fie idempotente;
-- **clonele `gate2d3375` și `gateslice4h` sunt singurele proiecte cu trace** și deci baza de
-  comparație pentru orice batch următor. Se șterg cu
+- nu porni o nouă sesiune de review înainte ca exporturile și sesiunea să poarte aceeași
+  `RENDER_VERSION`;
+- nu folosi verdictul tehnic drept etichetă negativă pentru ranker-ul de selecție;
+- **șase proiecte au perechea completă de trace**: `gate2d3375`, `gateslice4h` și cele patru
+  piloturi `pilotf81b`, `pilotee0e`, `pilot6b38`, `pilot2c8a`. Gate-urile păstrează baseline-ul
+  gaming; piloturile păstrează corpusul multi-gen și exporturile review-ului. Clonele se șterg cu
   `scripts/clone_clipper_project.py --drop <id>`.
 
 ## Documente asociate
 
 - [`docs/clipper-map.md`](../../../clipper-map.md)
+- `scripts/audit_clipper_exports.py` — gate-ul R0; metricile sunt în
+  `server/services/clipper/edit_quality.py`
 - [`docs/ai-stream-clipper-runbook.md`](../../../ai-stream-clipper-runbook.md)
 - [`Reasoning v2 — audit și plan de consolidare`](../../../plans/ai-stream-clipper-reasoning-v2.md)
+- [`Motor de selecție și montaj content-aware — plan de producție v1`](../../../plans/ai-stream-clipper-production-engine-v1.md) — **următorul plan de implementare**; pornește cu Batch R0 și păstrează reasoning-ul și randarea ca gate-uri separate
 - [`docs/refs/reasoning-baseline-2026-08-21.json`](../../../refs/reasoning-baseline-2026-08-21.json) — baseline-ul de comparație
 - [`handoff-clipper-session-4.md`](../../archive/clipper/handoff-clipper-session-4.md) — istoric detaliat

@@ -1,18 +1,31 @@
 # ClipForge — Current Application Handover
 
 **Scope:** aplicația întreagă, nu doar AI Stream Clipper.  
-**Data hărții:** 22 august 2026.  
+**Data hărții:** 29 august 2026.
 **TikTok:** exclus din această hartă, conform cerinței proiectului.
 
-## Stare, 22 august 2026
+## Stare, 29 august 2026
 
 Reasoning v2 al Clipper-ului este implementat până la Batch 6 inclusiv, rulează în
 `story_v2_shadow` — calculează ordinea nouă și o înregistrează, dar livrează în continuare ordinea
 legacy — și **nu este aprobat implicit**: `story_v2` este refuzat de API până la comparația oarbă pe
-corpus. Detaliile și ce a rămas deschis sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURRENT.md).
+corpus. Shadow păstrează separat `shadow_rank`, fără să schimbe board-ul livrat.
 
-Teste backend: **916 trec**, 2 pică — ambele din `test_tiktok_transform.py`, cu 404, pentru că
-routerul TikTok nu este montat. TypeScript curat.
+Rendererul Clipper este acum `render_v3_letterbox`: exporturile `fit` păstrează cadrul complet cu
+fundal blurat, iar toate cele 58 de clipuri pilot au fost re-randate complet. Geometria trece, dar
+auditul a găsit montaj excesiv, 116 tăieturi fără schimbare vizuală, boundaries agresive, captions
+duble și UI de browser. Motorul nu este încă aprobat pentru publicare automată.
+
+**Batch R0 este închis.** Auditul celor 58 de exporturi este acum cod care se rerulează
+(`python scripts/audit_clipper_exports.py pilotf81b pilotee0e pilot6b38 pilot2c8a`) și reproduce
+baseline-ul exact: 58 clipuri, 1.341 shot-uri, 29,3349/min, 116 tăieturi `fit → fit`. Este un gate,
+nu un raport — iese cu 2 pe artefacte corupte, sidecar-uri care numesc alt clip sau alt proiect și
+fingerprint-uri care nu mai corespund planului. Punctul de reluare este **Batch R1** din
+[`plans/ai-stream-clipper-production-engine-v1.md`](../plans/ai-stream-clipper-production-engine-v1.md).
+Detaliile și cifrele sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURRENT.md).
+
+Verificare pe working tree-ul local, 29 august: **1.039 teste backend trec, 2 pică** — ambele din
+`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. TypeScript curat.
 
 ## Cum folosești acest document
 
@@ -68,12 +81,13 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 
 ## Priorități globale
 
-1. Stabilizarea job queue-ului și a anulării.
-2. Eliminarea job-urilor care pot rămâne blocate.
-3. Consistență între DB și filesystem.
-4. Upload streaming și limite reale de memorie/disk.
-5. Readiness checks pentru backend și dependențe.
-6. Test harness stabil și teste de reziliență.
+1. Clipper Batch R1: o tăietură există numai dacă imaginea livrată se schimbă — cele 116 trebuie să
+   ajungă 0 fără ca restul baseline-ului să se miște.
+2. Clipper R2–R7: montaj content-aware și gate tehnic separat de reasoning.
+3. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
+4. Consistență între DB și filesystem și idempotency pentru job-urile de export.
+5. Upload streaming și limite reale de memorie/disk.
+6. Readiness checks și teste de reziliență pentru aplicația întreagă.
 
 ## Handover pe module
 
@@ -87,4 +101,3 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 - [`TTS`](areas/tts/CURRENT.md)
 - [`Utilities`](areas/utilities/CURRENT.md)
 - [`Infrastructure`](areas/infrastructure/CURRENT.md)
-

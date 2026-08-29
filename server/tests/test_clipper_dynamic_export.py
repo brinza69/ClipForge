@@ -357,3 +357,79 @@ def test_the_export_handler_passes_all_four_to_the_dynamic_call():
     dynamic_call = dynamic_call[:dynamic_call.index("else:")]
     for arg in ("watermark=", "drop_spans=", "has_audio=", "is_cancelled="):
         assert arg in dynamic_call, f"the dynamic call lost {arg}"
+
+
+# --- Batch R0: the sidecar contract -----------------------------------------
+#
+# The sidecar is what the audit reads. Everything below is about it describing
+# the file that was actually written — not the row the render started from.
+
+
+def test_the_sidecar_names_the_renderer_that_actually_ran():
+    """Stamped at write time, never backfilled, and NOT one constant for both
+    paths: a static export filed under the dynamic renderer's version is
+    attributable to a grammar of shots it never had. The 58 pilot exports
+    predate the key and must keep reading as unavailable."""
+    import inspect
+
+    src = inspect.getsource(jobs.handle_export)
+    assert "dynamic_render.RENDER_VERSION if dyn" in src
+    assert "else static_render.RENDER_VERSION" in src
+
+    from services.clipper import dynamic_render, render as static_render
+
+    assert dynamic_render.RENDER_VERSION != static_render.RENDER_VERSION
+
+
+def test_the_sidecar_carries_every_key_the_fingerprint_is_taken_over():
+    """The digest is computed from the sidecar through `edit_quality`. A key the
+    projection reads and the writer never writes fingerprints as `null` for
+    every export — silently, and identically for all of them."""
+    import inspect
+
+    from services.clipper import edit_quality
+
+    body = inspect.getsource(jobs.handle_export)
+    body = body[body.index("body = {"):body.index('body["input_fingerprint"]')]
+    for key in edit_quality.FINGERPRINT_KEYS:
+        assert f'"{key}"' in body, f"the sidecar never writes {key}"
+
+
+def test_the_fingerprint_is_computed_through_the_audits_own_projection():
+    """Not a payload built by hand here. Two definitions drift, and then the
+    check passes for a file whose plan has changed underneath it."""
+    import inspect
+
+    src = inspect.getsource(jobs.handle_export)
+    assert 'body["input_fingerprint"] = edit_quality.input_fingerprint(body)' in src
+
+
+def test_the_sidecar_records_the_seconds_the_render_removed():
+    """Without `drop_spans` the sidecar describes a longer clip than the file,
+    and every time in it — captions, shot boundaries — is on a clock the mp4
+    does not keep."""
+    import inspect
+
+    assert '"drop_spans": drop' in inspect.getsource(jobs.handle_export)
+
+
+def test_the_sidecar_keeps_the_stored_caption_plan_and_the_height_separately():
+    """Not a pre-merged "effective" plan. Merging here would put a second copy
+    of `_write_ass`'s rule in the worker, and the merged result cannot be taken
+    apart again by anything that needs to know what was decided at score time
+    and what was decided at render time."""
+    import inspect
+
+    src = inspect.getsource(jobs.handle_export)
+    assert '"caption_plan": clip.caption_plan' in src
+    assert '"caption_y": caption_y' in src
+
+
+def test_a_missing_source_sizes_to_none_not_zero(tmp_path):
+    """Part of the fingerprint: the same path with a different file behind it is
+    a different input. A source that is gone and a source that is empty are
+    different facts, and 0 would spell them the same."""
+    real = tmp_path / "source.mp4"
+    real.write_bytes(b"x" * 17)
+    assert jobs._size_bytes(real) == 17
+    assert jobs._size_bytes(tmp_path / "gone.mp4") is None

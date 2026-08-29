@@ -35,6 +35,15 @@ logger = logging.getLogger("clipforge.clipper.render")
 ProgressFn = Callable[[float, str], Any]
 CancelFn = Callable[[], bool]
 
+#: What THIS renderer does, stamped on anything that evaluates its output — the
+#: static counterpart to `dynamic_render.RENDER_VERSION`.
+#:
+#: A static export used to be stamped with the dynamic renderer's version, which
+#: named a grammar of shots and letterboxing that never touched it. A verdict
+#: filed under the wrong renderer is worse than an unstamped one: it is
+#: attributable, and to the wrong thing.
+RENDER_VERSION = "render_static_split_v1"
+
 # A 60-second clip encodes in well under a minute; this ceiling only ever fires
 # on a wedged child process, not on a slow-but-working encode.
 RENDER_TIMEOUT = 1800.0
