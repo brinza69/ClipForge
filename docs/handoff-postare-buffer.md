@@ -333,3 +333,33 @@ Drive e problema la Google, nu autentificare expirata — aceea da `401`/`403`.
 
 Tokenul Google expira cam saptamanal (aplicatia OAuth e in mod Testing). Se
 reconecteaza din Settings in interfata ClipForge.
+
+---
+
+## 12. Cardurile cu text (postari-imagine)
+
+Pe langa clipuri, pe `Povestitorul` merge **un card cu text pe zi** — o fraza
+scrisa de mana pe fundal colorat. Sunt ieftine de produs si tin ritmul zilnic
+intre videoclipuri.
+
+Cele 20 de carduri sunt pe Drive, in subfolderul **`CARDURI TEXT - Facebook`**
+din folderul povestitor romanesc. Textul fiecaruia e in
+`data/carduri_catalog.json`, potrivit dupa numele fisierului — foloseste-l ca
+descriere a postarii, nu inventa alta.
+
+**Forma ceruta de Buffer e `assets: [{image: {url}}]`** — nu `photo`, nu `video`.
+Verificat pe viu pe 29 august, cu o postare de proba creata si stearsa imediat.
+`post_povestitor.py` trimite doar `video`, deci **nu il folosi pentru carduri**;
+pe rig exista `scripts/posteaza_carduri.py` care face exact asta:
+
+```
+server\.venv\Scripts\python.exe scripts\posteaza_carduri.py --canal povestitor --dry
+```
+
+Ora e **12:00**, aleasa in afara sloturilor de video (08:00, 13:00, 18:30,
+20:30), ca sa nu cada pe acelasi minut si sa fie respinsa ca slot ocupat.
+Evidenta e in `data/carduri_postate.json`, pe canal si nume de fisier, deci o a
+doua rulare nu repeta nimic.
+
+**Cardurile mananca din plafonul de postari programate.** Daca vezi coada plina
+si clipuri neprogramate, asta e cauza — nu un defect.
