@@ -6,7 +6,17 @@ each build now records on every candidate and aggregates it; it re-measures
 nothing, so the audit and the pipeline cannot disagree about what a defect is.
 
     python scripts/audit_clipper_boundaries.py pilotf81b pilotee0e
+    python scripts/audit_clipper_boundaries.py --all --recompute
     python scripts/audit_clipper_boundaries.py --all --json
+
+TWO MODES, AND THE DIFFERENCE MATTERS. By default it reads the verdict the
+build recorded — which is what a gate should check, since it is the artefact
+that ships. `--recompute` loads the transcript from the database and runs the
+SAME `boundary_completion.attach` over the stored windows, which measures the
+rule on a corpus scored before this batch existed WITHOUT re-scoring it and
+without touching a score or a board. It is a measurement of the rule, not of the
+pipeline: a green `--recompute` still leaves the end-to-end integration
+unproven, and the report says so rather than letting one stand for the other.
 
 WHAT IT REFUSES TO AVERAGE. A candidate with no `boundary_view` is `missing`,
 not "clean": the field is written by the build, and its absence means the
@@ -36,8 +46,15 @@ sys.path.insert(0, str(_ROOT / "server"))
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 
 from services.clipper.boundary_completion import (  # noqa: E402
-    BLOCKING, DEFECTS, UNKNOWNS,
+    BLOCKING, DEFECTS, REFUSALS, TECHNICAL, UNKNOWNS,
 )
+
+#: Every key `boundary_view_v1` promises. A view missing one is MALFORMED, not
+#: a view with fewer findings: reading `view.get("defects") or []` off a record
+#: that never carried the key counts a hole as a clean window, which is the one
+#: conclusion this audit exists to prevent.
+REQUIRED_KEYS = ("defects", "blocking", "unknown", "measurements", "repair",
+                 "eligible")
 
 MISSING = "missing_boundary_view"
 MALFORMED = "malformed_boundary_view"
@@ -46,6 +63,49 @@ MALFORMED = "malformed_boundary_view"
 #: is a thing to do rather than a bug to chase. A project where only SOME are
 #: missing is the bug — the record failed on the ones it failed on.
 PREDATES = "predates_r5_rescore_needed"
+
+
+def _recompute(project_id: str, rows: list[dict]) -> str | None:
+    """Measure the rule on stored windows. Returns a refusal reason, or None.
+
+    Read-only: it loads the transcript and the project's own clip bounds, runs
+    the canonical function, and attaches the result to the in-memory rows. The
+    artefact on disk is not rewritten — a script that edited `candidates.json`
+    would be re-scoring by the back door.
+    """
+    import asyncio
+
+    from config import settings
+    from database import async_session
+    from models import ProjectModel, TranscriptModel
+    from sqlalchemy import select
+
+    from services.clipper import boundary_completion
+    from services.clipper.candidate_terms import _words_for
+
+    async def _load() -> tuple[dict | None, float, float]:
+        async with async_session() as session:
+            row = (await session.execute(
+                select(TranscriptModel)
+                .where(TranscriptModel.project_id == project_id).limit(1)
+            )).scalar_one_or_none()
+            project = await session.get(ProjectModel, project_id)
+        if not row or not row.segments:
+            return None, 0.0, 0.0
+        cfg = (project.clipper_settings if project else None) or {}
+        return ({"language": row.language, "segments": row.segments},
+                float(cfg.get("max_clip_s") or settings.clipper_max_clip_s),
+                float((project.duration if project else 0) or 0.0))
+
+    transcript, max_s, duration = asyncio.run(_load())
+    if not transcript:
+        return "no_transcript_in_db"
+    words = _words_for({}, transcript)
+    if not words:
+        return "transcript_has_no_word_times"
+    boundary_completion.attach(rows, words, max_s=max_s,
+                               duration=duration or None)
+    return None
 
 
 def _candidates(project_id: str) -> list[dict] | None:
@@ -64,6 +124,32 @@ def _candidates(project_id: str) -> list[dict] | None:
     return None
 
 
+def _well_formed(view: dict) -> bool:
+    """Whether the record says everything `boundary_view_v1` promises to say.
+
+    Checked BEFORE anything is counted. `view.get("defects") or []` on a record
+    that never carried the key reads as a clean window, and a corpus of holes
+    then aggregates into a pass — the exact conclusion R0 spent a session
+    learning to refuse.
+    """
+    if view.get("schema") != "boundary_view_v1":
+        return False
+    if any(key not in view for key in REQUIRED_KEYS):
+        return False
+    if not isinstance(view["measurements"], dict):
+        return False
+    if not isinstance(view["repair"], dict):
+        return False
+    if view["eligible"] not in (True, False, None):
+        return False
+    for key in ("defects", "blocking", "unknown"):
+        if not isinstance(view[key], list):
+            return False
+    known = set(DEFECTS) | set(UNKNOWNS)
+    return all(isinstance(name, str) and name in known
+               for name in view["defects"] + view["unknown"])
+
+
 def _percentile(ordered: list[float], q: float) -> float | None:
     if not ordered:
         return None
@@ -71,12 +157,19 @@ def _percentile(ordered: list[float], q: float) -> float | None:
                              max(0, int(q * (len(ordered) - 1))))], 3)
 
 
-def _measure(project_id: str) -> dict:
+def _measure(project_id: str, *, recompute: bool = False) -> dict:
     """One project's tally. Every count is of something, never of an absence."""
     rows = _candidates(project_id)
     if rows is None:
         return {"project": project_id, "candidates": None,
                 "integrity": ["no_candidates_artefact"]}
+    recomputed = False
+    if recompute:
+        refused = _recompute(project_id, rows)
+        if refused:
+            return {"project": project_id, "candidates": len(rows),
+                    "integrity": [refused]}
+        recomputed = True
 
     out: dict = {
         "project": project_id,
@@ -87,34 +180,40 @@ def _measure(project_id: str) -> dict:
         "repairable": 0,
         "integrity": [],
         "tails": [],
+        # Said out loud on every row: a number measured from the stored windows
+        # is not the same evidence as one the pipeline actually wrote.
+        "source": "recomputed" if recomputed else "recorded",
     }
+    out["refused"] = {name: 0 for name in REFUSALS}
+    out["technical"] = 0
     for cand in rows:
         view = cand.get("boundary_view")
         if not isinstance(view, dict):
             out["integrity"].append(MISSING)
             continue
-        if view.get("schema") != "boundary_view_v1":
+        if not _well_formed(view):
             out["integrity"].append(MALFORMED)
             continue
-        for name in view.get("defects") or []:
-            if name in out["defects"]:
-                out["defects"][name] += 1
-            else:
-                out["integrity"].append(MALFORMED)
-        for name in view.get("unknown") or []:
-            if name in out["unknown"]:
-                out["unknown"][name] += 1
-        eligible = view.get("eligible")
+        for name in view["defects"]:
+            out["defects"][name] += 1
+        for name in view["unknown"]:
+            out["unknown"][name] += 1
+        if [d for d in view["defects"] if d in TECHNICAL]:
+            out["technical"] += 1
+        eligible = view["eligible"]
         if eligible is True:
             out["eligible"] += 1
         elif eligible is False:
             out["ineligible"] += 1
         else:
             out["undecidable"] += 1
-        if (view.get("repair") or {}).get("kind"):
+        repair = view["repair"]
+        if repair.get("kind"):
             out["repairable"] += 1
-        tail = (view.get("measurements") or {}).get("tail_s")
-        if isinstance(tail, (int, float)):
+        elif repair.get("refused") in out["refused"]:
+            out["refused"][repair["refused"]] += 1
+        tail = view["measurements"].get("tail_s")
+        if isinstance(tail, (int, float)) and not isinstance(tail, bool):
             out["tails"].append(float(tail))
     return out
 
@@ -125,9 +224,17 @@ def _report(row: dict) -> None:
         print(f"{name:12} no candidates.json — nothing to audit")
         return
     total = row["candidates"]
-    print(f"{name:12} {total:4} candidates   "
+    print(f"{name:12} {total:4} candidates ({row.get('source', 'recorded')})   "
           f"eligible {row['eligible']}  ineligible {row['ineligible']}  "
           f"undecidable {row['undecidable']}")
+    if row.get("technical"):
+        print(f"{'':12} technical (a render pad fixes, R7 decides if it blocks): "
+              f"{row['technical']}")
+    refused = {k: v for k, v in (row.get("refused") or {}).items() if v}
+    if refused:
+        print(f"{'':12} repairs refused: "
+              + ", ".join(f"{k} {v}" for k, v in sorted(refused.items(),
+                                                        key=lambda kv: -kv[1])))
     named = {k: v for k, v in row["defects"].items() if v}
     if named:
         print(f"{'':12} defects: " + ", ".join(
@@ -163,6 +270,9 @@ def main() -> int:
     ap.add_argument("--all", action="store_true",
                     help="every project under the data directory")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--recompute", action="store_true",
+                    help="measure the rule on stored windows using the "
+                         "transcript from the database, without re-scoring")
     args = ap.parse_args()
 
     names = list(args.projects)
@@ -172,7 +282,7 @@ def main() -> int:
         print(f"no projects under {DATA}")
         return 2
 
-    rows = [_measure(name) for name in names]
+    rows = [_measure(name, recompute=args.recompute) for name in names]
     if args.json:
         print(json.dumps(rows, indent=2))
     else:
@@ -197,7 +307,9 @@ def main() -> int:
         if stale:
             print(f"{'':12} {stale} project(s) predate R5 and carry no verdict at "
                   f"all. Until they are re-scored the gate is NOT MEASURED, "
-                  f"which is a different thing from being passed.")
+                  f"which is a different thing from being passed. "
+                  f"`--recompute` measures the RULE on their stored windows; it "
+                  f"does not measure the pipeline.")
         if pooled_tails:
             print(f"{'':12} tail median {_percentile(pooled_tails, 0.50)}s, "
                   f"p90 {_percentile(pooled_tails, 0.90)}s — the numbers "

@@ -45,8 +45,8 @@ from services.clipper.segmentation import _continues, _ends_sentence
 # R0 measured 22 of the 58 pilot exports at or under it.
 from services.clipper.edit_quality import TAIL_TIGHT_S
 
-__all__ = ["STATUSES", "DEFECTS", "UNKNOWNS", "BLOCKING", "REFUSALS",
-           "completeness", "boundary_view"]
+__all__ = ["STATUSES", "DEFECTS", "UNKNOWNS", "BLOCKING", "TECHNICAL",
+           "REFUSALS", "completeness", "boundary_view", "attach"]
 
 COMPLETE = "complete"
 INCOMPLETE = "incomplete"
@@ -95,6 +95,12 @@ DEFECTS: tuple[str, ...] = (
 #: `_keep_release` already does, not by refusing the moment.
 BLOCKING: frozenset[str] = frozenset({START_IN_WORD, END_IN_WORD,
                                       END_MID_SENTENCE, ORPHAN_TAIL})
+
+#: Defects about the FILE rather than the moment: a pad at render time fixes
+#: them and the selection never has to change. Kept as their own axis because
+#: whether one may reach a board is R7's preflight question — answering it here
+#: by folding them into `eligible` would decide a gate this batch does not own.
+TECHNICAL: frozenset[str] = frozenset({CLIPPED_RELEASE, DEAD_TAIL})
 
 # --- why a check could not be made -------------------------------------------
 
@@ -227,8 +233,16 @@ def completeness(cand: dict, words: Sequence[dict]) -> dict:
     if not punctuated:
         unknown.append(NO_PUNCTUATION)
     elif inside:
-        opening = _sentence_over(sentences, start)
-        if opening is None or abs(_num(opening.get("start")) - start) > SENTENCE_EDGE_S:
+        # STRUCTURAL, not a tolerance: does the window's first word BEGIN a
+        # sentence. A time comparison against the sentence's start called a
+        # clean opening mid-sentence whenever the window opened in the silence
+        # before the speech — which is what `refine_boundaries` produces every
+        # time it adds a lead-in or pads a start. The score asks a different
+        # question on purpose (how CLOSE the cut is, a continuous quality); this
+        # asks a fact.
+        opening = _sentence_over(sentences, _num(inside[0].get("start")))
+        if opening is None or _num(opening.get("start")) < _num(
+                inside[0].get("start")) - _EPS:
             start_defects.append(START_MID_SENTENCE)
         if not _ends_sentence(str(inside[-1].get("word") or "")):
             end_defects.append(END_MID_SENTENCE)
@@ -271,7 +285,11 @@ def _repair(cand: dict, words: Sequence[dict], defects: Sequence[str], *,
     start, end = _num(cand.get("start")), _num(cand.get("end"))
     wanted = [d for d in defects if d in (END_MID_SENTENCE, ORPHAN_TAIL)]
     if not wanted:
-        return {"kind": None, "refused": NOTHING_TO_REPAIR}
+        # Two different answers, and they were one. "Nothing is wrong" and
+        # "something is wrong and this repair does not touch it" are not the
+        # same report, and only the second is a reason to look further.
+        return {"kind": None,
+                "refused": NOT_REPAIRABLE_HERE if defects else NOTHING_TO_REPAIR}
 
     sentences = _source(list(words or []))["sentences"] if words else []
     target = _next_sentence_end(sentences, end)
@@ -321,12 +339,21 @@ def boundary_view(cand: dict, words: Sequence[dict], *, max_s: float,
                       next_start=next_start)
               if defects else {"kind": None, "refused": NOTHING_TO_REPAIR})
 
-    if checks["unknown"]:
-        # Not eligible and not ineligible. A window nobody could check is the
-        # one thing this must not turn into a verdict, because the board would
-        # then lose moments for the way their transcript was made.
-        eligible: bool | None = None
-        reason = UNAVAILABLE
+    # ORDER IS THE WHOLE RULE. A defect that was MEASURED rejects the window
+    # whatever else could not be checked: a cut inside a word needs neither
+    # punctuation nor a language, and letting `unknown` swallow it hid a certain
+    # defect behind an unavailable measurement. `None` is right only when
+    # nothing known rejects the candidate and the verdict depends on the signal
+    # that is missing.
+    if blocking and not (repair.get("kind") and not [
+            d for d in repair["remaining"] if d in BLOCKING]):
+        eligible: bool | None = False
+        reason = blocking[0]
+    elif checks["unknown"]:
+        # Nothing known rejects it, and the check that would decide could not be
+        # made. The board must not lose a moment for the way its transcript was
+        # written.
+        eligible, reason = None, UNAVAILABLE
     elif not blocking:
         eligible, reason = True, None
     elif repair.get("kind") and not [d for d in repair["remaining"]
@@ -345,7 +372,14 @@ def boundary_view(cand: dict, words: Sequence[dict], *, max_s: float,
         "start": checks["start"],
         "end": checks["end"],
         "defects": defects,
+        # TWO AXES, NOT ONE VERDICT. `blocking` is about the MOMENT — is this
+        # window worth keeping at all. `technical` is about the FILE, and a pad
+        # at render time fixes it without touching the selection. Whether a
+        # technical defect may reach a board is R7's preflight question, not
+        # this batch's, and compressing them into one number would answer it
+        # here by accident.
         "blocking": blocking,
+        "technical": [d for d in defects if d in TECHNICAL],
         "unknown": checks["unknown"],
         "measurements": checks["measurements"],
         "repair": repair,
@@ -361,3 +395,33 @@ def boundary_view(cand: dict, words: Sequence[dict], *, max_s: float,
         # only after this validator has passed the corpus.
         "applied": False,
     }
+
+
+def attach(candidates: Sequence[dict], words: Sequence[dict], *,
+           max_s: float, duration: float | None = None) -> list[dict]:
+    """Record a verdict on every candidate, in place. Returns the same list.
+
+    THE one place the per-candidate arguments are worked out, so the worker that
+    writes the artefact and the audit that reads it cannot disagree about what
+    was measured. They used to be two call sites, and the audit could only
+    aggregate what the worker had already stored — which meant a corpus scored
+    before this batch could not be measured at all without re-running it.
+
+    `next_start` is the first window that begins at or after this one ENDS. A
+    window starting exactly on the end is a neighbour like any other, and `>`
+    quietly excluded it. It is a CONSERVATIVE bound rather than a correct one:
+    the field is not a timeline, and the next candidate is often another variant
+    of the same moment rather than a different one. Measured on the corpus, many
+    windows have another start within half a second of their end, so this
+    refuses repairs a grouping pass would allow. Recorded as
+    `would_overlap_the_next_window` so the cost of the bound is countable
+    instead of invisible.
+    """
+    rows = [c for c in candidates or [] if isinstance(c, dict)]
+    starts = sorted(_num(c.get("start")) for c in rows)
+    for cand in rows:
+        end = _num(cand.get("end"))
+        after = next((s for s in starts if s >= end - _EPS), None)
+        cand["boundary_view"] = boundary_view(
+            cand, words, max_s=max_s, ceiling=duration, next_start=after)
+    return rows

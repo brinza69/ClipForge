@@ -67,29 +67,21 @@ def _guard(queue, job_id: str) -> None:
 
 def _record_completeness(refined: list[dict], transcript: dict, *,
                          max_s: float, duration: float) -> None:
-    """Attach R5's `boundary_view` to every candidate. Never fails the run.
+    """Record R5's `boundary_view` on every candidate. Never fails the run.
 
-    `next_start` is the first candidate that begins AFTER this one ends — the
-    only neighbour a bounded repair could newly collide with. The field is not
-    a timeline and windows overlap on purpose, so an overlap that already
-    exists is not a bound; creating one that did not is.
+    The work is `boundary_completion.attach`, not a second implementation of it:
+    the audit script runs the SAME function over historical windows, and two
+    copies would let the artefact and the gate describe different measurements.
     """
     from services.clipper import boundary_completion
-    from services.clipper.candidate_terms import _num as _n
     from services.clipper.candidate_terms import _words_for
 
-    starts = sorted(_n(c.get("start")) for c in refined)
-    for cand in refined:
-        try:
-            end = _n(cand.get("end"))
-            after = next((s for s in starts if s > end + 1e-6), None)
-            cand["boundary_view"] = boundary_completion.boundary_view(
-                cand, _words_for(cand, transcript), max_s=max_s,
-                ceiling=duration, next_start=after)
-        except Exception:
-            # An observability field must never cost the run it describes.
-            logger.warning("boundary completeness failed for a candidate",
-                           exc_info=True)
+    try:
+        boundary_completion.attach(refined, _words_for({}, transcript),
+                                   max_s=max_s, duration=duration)
+    except Exception:
+        # An observability field must never cost the run it describes.
+        logger.warning("boundary completeness failed", exc_info=True)
 
 
 async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -> None:

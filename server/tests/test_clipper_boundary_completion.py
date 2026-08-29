@@ -86,18 +86,17 @@ def test_a_window_with_no_words_is_unavailable_not_perfect():
     assert view["measurements"]["tail_s"] is None
 
 
-def test_a_truncated_word_is_still_found_without_punctuation():
+def test_a_measured_defect_is_never_swallowed_by_an_unavailable_one():
     """Unavailable on the sentence axis is not unavailable on every axis. A cut
-    inside a word is measurable whatever the transcript looks like, and it still
-    blocks."""
+    inside a word needs neither punctuation nor a language, and letting the
+    unknown decide hid a CERTAIN defect behind a measurement nobody could make.
+    `None` is right only when nothing known rejects the window."""
     bare = _words(("hello", 0.0, 0.4), ("there", 0.5, 0.9))
     view = _view(0.2, 0.9, bare)
     assert bc.NO_PUNCTUATION in view["unknown"]
-    assert bc.START_IN_WORD in view["defects"]
-    # The unknown is about the SENTENCE, so the verdict stays undecidable — but
-    # the defect is recorded, and the audit counts it.
-    assert view["eligible"] is None
     assert view["blocking"] == [bc.START_IN_WORD]
+    assert view["eligible"] is False
+    assert view["ineligible_because"] == bc.START_IN_WORD
 
 
 # --- the end -----------------------------------------------------------------
@@ -113,6 +112,7 @@ def test_a_clean_window_is_complete_on_both_edges():
     view = _view(0.0, 1.4)
     assert view["start"]["status"] == view["end"]["status"] == bc.COMPLETE
     assert view["defects"] == [] and view["eligible"] is True
+    assert view["technical"] == []
 
 
 def test_no_air_after_the_last_word_is_the_defect_the_render_audit_counts():
@@ -128,6 +128,9 @@ def test_no_air_after_the_last_word_is_the_defect_the_render_audit_counts():
     # already does, not by refusing the moment.
     assert bc.CLIPPED_RELEASE not in bc.BLOCKING
     assert view["eligible"] is True
+    # Two axes, named rather than compressed: this one is about the FILE, and
+    # whether it may reach a board is R7's preflight question.
+    assert view["technical"] == [bc.CLIPPED_RELEASE]
 
 
 def test_a_long_silence_at_the_end_is_dead_air_not_a_release():
@@ -151,6 +154,17 @@ def test_an_orphan_tail_needs_the_silence_that_proves_it():
     continuous = _words(("Hold", 0.0, 0.3), ("on", 0.4, 0.6), ("let's", 0.7, 1.0),
                         ("go.", 1.1, 1.4))
     assert bc.ORPHAN_TAIL not in _view(0.0, 1.05, continuous)["defects"]
+
+
+def test_a_window_that_opens_in_the_silence_before_a_sentence_opens_cleanly():
+    """A time comparison against the sentence's start called this mid-sentence,
+    and it is what `refine_boundaries` produces every time it adds a lead-in or
+    pads a start. The question is structural: does the window's first word BEGIN
+    a sentence."""
+    view = _view(1.6, 2.9)
+    assert view["measurements"]["lead_s"] == 0.4, "the window opens in silence"
+    assert bc.START_MID_SENTENCE not in view["defects"]
+    assert view["start"]["status"] == bc.COMPLETE
 
 
 def test_a_window_that_opens_on_a_continuation_word_is_noted_not_refused():
@@ -219,6 +233,15 @@ def test_the_repair_reports_what_it_would_not_fix():
 
 def test_a_window_with_nothing_wrong_has_no_repair_to_propose():
     assert _view(0.0, 1.4)["repair"]["refused"] == bc.NOTHING_TO_REPAIR
+
+
+def test_a_defect_this_repair_does_not_touch_says_so():
+    """"Nothing is wrong" and "something is wrong and this move does not fix
+    it" are different reports, and only the second is a reason to look further.
+    They were the same string."""
+    view = _view(0.2, 1.4)
+    assert bc.START_IN_WORD in view["defects"]
+    assert view["repair"]["refused"] == bc.NOT_REPAIRABLE_HERE
 
 
 def test_a_truncated_word_is_not_something_an_extension_repairs():

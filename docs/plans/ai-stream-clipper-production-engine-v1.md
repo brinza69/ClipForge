@@ -500,10 +500,44 @@ măsurată înainte să fie crezută, nu după.
 o singură sursă (median 0,16s, p90 0,40s). Auditul tipărește distribuția reală a cozii pe corpus,
 adică exact numerele din care s-ar re-deriva.
 
-**Gate:** **NU e măsurat.** Toate cele 22 de proiecte de pe disc au fost scorate înainte de R5 și
-niciun candidat nu poartă verdict; auditul le numește `predates_r5_rescore_needed` și iese cu 2.
-„Zero cuvinte trunchiate" și „cele 22 de finaluri cu ≤50ms scad" devin verificabile abia după un
-re-score, iar „≥95% începuturi și finaluri acceptate" cere oricum un om.
+**Corecții din review (Codex, două runde):**
+
+- **Un defect MĂSURAT nu mai e înghițit de o măsurătoare indisponibilă.** Un cuvânt trunchiat nu are
+  nevoie nici de punctuație, nici de o limbă; `eligible=None` e corect doar când nimic cunoscut nu
+  respinge fereastra și verdictul depinde de semnalul care lipsește. Ordinea e acum: blocant măsurat
+  → `False`; altfel necunoscut → `None`; altfel `True`.
+- **Deschiderea se verifică STRUCTURAL, nu cu o toleranță.** O comparație de timp cu începutul
+  propoziției numea „mid-sentence" orice fereastră care se deschidea în tăcerea dinaintea vorbirii —
+  adică exact ce produce `refine_boundaries` de fiecare dată când adaugă lead-in sau paddează un
+  început. Întrebarea e dacă primul cuvânt dinăuntru ÎNCEPE o propoziție.
+- **Două axe, nu un verdict comprimat.** `blocking` e despre MOMENT (merită păstrat?), `technical` e
+  despre FIȘIER (`clipped_release`, `dead_tail` — un pad la randare le repară). Dacă un defect tehnic
+  are voie pe board e întrebarea preflight-ului R7, nu a acestui batch.
+- **„Nimic nu e greșit" și „ceva e greșit și mutarea asta nu-l atinge" erau același string.** Acum
+  `nothing_to_repair` vs `defect_is_not_an_unfinished_end`.
+- **Vecinul care începe exact la final** nu mai e omis (`>=`, nu `>`), iar limita e recunoscută ca
+  fiind conservatoare, nu corectă: câmpul nu e un timeline, iar candidatul următor e adesea altă
+  variantă a aceluiași moment. Refuzurile se numără (`would_overlap_the_next_window`), ca prețul
+  limitei să fie o cifră, nu o politică invizibilă.
+- **Auditul valida schema prea slab.** `view.get("defects") or []` pe un record care nu a purtat
+  niciodată cheia se citea ca o fereastră curată, iar un corpus de goluri se agrega într-o trecere.
+  Acum fiecare cheie promisă e verificată înainte de orice numărătoare.
+
+**Gate:** măsurabil de acum, prin `--recompute`, care încarcă transcriptul din DB și rulează ACEEAȘI
+funcție canonică peste ferestrele stocate — fără re-score, fără să atingă vreun scor sau board.
+**Prima măsurătoare, pe două piloturi (311 candidați): 64 de ferestre se termină în interiorul unui
+cuvânt.** Gate-ul cere zero. Cauza e trasabilă: `_reaction_end` întoarce `min(w1, limit)`, iar când
+reacția lovește plafonul de `REACTION_MAX_S` la mijlocul unui cuvânt, tăietura cade acolo — `_snap`
+nu se aplică niciodată pe finalul final, iar `_fit` snapează doar când se depășește maximul. Toate
+cele patru exemple verificate manual poartă `reaction_kept`.
+
+**Nu am reparat-o în acest batch**, fiindcă mutarea fiecărei ferestre afectate schimbă scorurile de
+graniță, dedupe-ul și board-ul — adică axa de selecție, pe care planul o separă deliberat de cea de
+randare. E prima intrare pentru continuarea lui R5.
+
+Coada măsurată: median 0,40s, p90 0,40s — adică `TAIL_PAD_S` însuși, deci `_keep_release` saturează;
+`clipped_release` apare unde nu a avut ce paddui. `--recompute` măsoară REGULA, nu pipeline-ul: un
+verde acolo lasă integrarea end-to-end nedemonstrată, iar raportul spune asta.
 
 ### Batch R6 — captions și source hygiene
 

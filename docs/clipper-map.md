@@ -218,7 +218,7 @@ operations). Split to stay under the 500-line limit.
 | `scripts/facecam_train.py` | the classifier that lost to `corner_proximity`, leave-one-source-out |
 | `scripts/measure_inset_border.py` | border coverage and persistence per candidate rect — the measurement that showed two facecams have no border at all |
 | `scripts/evaluate_clipper_reasoning.py` | read the two traces off disk and report what happened: how much of the field the judge saw, how many story candidates reached it, chunk coverage, fallbacks. Reports, never asserts — run it before and after a change and diff the `--json` |
-| `scripts/audit_clipper_boundaries.py` | Batch R5's gate: aggregates the recorded `boundary_view` over `candidates.json`, per project and pooled. Re-measures nothing, so the audit and the pipeline cannot disagree about what a defect is. A candidate with no verdict is `missing`, never "clean"; a project where EVERY candidate lacks one is named `predates_r5_rescore_needed` instead, because that is a thing to do rather than a bug to chase. Prints the denominator before the count — "0 blocking defects" over candidates nobody checked reads as a pass. Also prints the corpus tail distribution, which is what `TAIL_PAD_S = 0.40` would be re-derived from rather than inherited. **Exits 2** |
+| `scripts/audit_clipper_boundaries.py` | Batch R5's gate: aggregates the recorded `boundary_view` over `candidates.json`, per project and pooled. Re-measures nothing, so the audit and the pipeline cannot disagree about what a defect is. A candidate with no verdict is `missing`, never "clean"; a project where EVERY candidate lacks one is named `predates_r5_rescore_needed` instead, because that is a thing to do rather than a bug to chase. Validates every key the schema promises BEFORE counting — `view.get("defects") or []` on a record that never carried the key reads as a clean window, and a corpus of holes aggregates into a pass. Prints the denominator before the count for the same reason. `--recompute` loads the transcript from the DB and runs the canonical `attach` over stored windows, measuring the RULE on a corpus scored before R5 without re-scoring it — which is not the same evidence as the pipeline having written it, and the report says so. Also prints the corpus tail distribution, which is what `TAIL_PAD_S = 0.40` would be re-derived from rather than inherited. **Exits 2** |
 | `scripts/score_facecam.py` | facecam detection scored against `source-labels.md`. Run it before believing any change to the seed — baseline **9/9**, and it also diffs the RECTS against `docs/refs/facecam-golden.json`, because a change that keeps every count while moving the geometry reads as no change at all. `--bless` regenerates the record |
 
 ## Tests
@@ -238,6 +238,7 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_urlguard.py` · `test_clipper_resume.py` · `test_job_claim.py` ·
 `test_clipper_regenerate.py` ·
 `test_clipper_boundary_completion.py` (R5: is the window finished) ·
+`test_clipper_boundary_audit.py` (R5's gate: what the corpus report refuses to count) ·
 `test_clipper_rhythm.py` (R4: what earns a cut) ·
 `test_clipper_rhythm_place.py` (R4: where it lands — every review finding) ·
 `test_clipper_rhythm_pace.py` (R4: the §4 bands, compared not enforced) ·

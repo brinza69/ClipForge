@@ -401,11 +401,22 @@ ACELAȘI defect (22 din 58 la baseline).
 de durata maximă, de mediu și de prima fereastră care începe DUPĂ aceasta. Ce rămâne după reparație se
 măsoară pe fereastra reparată, nu se presupune.
 
-**Gate-ul NU e măsurat, și asta e starea, nu o scăpare.** Toate cele 22 de proiecte de pe disc au fost
-scorate înainte de R5; `scripts/audit_clipper_boundaries.py` le numește
-`predates_r5_rescore_needed`, tipărește numitorul înaintea numărătorii („0 din 144 candidați poartă
-un verdict") și iese cu 2. Scriptul tipărește și distribuția reală a cozii pe corpus — numerele din
-care s-ar re-deriva `TAIL_PAD_S = 0.40`, moștenit azi de la o singură sursă.
+**Gate-ul E măsurabil, prin `--recompute`.** Toate cele 22 de proiecte de pe disc au fost scorate
+înainte de R5, deci nu poartă verdict; `scripts/audit_clipper_boundaries.py` le numește
+`predates_r5_rescore_needed` și tipărește numitorul înaintea numărătorii („0 din 144 candidați poartă
+un verdict"). Cu `--recompute` încarcă transcriptul din DB și rulează ACEEAȘI funcție canonică
+(`boundary_completion.attach`) peste ferestrele stocate, fără re-score și fără să atingă vreun scor
+sau board. Măsoară REGULA, nu pipeline-ul — un verde acolo lasă integrarea end-to-end nedemonstrată.
+
+**PRIMA MĂSURĂTOARE, și e un defect real: 64 din 311 ferestre (două piloturi) se termină în
+interiorul unui cuvânt.** Gate-ul cere zero. Cauza e trasabilă și verificată manual pe patru cazuri:
+`_reaction_end` întoarce `min(w1, limit)`, iar când reacția lovește plafonul `REACTION_MAX_S` la
+mijlocul unui cuvânt tăietura cade acolo; `_snap` nu se aplică niciodată pe finalul final, iar `_fit`
+snapează doar la depășirea maximului. Toate patru poartă `reaction_kept`. **Nu e reparat aici** —
+mutarea ferestrelor afectate schimbă scorurile de graniță, dedupe-ul și board-ul, adică axa de
+selecție. E prima intrare pentru continuarea lui R5.
+
+Coada măsurată: median 0,40s, p90 0,40s — chiar `TAIL_PAD_S`, deci `_keep_release` saturează.
 
 ## Punctul exact de reluare
 
