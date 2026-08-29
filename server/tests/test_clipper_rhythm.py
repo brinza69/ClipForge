@@ -103,8 +103,11 @@ def test_a_treatment_change_moves_to_the_nearest_pause():
                     duration=10.0, boundaries=_pauses(5.3), scenes=[], beats=[])
     assert [c["t"] for c in view["cuts"]] == [5.3]
     assert view["cuts"][0]["placement"] == "snapped"
-    assert view["cuts"][0]["asked_at"] == 5.0
     assert view["cuts"][0]["reasons"] == [rhythm.REASON_TREATMENT]
+    # Every request the cut answers, with the moment it was asked FROM. A single
+    # `asked_at` could not say that two changes had been folded into one cut,
+    # which is exactly what has to stay visible.
+    assert view["cuts"][0]["requests"] == [[rhythm.REASON_TREATMENT, 5.0]]
 
 
 def test_a_treatment_change_with_no_pause_near_it_still_cuts_and_says_so():
@@ -153,6 +156,11 @@ def test_a_regime_change_that_delivers_the_same_image_is_held_not_cut():
     # Held, not invisible: "we saw this change and chose not to cut on it" is a
     # different statement from "we never looked".
     assert view["held"][0]["t"] == 5.0
+    # And the event is named for what was OBSERVED. A regime changed; a treatment
+    # change is precisely what this is not, and labelling it as one would put a
+    # reason in the report that never existed.
+    assert view["held"][0]["reason"] == rhythm.EVENT_REGIME_CHANGE
+    assert rhythm.EVENT_REGIME_CHANGE not in rhythm.REASONS
 
 
 def test_a_beat_outside_measured_action_is_not_an_event():
@@ -214,7 +222,7 @@ def test_a_required_cut_too_soon_is_emitted_and_recorded():
                     duration=10.0, boundaries=[], scenes=[], beats=[])
     assert [c["t"] for c in view["cuts"]] == [5.0, 5.2]
     assert [v["shot_s"] for v in view["min_shot_violations"]] == [0.2]
-    assert view["min_shot_violations"][0]["where"] == "before"
+    assert view["required_conflicts"] == []
 
 
 def test_an_optional_cut_too_soon_is_dropped():
@@ -225,13 +233,81 @@ def test_an_optional_cut_too_soon_is_dropped():
     assert view["held_reasons"] == {rhythm.HOLD_MIN_SHOT: 1}
 
 
-def test_a_runt_tail_is_reported_too():
-    """A cut 100ms before the end leaves a shot nobody can see. The old planner
-    popped it; this one keeps the reason and reports the shape."""
+def test_a_runt_tail_is_refused_not_merely_reported():
+    """A cut 100ms before the end is a 100ms flash. Reporting the violation and
+    keeping the cut would present a requirement the timeline cannot materialise
+    as a valid edit, so the cut is removed and the requirement is recorded as a
+    conflict — R5 decides whether to extend the window or move the boundary."""
     view = _propose(_segments(("speaker", 0.0, 9.9), ("visual_evidence", 9.9, 10.0)),
                     duration=10.0, boundaries=[], scenes=[], beats=[])
-    assert [c["t"] for c in view["cuts"]] == [9.9]
-    assert view["min_shot_violations"][-1]["where"] == "tail"
+    assert view["cuts"] == []
+    assert view["min_shot_violations"] == [], "not a violation — a refusal"
+    conflict = view["required_conflicts"][0]
+    assert conflict["conflict"] == rhythm.CONFLICT_TAIL
+    assert conflict["t"] == 9.9 and conflict["shot_s"] == 0.1
+    assert view["required_conflict_kinds"] == {rhythm.CONFLICT_TAIL: 1}
+
+
+def test_an_optional_cut_in_the_tail_is_only_held():
+    """Same flash, no requirement behind it. It never reaches the conflict list,
+    because nothing about the frame was wrong."""
+    view = _propose(_segments(("safe", 0.0, 10.0)), profile="exploration",
+                    duration=10.0, boundaries=[(9.9, 1.6)], scenes=[9.9], beats=[])
+    assert view["cuts"] == [] and view["required_conflicts"] == []
+    assert view["held_reasons"] == {rhythm.HOLD_TAIL_MIN_SHOT: 1}
+
+
+def test_two_required_changes_never_collapse_into_one_clean_cut():
+    """The failure this rule exists for. A change at 5.0 and another at 5.2 both
+    snap to the pause at 5.1; absorbed as a duplicate, the treatment that exists
+    only between them is never shown, and there is no cut, no hold and no
+    violation to say so. The flicker the report exists to expose becomes
+    invisible."""
+    view = _propose(_segments(("speaker", 0.0, 5.0), ("visual_evidence", 5.0, 5.2),
+                              ("speaker", 5.2, 10.0)),
+                    duration=10.0, boundaries=_pauses(5.1), scenes=[], beats=[])
+    # The first snaps to the pause; the second cannot be satisfied by it, so it
+    # stays at its own moment and the 100ms shot is recorded.
+    assert [c["t"] for c in view["cuts"]] == [5.1, 5.2]
+    assert [c["placement"] for c in view["cuts"]] == ["snapped", "unsnapped"]
+    assert [v["shot_s"] for v in view["min_shot_violations"]] == [0.1]
+
+
+def test_a_required_change_that_cannot_be_separated_is_a_conflict():
+    """When the second change's own moment is BEHIND the cut that absorbed it,
+    there is nowhere left to put it. Recorded rather than dropped: a requirement
+    nobody can materialise is not the same as one that was met."""
+    view = _propose(_segments(("speaker", 0.0, 5.0), ("visual_evidence", 5.0, 5.05),
+                              ("speaker", 5.05, 10.0)),
+                    duration=10.0, boundaries=_pauses(5.3), scenes=[], beats=[])
+    assert [c["t"] for c in view["cuts"]] == [5.3]
+    conflict = view["required_conflicts"][0]
+    assert conflict["conflict"] == rhythm.CONFLICT_COLLISION
+    assert conflict["t"] == 5.05 and conflict["collides_with"] == 5.3
+
+
+def test_the_cuts_come_out_in_order_whatever_the_snap_windows_overlap():
+    """THE INVARIANT, not a scenario. Raised in review as a consequence of
+    overlapping snap windows; worked through, it cannot happen under today's
+    selection rule — any boundary inside a later reason's window and below the
+    earlier placement was also inside the earlier reason's window, so it lost
+    there and loses again. This sweeps the overlapping cases anyway, because the
+    ORDER is what the tail walk-back and the partition attribution both assume,
+    and the next change to the boundary choice would break it silently."""
+    windows = [
+        [(5.0, 1.0), (5.35, 5.0)],          # a far strong pause beats a near weak one
+        [(5.35, 3.0), (5.2, 3.0)],          # equal weight, both in reach of both
+        [(4.7, 4.0), (5.2, 4.0), (5.4, 1.0)],
+        [],                                  # nothing to snap to at all
+    ]
+    for boundaries in windows:
+        view = _propose(_segments(("speaker", 0.0, 5.0),
+                                  ("visual_evidence", 5.0, 5.1),
+                                  ("action", 5.1, 10.0)),
+                        duration=10.0, boundaries=boundaries, scenes=[], beats=[])
+        times = [c["t"] for c in view["cuts"]]
+        assert times == sorted(times), f"out of order for {boundaries}"
+        assert len(set(times)) == len(times), f"two cuts at one instant: {boundaries}"
 
 
 # --- what cannot be known ----------------------------------------------------

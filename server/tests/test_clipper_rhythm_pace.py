@@ -17,9 +17,14 @@ Two things that look like bookkeeping and are not:
   called `action` and the rest. Without the motion measurement the split cannot
   be made, and folding the two together would quietly judge quiet material
   against the busy band.
-- **`indeterminate` is an answer.** Below `60 / lo` seconds a band's own lower
-  bound does not expect a single cut yet, so "no cuts" and "too few cuts" are
-  the same observation.
+- **`indeterminate` is an answer, but only for the lower bound.** Below
+  `60 / lo` seconds a band's own floor does not expect a first cut yet, so "no
+  cuts" and "too few cuts" are the same observation. `above` is different: three
+  cuts in four seconds is 45 a minute and the clip's length does not make that
+  ambiguous, so the ceiling is checked first.
+- **A partial motion track is not a partition.** The unmeasured seconds fall
+  silently into `quiet` and a minute nobody measured comes back as a confident
+  `below`.
 """
 
 from __future__ import annotations
@@ -82,16 +87,22 @@ def test_the_action_profile_is_judged_on_the_busy_and_the_quiet_half_apart():
     view = _propose(_segments(("action", 0.0, 30.0), ("speaker", 30.0, 60.0)),
                     profile="action", duration=60.0,
                     boundaries=_pauses(*beats), scenes=[], beats=beats)
-    loud, quiet = _partitions(view)["action"], _partitions(view)["quiet"]
+    rows = _partitions(view)
+    loud, quiet = rows["action"], rows["quiet"]
     assert loud["seconds"] == 30.0 and loud["cuts"] == 7
     assert loud["cuts_per_min"] == 14.0 and loud["verdict"] == "within"
     # The action ending at 30.0 IS a treatment change, so there is a cut there —
-    # and it belongs to the stretch it OPENS, not to the one it ends. Attributing
-    # it backwards would credit the busy band with a cut made because the busy
-    # part stopped.
-    assert quiet["seconds"] == 30.0 and quiet["cuts"] == 1
-    assert quiet["cuts_per_min"] == 2.0
+    # and it belongs to NEITHER band. It happened because the action stopped, and
+    # crediting it to the quiet edit makes quiet material look busier for a
+    # reason that has nothing to do with quiet material.
+    assert quiet["seconds"] == 30.0 and quiet["cuts"] == 0
     assert quiet["band"] == [5.0, 12.0] and quiet["verdict"] == "below"
+    assert rows["transition"]["cuts"] == 1
+    assert rows["transition"]["verdict"] == "excluded"
+    assert rows["transition"]["band"] is None
+    # The three still account for every cut.
+    assert (loud["cuts"] + quiet["cuts"] + rows["transition"]["cuts"]
+            == view["cut_count"])
 
 
 def test_a_short_quiet_half_is_indeterminate_while_the_busy_half_is_not():
@@ -115,13 +126,59 @@ def test_without_the_motion_measurement_both_halves_are_unavailable():
         view = _propose(_segments(("safe", 0.0, 60.0)), profile="action",
                         duration=60.0, boundaries=_pauses(10.0), scenes=[],
                         beats=[], **axis)
-        assert view["action_measured"] is False
+        assert view["action_partition_known"] is False
+        assert len(view["pace"]) == 2, "no transition row without a partition"
         for row in view["pace"]:
             assert row["verdict"] == "unavailable"
             assert row["unavailable_because"] == "action_not_measured"
             # Not zero. Nobody counted seconds into a partition that could not
             # be drawn.
             assert row["seconds"] is None and row["cuts"] is None
+
+
+def test_a_partial_motion_track_is_not_a_partition_either():
+    """The subtler half of the same rule, and the one that looked fine. With a
+    partial series every second that is not `action` — INCLUDING the seconds
+    nobody measured — falls into `quiet`, so a minute nobody measured comes back
+    as a confident `below`. We do not know that."""
+    view = _propose(_segments(("safe", 0.0, 60.0)), profile="action",
+                    duration=60.0, boundaries=_pauses(10.0), scenes=[], beats=[],
+                    coverage="partial")
+    assert view["action_partition_known"] is False
+    assert view["action_partition_unavailable_because"] == "action_coverage_partial"
+    for row in view["pace"]:
+        assert row["verdict"] == "unavailable"
+        assert row["unavailable_because"] == "action_coverage_partial"
+
+
+def test_a_beat_inside_a_measured_action_stretch_survives_a_partial_track():
+    """Refusing the whole-clip PARTITION is not the same as refusing every
+    signal in it. A stretch R3b classified `action` was measured — that is what
+    the classification requires — so a beat inside it still earns its cut."""
+    view = _propose(_segments(("action", 0.0, 30.0), ("safe", 30.0, 60.0)),
+                    profile="action", duration=60.0,
+                    boundaries=_pauses(10.0), scenes=[], beats=[10.0],
+                    coverage="partial")
+    # The beat at 10.0, plus the treatment change where the action ends: a crop
+    # on the action and a full frame are not the same picture.
+    assert [c["t"] for c in view["cuts"]] == [10.0, 30.0]
+    assert view["cut_reasons"] == {rhythm.REASON_BEAT: 1,
+                                   rhythm.REASON_TREATMENT: 1}
+    assert view["action_partition_known"] is False
+
+
+def test_a_ceiling_is_provable_in_a_window_too_short_to_prove_a_floor():
+    """Three cuts in four seconds of action is 45 a minute against a ceiling of
+    28. `indeterminate` there hid a verdict the cuts had already demonstrated —
+    only the LOWER bound needs room."""
+    beats = [1.0, 2.0, 3.0]
+    view = _propose(_segments(("action", 0.0, 4.0)), profile="action",
+                    duration=4.0, boundaries=_pauses(*beats), scenes=[],
+                    beats=beats)
+    row = _partitions(view)["action"]
+    assert row["seconds"] == 4.0 and row["cuts"] == 3
+    assert row["cuts_per_min"] == 45.0
+    assert row["verdict"] == "above"
 
 
 # --- the comparison the batch is for -----------------------------------------

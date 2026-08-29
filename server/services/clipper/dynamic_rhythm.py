@@ -25,19 +25,20 @@ this batch removes. A treatment change with no pause near it is a reason with no
 place, and it is NOT dropped: the frame has become wrong, so it cuts where the
 change happened and the report says the cut is unsnapped.
 
-WHAT IS REPORTED RATHER THAN ENFORCED. The §4 bands are guardrails somebody
-chose, not results anybody measured, so this compares the proposal against them
-and prints the verdict. It never adds a cut to reach a band, and never drops one
-to stay inside it. On today's signals `talking_head` and `conversation` will read
-`below` — see `UNMEASURED`, which names exactly which of their §4 rules nothing
-in this repo can yet measure. That is the finding, not a bug to paper over.
+WHAT IS REPORTED RATHER THAN ENFORCED. The §4 bands live in
+`dynamic_rhythm_pace`, split out at the 500-line limit. Nothing here adds a cut
+to reach a band or drops one to stay inside it. On today's signals
+`talking_head` and `conversation` read `below` — see `UNMEASURED`, which names
+exactly which of their §4 rules nothing in this repo can yet measure. That is
+the finding, not a bug to paper over, and the `below` must not be used as a
+product gate until the missing signal exists.
 """
 
 from __future__ import annotations
 
 from typing import Any, Sequence
 
-from services.clipper import dynamic_regimes, edit_profiles
+from services.clipper import dynamic_regimes, dynamic_rhythm_pace, edit_profiles
 from services.clipper.candidate_terms import _num
 # Through `dynamic_edit`, which re-exports it, and NOT straight from
 # `dynamic_cuts`. The two import each other — `dynamic_cuts` needs the shared
@@ -48,8 +49,8 @@ from services.clipper.candidate_terms import _num
 from services.clipper.dynamic_edit import _boundaries
 from services.clipper.edit_profiles import CONSERVATIVE
 
-__all__ = ["REASONS", "HOLDS", "ADMITS", "UNMEASURED", "SNAP_S",
-           "cut_boundaries", "candidates", "place", "pace", "rhythm_view"]
+__all__ = ["REASONS", "HOLDS", "CONFLICTS", "ADMITS", "UNMEASURED", "SNAP_S",
+           "cut_boundaries", "candidates", "place", "rhythm_view"]
 
 # --- why a cut is allowed to exist -------------------------------------------
 
@@ -80,8 +81,39 @@ HOLD_NO_BOUNDARY = "no_boundary"
 HOLD_SAME_TREATMENT = "same_treatment"
 HOLD_NOT_MEASURED_ACTION = "not_measured_action"
 HOLD_PROFILE = "profile_forbids"
+#: An optional reason whose place is already taken by a cut at a DIFFERENT
+#: moment. Merging it in would credit that cut with a reason it does not have.
+HOLD_SAME_PLACE = "same_place"
+#: An optional cut close enough to the end that the shot after it is a flash.
+HOLD_TAIL_MIN_SHOT = "tail_min_shot"
 HOLDS: tuple[str, ...] = (HOLD_MIN_SHOT, HOLD_NO_BOUNDARY, HOLD_SAME_TREATMENT,
-                          HOLD_NOT_MEASURED_ACTION, HOLD_PROFILE)
+                          HOLD_NOT_MEASURED_ACTION, HOLD_PROFILE,
+                          HOLD_SAME_PLACE, HOLD_TAIL_MIN_SHOT)
+
+#: A REQUIRED change that could not be honoured at all. Its own list, not a
+#: hold: a hold is an opportunity declined, and this is a visual requirement the
+#: timeline cannot materialise. Burying the two together would let a frame the
+#: report calls wrong disappear into a column of things that were fine.
+#:
+#: The cut would leave a runt final shot. Reporting the violation and keeping
+#: the cut is not enough — a cut at 9.9s of a 10s clip is a 100ms flash, and a
+#: requirement impossible to materialise must not be presented as a valid edit.
+#: R5 decides whether to extend the window or move the boundary.
+CONFLICT_TAIL = "tail_min_shot"
+#: Two DISTINCT required changes that would collapse onto one cut. They cannot
+#: both be satisfied by it: a treatment that exists only between them is never
+#: shown, and the flicker `min_shot_violations` exists to expose becomes
+#: invisible instead.
+CONFLICT_COLLISION = "required_collision"
+CONFLICTS: tuple[str, ...] = (CONFLICT_TAIL, CONFLICT_COLLISION)
+
+#: An OBSERVED event that is deliberately not in `REASONS`, because on its own
+#: it never earns a cut. It is what a `same_treatment` hold is a hold OF.
+EVENT_REGIME_CHANGE = "regime_change"
+
+#: Two placements this far apart are the same instant, at the 3dp everything
+#: here rounds to. Not a tolerance — a rounding equality.
+_SAME_MOMENT = 1e-3
 
 #: Which reasons each profile's grammar admits. CHOSEN from §4's rules, and the
 #: only difference today is the beat: §4 gives the pace to events for `action`
@@ -137,11 +169,8 @@ def cut_boundaries(words: Sequence[dict], peaks: Sequence[float],
     return _boundaries(words, peaks, scenes, clip_start, duration, style)
 
 
-def _covering(segments: Sequence[dict], t: float) -> dict | None:
-    for segment in segments or []:
-        if _num(segment.get("t0")) <= t < _num(segment.get("t1")):
-            return segment
-    return None
+#: One implementation, in the module that also attributes cuts to partitions.
+_covering = dynamic_rhythm_pace.covering
 
 
 def candidates(*, treatment_segments: Sequence[dict],
@@ -175,7 +204,13 @@ def candidates(*, treatment_segments: Sequence[dict],
     # Regime boundaries that deliver the same image. Recorded as held rather
     # than ignored: "we saw this change and chose not to cut on it" is a
     # different statement from "we never looked", and only one of them can be
-    # audited against R1's 116.
+    # audited at all.
+    #
+    # NOT COMPARABLE WITH R1's 116, however alike the two counts look. Those
+    # came from adjacent LEGACY SHOTS delivering one image; these come from R3b
+    # REGIME segments. Different populations, so the numbers cannot be
+    # subtracted, and a report that put them side by side would invite exactly
+    # that.
     key = dynamic_regimes.visual_key_for
     for a, b in zip(regime_segments or [], list(regime_segments or [])[1:]):
         if a.get("regime") == b.get("regime"):
@@ -184,7 +219,11 @@ def candidates(*, treatment_segments: Sequence[dict],
                 key(b.get("regime"), anchor_known=anchor_known):
             t = round(_num(b.get("t0")), 3)
             if inside(t):
-                held.append({"t": t, "reason": REASON_TREATMENT,
+                # `regime_change`, NOT `treatment_change`. What was observed is
+                # a change of regime; a treatment change is precisely what this
+                # is not, and labelling it as one would put a reason in the
+                # report that never existed.
+                held.append({"t": t, "reason": EVENT_REGIME_CHANGE,
                              "hold": HOLD_SAME_TREATMENT})
 
     for t in scenes or []:
@@ -215,148 +254,125 @@ def place(wanted: Sequence[dict], boundaries: Sequence[tuple[float, float]],
           snap_s: float = SNAP_S) -> dict:
     """Turn reasons into cut times, or say why each one did not become one.
 
-    Two rules, and the asymmetry between them is the point:
+    Returns `{cuts, held, required_conflicts, min_shot_violations}`.
 
-    - An OPTIONAL reason that has no boundary within `snap_s`, or that would cut
-      sooner than `min_shot_s` after the last one, is dropped. Nothing is wrong
-      with the frame; a cut here would be rhythm for its own sake.
-    - A REQUIRED reason is emitted either way, and the violation is RECORDED.
-      Holding a crop on an empty anchor to protect a minimum shot length trades
-      a visible defect for an invisible metric. `min_shot_violations` is how a
-      flickering presence timeline becomes something a human can look at.
+    THE ASYMMETRY. An OPTIONAL reason with no boundary within `snap_s`, or one
+    that would cut sooner than `min_shot_s` after the last, is dropped: nothing
+    is wrong with the frame and a cut here would be rhythm for its own sake. A
+    REQUIRED reason is emitted anyway and the violation is RECORDED — holding a
+    crop on an emptied anchor to protect a minimum shot length trades a defect
+    the viewer sees for a metric nobody does.
+
+    THREE WAYS THE OBVIOUS VERSION LOSES A REQUIRED CHANGE, all found by review:
+
+    - **Two of them snapping to one pause.** A change at 5.0 and another at 5.2
+      both land on the pause at 5.1, the second is absorbed as a duplicate, and
+      the treatment that existed only between them is never shown — with no cut,
+      no hold and no violation to say so. A cut satisfies a change only when it
+      sits at that change's OWN moment; otherwise the second stays unsnapped, or
+      it is reported as a `required_collision`.
+    - **A cut landing behind the one before it.** Refused, and it falls back to
+      the reason's own time. Raised in review as a consequence of overlapping
+      snap windows; worked through, it cannot happen under TODAY'S selection
+      rule — any boundary inside a later reason's window and below the earlier
+      placement was also inside the earlier reason's window, so it lost there on
+      weight or distance and loses again. The guard stays because the ORDER is
+      what the tail walk-back and the partition attribution both assume, and the
+      next change to `max(near, ...)` would break it silently.
+    - **The runt tail.** A cut 100ms before the end is a flash, and reporting it
+      while leaving it in `cuts` presents an unmaterialisable requirement as a
+      valid edit. It is removed and recorded as a conflict.
     """
     cuts: list[dict] = []
     held: list[dict] = []
+    conflicts: list[dict] = []
     violations: list[dict] = []
     at: dict[float, dict] = {}
     last = 0.0
 
     for want in wanted:
-        t, reason = float(want["t"]), str(want["reason"])
+        own, reason = round(float(want["t"]), 3), str(want["reason"])
         required = reason in REQUIRED
 
-        near = [(bw, bt) for bt, bw in boundaries or [] if abs(bt - t) <= snap_s]
+        near = [(bw, bt) for bt, bw in boundaries or [] if abs(bt - own) <= snap_s]
         if near:
             # The strongest boundary in the window, and the closest one among
             # equals — so a cut moves as little as the evidence allows.
-            weight, chosen = max(near, key=lambda b: (b[0], -abs(b[1] - t)))
+            weight, chosen = max(near, key=lambda b: (b[0], -abs(b[1] - own)))
             placed, placement = round(float(chosen), 3), "snapped"
         elif required:
-            weight, placed, placement = None, round(t, 3), "unsnapped"
+            weight, placed, placement = None, own, "unsnapped"
         else:
-            held.append({"t": round(t, 3), "reason": reason,
-                         "hold": HOLD_NO_BOUNDARY})
-            continue
-
-        if placed <= 0.0 or placed >= duration:
-            held.append({"t": round(t, 3), "reason": reason,
-                         "hold": HOLD_NO_BOUNDARY})
+            held.append({"t": own, "reason": reason, "hold": HOLD_NO_BOUNDARY})
             continue
 
         existing = at.get(placed)
-        if existing is not None:
-            # One cut, two reasons for it. Both are kept: a treatment change
+        if existing is not None and abs(existing["t"] - own) <= _SAME_MOMENT:
+            # One instant, two reasons for it. Both are kept: a treatment change
             # that also falls on a source cut is better evidence than either.
             if reason not in existing["reasons"]:
                 existing["reasons"].append(reason)
+            existing["requests"].append([reason, own])
+            continue
+
+        if existing is not None or placed <= last:
+            if not required:
+                held.append({"t": own, "reason": reason,
+                             "hold": HOLD_SAME_PLACE if existing else HOLD_MIN_SHOT})
+                continue
+            # Separate the two rather than let one stand for both — but only
+            # where the change's own moment is somewhere a cut can go.
+            if own > last and own not in at and 0.0 < own < duration:
+                weight, placed, placement = None, own, "unsnapped"
+            else:
+                conflicts.append({
+                    "t": own, "reason": reason, "conflict": CONFLICT_COLLISION,
+                    "collides_with": existing["t"] if existing else last})
+                continue
+
+        if not 0.0 < placed < duration:
+            target = conflicts if required else held
+            target.append({"t": own, "reason": reason,
+                           **({"conflict": CONFLICT_COLLISION} if required
+                              else {"hold": HOLD_NO_BOUNDARY})})
             continue
 
         short = round(placed - last, 3)
         if short < min_shot_s:
             if not required:
-                held.append({"t": round(t, 3), "reason": reason,
-                             "hold": HOLD_MIN_SHOT})
+                held.append({"t": own, "reason": reason, "hold": HOLD_MIN_SHOT})
                 continue
             violations.append({"t": placed, "reason": reason,
-                               "shot_s": short, "min_shot_s": min_shot_s,
-                               "where": "before"})
+                               "shot_s": short, "min_shot_s": min_shot_s})
 
         entry = {"t": placed, "reasons": [reason], "placement": placement,
-                 "asked_at": round(t, 3),
+                 # Every request this cut answers, with the moment it was asked
+                 # from. A single `asked_at` could not say that two changes were
+                 # folded into one cut, which is exactly what has to be visible.
+                 "requests": [[reason, own]],
                  "boundary_weight": (None if weight is None else round(weight, 3))}
         cuts.append(entry)
         at[placed] = entry
         last = placed
 
-    if cuts:
-        tail = round(duration - cuts[-1]["t"], 3)
-        if tail < min_shot_s:
-            violations.append({"t": cuts[-1]["t"], "reason": cuts[-1]["reasons"][0],
-                               "shot_s": tail, "min_shot_s": min_shot_s,
-                               "where": "tail"})
-    return {"cuts": cuts, "held": held, "min_shot_violations": violations}
+    # THE TAIL IS NOT A VIOLATION, IT IS A REFUSAL. Removing one cut can leave
+    # the next one just as close to the end, so this walks back rather than
+    # checking once.
+    while cuts and round(duration - cuts[-1]["t"], 3) < min_shot_s:
+        dropped = cuts.pop()
+        at.pop(dropped["t"], None)
+        violations = [v for v in violations if v["t"] != dropped["t"]]
+        row = {"t": dropped["t"], "reason": dropped["reasons"][0],
+               "shot_s": round(duration - dropped["t"], 3),
+               "min_shot_s": min_shot_s}
+        if any(r in REQUIRED for r in dropped["reasons"]):
+            conflicts.append({**row, "conflict": CONFLICT_TAIL})
+        else:
+            held.append({"t": row["t"], "reason": row["reason"],
+                         "hold": HOLD_TAIL_MIN_SHOT})
 
-
-def _seconds_in(segments: Sequence[dict], regime: str, duration: float) -> float:
-    total = 0.0
-    for segment in segments or []:
-        if segment.get("regime") != regime:
-            continue
-        t0, t1 = _num(segment.get("t0")), min(_num(segment.get("t1")), duration)
-        if t1 > t0:
-            total += t1 - t0
-    return round(total, 3)
-
-
-def _verdict(cuts: int, seconds: float,
-             band: Sequence[float]) -> tuple[str, float | None]:
-    """`(verdict, cuts per minute)` against one §4 band.
-
-    `indeterminate` is a real answer, and the reason it exists is arithmetic
-    rather than taste: below `60 / lo` seconds the band's OWN lower bound does
-    not expect a single cut yet, so "no cuts" and "too few cuts" are the same
-    observation. A two-second stretch cannot be under a five-a-minute floor.
-    """
-    lo, hi = float(band[0]), float(band[1])
-    if seconds <= 0:
-        return "unavailable", None
-    per_min = round(cuts * 60.0 / seconds, 2)
-    if lo > 0 and seconds < 60.0 / lo:
-        return "indeterminate", per_min
-    if per_min < lo:
-        return "below", per_min
-    if per_min > hi:
-        return "above", per_min
-    return "within", per_min
-
-
-def pace(cuts: Sequence[dict], *, duration: float, profile: str,
-         regime_segments: Sequence[dict], action_measured: bool) -> list[dict]:
-    """The proposal against §4's bands, partition by partition.
-
-    `action` is the one profile with two bands — events set the pace and a lull
-    is not an invitation to cut faster — so its clip is split into the seconds
-    R3b called `action` and the rest, and each half is judged against its own
-    band. When the motion series was never measured the split cannot be made,
-    and BOTH partitions come back `unavailable` rather than being folded into
-    one number that would quietly judge quiet material against the busy band.
-    """
-    times = [float(c["t"]) for c in cuts or []]
-    quiet_band = edit_profiles.band_for(profile, quiet=True)
-    band = edit_profiles.band_for(profile)
-    if quiet_band is None:
-        verdict, per_min = _verdict(len(times), duration, band)
-        return [{"partition": "clip", "seconds": round(duration, 3),
-                 "cuts": len(times), "cuts_per_min": per_min,
-                 "band": list(band), "verdict": verdict}]
-
-    if not action_measured:
-        return [{"partition": name, "seconds": None, "cuts": None,
-                 "cuts_per_min": None, "band": list(b), "verdict": "unavailable",
-                 "unavailable_because": "action_not_measured"}
-                for name, b in (("action", band), ("quiet", quiet_band))]
-
-    loud = _seconds_in(regime_segments, "action", duration)
-    in_loud = sum(1 for t in times
-                  if (_covering(regime_segments, t) or {}).get("regime") == "action")
-    out: list[dict] = []
-    for name, seconds, count, b in (("action", loud, in_loud, band),
-                                    ("quiet", round(duration - loud, 3),
-                                     len(times) - in_loud, quiet_band)):
-        verdict, per_min = _verdict(count, seconds, b)
-        out.append({"partition": name, "seconds": seconds, "cuts": count,
-                    "cuts_per_min": per_min, "band": list(b), "verdict": verdict})
-    return out
+    return {"cuts": cuts, "held": held, "required_conflicts": conflicts,
+            "min_shot_violations": violations}
 
 
 def _tally(rows: Sequence[dict], key: str) -> dict[str, int]:
@@ -417,10 +433,20 @@ def rhythm_view(*, duration: float, profile: str, mode: str,
 
     segments = regime_view.get("segments") or []
     anchor_known = bool(regime_view.get("target_anchor_known"))
-    action_measured = (
-        regime_view.get("action_coverage") != dynamic_regimes.COVERAGE_UNAVAILABLE
-        and regime_view.get("action_variability")
-        == dynamic_regimes.VARIABILITY_VARIABLE)
+    # PARTIAL IS NOT A PARTITION. Splitting a clip into "action" and "the rest"
+    # needs to know what every second WAS: with a partial series the unmeasured
+    # seconds fall silently into `quiet`, and a minute nobody measured comes back
+    # as a confident `below`. Individual beats stay gated per segment — a
+    # measured action stretch inside a partial track is still measured — but the
+    # WHOLE-CLIP partition is refused.
+    coverage = regime_view.get("action_coverage")
+    variability = regime_view.get("action_variability")
+    partition_known = (coverage == dynamic_regimes.COVERAGE_COMPLETE
+                       and variability == dynamic_regimes.VARIABILITY_VARIABLE)
+    unavailable_because = (
+        None if partition_known
+        else "action_coverage_partial" if coverage == dynamic_regimes.COVERAGE_PARTIAL
+        else "action_not_measured")
 
     wanted, refused = candidates(
         treatment_segments=regime_view.get("treatment_segments") or [],
@@ -446,7 +472,15 @@ def rhythm_view(*, duration: float, profile: str, mode: str,
         "held": held,
         "held_reasons": _tally(held, "hold"),
         "min_shot_violations": placed["min_shot_violations"],
-        "action_measured": action_measured,
-        "pace": pace(placed["cuts"], duration=duration, profile=profile,
-                     regime_segments=segments, action_measured=action_measured),
+        # A REQUIRED change the timeline could not materialise. Its own list, so
+        # a frame the report calls wrong cannot disappear into the column of
+        # opportunities that were merely declined.
+        "required_conflicts": placed["required_conflicts"],
+        "required_conflict_kinds": _tally(placed["required_conflicts"], "conflict"),
+        "action_partition_known": partition_known,
+        "action_partition_unavailable_because": unavailable_because,
+        "pace": dynamic_rhythm_pace.pace(
+            placed["cuts"], duration=duration, profile=profile,
+            regime_segments=segments, partition_known=partition_known,
+            unavailable_because=unavailable_because),
     }

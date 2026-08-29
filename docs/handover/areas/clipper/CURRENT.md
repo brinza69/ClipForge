@@ -320,6 +320,15 @@ R4 taie de zero ori.
 defect vizibil pe o metrică invizibilă — și lista de violări e felul în care un timeline de prezență
 care pâlpâie devine ceva ce i se poate arăta unui om.
 
+**Patru corecții din review-ul Codex, toate găsite citind codul:** două schimbări obligatorii nu pot
+fi satisfăcute de aceeași tăietură (la 5,0s și 5,2s ambele se agățau de pauza de la 5,1s și
+tratamentul dintre ele dispărea complet — fără tăietură, fără `held`, fără violare); coada runt nu e
+o violare ci un refuz (o tăietură la 9,9s dintr-un clip de 10s e un flash de 100ms și iese în
+`required_conflicts`); acoperirea parțială nu e o partiționare (secundele nemăsurate intrau automat
+în `quiet` și un minut nemăsurat ieșea `below`); `indeterminate` ascundea un `above` demonstrabil —
+trei tăieturi în patru secunde sunt 45/min, iar durata scurtă nu face asta ambiguu. Plus atribuirea:
+o tăietură la granița `action → speaker` e o **tranziție**, creditată niciunei benzi.
+
 **Benzile din §4 se compară, nu se impun.** Nimic nu adaugă o tăietură ca să atingă o bandă, nimic nu
 scoate una ca să rămână în ea. `action` e singurul profil judecat pe două benzi — secundele numite
 `action` și restul; fără măsurătoarea de mișcare ambele partiții ies `unavailable`, niciodată
@@ -335,7 +344,8 @@ ies `below` banda lor — golul e măsurătoarea care lipsește, nu un ritm care
 schimba planul livrat, pe care R2 l-a înghețat și de care depind gate-urile vizuale deschise.
 `delivers_profile()` face comutarea singur în ziua în care `content_aware` intră în `SELECTABLE`.
 
-**Split nou:** `workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe
+**Split nou:** `services/clipper/dynamic_rhythm_pace.py` (benzile) și
+`workers/clipper_shadow_views.py` — tot ce o randare ÎNREGISTREAZĂ despre montajul pe
 care nu l-a făcut (R3a + R3b + R4). `clipper_render_plan.py` trecuse de 500 de linii.
 
 ## Punctul exact de reluare

@@ -343,10 +343,10 @@ false `fit` dispar; cadrele Jensen și vlog folosite în audit trec verificarea 
 
 **Scop:** camera se schimbă pentru că informația vizuală o cere, nu pentru că a trecut 1,8s.
 
-**Fișiere, corectate la implementare:** nou `dynamic_rhythm.py`, nou `clipper_shadow_views.py`
-(split la 500 de linii), `edit_profiles.py` (`band_for`), `clipper_render_plan.py`,
-`clipper_render_jobs.py`, teste noi `test_clipper_rhythm.py`, `test_clipper_rhythm_pace.py`,
-`test_clipper_rhythm_export.py`.
+**Fișiere, corectate la implementare:** nou `dynamic_rhythm.py`, nou `dynamic_rhythm_pace.py`, nou
+`clipper_shadow_views.py` (ambele split-uri la 500 de linii), `edit_profiles.py` (`band_for`),
+`clipper_render_plan.py`, `clipper_render_jobs.py`, teste noi `test_clipper_rhythm.py`,
+`test_clipper_rhythm_pace.py`, `test_clipper_rhythm_export.py`.
 
 **`dynamic_cuts.py` și `dynamic_edit.py` NU sunt atinse, și asta este deliberat.** Planul le lista,
 dar a le modifica ar schimba planul livrat — pe care R2 l-a înghețat și de care depind gate-urile
@@ -368,6 +368,30 @@ greșit, deci taie chiar și fără graniță (`placement: unsnapped`) și chiar
 violarea înregistrată. A ține un crop pe o ancoră goală ca să protejezi o lungime minimă schimbă un
 defect vizibil pe o metrică invizibilă. Restul sunt oportunități, iar o oportunitate care nu poate fi
 luată curat nu se ia.
+
+**Patru corecții din review, toate găsite de Codex citind codul, nu descrierea lui:**
+
+- **Două schimbări obligatorii nu pot fi satisfăcute de aceeași tăietură.** La 5,0s și 5,2s ambele
+  se agățau de pauza de la 5,1s, a doua era absorbită ca duplicat, iar tratamentul care exista doar
+  între ele nu se vedea niciodată — fără tăietură, fără `held`, fără violare. O tăietură satisface
+  o schimbare doar dacă stă la MOMENTUL ei; altfel a doua rămâne `unsnapped` sau se raportează ca
+  `required_collision`. Fiecare tăietură păstrează `requests: [[motiv, moment]]`, nu un singur
+  `asked_at`.
+- **Coada runt nu e o violare, e un refuz.** O tăietură la 9,9s într-un clip de 10s produce un flash
+  de 100ms. A o raporta și a o lăsa în `cuts` prezenta drept montaj valid o cerință imposibil de
+  materializat. Se scoate din `cuts` și intră în `required_conflicts`; R5 decide dacă extinde
+  fereastra sau mută boundary-ul.
+- **Acoperirea parțială nu e o partiționare.** `action_measured` era adevărat și cu
+  `coverage=partial`, deci toate secundele nemăsurate intrau automat în `quiet` și un minut pe care
+  nimeni nu l-a măsurat ieșea `below`. Partiționarea cere acum `complete` ȘI `variable`; beat-urile
+  rămân acceptate în segmentele `action` individuale, fiindcă acolo măsurătoarea există.
+- **`indeterminate` ascundea un `above` demonstrabil.** Trei tăieturi în patru secunde sunt 45/min
+  față de un plafon de 28, iar durata scurtă nu face asta ambiguu. Doar podeaua are nevoie de spațiu,
+  deci `above` se verifică primul.
+
+**A cincea, de atribuire:** o tăietură la granița `action → speaker` nu e o tăietură `quiet`, e o
+**tranziție**. Se numără separat, creditată niciunei benzi — altfel montajul liniștit pare mai agitat
+dintr-un motiv care nu are legătură cu materialul liniștit.
 
 **Guardrail-urile sunt raportate, nu impuse.** Nimic nu adaugă o tăietură ca să atingă o bandă și
 nimic nu scoate una ca să rămână în ea — o propunere umplută până la bandă ar face banda
