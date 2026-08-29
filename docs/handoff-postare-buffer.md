@@ -1,4 +1,4 @@
-# Handoff — postare Povestitor (engleza) pe Buffer
+# Handoff — postare Povestitor (romana) pe Buffer
 
 Pentru o sesiune Claude care face **DOAR distributie**. Nu randeaza, nu produce
 video, nu atinge pipeline-ul. Ia fisiere gata de pe Google Drive, le pune
@@ -12,25 +12,25 @@ Verificat pe rig la 25 august 2026.
 
 | canal | retea | ce posteaza | profil |
 |---|---|---|---|
-| `povestitorul.ro` | TikTok | **engleza** | `tiktok_en` |
-| `Povestitorul` | Facebook | **romana, si asa ramane** | `facebook` |
+| `povestitorul.ro` | TikTok | **romana** | `tiktok` |
+| `Povestitorul` | Facebook | **romana** | `facebook` |
 
-TikTok e pe engleza. **Facebook s-a intors pe romana pe 28 august si ramane
-acolo** — nu mai treci pe `facebook_en` cand se termina stocul romanesc, cum
-scria pana acum. Daca planul romanesc se goleste, spui, nu comuti singur pe
-engleza.
+**AMANDOUA canalele sunt pe romana din 29 august 2026.** Engleza a tinut patru
+zile (TikTok de pe 27 aug, Facebook de pe 25) si s-a inchis. Daca planul
+romanesc se goleste, **spui — nu comuti singur pe engleza.**
 
-**Fara coperta pe Facebook.** Clipurile romanesti se posteaza asa cum sunt, fara
-cardul de la inceput. Copertile raman doar pe TikTok englez.
+Profilurile `tiktok_en` si `facebook_en` refuza acum sa porneasca, si asa
+trebuie sa ramana. Fisierele engleze raman pe Drive, nepostate.
 
-**Pe Drive cele doua stocuri sunt foldere separate**, ca sa nu existe confuzie:
+**Fara coperta, nicaieri.** Clipurile se posteaza asa cum sunt, fara cardul de
+la inceput. Copertile mai exista doar pe 19 fisiere ENGLEZE care nu se mai
+posteaza — le ignori.
 
-| folder pe Drive | continut | cine il ia |
-|---|---|---|
-| `POVESTITOR ENGLEZA` | 24 videoclipuri / 40 fisiere | doar TikTok |
-| folderul povestitor romanesc | 51 videoclipuri / 74 fisiere, si creste | doar Facebook |
+**Un singur stoc conteaza: folderul romanesc.** 51 de videoclipuri / 74 de
+fisiere la 29 august, si creste — pe rig randeaza povestitorul romanesc cu voce
+locala gratuita (F5), rand cu rand din sheet.
 
-Nu le amesteca si nu muta fisiere intre ele.
+Folderul `POVESTITOR ENGLEZA` ramane pe loc, dar **nu-l mai atingi**.
 
 **Comenzile de mai jos sunt scrise cu `server\.venv\Scripts\python.exe` pentru
 ca asa arata pe rigul de randare.** Pe un aparat care doar posteaza nu exista
@@ -56,24 +56,26 @@ Daca lipseste un videoclip, **nu il produce** — raporteaza ca lipseste.
 
 ## 3. De unde se iau videoclipurile
 
-**Doua foldere, unul pentru fiecare canal:**
+**Un singur folder, si el alimenteaza AMANDOUA canalele:**
 
 ```
-Povestitor EN = <povestitor_en_drive_folder>   -> TikTok  povestitorul.ro
-Povestitor RO = <povestitor_drive_folder>      -> Facebook Povestitorul
+Povestitor RO = <povestitor_drive_folder>   -> Facebook Povestitorul
+                                            -> TikTok  povestitorul.ro
 ```
 
-Cheile sunt in `data/targets.json`, sub `povestitor_en_drive_folder` si
-`povestitor_drive_folder`.
+Cheia e in `data/targets.json`, sub `povestitor_drive_folder`.
 
-Folderul romanesc **este al tau**, incepand cu 28 august. Pana atunci pista
-romana era inchisa si documentul asta spunea sa nu te atingi de el — nu mai e
-adevarat. La 29 august are 87 de fisiere, din care planul retine 51 de
-videoclipuri (74 de fisiere); restul sunt fisiere straine sau in alta limba, iar
-`build_pov_post_list.py` le sare singur.
+Folderul romanesc **este al tau**. Pana pe 28 august pista romana era inchisa si
+documentul asta spunea sa nu te atingi de el — nu mai e adevarat. La 29 august
+are 87 de fisiere, din care planul retine 51 de videoclipuri (74 de fisiere);
+restul sunt fisiere straine sau in alta limba, iar `build_pov_post_list.py` le
+sare singur.
 
 Folderul mai creste: pe rig randeaza acum povestitorul romanesc cu voce locala
 gratuita (F5), rand cu rand din sheet. Nu astepta un stoc fix.
+
+`povestitor_en_drive_folder` **nu mai e al tau** — pista engleza s-a inchis pe
+29 august.
 
 ### CAPCANA care a produs deja o greseala
 
@@ -96,15 +98,16 @@ Sheet-ul romanesc — `targets.json` -> `pov_sheet_id`, tab `Sheet1`:
 | coloana | continut |
 |---|---|
 | A | NR (numele fisierului pe Drive) |
-| D | **descriere ROMANA** — captionul pentru Facebook |
-| L | **descriere ENGLEZA** — captionul pentru TikTok |
+| D | **descriere ROMANA** — captionul tau, pentru amandoua canalele |
+| L | descriere engleza — pista inchisa, nu o folosi |
 
-Coloana potrivita se alege dupa CANAL, nu dupa ce ai la indemana: Facebook ia D,
-TikTok ia L. Pana pe 28 august coloana D era marcata "nu o folosi" — asta era
-valabil cat pista romana a fost inchisa.
+Coloana D e singura care conteaza acum. Documentul asta a spus, pe rand, si
+"D — nu o folosi" (cat romana a fost inchisa), si "D pentru Facebook, L pentru
+TikTok" (in cele patru zile cu TikTok englez). Ambele sunt depasite.
 
 **Fara descriere nu se posteaza** — captionul ar iesi gol. Se raporteaza randul,
-nu se inventeaza text. La 25 august un singur NR (191) nu are descriere engleza.
+nu se inventeaza text. `build_pov_post_list.py` sare singur randurile fara
+descriere in coloana D si le raporteaza.
 
 ---
 
@@ -210,23 +213,23 @@ acopere chiar tot, deci confirma cu utilizatorul inainte de prima rulare reala.
 Intai se construieste planul, apoi se posteaza din el:
 
 ```
-server\.venv\Scripts\python.exe scripts\build_pov_en_post_list.py
-server\.venv\Scripts\python.exe scripts\post_povestitor.py --channel tiktok_en --dry
-
 server\.venv\Scripts\python.exe scripts\build_pov_post_list.py
 server\.venv\Scripts\python.exe scripts\post_povestitor.py --channel facebook --dry
+server\.venv\Scripts\python.exe scripts\post_povestitor.py --channel tiktok --dry
 ```
 
-Profilurile tale sunt **`tiktok_en`** (engleza) si **`facebook`** (romana).
+Profilurile tale sunt **`facebook`** si **`tiktok`**, amandoua romanesti,
+amandoua din acelasi plan si acelasi folder. Difera doar evidenta a ce s-a
+postat: Facebook se uita in istoricul Buffer, TikTok in folderul `posted/` de pe
+Drive.
 
 | profil | plan | folder | descriere |
 |---|---|---|---|
-| `tiktok_en` | `data/pov_en_post_list.json` | EN | coloana L |
 | `facebook` | `data/pov_post_list.json` | RO | coloana D |
+| `tiktok` | `data/pov_post_list.json` | RO | coloana D |
 
-`facebook_en` exista si posteaza engleza pe Facebook — **nu-l folosi**, Facebook
-a revenit pe romana pe 28 august. `tiktok` fara sufix e pista romana oprita si
-refuza sa porneasca fara `--si-inchise`; asa si trebuie.
+`tiktok_en` si `facebook_en` refuza sa porneasca — pista engleza e inchisa din
+29 august. Nu le fortezi cu `--si-inchise`.
 
 Ruleaza **intai cu `--dry`**, mereu. Fara `--dry` trimite pe bune.
 `--limit N` opreste dupa N postari, `--first 252,253` pune anumite NR-uri in fata.

@@ -105,7 +105,10 @@ def _meta_youtube(g, f, part, total):
 
 PROFILES = {
     "tiktok": {
-        "inchis": "pista romana, oprita 25 aug 2026",
+        # REDESCHIS 29 aug 2026. A fost inchis pe 25 aug, cand ambele canale
+        # povestitor au trecut pe engleza; acum povestitorul e romanesc peste
+        # tot, si pe Facebook si pe TikTok. Cine vede istoricul si crede ca
+        # profilul asta e mort: nu e.
         "channel": _canal("tiktok_channel_ro"),
         "channel_key": "tiktok_channel_ro",
         "plan": _ROOT / "data" / "pov_post_list.json",
@@ -114,8 +117,9 @@ PROFILES = {
         "caption": _sufix_ro,
     },
     "facebook": {
-        # Romana pe Facebook NU e inchisa: se termina intai stocul romanesc, si
-        # abia dupa aceea trece pe `facebook_en`. Pe TikTok romana s-a incheiat.
+        # Romana pe Facebook e definitiva (28 aug 2026): cand se termina stocul
+        # romanesc NU se trece pe `facebook_en`, se cere continut nou. Nota
+        # veche de aici spunea invers.
         "channel": _canal("facebook_channel"),
         "channel_key": "facebook_channel",
         # acelasi plan ca TikTok: fisierele sunt aceleasi, difera doar evidenta
@@ -126,9 +130,12 @@ PROFILES = {
         "metadata": {"facebook": {"type": "reel"}},
         "caption": _sufix_ro,
     },
-    # Pista ENGLEZA: alt folder de Drive, descrieri din coloana L. Ambele
-    # canale povestitor au trecut pe engleza (TikTok 27 aug, Facebook 25 aug).
+    # Pista ENGLEZA: alt folder de Drive, descrieri din coloana L. A tinut patru
+    # zile — TikTok a trecut pe engleza pe 27 aug, Facebook pe 25 — si s-a
+    # inchis pe 29 aug, cand povestitorul a revenit integral pe romana.
+    # Fisierele engleze raman pe Drive, nerandate mai departe si nepostate.
     "tiktok_en": {
+        "inchis": "povestitorul e romanesc peste tot din 29 aug 2026",
         "channel": _canal("tiktok_channel_ro"),
         "channel_key": "tiktok_channel_ro",
         "plan": _ROOT / "data" / "pov_en_post_list.json",
@@ -138,6 +145,7 @@ PROFILES = {
         "caption": _sufix_ro,
     },
     "facebook_en": {
+        "inchis": "povestitorul e romanesc peste tot din 29 aug 2026",
         "channel": _canal("facebook_channel"),
         "channel_key": "facebook_channel",
         "plan": _ROOT / "data" / "pov_en_post_list.json",
@@ -323,9 +331,14 @@ def main():
             f"'{prof.get('channel_key')}' din data/targets.json "
             f"(sau variabila CLIPFORGE_{(prof.get('channel_key') or '').upper()}).")
     if prof.get("inchis") and "--si-inchise" not in argv:
+        # Nu se numeste aici profilul de schimb: directia s-a inversat deja o
+        # data (pana pe 29 aug mesajul trimitea spre `_en`, exact ce s-a inchis
+        # apoi). Motivul din `inchis` spune ce e valabil ACUM; el se schimba
+        # odata cu decizia, un nume ghicit aici nu.
         print(f"profilul '{which}' e inchis: {prof['inchis']}")
-        print(f"canalul lui ({prof['channel']}) e acum pe engleza — foloseste "
-              f"'{which}_en' daca exista, sau adauga --si-inchise daca chiar asta vrei.")
+        print(f"canalul lui ({prof['channel']}) nu se mai alimenteaza de aici. "
+              f"Deschise: {', '.join(k for k, v in PROFILES.items() if not v.get('inchis'))}. "
+              f"Cu --si-inchise merge oricum, daca chiar asta vrei.")
         return
 
     org = default_org()
