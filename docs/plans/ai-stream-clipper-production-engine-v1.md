@@ -525,19 +525,25 @@ adică exact numerele din care s-ar re-deriva.
 
 **Gate:** măsurabil de acum, prin `--recompute`, care încarcă transcriptul din DB și rulează ACEEAȘI
 funcție canonică peste ferestrele stocate — fără re-score, fără să atingă vreun scor sau board.
-**Prima măsurătoare, pe două piloturi (311 candidați): 64 de ferestre se termină în interiorul unui
-cuvânt.** Gate-ul cere zero. Cauza e trasabilă: `_reaction_end` întoarce `min(w1, limit)`, iar când
-reacția lovește plafonul de `REACTION_MAX_S` la mijlocul unui cuvânt, tăietura cade acolo — `_snap`
-nu se aplică niciodată pe finalul final, iar `_fit` snapează doar când se depășește maximul. Toate
-cele patru exemple verificate manual poartă `reaction_kept`.
+**Prima măsurătoare, pe tot corpusul — 6.762 de candidați din 22 de proiecte, toți cu verdict:
+171 de ferestre se termină în interiorul unui cuvânt și ZERO încep așa.** Gate-ul cere zero.
+Asimetria 171/0 e chiar demonstrația cauzei: `refine_boundaries` aplică `_snap` pe început și
+niciodată pe finalul final. `_reaction_end` întoarce `min(w1, limit)`, deci când reacția lovește
+plafonul `REACTION_MAX_S` la mijlocul unui cuvânt tăietura cade acolo; `_fit` snapează doar la
+depășirea maximului, iar `_keep_release` nu ajută fiindcă `end - inside_end > TAIL_PAD_S` e fals
+acolo. Cele patru exemple verificate manual poartă toate `reaction_kept`.
+
+Restul, ca bază de comparație pentru o rulare viitoare: 4.118 defecte blocante în total,
+`end_mid_sentence` fiind majoritatea. Coada e median 0,40s și p90 0,40s pe majoritatea proiectelor —
+adică `TAIL_PAD_S` însuși, deci `_keep_release` saturează — dar pe `slice4h00test` e median 0,0s cu
+880 din 920 de ferestre `clipped_release`, ceea ce e un fir separat de tras.
 
 **Nu am reparat-o în acest batch**, fiindcă mutarea fiecărei ferestre afectate schimbă scorurile de
 graniță, dedupe-ul și board-ul — adică axa de selecție, pe care planul o separă deliberat de cea de
 randare. E prima intrare pentru continuarea lui R5.
 
-Coada măsurată: median 0,40s, p90 0,40s — adică `TAIL_PAD_S` însuși, deci `_keep_release` saturează;
-`clipped_release` apare unde nu a avut ce paddui. `--recompute` măsoară REGULA, nu pipeline-ul: un
-verde acolo lasă integrarea end-to-end nedemonstrată, iar raportul spune asta.
+`--recompute` măsoară REGULA, nu pipeline-ul: un verde acolo lasă integrarea end-to-end
+nedemonstrată, iar raportul spune pe fiecare rând `recorded` sau `recomputed`.
 
 ### Batch R6 — captions și source hygiene
 

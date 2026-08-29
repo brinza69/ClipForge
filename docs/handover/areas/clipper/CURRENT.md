@@ -408,15 +408,20 @@ un verdict"). Cu `--recompute` încarcă transcriptul din DB și rulează ACEEA�
 (`boundary_completion.attach`) peste ferestrele stocate, fără re-score și fără să atingă vreun scor
 sau board. Măsoară REGULA, nu pipeline-ul — un verde acolo lasă integrarea end-to-end nedemonstrată.
 
-**PRIMA MĂSURĂTOARE, și e un defect real: 64 din 311 ferestre (două piloturi) se termină în
-interiorul unui cuvânt.** Gate-ul cere zero. Cauza e trasabilă și verificată manual pe patru cazuri:
+**PRIMA MĂSURĂTOARE, pe tot corpusul (6.762 de candidați, 22 de proiecte, toți cu verdict): 171 de
+ferestre se termină în interiorul unui cuvânt și ZERO încep așa.** Gate-ul cere zero. Asimetria
+171/0 e chiar demonstrația cauzei — `refine_boundaries` aplică `_snap` pe început și niciodată pe
+finalul final. Verificat manual pe patru cazuri:
 `_reaction_end` întoarce `min(w1, limit)`, iar când reacția lovește plafonul `REACTION_MAX_S` la
 mijlocul unui cuvânt tăietura cade acolo; `_snap` nu se aplică niciodată pe finalul final, iar `_fit`
 snapează doar la depășirea maximului. Toate patru poartă `reaction_kept`. **Nu e reparat aici** —
 mutarea ferestrelor afectate schimbă scorurile de graniță, dedupe-ul și board-ul, adică axa de
 selecție. E prima intrare pentru continuarea lui R5.
 
-Coada măsurată: median 0,40s, p90 0,40s — chiar `TAIL_PAD_S`, deci `_keep_release` saturează.
+Restul, ca bază de comparație: 4.118 defecte blocante, majoritatea `end_mid_sentence`. Coada e
+median 0,40s / p90 0,40s pe majoritatea proiectelor — chiar `TAIL_PAD_S`, deci `_keep_release`
+saturează — dar pe `slice4h00test` e median 0,0s cu 880 din 920 de ferestre `clipped_release`, un fir
+separat de tras.
 
 ## Punctul exact de reluare
 
