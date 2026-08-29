@@ -414,9 +414,7 @@ ferestre se termină în interiorul unui cuvânt și ZERO încep așa.** Gate-ul
 finalul final. Verificat manual pe patru cazuri:
 `_reaction_end` întoarce `min(w1, limit)`, iar când reacția lovește plafonul `REACTION_MAX_S` la
 mijlocul unui cuvânt tăietura cade acolo; `_snap` nu se aplică niciodată pe finalul final, iar `_fit`
-snapează doar la depășirea maximului. Toate patru poartă `reaction_kept`. **Nu e reparat aici** —
-mutarea ferestrelor afectate schimbă scorurile de graniță, dedupe-ul și board-ul, adică axa de
-selecție. E prima intrare pentru continuarea lui R5.
+snapează doar la depășirea maximului. Toate patru poartă `reaction_kept`. **Reparat în R5a** — vezi mai jos.
 
 **`--recompute` rulează regula de AZI peste ferestre produse de codul de atunci**, deci o cifră
 agregată amestecă generații. Verificat: artefactul lui `slice4h00test` e din 14 august, iar
@@ -434,10 +432,29 @@ Restul, din JSON-ul complet: `end_mid_sentence` 3.681, `clipped_release` 1.855,
 `start_mid_sentence` 573, `start_on_continuation` 432, `end_inside_word` 261, `orphan_tail` 176,
 `required_context_outside` 76, `dead_tail` 55. Coada: median 0,40s / p90 0,40s pe 6.742 de ferestre.
 
+## Batch R5a — finalul aterizează în afara unui cuvânt, 30 august 2026
+
+**O singură modificare:** `_fit` snapează acum și finalul, ultimul lucru pe care îl face, mărginit de
+maxim și de mediu, cu pull-back refuzat când ar coborî sub minim. Docstring-ul promitea „staying off
+words" de la început; era adevărat doar pentru început, iar asimetria 261/0 e chiar demonstrația.
+
+**Măsurat înainte/după cu `scripts/measure_boundary_snap.py`: 261 → 0**, zero refuzate pentru minim,
+maxim sau mediu, 260 împinse înainte și 1 trasă înapoi. Deplasare mediană 0,10s, p90 0,66s — dar
+**120 din 261 depășesc 0,15s**, deci presupunerea inițială („mutare deterministă sub 0,15s") era
+greșită. Trei cazuri depășesc 3s și sunt artefacte de timestamp verificate individual: transcriptul
+conține un „don`t" de 5,72s, un „love" de 5,14s, un „Melkso" de 3,54s. Nu am pus gardă pe durata
+cuvântului — ar fi o constantă nouă necalibrată.
+
+**Ce NU e măsurat, și e următorul pas:** efectul celor 261 de mutări asupra scorurilor de graniță,
+dedupe-ului, shortlist-ului, judge-ului și board-ului. Cere un re-score end-to-end pe o **CLONĂ**, nu
+pe proiectele-baseline. Baseline-ul R0 rămâne dovada despre cele 58 de fișiere vechi; rezultatele noi
+se ștampilează cu versiunea nouă de boundary și nu se amestecă în aceeași comparație. S8 vine după.
+
 ## Punctul exact de reluare
 
-Următoarea sesiune are trei opțiuni, în ordinea asta: **un re-score al piloturilor**, care e singurul
-lucru care face gate-ul R5 măsurabil și nu cere pe nimeni; **gate-ul vizual pentru R3a, R3b și R4**,
+Următoarea sesiune are trei opțiuni, în ordinea asta: **un re-score pe o clonă**, care măsoară delta
+lui R5a pe scoruri/dedupe/shortlist/board fără să atingă baseline-ul; **gate-ul vizual pentru R3a,
+R3b și R4**,
 care nu se poate închide fără un om; sau **Batch R6** — captions și source hygiene — din
 [`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md),
 acum versionat în repo. Vocabularul de regimuri pe care R3 îl atribuie există deja, ca listă închisă,

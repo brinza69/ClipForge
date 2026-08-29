@@ -550,9 +550,42 @@ intrat pe 15 în `4a136de` — de acolo vin cele 880 de cozi zero ale lui. Pe fe
 implementarea de azi ar adăuga padding la 748 din 880; 132 n-au spațiu. Proiectul demonstrează lipsa
 de proveniență/versionare a artefactelor, nu că funcția curentă e ocolită.
 
-**Nu am reparat-o în acest batch**, fiindcă mutarea fiecărei ferestre afectate schimbă scorurile de
-graniță, dedupe-ul și board-ul — adică axa de selecție, pe care planul o separă deliberat de cea de
-randare. E prima intrare pentru continuarea lui R5.
+**Reparată în R5a**, după review: proprietarul defectului e boundary refinement, nu rendererul —
+ferestrele candidate sunt greșite ÎNAINTE de scoring.
+
+### Batch R5a — finalul aterizează în afara unui cuvânt — 30 aug 2026
+
+**Fișiere:** `candidate_boundaries.py` (`_fit`), nou `scripts/measure_boundary_snap.py`, test nou
+`test_clipper_boundary_snap.py`.
+
+**O singură modificare:** `_fit` snapează acum și finalul, ultimul lucru pe care îl face, mărginit de
+maxim și de mediu, cu pull-back refuzat când ar coborî sub minim. Docstring-ul funcției promitea
+„staying off words" de la început; era adevărat doar pentru început.
+
+**Măsurat pe corpus, înainte și după (`scripts/measure_boundary_snap.py`):**
+
+| | |
+|---|---:|
+| ferestre trunchiate, înainte | **261** |
+| ferestre trunchiate, după | **0** |
+| refuzate pentru minim / maxim / mediu | 0 / 0 / 0 |
+| împinse înainte / trase înapoi | 260 / 1 |
+| deplasare mediană | 0,10s |
+| deplasare p90 | 0,66s |
+| peste 0,15s | 120 din 261 |
+| peste 1s | 13 |
+| peste 3s | 3 |
+
+**Deplasarea NU e mică**, contrar a ce presupusesem („sub 0,15s"): 120 din 261 o depășesc. Cele trei
+cazuri peste 3s sunt artefacte de timestamp, verificate individual — transcriptul conține un „don`t"
+de 5,72s, un „love" de 5,14s și un „Melkso" de 3,54s. Snap-ul rămâne corect (nu taie în interiorul
+tokenului), dar acolo adaugă secunde de material probabil tăcut. **Nu am pus o gardă pe durata
+cuvântului**: ar fi o constantă nouă necalibrată, exact ce planul refuză.
+
+**Ce NU e măsurat:** ce fac cele 261 de mutări scorurilor de graniță, dedupe-ului, shortlist-ului și
+board-ului. Nu se poate ști fără un re-score pe o **clonă** — nu pe proiectele-baseline. Baseline-ul
+R0 nu se pierde: rămâne dovada despre cele 58 de fișiere vechi, iar rezultatele noi se ștampilează cu
+versiunea nouă de boundary și nu se amestecă în aceeași comparație. Review-ul orb S8 vine după.
 
 `--recompute` măsoară REGULA, nu pipeline-ul: un verde acolo lasă integrarea end-to-end
 nedemonstrată, iar raportul spune pe fiecare rând `recorded` sau `recomputed`.

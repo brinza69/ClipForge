@@ -220,7 +220,28 @@ def _drop_dangling_tail(end: float, words: Sequence[dict], start: float,
 
 def _fit(start: float, end: float, words: Sequence[dict], lo: float, hi: float,
          floor: float, ceiling: float) -> tuple[float, float]:
-    """Force the span inside [lo, hi] and the media bounds, staying off words."""
+    """Force the span inside [lo, hi] and the media bounds, staying off words.
+
+    "Staying off words" was true of the START and never of the END. Measured by
+    Batch R5's boundary audit over the whole corpus: 261 of 6.762 windows end
+    strictly inside a word and ZERO begin inside one — and that 261/0 asymmetry
+    IS the diagnosis, because this is the one place a start is snapped and an
+    end is not. The end only met `_snap` when the maximum duration was breached.
+
+    Every rule above chooses WHICH word the clip ends on and several of them land
+    off a word edge: `_reaction_end` returns `min(w1, limit)`, so a reaction
+    hitting `REACTION_MAX_S` mid-word cuts there; `_payoff_time` searches a 0.5s
+    grid; the minimum-duration branch below adds `lo` to a start. `_keep_release`
+    does not rescue any of them — it returns early when the gap already exceeds
+    `TAIL_PAD_S`, which is exactly the mid-word case.
+
+    Pushing OUT to the end of the straddled word is what the corpus wants:
+    measured, all 261 fit inside their own maximum, median move 0.31s and p90
+    0.50s. `_snap` falls back to pulling in to the word's start when the push
+    would breach `limit`, and the guard below refuses that when it would take the
+    clip under the minimum — a truncated word is a defect, and a clip shorter
+    than the floor is a different one.
+    """
     start = max(floor, start)
     end = min(ceiling, max(end, start + 0.1))
     if end - start > hi:
@@ -232,6 +253,12 @@ def _fit(start: float, end: float, words: Sequence[dict], lo: float, hi: float,
     start = _snap(words, start, to_end=False, limit=floor)
     if end - start > hi:  # snapping backwards can reopen the max breach
         start = _snap(words, end - hi, to_end=False, limit=end - hi)
+    # LAST, so nothing above can put the cut back inside a word. Bounded by both
+    # the maximum and the media; a pull-back that breaches the minimum is
+    # refused, because trading one defect for another is not a repair.
+    snapped = _snap(words, end, to_end=True, limit=min(start + hi, ceiling))
+    if lo <= snapped - start <= hi and snapped <= ceiling + _EPS:
+        end = snapped
     return start, max(end, start + 0.1)
 
 
