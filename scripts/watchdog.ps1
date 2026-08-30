@@ -210,7 +210,11 @@ while ($true) {
         Ensure-Proc 'avanseaza_loturi\.py' "$root\scripts\avanseaza_loturi.py" "$root\data\loturi.out.log" "$root\data\loturi.err.log" "avans-loturi"
         # Coada naratorului tine 10 postari (plafonul contului), adica 2,5
         # zile la 4/zi. Fara realimentare, canalul tace in weekend.
-        Ensure-Proc 'umple_coada_narator\.py' "$root\scripts\umple_coada_narator.py" "$root\data\coada_narator.log" "$root\data\coada_narator.err.log" "coada-narator"
+        Ensure-Proc 'umple_cozile\.py' "$root\scripts\umple_cozile.py" "$root\data\cozi.log" "$root\data\cozi.err.log" "cozi"
+        # Alimenteaza sheet-ul francez cu cele mai vizionate shorts de la Varizz.
+        # Fara el, pista franceza se termina si placa A sta degeaba — asa a stat
+        # doua zile in august. Se opreste singur cand canalul e epuizat peste prag.
+        Ensure-Proc 'varizz_populare\.py' "$root\scripts\varizz_populare.py" "$root\data\varizz.log" "$root\data\varizz.err.log" "varizz" @('--bucla')
         # Muzica de fundal pe randarile narator noi. Fara ea, un lot proaspat
         # ajunge pe Drive fara melodie si `umple_coada_narator` il programeaza
         # asa — diferit de tot ce e deja publicat. Pornit DUPA coada-narator

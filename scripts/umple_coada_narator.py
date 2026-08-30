@@ -57,6 +57,17 @@ def o_trecere():
 
 
 def main():
+    # INLOCUIT 30 aug 2026 de `umple_cozile.py`, care face acelasi lucru pentru
+    # TOATE canalele contului, nu doar naratorul. Canalele franceze n-aveau
+    # nicio realimentare si se goleau pur si simplu.
+    #
+    # Fisierul ramane fiindca nota de mai sus despre plafonul de 10 — masurat pe
+    # viu, si diferit de celalalt cont — e singurul loc unde e scris.
+    if "--si-inchise" not in sys.argv:
+        print("scriptul e inlocuit de scripts/umple_cozile.py (30 aug 2026),")
+        print("care umple TOATE cozile contului, nu doar naratorul.")
+        print("adauga --si-inchise daca chiar vrei varianta veche.")
+        return
     spune("supraveghez coada naratorul.ro (plafon 10, verific la 3h)")
     gol = 0
     while True:

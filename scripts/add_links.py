@@ -23,7 +23,7 @@ sys.path.insert(0, str(_ROOT / "scripts"))
 
 import targets  # noqa: E402
 from services import sheets_config as _scfg  # noqa: E402
-from services.sheets import _service, write_cell  # noqa: E402
+from services.sheets import _service  # noqa: E402
 
 YT = re.compile(r"(?:youtube\.com/(?:shorts/|watch\?v=|live/)|youtu\.be/)([A-Za-z0-9_-]{6,})")
 TT = re.compile(r"tiktok\.com/@[\w.]+/video/(\d+)")
@@ -172,9 +172,19 @@ def main():
     if not write:
         print("(fara --write) nimic scris")
         return
+    # O SINGURA cerere pentru tot lotul, nu doua pe rand. Scrisul celula cu
+    # celula a mers cat s-au adaugat linkuri cate patru, dar la 100 de randuri
+    # inseamna 200 de cereri si Google raspunde 429 — s-a intamplat pe 30 aug,
+    # cu 59 din 100 scrise si restul pierdute. `batchUpdate` nu are problema
+    # asta si e si mai rapid.
+    date = []
     for p in plan:
-        write_cell(sid, tab, "A", p["row"], p["nr"])
-        write_cell(sid, tab, "B", p["row"], p["url"])
+        date.append({"range": f"'{tab}'!A{p['row']}", "values": [[p["nr"]]]})
+        date.append({"range": f"'{tab}'!B{p['row']}", "values": [[p["url"]]]})
+    _service().spreadsheets().values().batchUpdate(
+        spreadsheetId=sid,
+        body={"valueInputOption": "USER_ENTERED", "data": date},
+    ).execute()
     print(f"scris: {len(plan)} randuri  (primul rand nou: {plan[0]['row']})")
 
 
