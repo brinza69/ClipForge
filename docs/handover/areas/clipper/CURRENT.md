@@ -477,9 +477,20 @@ celor patru abordări eșuate de facecam: ca să nu fie rerulate.
 offline, 5s pe sursă pe GPU. Dependența e OPȚIONALĂ — fără ea totul e `unknown` și analiza nu costă
 nimic.
 
+**Care încotro merg răspunsurile, fiindcă prima versiune le avea invers:** `present` = sursa are deja
+captions → se **dezactivează** stratul ClipForge; `absent` → se **păstrează**; `unknown` → nu se
+schimbă nimic. Deci `present` e răspunsul scump — unul greșit livrează un clip fără captions deloc —
+și de aceea se obține din dovezile unei singure benzi, în timp ce `absent` cere toate benzile clar
+negative.
+
 **Discriminatorul e lățimea, și e contraintuitiv:** watermark-ul lui `pilot6b38` e în 13 din 14 cadre,
 mai persistent decât adevăratul pozitiv, dar are 0,079 din lățimea cadrului față de 0,45. Persistența
 singură ar fi clasificat greșit. Fiecare negativ pică pe altă axă.
+
+**Trei corecții din review:** semantica inversată de mai sus; judecarea doar a benzii cu cele mai
+multe cadre lăsa un watermark să mascheze pista reală de subtitrare; și un detector care aruncă pe
+fiecare cadru ieșea `absent` — testul meu verifica benzile goale și nu verdictul. Numitorul e acum
+ce s-a **analizat**, nu ce s-a eșantionat.
 
 **Ce NU e demonstrat:** pragurile au fost alese cu răspunsul la vedere, pe patru surse. `calibrated:
 false` călătorește cu fiecare verdict. Restul listei R6 nu e începută.

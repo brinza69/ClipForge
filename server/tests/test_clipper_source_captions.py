@@ -11,11 +11,12 @@ file, without weights and without a GPU. The model's own accuracy is measured
 where it can be — against four sources somebody already labelled, by
 `scripts/detect_source_captions.py --expect`.
 
-THE ASYMMETRY THIS FILE IS MOSTLY ABOUT. `present` costs a caption layer
-somebody can switch back on. `absent` is what turns the second layer off, so it
-may only be returned when the detector actually ran and found nothing. Every
-other outcome is `unknown`, which changes nothing — and most of the tests below
-are one more way of arriving at that.
+THE ASYMMETRY THIS FILE IS MOSTLY ABOUT, and an earlier version of it had the
+direction backwards. §R6: `present` means the source already carries captions,
+so ClipForge's layer is DISABLED; `absent` keeps it; `unknown` changes nothing.
+A wrong `present` therefore ships a clip with NO captions, which is why it is
+the state that needs both bars cleared — and why `absent` needs EVERY band to be
+clearly negative while `present` needs only one to be clearly positive.
 """
 
 from __future__ import annotations
@@ -40,6 +41,25 @@ def test_the_source_with_burned_captions_is_found():
     state, why, band = sc.classify(GO_GHOST, 14)
     assert state == sc.PRESENT and why is None
     assert band["band"] == 9 and band["share"] == 0.643
+
+
+def test_a_watermark_cannot_hide_a_real_caption_track():
+    """THE band-order bug. Judging only the band with the most frames let a
+    label win every time: a watermark at 14 of 14 and 0.08 wide beat the real
+    caption track at 9 of 14 and 0.45, and the source came back `absent` with
+    the caption band never examined."""
+    both = _bands((8, 14, 0.08), (9, 9, 0.45))
+    state, _why, band = sc.classify(both, 14)
+    assert state == sc.PRESENT
+    assert band["band"] == 9, "the band that decided has to be the caption one"
+
+
+def test_absent_needs_every_band_to_be_negative():
+    """`present` is reachable on one band because it is the state that
+    suppresses ClipForge's captions; `absent` is not, because it is the state
+    that would leave a duplicate in place."""
+    assert sc.classify(_bands((8, 14, 0.08), (9, 9, 0.45)), 14)[0] == sc.PRESENT
+    assert sc.classify(_bands((8, 14, 0.08), (2, 1, 0.05)), 14)[0] == sc.ABSENT
 
 
 def test_a_persistent_hud_label_is_not_a_caption_track():
@@ -76,9 +96,8 @@ def test_evidence_between_the_thresholds_is_refused():
     assert state == sc.UNKNOWN and why == sc.AMBIGUOUS
 
 
-def test_too_few_frames_is_unknown_not_absent():
-    """A handful of frames is not a distribution, and `absent` is the answer
-    that turns a caption layer off."""
+def test_too_few_frames_is_unknown_not_a_verdict():
+    """A handful of frames is not a distribution."""
     state, why, band = sc.classify(GO_GHOST, 3)
     assert state == sc.UNKNOWN and why == sc.TOO_FEW and band is None
 
@@ -105,16 +124,39 @@ def test_an_unreadable_video_is_unknown(tmp_path):
     assert out["state"] == sc.UNKNOWN and out["why_unknown"] == sc.NO_VIDEO
 
 
-def test_a_detector_that_throws_does_not_become_absent():
-    """One frame the model cannot handle is not evidence about the source. It
-    is skipped, and if every frame is skipped the bands are empty — which is
-    `absent` only because the frames WERE sampled and looked at."""
+def test_a_detector_that_throws_on_every_frame_is_not_a_clean_source():
+    """The bug my own test missed: it asserted the bands were empty and never
+    checked the VERDICT. Empty bands are indistinguishable from a source with no
+    text in them, so the denominator has to be what the model got through — not
+    what was read off disk."""
     class _Angry:
         def detect(self, *_a, **_k):
             raise RuntimeError("bad frame")
 
-    bands = sc._bands([_Frame(), _Frame()], _Angry())
+    frames = [_Frame() for _ in range(14)]
+    bands, analysed = sc._bands(frames, _Angry())
     assert all(b["frames"] == 0 for b in bands)
+    assert analysed == 0, "nothing was analysed, whatever was sampled"
+    state, why, _band = sc.classify(bands, analysed)
+    assert state == sc.UNKNOWN and why == sc.TOO_FEW
+
+
+def test_a_share_is_taken_over_what_was_analysed_not_what_was_sampled():
+    """Half the frames thrown on would otherwise halve every share and turn a
+    caption track into an absence."""
+    class _Half:
+        def __init__(self):
+            self.n = 0
+
+        def detect(self, *_a, **_k):
+            self.n += 1
+            if self.n % 2:
+                raise RuntimeError("bad frame")
+            return ([[(100, 400, 200, 230)]],)
+
+    bands, analysed = sc._bands([_Frame() for _ in range(20)], _Half())
+    assert analysed == 10
+    assert sc.classify(bands, analysed)[0] == sc.PRESENT
 
 
 class _Frame:

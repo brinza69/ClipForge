@@ -1,10 +1,11 @@
 """Batch R6: which sources already carry burned-in subtitles.
 
 Runs the detector over each project's analysis proxy and prints the verdict with
-the evidence behind it. The known truth on the four pilots comes from
-`docs/source-labels.md` and the v2 human review — go ghost (`pilotf81b`) ships
-with text burned in and the other three do not — so this is the one place in the
-plan where a detector can be checked against an answer somebody already knew.
+the evidence behind it. The known truth on the four pilots comes from the v2 human review — 15 of 15 go
+ghost exports shipped with two caption systems — and NOT from
+`docs/source-labels.md`, which identifies the sources but carries no caption
+labels at all. This is the one place in the plan where a detector can be checked
+against an answer somebody already knew.
 
     python scripts/detect_source_captions.py --all
     python scripts/detect_source_captions.py pilotf81b --expect present
@@ -13,8 +14,13 @@ plan where a detector can be checked against an answer somebody already knew.
 the label. Without it the script only reports, because a detector that is
 graded by the same person who tuned it is not being graded.
 
+WHICH WAY ROUND THE ANSWERS GO, because an earlier draft had it backwards:
+`present` means the source already has captions, so ClipForge's layer would be
+DISABLED; `absent` means it keeps burning its own; `unknown` changes nothing. A
+wrong `present` therefore ships a clip with no captions at all.
+
 A project whose proxy is missing gets a row and fails the run. It does not
-vanish — that mistake has been made five times in this plan already, always the
+vanish — that mistake has been made six times in this plan already, always the
 same way: something unreadable disappears and the result looks like a pass.
 """
 
@@ -61,7 +67,10 @@ def main() -> int:
     ap.add_argument("projects", nargs="*")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--samples", type=int, default=14)
-    ap.add_argument("--expect", choices=sc.STATES,
+    # NOT `unknown`. An `unknown` result is counted as undecided, which forces
+    # exit 2, so `--expect unknown` could never pass — a gate on "we could not
+    # tell" is not a gate anyway.
+    ap.add_argument("--expect", choices=(sc.PRESENT, sc.ABSENT),
                     help="fail the run when a verdict disagrees with this label")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -100,7 +109,8 @@ def main() -> int:
             print(f"{'':14} DISAGREES: {row['project']} said {row['state']}")
     elif undecided:
         print(f"\n{'':14} {undecided} of {len(rows)} undecided — reported, and "
-              f"an undecided source keeps both caption layers")
+              f"an undecided source changes nothing: ClipForge keeps burning "
+              f"its own layer, which is exactly today's behaviour")
     return code
 
 

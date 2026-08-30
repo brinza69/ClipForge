@@ -619,9 +619,16 @@ rerulze. Ce funcționează e un detector de text adevărat: greutățile CRAFT a
 cadre, deci MAI persistent decât adevăratul pozitiv, și are 0,079 din lățimea cadrului față de 0,45.
 Fiecare negativ pică pe altă axă, deci ambii discriminatori fac muncă.
 
-**`absent` e răspunsul scump** — el ar stinge al doilea strat — deci se întoarce doar când detectorul
-chiar a rulat pe destule cadre. Fără model, fișier necitibil, prea puține cadre sau dovezi între
-praguri: `unknown`, care nu schimbă nimic.
+**`present` e răspunsul scump**, nu `absent` — o versiune anterioară a acestei secțiuni avea direcția
+inversată. `present` înseamnă că sursa are deja captions, deci **dezactivează** stratul ClipForge;
+`absent` îl **păstrează**; `unknown` nu schimbă nimic. Un `present` greșit livrează un clip fără niciun
+fel de captions, de aceea e singura stare care cere ambele praguri — și de aceea se poate obține din
+dovezile unei singure benzi, în timp ce `absent` cere ca toate benzile să fie clar negative.
+
+**Două corecții din review:** judecarea doar a benzii cu cele mai multe cadre lăsa un watermark
+(14/14, lățime 0,08) să mascheze pista reală de subtitrare (9/14, lățime 0,45); și un detector care
+aruncă pe fiecare cadru ieșea `absent`, fiindcă benzi goale sunt indistinctibile de o sursă fără text.
+Numitorul e acum ce s-a **analizat**, nu ce s-a eșantionat.
 
 **Ce NU e demonstrat:** pragurile au fost alese cu răspunsul la vedere, pe patru surse. Nu e o
 calibrare, iar `calibrated: false` călătorește cu fiecare verdict. Restul listei R6 — poziția

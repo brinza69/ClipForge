@@ -6,11 +6,17 @@ nothing in the pipeline could tell. R0 left the hook — `captions_duplicate_
 declared` has been `unavailable` since, because reporting 0 there would turn "we
 never asked" into "we checked and it is clean".
 
-THREE VALUES, AND `absent` IS THE EXPENSIVE ONE. `present` costs a caption layer
-somebody can turn back on. `absent` is what disables the second layer, so it is
-only ever returned when the detector actually ran on enough frames and found
-nothing. Every other outcome — no detector installed, an unreadable file, too
-few samples — is `unknown`, which changes nothing.
+THREE VALUES, AND `present` IS THE EXPENSIVE ONE. §R6 is explicit about which
+way round this goes, and an earlier version of this docstring had it backwards:
+
+    present  the source already has captions  ->  DISABLE ClipForge's layer
+    absent   it does not                      ->  KEEP ClipForge's layer
+    unknown  nobody could tell                ->  change nothing
+
+So a wrong `present` ships a clip with NO captions at all, which is why it is
+the only state that needs both bars cleared. `absent` and `unknown` both leave
+today's behaviour alone; the difference between them is what a later batch is
+allowed to act on, not what happens now.
 
 TWO APPROACHES FAILED FIRST, and they are written down in
 `docs/clipper-caption-detection.md` so the next agent does not run them again.
@@ -23,14 +29,15 @@ WHAT SEPARATES A SUBTITLE FROM A HUD LABEL, measured on the four labelled
 pilots rather than reasoned about. Three properties together, and no single one
 of them is enough:
 
-- **One band.** A subtitle has a fixed position; `pilot2c8a`'s gameplay text is
-  scattered over eight bands, one to three frames each.
+- **One band.** A subtitle has a fixed position; the text on `pilot2c8a`
+  (moistcr1tikal, Just Chatting) is scattered over eight bands, one to three
+  frames each.
 - **Persistent.** It is there in most samples; go ghost's band carries text in 9
   of 14.
 - **WIDE.** A line of dialogue spans a good fraction of the frame. This is the
-  one that separates a subtitle from a HUD: `pilot6b38` has text in the same
-  band in 13 of 14 frames — coordinates or a watermark — and its widest box is
-  0.08 of the frame against go ghost's 0.45.
+  one that separates a subtitle from a label: `pilot6b38` (Jensen Huang) has
+  text in the same band in 13 of 14 frames — a watermark or a lower third — and
+  its widest box is 0.08 of the frame against go ghost's 0.45.
 
 THE THRESHOLDS BELOW WERE CHOSEN WITH THE ANSWER VISIBLE, on four sources. That
 is not a calibration and this file does not pretend otherwise. They are named
@@ -56,7 +63,12 @@ NO_DETECTOR = "no_text_detector_installed"
 NO_VIDEO = "video_unreadable"
 TOO_FEW = "too_few_frames_sampled"
 AMBIGUOUS = "evidence_between_the_thresholds"
-REASONS: tuple[str, ...] = (NO_DETECTOR, NO_VIDEO, TOO_FEW, AMBIGUOUS)
+#: Frames were read and the model threw on all of them. Empty bands are
+#: indistinguishable from a source with no text, so this has to be its own
+#: answer rather than a quiet `absent`.
+DETECTOR_FAILED = "detector_failed_on_every_frame"
+REASONS: tuple[str, ...] = (NO_DETECTOR, NO_VIDEO, TOO_FEW, AMBIGUOUS,
+                            DETECTOR_FAILED)
 
 #: How many sampled frames must carry text in ONE band for it to be a caption
 #: track rather than something that happened to be on screen. CHOSEN on four
@@ -89,7 +101,13 @@ def _reader():
         return None
     for gpu in (True, False):
         try:
-            return easyocr.Reader(["en"], gpu=gpu, verbose=False)
+            # `download_enabled=False` because "optional if offline" has to mean
+            # it, and the default would fetch weights from the network on a
+            # machine that has none. `recognizer=False` because the question is
+            # whether text is THERE, not what it says — loading the recognition
+            # model would cost seconds per source for nothing.
+            return easyocr.Reader(["en"], gpu=gpu, verbose=False,
+                                  download_enabled=False, recognizer=False)
         except Exception:
             continue
     return None
@@ -118,21 +136,28 @@ def _sample(video: str, samples: int) -> list:
         cap.release()
 
 
-def _bands(frames: Sequence[Any], reader) -> list[dict]:
-    """Per band: in how many frames text appeared, and the widest line seen.
+def _bands(frames: Sequence[Any], reader) -> tuple[list[dict], int]:
+    """`(per-band evidence, frames the detector actually got through)`.
 
     One count per frame per band, not one per box: a caption broken into three
     boxes by the detector is still one caption, and counting the boxes would
     make a busy frame look like a caption track.
+
+    The second return value is the whole point of the tuple. A model that
+    throws on every frame leaves the bands empty, and empty bands are
+    indistinguishable from a source with no text in them — so the denominator
+    has to be what was ANALYSED, never what was sampled.
     """
     hits = [0] * BANDS
     widest = [0.0] * BANDS
+    analysed = 0
     for frame in frames:
         height, width = frame.shape[0], frame.shape[1]
         try:
             boxes = reader.detect(frame, text_threshold=0.7, low_text=0.4)[0][0]
         except Exception:
             continue
+        analysed += 1
         seen: set[int] = set()
         for box in boxes or []:
             x0, x1, y0, y1 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
@@ -141,32 +166,57 @@ def _bands(frames: Sequence[Any], reader) -> list[dict]:
                 hits[band] += 1
                 seen.add(band)
             widest[band] = max(widest[band], (x1 - x0) / max(1, width))
-    return [{"band": i, "frames": hits[i], "widest": round(widest[i], 3)}
-            for i in range(BANDS)]
+    return ([{"band": i, "frames": hits[i], "widest": round(widest[i], 3)}
+             for i in range(BANDS)], analysed)
 
 
-def classify(bands: Sequence[dict], sampled: int) -> tuple[str, str | None, dict | None]:
-    """`(state, why_unknown, the band)` from the per-band evidence.
+def _verdict_for(band: dict, analysed: int) -> str:
+    """What ONE band is on its own: present, absent, or in between."""
+    share = band["frames"] / float(max(1, analysed))
+    if share >= BAND_SHARE_MIN and band["widest"] >= WIDTH_MIN:
+        return PRESENT
+    if share <= BAND_SHARE_MAYBE or band["widest"] <= WIDTH_MAYBE:
+        # Either it is almost never there, or what is there is too narrow to be
+        # a line of dialogue.
+        return ABSENT
+    return UNKNOWN
 
-    The band that decides is the one with the most frames, and it has to clear
-    BOTH bars: present in enough of them, and wide enough to be a line of
-    dialogue rather than a label. Between the two sets of thresholds the answer
-    is `unknown` — an ambiguous source is exactly the one where turning the
-    second caption layer off would be a guess.
+
+def classify(bands: Sequence[dict], analysed: int) -> tuple[str, str | None, dict | None]:
+    """`(state, why_unknown, the band that decided)` from the per-band evidence.
+
+    EVERY BAND IS EXAMINED, and the order matters. An earlier version took the
+    band with the most frames and judged only that one, which a HUD label wins
+    every time — measured on the two real pieces of evidence combined, a
+    watermark at 14/14 and 0.08 wide beat the actual caption track at 9/14 and
+    0.45, and the source came back `absent` without the caption band ever being
+    looked at.
+
+    So: any band that clears both bars makes it `present`; failing that, any
+    band in the ambiguous zone makes it `unknown`; `absent` needs EVERY band to
+    be clearly negative. That order is not symmetry — it follows from `present`
+    being the state that would suppress ClipForge's own captions, so it must be
+    reachable on the evidence of one band while `absent` needs all of them.
+
+    `analysed` is the number of frames the detector actually got through, which
+    is not the number sampled: a model that throws on every frame produced no
+    evidence at all, and reading that as "looked and found nothing" is the same
+    mistake in a different coat.
     """
-    if sampled < SAMPLES_MIN:
+    if analysed < SAMPLES_MIN:
         return UNKNOWN, TOO_FEW, None
-    best = max(bands or [{"band": -1, "frames": 0, "widest": 0.0}],
-               key=lambda b: (b["frames"], b["widest"]))
-    share = best["frames"] / float(sampled)
-    band = {**best, "share": round(share, 3)}
-    if share >= BAND_SHARE_MIN and best["widest"] >= WIDTH_MIN:
-        return PRESENT, None, band
-    if share <= BAND_SHARE_MAYBE or best["widest"] <= WIDTH_MAYBE:
-        # Either nothing is there, or what is there is too narrow to be a line
-        # of dialogue. Both are the same answer: no second caption system.
-        return ABSENT, None, band
-    return UNKNOWN, AMBIGUOUS, band
+    rated = [(b, _verdict_for(b, analysed)) for b in bands or []]
+    for state in (PRESENT, UNKNOWN):
+        hits = [b for b, v in rated if v == state]
+        if hits:
+            best = max(hits, key=lambda b: (b["frames"], b["widest"]))
+            band = {**best, "share": round(best["frames"] / float(analysed), 3)}
+            return state, (AMBIGUOUS if state == UNKNOWN else None), band
+    best = (max(bands, key=lambda b: (b["frames"], b["widest"])) if bands
+            else {"band": -1, "frames": 0, "widest": 0.0})
+    band = {**best, "share": round(best["frames"] / float(analysed), 3)}
+    return ABSENT, None, band
+
 
 
 #: `reader=None` has to MEAN "there is no detector", so the default cannot be
@@ -188,6 +238,10 @@ def detect(video: str, *, samples: int = 14, reader: Any = _RESOLVE) -> dict:
         "why_unknown": None,
         "band": None,
         "sampled": 0,
+        # Sampled, got through, and thrown on. `sampled` is what was read off
+        # disk; `analysed` is the denominator every share is taken over.
+        "analysed": 0,
+        "failed": 0,
         "bands": [],
         # The thresholds that produced the answer, beside the answer. They were
         # chosen on four sources with the labels visible, and a report that hid
@@ -208,7 +262,13 @@ def detect(video: str, *, samples: int = 14, reader: Any = _RESOLVE) -> dict:
         return out
 
     out["sampled"] = len(frames)
-    out["bands"] = [b for b in _bands(frames, engine) if b["frames"]]
-    state, why, band = classify(out["bands"], len(frames))
+    bands, analysed = _bands(frames, engine)
+    out["analysed"] = analysed
+    out["failed"] = len(frames) - analysed
+    out["bands"] = [b for b in bands if b["frames"]]
+    state, why, band = classify(out["bands"], analysed)
+    if state == UNKNOWN and why == TOO_FEW and analysed < len(frames):
+        # Sampled but not analysed: the model, not the material.
+        why = DETECTOR_FAILED if analysed == 0 else TOO_FEW
     out["state"], out["why_unknown"], out["band"] = state, why, band
     return out

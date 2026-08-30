@@ -15,17 +15,37 @@ fiindcă sursa avea deja text ars și nimic din pipeline nu putea să spună ast
 
 ## Adevărul cunoscut, împotriva căruia se măsoară
 
-Din `docs/source-labels.md` și review-ul uman v2:
+Din review-ul uman v2 (identitatea surselor din `docs/source-labels.md`):
 
 | proiect | sursă | subtitrări arse |
 |---|---|---|
 | `pilotf81b` | go ghost, 22m, editat | **DA** |
 | `pilotee0e` | Turul apartamentului, 42m, română | nu |
-| `pilot6b38` | Minecraft co-stream | nu |
-| `pilot2c8a` | Minecraft, lung | nu |
+| `pilot6b38` | Jensen Huang, 63m, editat | nu |
+| `pilot2c8a` | moistcr1tikal, Just Chatting, 3h43m, live | nu |
 
-Patru surse cu etichetă umană. E singurul loc din plan unde un detector poate fi verificat împotriva
-unui răspuns pe care cineva deja îl știa.
+**Atenție la proveniență:** `docs/source-labels.md` identifică sursele, dar **nu conține nicio
+etichetă despre captions**. Adevărul despre subtitrările arse vine din review-ul uman v2 („15 din 15
+clipuri go ghost cu două sisteme de captions"). O versiune anterioară a acestui document atribuia
+greșit eticheta lui `source-labels.md` și numea două dintre surse „Minecraft", ceea ce niciuna nu e.
+
+E singurul loc din plan unde un detector poate fi verificat împotriva unui răspuns pe care cineva
+deja îl știa.
+
+## Care încotro merg răspunsurile
+
+O versiune anterioară a acestui document și a modulului aveau direcția **inversată**. §R6 e explicit:
+
+| stare | ce înseamnă | ce face |
+|---|---|---|
+| `present` | sursa are deja captions | **dezactivează** stratul ClipForge |
+| `absent` | nu are | **păstrează** stratul ClipForge |
+| `unknown` | nu s-a putut ști | nu schimbă nimic |
+
+Deci **`present` e răspunsul scump**: unul greșit livrează un clip fără niciun fel de captions. De
+aceea `present` e singura stare care cere ambele praguri trecute — și de aceea `present` se poate
+obține din dovezile unei SINGURE benzi, în timp ce `absent` cere ca TOATE benzile să fie clar
+negative.
 
 ---
 
@@ -98,10 +118,10 @@ pilot6b38   absent    band 8/10, 13 din 14 cadre, cea mai lată linie 0.079
 pilot2c8a   absent    band 7/10,  3 din 14 cadre, cea mai lată linie 0.346
 ```
 
-**Ce separă o subtitrare de o etichetă de HUD — trei proprietăți împreună, și niciuna singură nu
+**Ce separă o subtitrare de o etichetă fixă — trei proprietăți împreună, și niciuna singură nu
 ajunge:**
 
-1. **O singură bandă.** Subtitrarea are poziție fixă; textul de gameplay al lui `pilot2c8a` e
+1. **O singură bandă.** Subtitrarea are poziție fixă; textul de pe `pilot2c8a` (moistcr1tikal) e
    împrăștiat pe opt benzi.
 2. **Persistentă.** E acolo în majoritatea eșantioanelor.
 3. **LATĂ.** Asta e discriminatorul pe care nimic altceva nu-l dă. `pilot6b38` are text în aceeași
@@ -111,6 +131,25 @@ ajunge:**
 **Fiecare negativ pică pe altă axă:** `pilot6b38` pe lățime (0,079 < 0,15), `pilot2c8a` pe persistență
 (3/14 < 0,30). Asta contează: înseamnă că ambii discriminatori fac muncă, nu că unul îl cară pe
 celălalt.
+
+### Ordinea benzilor, găsită la review
+
+Prima implementare judeca **doar banda cu cele mai multe cadre**. Combinând cele două dovezi reale
+care există deja — watermark-ul lui `pilot6b38` la 14/14 și lățime 0,08, plus pista de subtitrare a
+lui go ghost la 9/14 și lățime 0,45 — rezultatul era `absent`: eticheta câștiga `max()` și banda de
+subtitrare nu era examinată niciodată. O sursă cu ȘI watermark ȘI subtitrări ar fi fost clasificată
+greșit.
+
+Ordinea corectă: orice bandă care trece ambele praguri → `present`; altfel orice bandă în zona
+ambiguă → `unknown`; `absent` doar dacă toate benzile sunt clar negative.
+
+### Eșecul detectorului nu e o sursă curată
+
+A doua constatare de la review, și testul meu propriu o rata: verificam că benzile ies goale și nu
+verificam deloc **verdictul**. Benzi goale sunt indistinctibile de o sursă fără text, deci numitorul
+trebuie să fie ce a **analizat** modelul, nu ce s-a citit de pe disc. `_bands` întoarce acum și
+numărul de cadre prin care detectorul chiar a trecut, iar `sampled` / `analysed` / `failed` sunt
+raportate separat.
 
 ---
 
