@@ -103,15 +103,18 @@ def test_a_search_that_never_ran_rejected_nothing():
     assert not any(b["taken"] for b in told["bands"])
 
 
-def test_the_spec_clamp_wins_over_a_wider_band_outside_it():
-    """The clamp is applied first and width second, and the rejection reason has
-    to say which one did the work."""
-    # A tall block low down and a thin one high up: the widest clear run is at
-    # the top of the frame, and a narrower one survives inside 0.55-0.75.
-    layout = _zones(hud=_px(0, 60), face=_px(0, 1500, w=OUT_W))
-    told = cc.explain("bottom", layout, out_w=OUT_W, out_h=OUT_H)
-    if told["reason"] != cc.BAND_IN_SPEC:  # pragma: no cover - geometry drift
-        return
+def test_the_spec_clamp_wins_over_a_band_outside_it():
+    """The clamp is applied first and width second, and the rejection reason
+    has to say which one did the work.
+
+    NO SILENT SKIP. The first version returned early if the geometry did not
+    produce `BAND_IN_SPEC`, so it passed on any change that stopped producing
+    it — a test that cannot fail is a test that is not run. The layout below is
+    one of 135 found by sweeping rect positions and heights for exactly this
+    case, and if it stops being one, this fails."""
+    told = cc.explain("hook", _zones(mid=_px(400, 300)),
+                      out_w=OUT_W, out_h=OUT_H)
+    assert told["reason"] == cc.BAND_IN_SPEC, told["reason"]
     assert SPEC_BAND_LO <= told["chosen"] <= SPEC_BAND_HI
     losers = [b for b in told["rejected"] if not b["in_spec"]]
     assert losers, "a band outside the clamp existed"
@@ -349,3 +352,52 @@ def test_a_pathological_output_size_does_not_produce_a_backwards_grid():
     told = cc.explain("bottom", _zones(face=_px(10, 20)), out_w=100, out_h=100)
     assert told["scanned"] >= 1
     assert all(math.isfinite(b["centre"]) for b in told["bands"])
+
+
+# --- it never raises ---------------------------------------------------------
+
+
+def test_an_explanation_never_takes_the_export_down_with_it():
+    """A caption is burned whether or not anybody can say why. `(layout or
+    {}).get` raised on a list, `int(out_w)` on a string, and `_base_y_pct` calls
+    `position.strip()` — so a position that is a number raised from inside
+    `resolve_position` before this file could say anything."""
+    cases = [
+        (("bottom", ["not", "a", "layout"]), {}, cc.BAD_LAYOUT),
+        (("bottom", "safe_zones"), {}, cc.BAD_LAYOUT),
+        ((7, _zones(face=_px(1000, 500))), {}, cc.BAD_POSITION),
+        (([], _zones(face=_px(1000, 500))), {}, cc.BAD_POSITION),
+        (("bottom", {}), {"out_w": "1080"}, cc.BAD_OUT_SIZE),
+        (("bottom", {}), {"out_h": 0}, cc.BAD_OUT_SIZE),
+        (("bottom", {}), {"out_h": float("nan")}, cc.BAD_OUT_SIZE),
+    ]
+    for args, kwargs, expected in cases:
+        told = cc.explain(*args, **kwargs)  # must not raise
+        assert expected in told["refused"], (args, kwargs, told["refused"])
+        assert told["chosen"] is None, "and it claims nothing"
+        assert told["reason"] is None
+        assert told["bands"] == [] and told["rejected"] == []
+
+
+def test_a_refusal_carries_every_field_a_caller_reads():
+    """A refusal that omits keys is a refusal the caller crashes on, which is
+    the failure this exists to prevent, one level up."""
+    good = set(cc.explain("bottom", _zones(face=_px(1000, 500)),
+                          out_w=OUT_W, out_h=OUT_H))
+    bad = set(cc.explain("bottom", ["not a layout"]))
+    assert good <= bad, sorted(good - bad)
+
+
+def test_a_position_that_is_a_name_nobody_defined_is_still_explained():
+    """`_base_y_pct` falls through to the bottom preset for any unknown name,
+    and for `None` — `(position or "bottom")` is its first move. Both are real
+    answers the shipping function gives, so both get explained. Only a position
+    that is not a NAME is refused."""
+    for position in ("nonsense", "", None):
+        told = cc.explain(position, _zones(face=_px(1000, 500)),
+                          out_w=OUT_W, out_h=OUT_H)
+        assert told["refused"] == [], repr(position)
+        assert told["chosen"] is not None, repr(position)
+        _x, shipped = resolve_position(position or "bottom", {},
+                                       out_w=OUT_W, out_h=OUT_H)
+        assert told["proposed"] == round(shipped, 4), repr(position)

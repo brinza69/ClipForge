@@ -8,7 +8,7 @@ arithmetic that fills them.
 
 THE THREE AXES, and keeping them apart is what this batch is about:
 
-    CONFLICTS    what was measured to be there
+    LANDS_ON     what was measured to be there
     UNAVAILABLE  what nobody supplied
     REFUSALS     what somebody supplied wrongly
 
@@ -19,7 +19,12 @@ mistake R0 opened this whole plan with.
 
 from __future__ import annotations
 
-#: What the caption can land on, as a closed list.
+#: What the caption can land on, as a closed list. `LANDS_ON`, and not
+#: `CONFLICTS`, which is what it was called: three of these four are things the
+#: caption COVERS and the fourth is a place it SITS. Calling the letterbox a
+#: conflict in the name while the comment beside it said "not a conflict by
+#: itself" left the reader two answers and no way to choose, and a reader who
+#: takes the name is told the opposite of what the code does.
 ON_FACE = "over_face"
 ON_UI = "over_ui_panel"
 ON_SOURCE_TEXT = "over_source_text"
@@ -31,7 +36,13 @@ ON_SOURCE_TEXT = "over_source_text"
 #: may host captions only if it passes contrast, and nothing here measures
 #: contrast. Reported, kept out of `share`, and decided by somebody else.
 ON_LETTERBOX = "on_letterbox_band"
-CONFLICTS: tuple[str, ...] = (ON_FACE, ON_UI, ON_SOURCE_TEXT, ON_LETTERBOX)
+LANDS_ON: tuple[str, ...] = (ON_FACE, ON_UI, ON_SOURCE_TEXT, ON_LETTERBOX)
+#: The three that are OCCLUSIONS, which is exactly what `share` is a union of.
+#: The letterbox is not one: a caption there covers nothing of the source. That
+#: is not a claim that the text is legible against it — `render_v3_letterbox`
+#: fills the strip with a blurred copy of the frame, and §R6 wants a contrast
+#: measurement before anything sits there.
+OCCLUSIONS: tuple[str, ...] = (ON_FACE, ON_UI, ON_SOURCE_TEXT)
 
 #: Why a check could not be made. Each one keeps its window in the denominator.
 NO_FACES = "no_face_track"
@@ -94,7 +105,7 @@ REFUSALS: tuple[str, ...] = (BAD_CAPTION_Y, BAD_EVIDENCE, BAD_SHOT,
 #: nothing checks is a comment.
 COMPOSITIONS: tuple[str, ...] = ("crop", "fit")
 
-__all__ = ["CONFLICTS", "UNAVAILABLE", "REFUSALS", "COMPOSITIONS",
+__all__ = ["LANDS_ON", "OCCLUSIONS", "UNAVAILABLE", "REFUSALS", "COMPOSITIONS",
            "ON_FACE", "ON_UI", "ON_SOURCE_TEXT", "ON_LETTERBOX",
            "NO_FACES", "NO_PANELS", "NO_TEXT", "NO_SHOTS", "NO_CAPTION",
            "NO_EVIDENCE", "NO_GEOMETRY", "NO_COMPOSITION",

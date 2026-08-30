@@ -6,8 +6,11 @@ and the delivered caption is where `_caption_y` put it. This says what it covers
 WHAT ALREADY EXISTS, so this does not rebuild it. `captions.resolve_position`
 has avoided keep-out rectangles since the clipper shipped, and
 `panels_to_keep_out` supplies the detected game UI per clip. What no keep-out
-has ever carried is the CREATOR'S FACE and the SOURCE'S OWN TEXT — a diagram, a
-slide, a lower third — and those are the two the §R6 list names.
+has ever carried is A FACE and the SOURCE'S OWN TEXT — a diagram, a slide, a
+lower third — and those are the two the §R6 list names. A face box, not the
+creator's face: this module's own rule is that a face box says a face is there
+and not who it is, and calling it the creator's here contradicted that two
+paragraphs before stating it.
 
 THE MISTAKE THIS FILE IS BUILT NOT TO REPEAT. `panels_to_keep_out` skips face
 shots, and the comment there says why in the only way that counts: mapping a
@@ -15,6 +18,12 @@ panel through a face crop is arithmetic with no referent, the scale factor is
 5-8x, and it shipped a report claiming "66% of the caption sits on detected game
 UI" for a clip whose captions sit on the streamer's hoodie. A vision model
 disagreed and the frames settled it.
+
+SO IT IS NOT THE MAPPER FOR THIS. `panels_to_keep_out` maps UI panels and skips
+face shots ON PURPOSE, which means it cannot supply the face evidence or the
+source-text evidence this module reports on — those need their own mapper, and
+there is no generic one. An earlier version of this docstring pointed at it as
+if there were.
 
 So the same care, in the other direction. A face crop makes the face fill the
 output; a game shot puts the same face in a small inset. One number for "the
@@ -50,7 +59,7 @@ entries; the second said "101 sidecars", which is every sidecar on disk rather
 than the corpus the figure belongs to. The conclusion held both times and the
 denominator did not.)
 
-THREE ANSWERS, NOT TWO. `conflicts` is what was measured, `unavailable` is what
+THREE ANSWERS, NOT TWO. `lands_on` is what was measured, `unavailable` is what
 nobody supplied, and `refused` is what somebody supplied wrongly. The first
 version had only the first two, so a NaN caption height reported "nobody set
 one" and a shot whose evidence was the number 3 reported all three signals as
@@ -70,6 +79,9 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+from services.clipper.caption_placement_geom import (  # noqa: F401
+    CAPTION_BAND_PCT, _rows, _usable_pct, _usable_size, band_for, covered,
+    overlaps, source_band)
 from services.clipper.caption_placement_vocab import (  # noqa: F401
     BAD_CAPTION_Y,
     BAD_COMPOSITION,
@@ -81,7 +93,8 @@ from services.clipper.caption_placement_vocab import (  # noqa: F401
     BAD_SHOTS,
     BAD_SOURCE_SIZE,
     COMPOSITIONS,
-    CONFLICTS,
+    LANDS_ON,
+    OCCLUSIONS,
     NO_CAPTION,
     NO_COMPOSITION,
     NO_EVIDENCE,
@@ -99,154 +112,23 @@ from services.clipper.caption_placement_vocab import (  # noqa: F401
 )
 
 
-__all__ = ["CONFLICTS", "UNAVAILABLE", "REFUSALS", "COMPOSITIONS", "band_for",
-           "overlaps", "covered", "source_band", "placement_view"]
+__all__ = ["LANDS_ON", "OCCLUSIONS", "UNAVAILABLE", "REFUSALS",
+           "COMPOSITIONS", "band_for", "overlaps", "covered", "source_band",
+           "placement_view"]
 
 
-#: The caption is treated as a FULL-WIDTH strip, which is what
-#: `panels_to_keep_out` already assumes and for the same reason: the crop is 9:16
-#: out of 16:9, so horizontal position survives the mapping poorly and the
-#: caption is centred and nearly full width anyway. Only the vertical extent is
-#: honest, so only the vertical extent is compared.
-#:
-#: THE HEIGHT IS `captions.CAPTION_BOX_H_PCT`, imported rather than restated.
-#: The first version put 0.12 here — a second definition of a number the
-#: geometry already had at 0.10 — and two numbers for one box is how a report
-#: ends up describing a caption nobody burns.
-#:
-#: It is the CANONICAL COLLISION geometry, not the pixel-perfect ASS rectangle:
-#: its own comment calls it a conservative approximation, and libass lays out
-#: the real text from the font, the wrap and the line count. So every overlap
-#: here is against the box the avoidance logic uses, which is the right thing to
-#: agree with and the wrong thing to call exact.
-from services.clipper.captions import CAPTION_BOX_H_PCT as CAPTION_BAND_PCT
+#: The signals `share` is a union of, one per member of `OCCLUSIONS`.
+#: `NO_GEOMETRY` and `NO_COMPOSITION` are deliberately NOT here: they are about
+#: the letterbox, which is in `LANDS_ON` and not in `OCCLUSIONS`, so they cannot
+#: make a coverage incomplete.
+_SHARE_SIGNALS: tuple[str, ...] = (NO_FACES, NO_PANELS, NO_TEXT)
 
 
-def _usable_pct(value: Any) -> bool:
-    """Whether a fraction of the frame is one: a finite number in 0..1."""
-    import math
-
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    return math.isfinite(value) and 0.0 <= float(value) <= 1.0
-
-
-def band_for(y_pct: float, height_pct: float = CAPTION_BAND_PCT) -> tuple[float, float]:
-    """`(top, bottom)` of the caption strip, as fractions of the output height."""
-    half = max(0.0, float(height_pct)) / 2.0
-    centre = min(1.0, max(0.0, float(y_pct)))
-    return max(0.0, centre - half), min(1.0, centre + half)
-
-
-def _rows(rect: Any, height: float) -> tuple[float, float] | None:
-    """A rectangle's vertical extent as fractions, or None if it is not one.
-
-    None means UNREADABLE, and the caller has to treat it as such. It used to
-    flow into `overlaps`, which answers 0.0 for None — so a malformed rectangle
-    read as "covers nothing" and a shot full of them read as clear. That is the
-    oldest mistake in this plan, arriving in a new place: an absence of
-    measurement presented as a measurement of absence.
-    """
-    import math
-
-    if not isinstance(rect, dict) or height <= 0:
-        return None
-    try:
-        y = float(rect.get("y", rect.get("top", 0.0)))
-        h = float(rect.get("h", rect.get("height", 0.0)))
-    except (TypeError, ValueError):
-        return None
-    if not (math.isfinite(y) and math.isfinite(h)) or h <= 0 or y < 0:
-        return None
-    return max(0.0, y / height), min(1.0, (y + h) / height)
-
-
-def overlaps(band: tuple[float, float], rect: tuple[float, float] | None) -> float:
-    """How much of the caption band a rectangle covers, 0..1.
-
-    A SHARE OF THE CAPTION, not of the rectangle. "The caption is 60% covered"
-    and "the panel covers 3% of its own area" are different sentences, and only
-    the first is about whether anybody can read it.
-    """
-    if rect is None:
-        return 0.0
-    top = max(band[0], rect[0])
-    bottom = min(band[1], rect[1])
-    span = band[1] - band[0]
-    if span <= 0 or bottom <= top:
-        return 0.0
-    return min(1.0, (bottom - top) / span)
-
-
-def _usable_size(value: Any) -> bool:
-    """Whether a pixel dimension is one: a finite, positive real number."""
-    import math
-
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    return math.isfinite(value) and value > 0
-
-
-def source_band(src_w: int, src_h: int) -> tuple[tuple[float, float] | None, bool]:
-    """`(where the source frame sits on a `fit` shot, whether that is known)`.
-
-    From `dynamic_geometry.canvas_size`, which is the function the renderer pads
-    with — not from a key on the shot. The first version read `shot["frame"]`,
-    and no shot has ever carried one: 161 `fit` shots, all of them in the 58
-    sidecars of the pilot corpus, 27 of which contain at least one — and zero
-    with `frame` or `fit_rect`. The branch was dead against real data and green
-    against fixtures that invented the key.
-
-    TWO ANSWERS FOR None, WHICH IS WHY THERE IS A SECOND RETURN VALUE. `(None,
-    True)` is "measured, and there is no letterbox" — a source already 9:16 or
-    narrower fills the output. `(None, False)` is "nobody supplied the source
-    dimensions", and a `fit` shot with unknown geometry cannot be said to have a
-    band or to lack one. Collapsing them read a missing width as an upright
-    source and reported zero conflicts with zero unavailable.
-    """
-    from services.clipper.dynamic_geometry import canvas_size
-
-    # NOT A COMPARISON AGAINST AN UNKNOWN TYPE. `src_w <= 0` on a string raised
-    # `TypeError` out of a function that already had a word for this case: its
-    # own `(None, False)` means "nobody supplied the dimensions". The code
-    # crashed instead of using the answer it had.
-    if not (_usable_size(src_w) and _usable_size(src_h)):
-        return None, False
-    _canvas_w, canvas_h, offset = canvas_size(int(src_w), int(src_h))
-    if canvas_h <= 0:
-        return None, False
-    if offset <= 0:
-        return None, True
-    return (offset / float(canvas_h), (canvas_h - offset) / float(canvas_h)), True
-
-
-def covered(band: tuple[float, float],
-            rects: Sequence[tuple[float, float] | None]) -> float:
-    """How much of the caption band is covered by ANY of the rectangles, 0..1.
-
-    A UNION, not a maximum. Measured on a real counter-example: one shot where a
-    face covers 60.4%, and another where a face covers 39.6% and text covers a
-    DIFFERENT 39.6% — 79.2% of the caption together. Taking the largest single
-    box, then the largest single signal, called the first shot the worse one.
-    "How much of the caption can nobody read" is a question about the union of
-    what is on top of it.
-    """
-    spans = sorted((max(band[0], r[0]), min(band[1], r[1]))
-                   for r in rects if r is not None
-                   and min(band[1], r[1]) > max(band[0], r[0]))
-    width = band[1] - band[0]
-    if width <= 0 or not spans:
-        return 0.0
-    total = 0.0
-    top, bottom = spans[0]
-    for start, end in spans[1:]:
-        if start > bottom:
-            total += bottom - top
-            top, bottom = start, end
-        else:
-            bottom = max(bottom, end)
-    total += bottom - top
-    return min(1.0, total / width)
+def _missing_for_share(unavailable: Sequence[str],
+                       refused: Sequence[str]) -> list[str]:
+    """Which of `share`'s own inputs were not measured."""
+    return ([u for u in unavailable if u in _SHARE_SIGNALS]
+            + [r for r in refused if r == BAD_RECTS])
 
 
 def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
@@ -281,7 +163,7 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
         # string or a number into "every signal missing" and then let a `worst`
         # be computed over the result.
         return {"index": shot.get("index"), "composition": composition,
-                "conflicts": [], "evidence": {}, "unavailable": [],
+                "lands_on": [], "evidence": {}, "unavailable": [],
                 "refused": [BAD_EVIDENCE], "share": None,
                 "share_complete": False}
 
@@ -321,7 +203,7 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
         # and is not a `crop`. Falling through to the `crop` branch answered the
         # letterbox question for a composition whose letterbox is undefined.
         return {"index": shot.get("index"), "composition": composition,
-                "conflicts": [], "evidence": {}, "unavailable": [],
+                "lands_on": [], "evidence": {}, "unavailable": [],
                 "refused": [BAD_COMPOSITION], "share": None,
                 "share_complete": False}
 
@@ -337,7 +219,7 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
                 measured[ON_LETTERBOX] = round(outside, 3)
 
     return {"index": shot.get("index"), "composition": composition,
-            "conflicts": found, "evidence": measured,
+            "lands_on": found, "evidence": measured,
             "unavailable": unavailable,
             "refused": sorted(set(refused_here)),
             # WHETHER EVERY SIGNAL CONTRIBUTED TO IT. `share` is a union over
@@ -351,7 +233,14 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
             # A union over an empty set is zero as arithmetic and "nobody
             # looked" as a fact, and a shot that measured nothing was being
             # offered as the worst case at 0.0.
-            "share_complete": not unavailable and not refused_here,
+            #
+            # ON THE AXIS `share` IS ACTUALLY MADE OF. It was `not unavailable`,
+            # which folds in `no_source_dimensions` and
+            # `shot_does_not_say_how_it_is_composed` — both about the LETTERBOX,
+            # which is not in `share` at all. A `fit` shot whose three occlusion
+            # signals were all measured was being called incomplete because
+            # nobody said how wide the source was.
+            "share_complete": not _missing_for_share(unavailable, refused_here),
             # HOW MUCH OF THE CAPTION IS COVERED, as the union ACROSS SIGNALS
             # and not the largest of them. A face over one half of the caption
             # and text over the other is a caption nobody can read, and the
@@ -395,14 +284,23 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
     # contract in the loudest way there is.
     if not _usable_size(out_h):
         refused.append(BAD_OUT_H)
-    if shots is not None and (isinstance(shots, (str, bytes))
-                              or not isinstance(shots, Sequence)):
+    # AND SETTING THEM TO None AFTERWARDS PUT THE REFUSAL STRAIGHT BACK INTO
+    # `unavailable`, because `if not shots` below reads None as "there were
+    # none". That is the same defect as the NaN caption height reporting
+    # `no_caption_plan`, committed in the fix for it, three guards later. The
+    # flags carry the state instead.
+    shots_refused = shots is not None and (isinstance(shots, (str, bytes))
+                                           or not isinstance(shots, Sequence))
+    if shots_refused:
         refused.append(BAD_SHOTS)
         shots = None
     if evidence is not None and (isinstance(evidence, (str, bytes))
                                  or not isinstance(evidence, Sequence)):
         refused.append(BAD_EVIDENCE_LIST)
         evidence = None
+        evidence_refused = True
+    else:
+        evidence_refused = False
     if (src_w or src_h) and not (_usable_size(src_w) and _usable_size(src_h)):
         # Not fatal — `source_band` already answers "nobody supplied them" — but
         # a dimension that is not a number is a different fact from one that is
@@ -416,9 +314,9 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
         refused.append(BAD_CAPTION_Y)
     elif y_pct is None:
         unavailable.append(NO_CAPTION)
-    if not shots:
+    if not shots and not shots_refused:
         unavailable.append(NO_SHOTS)
-    if evidence is None:
+    if evidence is None and not evidence_refused:
         unavailable.append(NO_EVIDENCE)
 
     out: dict[str, Any] = {
@@ -429,7 +327,7 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
         "unavailable": unavailable,
         "refused": refused,
         "shots": [],
-        "conflicts": [],
+        "lands_on": [],
         "worst": None,
         # Never true here. The delivered caption is where `_caption_y` put it,
         # and this batch does not move it.
@@ -454,7 +352,7 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
             # A refusal with its own row. Dropping it silently shifted nothing
             # any more, but it still removed an entry from the corpus without
             # saying so.
-            views.append({"index": i, "composition": None, "conflicts": [],
+            views.append({"index": i, "composition": None, "lands_on": [],
                           "evidence": {}, "unavailable": [],
                           "refused": [BAD_SHOT], "share": None,
                           "share_complete": False})
@@ -467,7 +365,7 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
     out["shots"] = views
     out["refused"] = sorted(set(refused)
                             | {r for v in views for r in v["refused"]})
-    out["conflicts"] = sorted({c for v in views for c in v["conflicts"]})
+    out["lands_on"] = sorted({c for v in views for c in v["lands_on"]})
     out["unavailable"] = sorted(set(unavailable)
                                 | {u for v in views for u in v["unavailable"]})
     # A REFUSED SHOT TAKES PART IN NOTHING. A corrupt record with a `share` of
@@ -479,8 +377,15 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
         # different things. An average across a face crop and a wide game shot
         # is a number about neither.
         out["worst"] = {**worst[1], "share": round(worst[0], 3)}
-    # AND WHETHER THE WORST CASE IS A MEASUREMENT OR A FLOOR. A reader who sees
-    # a number and no qualifier beside it will treat it as the answer.
-    out["worst_share_complete"] = (None if out["worst"] is None
-                                   else bool(out["worst"]["share_complete"]))
+    # AND WHETHER THE WORST SHOT IS ESTABLISHED, WHICH IS A QUESTION ABOUT ALL
+    # OF THEM. The first version reported the completeness of the WINNER, and a
+    # complete 0.5 does not beat an incomplete 0.4 whose unmeasured signals
+    # could carry it to 0.9. Every share that took part has to be a measurement
+    # before the maximum over them names anybody — and a shot that was refused
+    # outright has no share at all, so it cannot be ruled out either.
+    out["worst_share_complete"] = (
+        None if out["worst"] is None
+        else bool(all(v["share_complete"] for v in views
+                      if v["share"] is not None)
+                  and not [v for v in views if v["share"] is None]))
     return out

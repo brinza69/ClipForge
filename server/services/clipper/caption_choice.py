@@ -75,7 +75,19 @@ from services.clipper.captions import (
     scan_grid,
 )
 
-__all__ = ["REASONS", "REJECTED_BECAUSE", "explain"]
+__all__ = ["REASONS", "REJECTED_BECAUSE", "REFUSALS", "explain"]
+
+#: What this refuses to explain, and why. IT MUST NEVER RAISE: a caption is
+#: burned whether or not anybody can say why, so an explanation that throws
+#: takes the export down to report on it. `(layout or {}).get` raised on a list,
+#: `int(out_w)` on a string, and `_base_y_pct` does `position.strip()` — so a
+#: position that is a number raised from inside `resolve_position` itself.
+BAD_LAYOUT = "layout_not_a_record"
+BAD_POSITION = "position_not_a_name"
+BAD_OUT_SIZE = "output_size_not_positive_numbers"
+UNEXPLAINABLE = "the_shipping_function_refused_this_input"
+REFUSALS: tuple[str, ...] = (BAD_LAYOUT, BAD_POSITION, BAD_OUT_SIZE,
+                             UNEXPLAINABLE)
 
 #: Why the winning position won, as a closed list. Each one is decided from
 #: what the shipping function RETURNED plus what the coverage arithmetic says
@@ -205,6 +217,33 @@ def _reason(*, chosen: float, base: float, rects_used: int,
     return UNEXPLAINED
 
 
+def _usable_size(value: Any) -> bool:
+    """Whether an output dimension is one: a finite, positive real number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value) and value > 0
+
+
+def _refusal(position: Any, why: list[str]) -> dict:
+    """A report that explains nothing, and says which nothing.
+
+    Every field a caller reads is present and empty. A refusal that omits keys
+    is a refusal the caller crashes on, which is the failure this exists to
+    prevent, one level up.
+    """
+    return {
+        "schema": "caption_choice_v1",
+        "scope": "why_the_delivered_caption_sits_where_it_does",
+        "position": position if isinstance(position, str) else None,
+        "proposed": None, "chosen": None, "moved": None,
+        "keep_out": None, "reason": None, "scanned": 0, "clear": 0,
+        "bands": [], "rejected": [], "searched": False,
+        "chosen_inside_a_clear_run": None, "coverage_at_chosen": None,
+        "refused": sorted(set(why)),
+        "changes_anything": False,
+    }
+
+
 def explain(position: str, layout: dict | None, *,
             out_w: int = 1080, out_h: int = 1920) -> dict:
     """`caption_choice_v1`: the proposed position, what lost, and why.
@@ -213,13 +252,34 @@ def explain(position: str, layout: dict | None, *,
     and it does not move anything: the caller gets the same `y_pct` the renderer
     burns, with the search that produced it written down beside it.
     """
-    out_w = int(out_w) if out_w else 1080
-    out_h = int(out_h) if out_h else 1920
+    refused: list[str] = []
+    if not (_usable_size(out_w) and _usable_size(out_h)):
+        refused.append(BAD_OUT_SIZE)
+    if layout is not None and not isinstance(layout, dict):
+        refused.append(BAD_LAYOUT)
+        layout = None
+    if position is not None and not isinstance(position, str):
+        # `_base_y_pct` calls `.strip()` on it, so a number raises from inside
+        # `resolve_position` before this file gets a chance to say anything.
+        refused.append(BAD_POSITION)
+        position = None
+    if refused:
+        return _refusal(position, refused)
+
+    out_w, out_h = int(out_w), int(out_h)
     zones = (layout or {}).get("safe_zones")
 
     # THE ANSWER, from the function that ships it.
-    _x, chosen = resolve_position(position, layout or {},
-                                  out_w=out_w, out_h=out_h)
+    try:
+        _x, chosen = resolve_position(position, layout or {},
+                                      out_w=out_w, out_h=out_h)
+    except Exception:
+        # A LAST RESORT, and it is not a substitute for the guards above. Those
+        # name what was wrong; this one only says that the shipping function
+        # would not answer, which is all that can honestly be said about an
+        # input nobody anticipated. Silence here would be worse: the report
+        # would describe a placement that never happened.
+        return _refusal(position, [UNEXPLAINABLE])
     # THE PRESET, from the same function with nothing to avoid. Not recomputed
     # from `SAFE_TOP` and `CAPTION_BOX_H_PCT`: a second copy of the base rule is
     # a second thing to drift.
@@ -240,6 +300,7 @@ def explain(position: str, layout: dict | None, *,
         "chosen": round(chosen, 4),
         "moved": abs(chosen - base) > 1e-9,
         "keep_out": census,
+        "refused": [],
         # Never true. This describes the delivered decision; it is not a second
         # opinion about it and nothing downstream may treat it as one.
         "changes_anything": False,

@@ -120,7 +120,7 @@ def test_a_shot_that_does_not_say_how_it_is_composed_is_not_refused():
     assert shot["refused"] == []
     assert cp.NO_COMPOSITION in shot["unavailable"]
     assert shot["evidence"][cp.ON_FACE] > 0, "the face was still measured"
-    assert cp.ON_LETTERBOX not in shot["conflicts"]
+    assert cp.ON_LETTERBOX not in shot["lands_on"]
 
 
 # --- the public entry point takes whatever it is given -----------------------
@@ -184,7 +184,104 @@ def test_the_letterbox_is_reported_but_never_called_readable():
     and nothing here measures contrast."""
     view = cp.placement_view(y_pct=0.9, out_h=OUT_H, **SRC,
                              shots=[_shot(0, "fit")], evidence=[_seen()])
-    assert cp.ON_LETTERBOX in view["conflicts"], "reported"
+    assert cp.ON_LETTERBOX in view["lands_on"], "reported"
     assert view["shots"][0]["share"] == 0.0, "and not an occlusion"
     # Nothing anywhere in the payload claims the caption is legible there.
     assert "readable" not in repr(view) and "legible" not in repr(view)
+
+
+# --- a refusal must not turn back into an absence ----------------------------
+
+
+def test_a_refused_shot_list_is_not_a_missing_one():
+    """Setting `shots = None` after refusing it put the refusal straight back
+    into `unavailable`, because `if not shots` reads None as "there were none".
+    The same defect as the NaN caption height reporting `no_caption_plan`,
+    committed in the fix for it, three guards later."""
+    for bad in (7, "two shots", 3.5):
+        view = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC, shots=bad,
+                                 evidence=[_seen()])
+        assert cp.BAD_SHOTS in view["refused"], repr(bad)
+        assert cp.NO_SHOTS not in view["unavailable"], repr(bad)
+
+    absent = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC, shots=None,
+                               evidence=[_seen()])
+    assert absent["refused"] == [] and cp.NO_SHOTS in absent["unavailable"]
+
+    empty = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC, shots=[],
+                              evidence=[_seen()])
+    assert cp.NO_SHOTS in empty["unavailable"], "an empty list IS none"
+
+
+def test_a_refused_evidence_list_is_not_a_missing_one():
+    for bad in (7, "faces"):
+        view = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC,
+                                 shots=[_shot(0)], evidence=bad)
+        assert cp.BAD_EVIDENCE_LIST in view["refused"], repr(bad)
+        assert cp.NO_EVIDENCE not in view["unavailable"], repr(bad)
+
+    absent = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC,
+                               shots=[_shot(0)], evidence=None)
+    assert cp.NO_EVIDENCE in absent["unavailable"]
+    assert cp.BAD_EVIDENCE_LIST not in absent["refused"]
+
+
+# --- completeness is a question about `share`'s own inputs -------------------
+
+
+def test_the_letterbox_signals_do_not_make_a_coverage_incomplete():
+    """`share_complete` was `not unavailable`, which folds in
+    `no_source_dimensions` and `shot_does_not_say_how_it_is_composed` — both
+    about the LETTERBOX, which `share` excludes. A `fit` shot whose three
+    occlusion signals were all measured was called incomplete because nobody
+    said how wide the source was."""
+    view = cp.placement_view(y_pct=0.5, out_h=OUT_H, src_w=0, src_h=0,
+                             shots=[_shot(0, "fit")], evidence=[_seen()])
+    shot = view["shots"][0]
+    assert cp.NO_GEOMETRY in shot["unavailable"], "still reported"
+    assert shot["share_complete"] is True, "and not about `share`"
+
+    unsaid = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC,
+                               shots=[{"index": 0}], evidence=[_seen()])
+    assert cp.NO_COMPOSITION in unsaid["shots"][0]["unavailable"]
+    assert unsaid["shots"][0]["share_complete"] is True
+
+
+def test_a_refused_rectangle_list_does_make_a_coverage_incomplete():
+    """That one IS one of `share`'s inputs."""
+    view = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0)],
+                             evidence=[{"faces": 7, "panels": [], "text": []}])
+    assert view["shots"][0]["share_complete"] is False
+
+
+# --- the worst shot is a claim about all of them -----------------------------
+
+
+def test_the_worst_shot_is_not_established_while_another_is_a_floor():
+    """A complete 0.5 does not beat an incomplete 0.4 whose unmeasured signals
+    could carry it to 0.9. The first version reported the completeness of the
+    WINNER, which says nothing about whether it won."""
+    view = cp.placement_view(
+        y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0), _shot(1)],
+        evidence=[_seen(faces=[_rect(864, 96)]),
+                  # Nobody looked at this shot's faces; its 0.4 is a floor.
+                  {"faces": None, "panels": [], "text": [_rect(864, 76)]}])
+    assert view["worst"]["index"] == 0, "the larger measured share"
+    assert view["worst"]["share_complete"] is True, "the winner is measured"
+    assert view["worst_share_complete"] is False, "but the ranking is not"
+
+
+def test_a_refused_shot_leaves_the_worst_case_unestablished():
+    """It has no share at all, so it cannot be ruled out of the maximum."""
+    view = cp.placement_view(
+        y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0), _shot(1)],
+        evidence=[_seen(faces=[_rect(864, 96)]), "not a record"])
+    assert view["worst"]["index"] == 0
+    assert view["worst_share_complete"] is False
+
+
+def test_with_every_share_measured_the_worst_case_is_established():
+    view = cp.placement_view(
+        y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0), _shot(1)],
+        evidence=[_seen(faces=[_rect(864, 96)]), _seen(text=[_rect(864, 76)])])
+    assert view["worst_share_complete"] is True

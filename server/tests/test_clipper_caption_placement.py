@@ -86,7 +86,7 @@ def test_a_rectangle_that_misses_the_band_covers_nothing():
 def test_a_caption_over_a_face_is_reported():
     view = cp.placement_view(y_pct=0.5, shots=[_shot(0)], out_h=OUT_H,
                              evidence=[_seen(faces=[_rect(900, 200)])], **SRC)
-    assert cp.ON_FACE in view["conflicts"]
+    assert cp.ON_FACE in view["lands_on"]
     assert view["worst"]["index"] == 0
     assert view["worst"]["share"] > 0
 
@@ -99,13 +99,13 @@ def test_the_three_signals_are_reported_apart():
     ev = view["worst"]["evidence"]
     assert ev[cp.ON_FACE] > 0 and ev[cp.ON_SOURCE_TEXT] > 0
     assert ev[cp.ON_UI] == 0.0, "the panel is at the top and misses the band"
-    assert cp.ON_UI not in view["conflicts"]
+    assert cp.ON_UI not in view["lands_on"]
 
 
 def test_a_caption_clear_of_everything_has_no_conflicts():
     view = cp.placement_view(y_pct=0.5, shots=[_shot(0)], out_h=OUT_H,
                              evidence=[_seen(faces=[_rect(0, 200)])], **SRC)
-    assert view["conflicts"] == []
+    assert view["lands_on"] == []
     assert view["worst"]["share"] == 0.0
 
 
@@ -146,7 +146,7 @@ def test_a_caption_below_a_fit_frame_sits_on_the_blurred_band():
     view = cp.placement_view(y_pct=0.9, out_h=OUT_H,
                              shots=[_shot(0, "fit")],
                              evidence=[_seen()], **SRC)
-    assert cp.ON_LETTERBOX in view["conflicts"]
+    assert cp.ON_LETTERBOX in view["lands_on"]
     assert view["source_band"] == [0.3417, 0.6583], "from `canvas_size`"
 
 
@@ -154,13 +154,13 @@ def test_a_caption_inside_a_fit_frame_is_not_on_the_band():
     view = cp.placement_view(y_pct=0.5, out_h=OUT_H,
                              shots=[_shot(0, "fit")],
                              evidence=[_seen()], **SRC)
-    assert cp.ON_LETTERBOX not in view["conflicts"]
+    assert cp.ON_LETTERBOX not in view["lands_on"]
 
 
 def test_a_crop_shot_has_no_letterbox_to_sit_on():
     view = cp.placement_view(y_pct=0.95, shots=[_shot(0, "crop")],
                              out_h=OUT_H, evidence=[_seen()], **SRC)
-    assert cp.ON_LETTERBOX not in view["conflicts"]
+    assert cp.ON_LETTERBOX not in view["lands_on"]
 
 
 def test_a_source_already_upright_has_no_letterbox_at_all():
@@ -170,7 +170,7 @@ def test_a_source_already_upright_has_no_letterbox_at_all():
     view = cp.placement_view(y_pct=0.9, out_h=OUT_H, shots=[_shot(0, "fit")],
                              evidence=[_seen()], src_w=1080, src_h=1920)
     assert view["source_band"] is None
-    assert cp.ON_LETTERBOX not in view["conflicts"]
+    assert cp.ON_LETTERBOX not in view["lands_on"]
 
 
 # --- what cannot be known ----------------------------------------------------
@@ -184,7 +184,7 @@ def test_a_missing_signal_is_named_and_never_becomes_clear():
         evidence=[{"faces": None, "panels": [], "text": []}])
     assert cp.NO_FACES in view["unavailable"]
     assert cp.ON_FACE not in view["worst"]["evidence"], "not measured, not 0.0"
-    assert cp.ON_FACE not in view["conflicts"]
+    assert cp.ON_FACE not in view["lands_on"]
 
 
 def test_an_empty_list_is_a_measurement_and_none_is_not():
@@ -220,7 +220,7 @@ def test_an_unreadable_rectangle_makes_the_signal_unavailable():
                        "text": []}])
         assert cp.NO_FACES in view["unavailable"], repr(bad)
         assert cp.ON_FACE not in view["shots"][0]["evidence"], repr(bad)
-        assert cp.ON_FACE not in view["conflicts"], repr(bad)
+        assert cp.ON_FACE not in view["lands_on"], repr(bad)
 
 
 def test_the_caption_height_is_the_one_the_geometry_burns():
@@ -318,7 +318,7 @@ def test_the_letterbox_is_not_an_occlusion():
     let "sits low on the padding" outrank it."""
     view = cp.placement_view(y_pct=0.9, out_h=OUT_H, **SRC,
                              shots=[_shot(0, "fit")], evidence=[_seen()])
-    assert cp.ON_LETTERBOX in view["conflicts"]
+    assert cp.ON_LETTERBOX in view["lands_on"]
     assert view["shots"][0]["evidence"][cp.ON_LETTERBOX] > 0
     assert view["shots"][0]["share"] == 0.0
 
@@ -333,7 +333,7 @@ def test_missing_geometry_is_not_an_upright_source():
                              evidence=[_seen()], src_w=0, src_h=0)
     assert view["source_band_known"] is False
     assert cp.NO_GEOMETRY in view["unavailable"]
-    assert cp.ON_LETTERBOX not in view["conflicts"]
+    assert cp.ON_LETTERBOX not in view["lands_on"]
 
     upright = cp.placement_view(y_pct=0.9, out_h=OUT_H,
                                 shots=[_shot(0, "fit")], evidence=[_seen()],
@@ -364,7 +364,7 @@ def test_no_evidence_at_all_is_its_own_absence():
     view = cp.placement_view(y_pct=0.5, shots=[_shot(0)], out_h=OUT_H, **SRC)
     assert cp.NO_EVIDENCE in view["unavailable"]
     assert view["shots"][0]["evidence"] == {}
-    assert view["conflicts"] == []
+    assert view["lands_on"] == []
 
 
 def test_a_shot_the_evidence_list_does_not_reach_is_unavailable():
@@ -400,5 +400,5 @@ def test_every_conflict_and_absence_is_in_a_closed_list():
         cp.placement_view(y_pct=None, shots=None),
     ]
     for view in views:
-        assert set(view["conflicts"]) <= set(cp.CONFLICTS)
+        assert set(view["lands_on"]) <= set(cp.LANDS_ON)
         assert set(view["unavailable"]) <= set(cp.UNAVAILABLE)
