@@ -178,19 +178,22 @@ def _shortlist_delta(before: list[dict], after: list[dict],
         groups = candidate_groups.build_groups(rows)
         picked = candidate_groups.build_shortlist(groups, duration=duration)
         out: set[int] = set()
+        ordered: list[int] = []
         for group in picked.get("selected") or []:
             # REPRESENTATIVES, not members. A group of seven cuts of one moment
             # is asked about through the two the shortlist puts forward; using
             # every member measured a set the judge never sees, and made the
             # answer look reassuring by covering the whole corpus.
             for member in group.get("representatives") or []:
+                if int(member) not in out:
+                    ordered.append(int(member))
                 out.add(int(member))
         if not out:
             # 0 against 0 compares equal and says nothing. A shortlist that put
             # nobody forward is a refusal, not a stable selection — and the
             # first version of this produced exactly that, silently.
             raise ValueError("shortlist put no window forward")
-        return sorted(out), len(groups)
+        return ordered, len(groups)
 
     try:
         a, groups_before = _picked(before)
@@ -199,7 +202,11 @@ def _shortlist_delta(before: list[dict], after: list[dict],
         return {"refused": type(exc).__name__}
     return {"windows_before": len(a), "windows_after": len(b),
             "groups_before": groups_before, "groups_after": groups_after,
-            "membership_changed": sorted(set(a) ^ set(b))}
+            "membership_changed": sorted(set(a) ^ set(b)),
+            # The ORDER too. The shortlist is a budget spent in order, so two
+            # runs with the same members and a different order are two different
+            # questions put to the judge.
+            "order_changed": a != b}
 
 
 def _measure(project_id: str, top_n: int = TOP_N) -> dict:
@@ -215,8 +222,18 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     if transcript is None:
         return {"project": project_id, "refused": "no_transcript_or_project"}
 
-    signals = storage.read_artifact(project_id, "signals") or {}
+    # REFUSED, NOT DEFAULTED. `read_artifact(...) or {}` and `duration or 0.0`
+    # turn a missing input into a measurement taken against nothing: every
+    # signal-derived feature reads zero, every duration-relative one divides by
+    # a floor, and the report comes back with numbers that describe the absence
+    # rather than the source. A project missing any of them cannot be compared
+    # and says so.
+    signals = storage.read_artifact(project_id, "signals")
+    if not isinstance(signals, dict) or not signals:
+        return {"project": project_id, "refused": "no_signals_artefact"}
     duration = float(project.duration or 0.0)
+    if duration <= 0:
+        return {"project": project_id, "refused": "no_duration_on_project"}
     cfg = project.clipper_settings or {}
     lo = float(cfg.get("min_clip_s") or settings.clipper_min_clip_s)
     hi = float(cfg.get("max_clip_s") or settings.clipper_max_clip_s)
@@ -227,9 +244,15 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     overridden = bool(project.content_type_override)
     words = _words_for({}, transcript)
     ceiling = duration or (_num(words[-1].get("end")) if words else 0.0)
+    if not words:
+        return {"project": project_id, "refused": "transcript_has_no_word_times"}
     # Read by `remeasure` to resolve back-references. Absent on the legacy path,
-    # where the story block does not exist either.
+    # where the story block does not exist either — but a corpus that HAS story
+    # candidates and no atoms would be remeasured against nothing, on both
+    # sides, and the null result would be an artefact of the missing file.
     atoms = storage.read_artifact(project_id, "atoms")
+    if any(isinstance(c.get("story"), dict) for c in rows) and not atoms:
+        return {"project": project_id, "refused": "story_candidates_without_atoms"}
 
     # BOTH SIDES REMEASURED, for the reason both sides are re-scored: the story
     # numbers stored in the artefact are whatever `story_evidence` computed when
@@ -343,7 +366,8 @@ def _report(row: dict) -> None:
               f"{sl['windows_before']}->{sl['windows_after']} representatives "
               f"in {sl['groups_before']}->{sl['groups_after']} groups, "
               f"membership "
-              f"{'CHANGED' if sl['membership_changed'] else 'same'}")
+              f"{'CHANGED' if sl['membership_changed'] else 'same':8} order "
+              f"{'changed' if sl['order_changed'] else 'same'}")
     if row.get("invalid"):
         print(f"{'':14} {row['invalid']} entries are not records — the corpus is "
               f"smaller than the file")
@@ -382,7 +406,11 @@ def main() -> int:
     refused = sum(1 for r in rows if r.get("refused"))
     invalid = sum(r.get("invalid", 0) for r in rows)
     contaminated = sum(len(r.get("contaminated") or []) for r in rows)
-    code = 2 if (refused or invalid or contaminated) else 0
+    # A shortlist that could not be built is a measurement that did not happen,
+    # and it was coming back green because only PROJECT-level refusals reached
+    # the exit code. Every way of not knowing has to fail the run.
+    unbuilt = sum(1 for r in rows if (r.get("shortlist") or {}).get("refused"))
+    code = 2 if (refused or invalid or contaminated or unbuilt) else 0
 
     if args.json:
         print(json.dumps(rows, indent=2))
@@ -402,6 +430,9 @@ def main() -> int:
         print(f"{'':14} {refused} project(s) could not be measured at all")
     if invalid:
         print(f"{'':14} {invalid} unreadable entries across the corpus")
+    if unbuilt:
+        print(f"{'':14} {unbuilt} project(s) whose judge shortlist could not be "
+              f"built at all")
     if contaminated:
         print(f"{'':14} {contaminated} end(s) moved for reasons other than the "
               f"snap — the delta is not this batch's alone")

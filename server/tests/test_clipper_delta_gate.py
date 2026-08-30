@@ -95,6 +95,50 @@ def test_a_shortlist_that_selects_nothing_is_a_refusal(monkeypatch, tmp_path):
     assert "membership_changed" not in out
 
 
+def test_a_refused_shortlist_fails_the_run(tmp_path, monkeypatch, capsys):
+    """Only PROJECT-level refusals reached the exit code, so a project whose
+    judge shortlist could not be built at all came back green. Every way of not
+    knowing has to fail the run."""
+    module = _module(monkeypatch, _project(tmp_path, "p", [{"start": 0.0,
+                                                           "end": 10.0}]))
+    monkeypatch.setattr(module, "_measure", lambda name, *_a, **_k: {
+        "project": name, "candidates": 1, "invalid": 0, "moved": 0,
+        "contaminated": [], "scores_changed": 0, "changed_without_moving": [],
+        "max_delta": 0.0, "mean_abs_delta": 0.0, "order_changed": False,
+        "top_n": 80, "scorer": "heuristic_only", "windows": {},
+        "shortlist": {"refused": "ValueError"}})
+    assert _run(module, "p") == 2
+    assert "could not be built" in capsys.readouterr().out
+
+
+def test_an_incomplete_input_is_refused_not_defaulted(tmp_path, monkeypatch):
+    """`read_artifact(...) or {}` and `duration or 0.0` turn a missing input
+    into a measurement taken against nothing: every signal-derived feature
+    reads zero and the report describes the absence rather than the source."""
+    module = _module(monkeypatch, _project(tmp_path, "p", [{"start": 0.0,
+                                                           "end": 10.0}]))
+
+    class _P:
+        duration = 100.0
+        clipper_settings: dict = {}
+        content_type_override = None
+        content_type = "unknown"
+
+    async def _load(_pid):
+        return {"segments": [{"start": 0.0, "end": 1.0, "words": [
+            {"word": "hi", "start": 0.0, "end": 0.4}]}]}, _P()
+
+    monkeypatch.setattr(module, "_load", _load)
+    monkeypatch.setattr(module.storage, "read_artifact",
+                        lambda _pid, name: None)
+    assert module._measure("p")["refused"] == "no_signals_artefact"
+
+    monkeypatch.setattr(module.storage, "read_artifact",
+                        lambda _pid, name: {"rms": [0.1]} if name == "signals" else None)
+    _P.duration = 0.0
+    assert module._measure("p")["refused"] == "no_duration_on_project"
+
+
 def test_the_judge_sees_representatives_not_every_member(monkeypatch, tmp_path):
     """A group of seven cuts of one moment is asked about through the ones the
     shortlist puts forward. Counting every member measured a set the judge never
