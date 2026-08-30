@@ -52,8 +52,22 @@ def _venv_python() -> Path:
 
 
 def _model_dir() -> Path:
+    """Modelul, cautat intai in data dir-ul backendului si apoi in `data/`.
+
+    Rigul are DOUA backenduri cu date separate: A pe `data/`, B pe `data_b/`.
+    Modelul (1,35 GB) e descarcat o singura data, in `data/models/f5_ro`, deci
+    pentru backendul B calea din `settings.data_dir` nu exista. Fara cautarea
+    asta, `is_available()` intoarce False pe B si vocea gratuita nu porneste
+    acolo niciodata — exact ce s-a intamplat pe 29-30 aug, cand povestitorul
+    romanesc a randat pe B si a mers pe ElevenLabs fara sa se planga nimeni.
+    Modelul e read-only, deci partajarea lui intre backenduri e sigura.
+    """
     from config import settings
-    return Path(settings.data_dir) / "models" / "f5_ro"
+    al_meu = Path(settings.data_dir) / "models" / "f5_ro"
+    if (al_meu / "vocab.txt").exists():
+        return al_meu
+    comun = _repo_root() / "data" / "models" / "f5_ro"
+    return comun if (comun / "vocab.txt").exists() else al_meu
 
 
 def _ckpt() -> Path:
@@ -75,10 +89,15 @@ def _vocab() -> Path:
 
 
 def _voices_dir() -> Path:
+    """Clipurile de referinta, cu aceeasi cautare in doua locuri ca modelul:
+    sunt puse o singura data, in `data/voices`, iar backendul B nu le are."""
     from config import settings
     d = Path(settings.data_dir) / "voices"
     d.mkdir(parents=True, exist_ok=True)
-    return d
+    if any(d.iterdir()):
+        return d
+    comun = _repo_root() / "data" / "voices"
+    return comun if comun.is_dir() and any(comun.iterdir()) else d
 
 
 # ── Sonde ─────────────────────────────────────────────────────────────────

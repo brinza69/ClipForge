@@ -243,9 +243,52 @@ def procese():
         print("  nu pot lista procesele")
 
 
+def presete_divergente():
+    """Presetele exista in DOUA copii, una pe fiecare backend: `data/` pentru
+    placa A, `data_b/` pentru B. Nimic nu le sincronizeaza.
+
+    Pe 30 aug 2026 asta a costat credite reale: `povestitor.json` a fost trecut
+    pe vocea gratuita in `data/`, s-a verificat acolo, si a parut in regula — dar
+    povestitorul randeaza pe placa B, care citea copia din `data_b/`, ramasa pe
+    ElevenLabs. Randarile au iesit pe plata fara ca nimic sa se planga, fiindca
+    ambele configuratii sunt valide luate separat.
+
+    De aia diferenta se tipareste aici, la fiecare pornire de sesiune.
+    """
+    titlu("PRESETE — cele doua copii")
+    import pathlib
+    a = pathlib.Path(_ROOT) / "data" / "variant_presets"
+    b = pathlib.Path(_ROOT) / "data_b" / "variant_presets"
+    if not b.is_dir():
+        print("  data_b/variant_presets nu exista — un singur backend?")
+        return
+    chei = ("tts_engine", "tts_voice_id", "tts_language", "drive_folder")
+    dif = 0
+    for p in sorted(a.glob("*.json")):
+        q = b / p.name
+        if not q.exists():
+            print(f"  {p.stem}: exista doar in data/ — placa B n-o vede")
+            dif += 1
+            continue
+        try:
+            va, vb = json.loads(p.read_text(encoding="utf-8")), json.loads(q.read_text(encoding="utf-8"))
+        except Exception:                       # noqa: BLE001
+            continue
+        for k in chei:
+            if va.get(k) != vb.get(k):
+                print(f"  {p.stem}.{k}:  data={va.get(k)}   data_b={vb.get(k)}")
+                dif += 1
+    if dif:
+        print(f"  ^ {dif} nepotriviri. Placa A foloseste data/, placa B foloseste data_b/.")
+        print("    Copiaza-l pe cel corect peste celalalt INAINTE sa randezi.")
+    else:
+        print("  identice pe cheile care conteaza (motor, voce, limba, folder)")
+
+
 if __name__ == "__main__":
     print(f"STARE CLIPFORGE — {datetime.now().strftime('%d %b %Y, %H:%M')}")
     de_facut()
+    presete_divergente()
     backenduri()
     credite()
     cozi()
