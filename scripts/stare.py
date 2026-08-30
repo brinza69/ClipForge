@@ -262,7 +262,8 @@ def presete_divergente():
     if not b.is_dir():
         print("  data_b/variant_presets nu exista — un singur backend?")
         return
-    chei = ("tts_engine", "tts_voice_id", "tts_language", "drive_folder")
+    chei = ("tts_engine", "tts_voice_id", "tts_language", "drive_folder",
+            "caption_scale", "caption_template_id", "split_into_parts")
     dif = 0
     for p in sorted(a.glob("*.json")):
         q = b / p.name
