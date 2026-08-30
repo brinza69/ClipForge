@@ -509,8 +509,13 @@ peste caseta de caption la FIECARE poziție din scanare, ștergând căutarea de
 caption-ul livrat (măsurat 0,3092 → 0,4642). `caption_choice` o numără; nu o repară, fiindcă reparația
 mută captions livrate.
 
-**Browser chrome:** măsurat cu easyocr pe 20 de proxy-uri × 8 cadre — 0 potriviri, din 453 de tokeni
-citiți. Corpusul nu conține niciun pozitiv, deci un detector nu poate fi calibrat aici.
+**Browser chrome:** prima măsurătoare (easyocr, 20 de proxy-uri × 8 cadre uniforme) a dat 0
+potriviri din 453 de tokeni citiți, și am concluzionat greșit că nu există pozitiv în corpus.
+Review-ul uman v2 listează „browser UI" printre defectele rendererului v3 — pozitivul există, opt
+instantanee dintr-o sursă de ore nu l-au atins. Se remăsoară pe EXPORTURILE randate, un cadru pe
+secundă. Ce rămâne valabil: recognizer-ul citește prost conținutul care contează (`pilotf81b`,
+singura sursă cu captions arse cunoscute, nu a dat niciun token peste confidence 0,5), deci recall-ul
+e mic și `not_detected` nu poate însemna „curat".
 
 **Ce a mai rămas din R6:** contrastul pe banda blurată de `fit`, warning-urile de browser chrome,
 cablarea în sidecar. `panels_to_keep_out` nu e mapper generic — sare peste shot-urile de față.

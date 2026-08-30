@@ -659,14 +659,30 @@ FIECARE poziție din scanare. O singură intrare malformată șterge căutarea d
 caption-ul livrat: măsurat 0,3092 → 0,4642 pe un rect de facecam plus un rect NaN. E comportament
 viu în `captions` și acest batch nu mută captions livrate, deci numărătoarea călătorește în raport.
 
-**Browser chrome — măsurat, fără pozitiv în corpus.** easyocr cu recognizer pornit, 20 de proxy-uri
-× 8 cadre, căutând URL-uri, domenii și placeholder-e de căutare: **0 potriviri**. Numitorul spune că
-nu e un detector mort — 453 de tokeni citiți în total, între 0 și 62 pe sursă, aproape toți numere de
-HUD și name tag-uri. Dar două surse au dat 0 tokeni, iar patru au dat tokeni fără niciunul peste
-confidence 0,5 — printre ele `pilotf81b`, singura sursă despre care știm că are captions arse. Deci:
-corpusul nu conține niciun POZITIV de browser chrome, un detector nu poate fi calibrat aici, iar ce e
-onest de construit e un warning de precizie mare prin construcție cu recall explicit nedemonstrat,
-care nu spune niciodată „curat".
+**Browser chrome — prima măsurătoare a pus întrebarea greșit, și concluzia ei era falsă.**
+
+Am rulat easyocr cu recognizer pornit peste 20 de proxy-uri × 8 cadre uniforme, căutând URL-uri,
+domenii și placeholder-e de căutare: 0 potriviri. Numitorul arăta că nu e un detector mort — 453 de
+tokeni citiți, între 0 și 62 pe sursă, aproape toți numere de HUD și name tag-uri — și am scris de
+aici că **corpusul nu conține niciun pozitiv**.
+
+**Asta contrazice o dovadă pe care o aveam deja.** Review-ul uman v2 listează „browser UI" printre
+defectele rendererului v3, alături de cele 116 tăieturi invizibile și de captions-urile duble. Deci
+pozitivul EXISTĂ; opt instantanee uniforme dintr-o sursă de ore nu l-au atins. Un eșantion care ratează
+lucrul căutat nu e o dovadă că lucrul lipsește — exact confuzia pe care restul acestui plan o combate,
+făcută de mine, în paragraful care o enunță.
+
+**Ce se măsoară în locul ei:** aceleași detectoare peste EXPORTURILE randate, un cadru pe secundă, nu
+peste proxy la opt momente arbitrare. Acolo a văzut omul defectul, deci acolo se pune întrebarea. Se
+numără două familii separat — un URL sau un domeniu, care e dovadă în sine, și o etichetă de control
+(`search`, `share`, `save`, `subscribe`), care e un cuvânt obișnuit și e dovadă doar alături de
+altele.
+
+**Ce rămâne adevărat din prima măsurătoare, și e o avertizare:** recognizer-ul citește prost exact
+conținutul care contează. Două surse au dat 0 tokeni, iar patru au dat tokeni fără niciunul peste
+confidence 0,5 — printre ele `pilotf81b`, singura sursă despre care ȘTIM că are captions arse. Deci
+recall-ul unui warning bazat pe recunoaștere de text e mic și nedemonstrat, iar `not_detected` nu
+poate însemna niciodată „curat".
 
 **Ce a mai rămas din listă:** contrastul pe banda blurată, warning-urile de browser chrome, și
 cablarea propriu-zisă în sidecar. `panels_to_keep_out` NU e un mapper generic — sare deliberat peste
