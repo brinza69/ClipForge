@@ -162,9 +162,11 @@ preferat în mai multe limbi și cu mai multe stiluri de subtitrare (poziție ce
 karaoke).
 
 **Nimic nu e aplicat.** Detectorul nu dezactivează încă al doilea strat de captions. `present` costă
-un strat pe care cineva îl poate reaprinde; `absent` e cel care stinge — de aceea `absent` se întoarce
-doar când detectorul chiar a rulat pe destule cadre și n-a găsit nimic, iar orice altceva (fără model,
-fișier necitibil, prea puține cadre, dovezi între praguri) e `unknown`, care nu schimbă nimic.
+`present` e cel care **stinge** stratul ClipForge, deci un `present` greșit livrează un clip fără
+niciun fel de captions — de aceea e singura stare care cere ambele praguri și se obține dintr-o
+singură bandă, în timp ce `absent` cere toate benzile clar negative. `absent` **păstrează** stratul,
+iar `unknown` (fără model, fișier necitibil, prea puține cadre, dovezi între praguri, detector care
+aruncă) nu schimbă nimic.
 
 **Dependența e opțională.** `easyocr` nu e în `requirements.txt`. Fără el, fiecare verdict e `unknown`
 și rularea de analiză nu costă nimic.

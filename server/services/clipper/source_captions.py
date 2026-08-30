@@ -50,13 +50,33 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-__all__ = ["PRESENT", "ABSENT", "UNKNOWN", "STATES", "REASONS", "detect",
+__all__ = ["PRESENT", "ABSENT", "UNKNOWN", "STATES", "REASONS",
+           "DISABLES_OWN_CAPTIONS", "disables_own_captions", "detect",
            "classify"]
 
 PRESENT = "present"
 ABSENT = "absent"
 UNKNOWN = "unknown"
 STATES: tuple[str, ...] = (PRESENT, ABSENT, UNKNOWN)
+
+#: THE DIRECTION, as a fact in code rather than a sentence in a docstring.
+#: An earlier version of this module described it backwards in prose while the
+#: logic was right, and prose cannot fail a test run — the next batch would have
+#: read the paragraph, disabled captions on every source WITHOUT them, and left
+#: the duplicates exactly where the defect already is. Whatever consumes this
+#: signal reads the constant.
+DISABLES_OWN_CAPTIONS = PRESENT
+
+
+def disables_own_captions(state: str) -> bool:
+    """Whether this verdict may switch ClipForge's own caption layer off.
+
+    Only `present` may. `absent` keeps the layer — the source has no text of its
+    own, so ours is the only one — and `unknown` changes nothing, which is the
+    same behaviour by a different route.
+    """
+    return state == DISABLES_OWN_CAPTIONS
+
 
 #: Why an answer could not be given. `absent` is never one of these outcomes.
 NO_DETECTOR = "no_text_detector_installed"
@@ -152,22 +172,45 @@ def _bands(frames: Sequence[Any], reader) -> tuple[list[dict], int]:
     widest = [0.0] * BANDS
     analysed = 0
     for frame in frames:
-        height, width = frame.shape[0], frame.shape[1]
-        try:
-            boxes = reader.detect(frame, text_threshold=0.7, low_text=0.4)[0][0]
-        except Exception:
+        found = _frame_bands(frame, reader)
+        if found is None:
+            # The frame is a failure, WHOLE. Not a frame with fewer boxes.
             continue
         analysed += 1
-        seen: set[int] = set()
-        for box in boxes or []:
-            x0, x1, y0, y1 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
-            band = min(BANDS - 1, max(0, int(((y0 + y1) / 2.0 / max(1, height)) * BANDS)))
-            if band not in seen:
-                hits[band] += 1
-                seen.add(band)
-            widest[band] = max(widest[band], (x1 - x0) / max(1, width))
+        for band, width_frac in found.items():
+            hits[band] += 1
+            widest[band] = max(widest[band], width_frac)
     return ([{"band": i, "frames": hits[i], "widest": round(widest[i], 3)}
              for i in range(BANDS)], analysed)
+
+
+def _frame_bands(frame: Any, reader) -> dict[int, float] | None:
+    """`{band: widest line}` for one frame, or None if it could not be read.
+
+    ATOMIC, and that is the whole point of it being its own function. Only the
+    `detect()` CALL used to be inside the `try`; the parsing was outside, so a
+    malformed box — one CRAFT returned with three coordinates instead of four —
+    raised `IndexError` straight out of a module whose contract is "optional
+    signal, never raises". A frame contributes everything or nothing: a partial
+    frame is a measurement of the model's failure, not of the source.
+    """
+    import math
+
+    try:
+        height, width = int(frame.shape[0]), int(frame.shape[1])
+        boxes = reader.detect(frame, text_threshold=0.7, low_text=0.4)[0][0]
+        out: dict[int, float] = {}
+        for box in boxes or []:
+            x0, x1, y0, y1 = (float(box[0]), float(box[1]),
+                              float(box[2]), float(box[3]))
+            if not all(math.isfinite(v) for v in (x0, x1, y0, y1)):
+                return None
+            band = min(BANDS - 1,
+                       max(0, int(((y0 + y1) / 2.0 / max(1, height)) * BANDS)))
+            out[band] = max(out.get(band, 0.0), (x1 - x0) / max(1, width))
+        return out
+    except Exception:
+        return None
 
 
 def _verdict_for(band: dict, analysed: int) -> str:

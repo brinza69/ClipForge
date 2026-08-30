@@ -111,8 +111,8 @@ def test_no_detector_is_unknown_and_costs_nothing():
 
 
 def test_an_unreadable_video_is_unknown(tmp_path):
-    """With a detector present and a file that is not a video. `absent` here
-    would disable a caption layer because a path was wrong."""
+    """With a detector present and a file that is not a video. A verdict here
+    would be a verdict about a path, not about a source."""
     broken = tmp_path / "not-a-video.mp4"
     broken.write_bytes(b"nope")
 
@@ -164,6 +164,75 @@ class _Frame:
 
 
 # --- the report --------------------------------------------------------------
+
+
+def test_only_present_may_disable_the_clipforge_layer():
+    """THE DIRECTION, executable. An earlier version of this batch had it
+    backwards in the prose while the logic was right — and prose cannot fail a
+    test run. Following that paragraph would have disabled captions on every
+    source WITHOUT them and left the duplicates exactly where the defect is.
+
+    Whatever consumes this signal reads the constant, not the docstring."""
+    assert sc.DISABLES_OWN_CAPTIONS == sc.PRESENT
+    assert sc.disables_own_captions(sc.PRESENT) is True
+    assert sc.disables_own_captions(sc.ABSENT) is False
+    assert sc.disables_own_captions(sc.UNKNOWN) is False
+    # And every state the classifier can produce answers the question.
+    for state in sc.STATES:
+        assert isinstance(sc.disables_own_captions(state), bool)
+
+
+def test_the_state_that_disables_needs_the_strongest_evidence():
+    """The asymmetry follows from the direction rather than from taste: the
+    expensive answer is the one that suppresses our captions, so it is the one
+    that has to clear both bars — while the cheap one needs every band to
+    agree."""
+    one_strong_band = _bands((8, 14, 0.08), (9, 9, 0.45))
+    assert sc.classify(one_strong_band, 14)[0] == sc.DISABLES_OWN_CAPTIONS
+    assert not sc.disables_own_captions(sc.classify(HUD, 14)[0])
+    assert not sc.disables_own_captions(sc.classify(SCATTERED, 14)[0])
+    assert not sc.disables_own_captions(sc.classify(EMPTY, 14)[0])
+    assert not sc.disables_own_captions(sc.classify(GO_GHOST, 3)[0])
+
+
+def test_a_malformed_box_does_not_escape_the_module(monkeypatch):
+    """The contract is "optional signal, never raises", and only the `detect()`
+    CALL was inside the `try` — the parsing was outside it, so a box CRAFT
+    returned with three coordinates instead of four raised `IndexError` straight
+    out of the module. Through `detect()`, because that is the surface the
+    contract is about."""
+    class _Malformed:
+        def detect(self, *_a, **_k):
+            return ([[(100, 400, 200)]],)          # three coordinates, not four
+
+    monkeypatch.setattr(sc, "_sample", lambda *_a, **_k: [_Frame()] * 14)
+    out = sc.detect("anything.mp4", reader=_Malformed())
+    assert out["state"] == sc.UNKNOWN
+    assert out["analysed"] == 0 and out["failed"] == 14
+
+
+def test_a_frame_contributes_everything_or_nothing(monkeypatch):
+    """A partial frame measures the model's failure, not the source. One bad box
+    among good ones must not leave the good ones counted."""
+    class _OneBad:
+        def detect(self, *_a, **_k):
+            return ([[(10, 300, 200, 230), (5, 9)]],)
+
+    monkeypatch.setattr(sc, "_sample", lambda *_a, **_k: [_Frame()] * 14)
+    out = sc.detect("anything.mp4", reader=_OneBad())
+    assert out["bands"] == [], "a partial frame left partial evidence behind"
+    assert out["failed"] == 14
+
+
+def test_a_non_finite_coordinate_fails_the_frame(monkeypatch):
+    """NaN survives every arithmetic check and would place a band at an
+    arbitrary index."""
+    class _Nan:
+        def detect(self, *_a, **_k):
+            return ([[(10, float("nan"), 200, 230)]],)
+
+    monkeypatch.setattr(sc, "_sample", lambda *_a, **_k: [_Frame()] * 14)
+    assert sc.detect("anything.mp4", reader=_Nan())["analysed"] == 0
 
 
 def test_the_thresholds_ride_with_the_answer():
