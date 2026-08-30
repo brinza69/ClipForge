@@ -107,20 +107,22 @@ def _refitted(cand: dict, words, *, lo: float, hi: float, ceiling: float,
     than as an effect of this batch.
     """
     start, end = _num(cand.get("start")), _num(cand.get("end"))
-    straddled = bc._straddled(words, end) is not None
     fitted_start, fitted_end = _fit(start, end, words, lo, hi, 0.0, ceiling)
-    # `_fit` DOES MORE THAN THE SNAP. It also snaps the start and enforces the
-    # duration bounds, and an earlier version of this check compared only the
-    # end — so a moved START would have gone into the delta as if the snap had
-    # caused it. Any movement of the start is contamination, whatever the end
-    # did.
-    moved_start = abs(fitted_start - start) > 1e-6
-    if abs(fitted_end - end) < 1e-6 and not moved_start:
-        return None, straddled and False
-    if moved_start:
-        # Reported through the same channel: the caller counts a window as
-        # contaminated when it moved for a reason other than the snap.
-        straddled = False
+    if abs(fitted_end - end) < 1e-6 and abs(fitted_start - start) < 1e-6:
+        return None, True
+
+    # WHICH OF `_fit`'S RULES COULD HAVE FIRED, from their preconditions rather
+    # than from their effect. Checking "the end was inside a word" was not
+    # enough: a window over the maximum is clamped first and the snap then runs
+    # on the clamped value, so the movement is partly the clamp's. A window is
+    # the snap ALONE only when nothing else had anything to do.
+    snap_only = (
+        bc._straddled(words, end) is not None      # the snap has work
+        and bc._straddled(words, start) is None    # the start snap does not
+        and lo <= end - start <= hi                # neither duration bound does
+        and end <= ceiling + 1e-6
+        and abs(fitted_start - start) < 1e-6       # and the start did not move
+    )
     inside, _b, _a = _neighbourhood(words, fitted_start, fitted_end)
     out = copy.deepcopy(cand)
     out["start"] = round(fitted_start, 3)
@@ -135,7 +137,7 @@ def _refitted(cand: dict, words, *, lo: float, hi: float, ceiling: float,
     # check for it.
     if isinstance(out.get("story"), dict):
         story_evidence.remeasure(out, atoms=atoms)
-    return out, straddled
+    return out, snap_only
 
 
 def _score(rows: list[dict], *, transcript, signals, duration, profile,
@@ -177,13 +179,17 @@ def _shortlist_delta(before: list[dict], after: list[dict],
         picked = candidate_groups.build_shortlist(groups, duration=duration)
         out: set[int] = set()
         for group in picked.get("selected") or []:
-            for member in group.get("members") or []:
+            # REPRESENTATIVES, not members. A group of seven cuts of one moment
+            # is asked about through the two the shortlist puts forward; using
+            # every member measured a set the judge never sees, and made the
+            # answer look reassuring by covering the whole corpus.
+            for member in group.get("representatives") or []:
                 out.add(int(member))
         if not out:
-            # 0 against 0 compares equal and says nothing. A shortlist that
-            # selected no window is a refusal, not a stable selection — and the
+            # 0 against 0 compares equal and says nothing. A shortlist that put
+            # nobody forward is a refusal, not a stable selection — and the
             # first version of this produced exactly that, silently.
-            raise ValueError("shortlist selected no windows")
+            raise ValueError("shortlist put no window forward")
         return sorted(out), len(groups)
 
     try:
@@ -239,16 +245,21 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     moved: list[int] = []
     contaminated: list[int] = []
     for i, cand in enumerate(rows):
-        refitted, straddled = _refitted(cand, words, lo=lo, hi=hi,
+        refitted, snap_only = _refitted(cand, words, lo=lo, hi=hi,
                                         ceiling=ceiling, atoms=atoms)
-        after.append(refitted if refitted is not None else copy.deepcopy(cand))
-        if refitted is not None:
-            moved.append(i)
-            if not straddled:
-                # `_fit` moved an end that was NOT inside a word, so something
-                # other than the snap is at work and the delta is not this
-                # batch's alone.
-                contaminated.append(i)
+        if refitted is None:
+            # SYMMETRY. A window that did not move still has to go through the
+            # same remeasure as its twin on the other side, or the two columns
+            # differ by a module version on exactly the windows this batch does
+            # not touch — which is the loudest possible way to fake a null
+            # result and the quietest way to fake a real one.
+            unmoved = copy.deepcopy(before[i])
+            after.append(unmoved)
+            continue
+        after.append(refitted)
+        moved.append(i)
+        if not snap_only:
+            contaminated.append(i)
 
     kw = dict(transcript=transcript, signals=signals, duration=duration,
               profile=profile, platform=platform, seg_types=seg_types,
@@ -291,8 +302,9 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
         "candidates": len(raw),
         "invalid": invalid,
         "moved": len(moved),
-        # Ends `_fit` moved that were not inside a word. Must be zero, or the
-        # comparison is measuring more than the snap.
+        # Windows `_fit` moved where something OTHER than the snap could have
+        # done it. Must be zero, or the comparison is measuring more than this
+        # batch.
         "contaminated": contaminated,
         "scores_changed": len(changed),
         # A window whose end never moved and whose score did is the scorer
@@ -328,16 +340,17 @@ def _report(row: dict) -> None:
         print(f"{'':14} shortlist: could not be built ({sl['refused']})")
     else:
         print(f"{'':14} {'judge shortlist':16} "
-              f"{sl['windows_before']}->{sl['windows_after']} windows in "
-              f"{sl['groups_before']}->{sl['groups_after']} groups, membership "
+              f"{sl['windows_before']}->{sl['windows_after']} representatives "
+              f"in {sl['groups_before']}->{sl['groups_after']} groups, "
+              f"membership "
               f"{'CHANGED' if sl['membership_changed'] else 'same'}")
     if row.get("invalid"):
         print(f"{'':14} {row['invalid']} entries are not records — the corpus is "
               f"smaller than the file")
     if row.get("contaminated"):
-        print(f"{'':14} CONTAMINATED: `_fit` moved {len(row['contaminated'])} "
-              f"end(s) that were not inside a word, so the delta is not the "
-              f"snap alone")
+        print(f"{'':14} CONTAMINATED: {len(row['contaminated'])} window(s) "
+              f"moved where a rule other than the snap could have done it, so "
+              f"the delta is not this batch's alone")
     if row["changed_without_moving"]:
         print(f"{'':14} {len(row['changed_without_moving'])} window(s) changed "
               f"score WITHOUT their end moving — the scorer is reading outside "

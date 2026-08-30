@@ -95,18 +95,39 @@ def test_a_shortlist_that_selects_nothing_is_a_refusal(monkeypatch, tmp_path):
     assert "membership_changed" not in out
 
 
-def test_a_group_member_is_an_index(monkeypatch, tmp_path):
-    """`build_groups` returns members AS indices into the input. The first
+def test_the_judge_sees_representatives_not_every_member(monkeypatch, tmp_path):
+    """A group of seven cuts of one moment is asked about through the ones the
+    shortlist puts forward. Counting every member measured a set the judge never
+    sees — and made the answer look reassuring by covering the whole corpus.
+
+    `build_groups` returns both lists AS indices into the input; the first
     version tagged the candidates and looked for the tag on dicts that were
-    never dicts, which is how it recovered nothing."""
+    never dicts, which is how it recovered nothing at all."""
     module = _module(monkeypatch, tmp_path)
-    monkeypatch.setattr(module.candidate_groups, "build_groups",
-                        lambda rows, **_k: [{"moment_id": "m",
-                                             "members": list(range(len(rows)))}])
+    monkeypatch.setattr(
+        module.candidate_groups, "build_groups",
+        lambda rows, **_k: [{"moment_id": "m",
+                             "members": list(range(len(rows))),
+                             "representatives": [0]}])
     monkeypatch.setattr(
         module.candidate_groups, "build_shortlist",
         lambda groups, **_k: {"selected": list(groups)})
-    rows = [{"start": float(i), "end": float(i) + 1.0} for i in range(3)]
+    rows = [{"start": float(i), "end": float(i) + 1.0} for i in range(7)]
     out = module._shortlist_delta(rows, rows, 10.0)
-    assert out["windows_before"] == out["windows_after"] == 3
+    assert out["windows_before"] == out["windows_after"] == 1, "one of seven"
     assert out["membership_changed"] == []
+
+
+def test_a_group_that_puts_nobody_forward_is_a_refusal(monkeypatch, tmp_path):
+    """Selected groups with no representatives recover nothing, and nothing
+    against nothing compares equal."""
+    module = _module(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        module.candidate_groups, "build_groups",
+        lambda rows, **_k: [{"moment_id": "m", "members": [0],
+                             "representatives": []}])
+    monkeypatch.setattr(
+        module.candidate_groups, "build_shortlist",
+        lambda groups, **_k: {"selected": list(groups)})
+    rows = [{"start": 0.0, "end": 1.0}]
+    assert module._shortlist_delta(rows, rows, 10.0).get("refused") == "ValueError"
