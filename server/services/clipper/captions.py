@@ -21,6 +21,10 @@ import logging
 import re
 from typing import Any, Iterable, Sequence
 
+from services.clipper.captions_geom import (  # noqa: F401
+    CAPTION_BOX_H_PCT, CAPTION_BOX_W_PCT, CLIPPER_CAPTION_CENTER_PCT,
+    SCAN_STEP_PCT, SPEC_BAND_HI, SPEC_BAND_LO, _base_y_pct, _widest_band,
+    scan_bounds, scan_grid)
 from services.captioner_events import _group_words
 from services.captioner_presets import (
     DEFAULT_PRESETS,
@@ -37,37 +41,6 @@ DEFAULT_PRESET_ID = "bold_impact"
 # 9:16 safe width without libass shrinking or clipping it.
 MAX_LINE_CHARS = 22
 MAX_LINES = 2
-
-# The caption block as a fraction of the 1920-tall frame: two lines of a ~72px
-# font with leading and outline. Used only for keep-out collision maths, so an
-# approximation that errs large is the safe direction.
-CAPTION_BOX_H_PCT = 0.10
-CAPTION_BOX_W_PCT = 0.80
-
-# How finely `resolve_position` scans for a clear band. 1% of frame height is
-# ~19px at 1920 — finer than any keep-out rect's edge is meaningful, and 60-odd
-# evaluations of a handful of rectangles costs nothing.
-#
-# This replaced a ladder of six ±4% nudges. The ladder had two faults a scan
-# does not: 4% is wider than a gap can be, so it could step over a clear slot
-# and land on the far side still covered; and it accepted the FIRST y that
-# scored zero, which can be a pixel from a rect's edge.
-SCAN_STEP_PCT = 0.01
-
-# The style spec's clamp, applied only when something has to be avoided:
-# "clamped to 55-75% of frame height". It is a guard rail on the band search,
-# not a claim about where captions look best — three of the spec's own seven
-# reference measurements (50.0, 50.2, 51.1) sit below it, and an unobstructed
-# caption is left at its preset position for that reason.
-SPEC_BAND_LO, SPEC_BAND_HI = 0.55, 0.75
-
-# Where "center" actually puts the block, as a fraction of frame height.
-# Measured on all seven captioned references (docs/refs/): 50.0, 50.2, 51.1, 53,
-# 62.5, 73.5 and 77.9% — four of seven cluster at 50-53%, and none sits as high
-# as the 43.75% the shared SAFE_CAPTION_CENTER offset yields. That constant is
-# deliberately left alone: services/captioner.py uses it for the ordinary export
-# path, whose provenance is not these nine short-form clips.
-CLIPPER_CAPTION_CENTER_PCT = 0.51
 
 # A chunk shorter than this reads as a flicker; libass also rounds to ms.
 MIN_CHUNK_S = 0.12
@@ -275,18 +248,6 @@ def _overlap_area(y_pct: float, rects: list[tuple[float, float, float, float]]) 
     return total
 
 
-def _base_y_pct(position: str, out_h: int) -> float:
-    half = CAPTION_BOX_H_PCT / 2
-    pos = (position or "bottom").strip().lower()
-    if pos in ("top", "upper"):
-        return (SAFE_TOP / out_h) + half
-    if pos in ("center", "middle", "mid"):
-        return CLIPPER_CAPTION_CENTER_PCT
-    if pos in ("hook", "mid_high"):
-        return SAFE_HOOK_MID_Y / out_h
-    return (out_h - SAFE_CAPTION_BOTTOM) / out_h
-
-
 def resolve_position(
     position: str,
     layout: dict,
@@ -305,10 +266,7 @@ def resolve_position(
     out_h = int(out_h) if out_h else 1920
 
     base = _base_y_pct(position, out_h)
-    lo = (SAFE_TOP / out_h) + CAPTION_BOX_H_PCT / 2
-    hi = (out_h - SAFE_CAPTION_BOTTOM) / out_h
-    if lo > hi:  # pathological output size — keep the band non-empty
-        lo = hi
+    lo, hi = scan_bounds(out_h)
     base = min(max(base, lo), hi)
 
     rects = [
@@ -336,8 +294,7 @@ def resolve_position(
     # narrower than its own step and land on the far side still covered, and it
     # has no notion of how much room a position has around it: it took the first
     # y that scored zero, which can be one pixel from a rect's edge.
-    grid = [round(lo + i * SCAN_STEP_PCT, 4)
-            for i in range(int((hi - lo) / SCAN_STEP_PCT) + 1)]
+    grid = scan_grid(lo, hi)
     clear = [y for y in grid if _overlap_area(y, rects) <= 0.0]
 
     inside = [y for y in clear if SPEC_BAND_LO <= y <= SPEC_BAND_HI]
@@ -398,21 +355,6 @@ def panels_to_keep_out(panels: Sequence[dict], shots: Sequence[dict],
                         "w": 1080, "h": int(min(out_h, bottom) - max(0.0, top)),
                         "kind": "game_ui"})
     return out
-
-
-def _widest_band(clear: list[float]) -> float | None:
-    """Centre of the longest run of consecutive clear positions."""
-    if not clear:
-        return None
-    best = run = [clear[0]]
-    for y in clear[1:]:
-        if y - run[-1] <= SCAN_STEP_PCT * 1.5:
-            run.append(y)
-        else:
-            run = [y]
-        if len(run) > len(best):
-            best = run
-    return (best[0] + best[-1]) / 2.0
 
 
 # ---------------------------------------------------------------------------

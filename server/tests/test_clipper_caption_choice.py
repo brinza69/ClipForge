@@ -19,6 +19,8 @@ from services.clipper.captions import (
     SPEC_BAND_HI,
     SPEC_BAND_LO,
     resolve_position,
+    scan_bounds,
+    scan_grid,
 )
 
 OUT_W, OUT_H = 1080, 1920
@@ -96,9 +98,9 @@ def test_a_search_that_never_ran_rejected_nothing():
     assert told["rejected"] == []
     assert told["bands"], "the runs are still reported"
     assert all(b["rejected_because"] is None for b in told["bands"])
-    # And the band holding the delivered position is still identified, even
-    # though the position is not that band's centre.
-    assert [b["taken"] for b in told["bands"]].count(True) == 1
+    # And no band is "taken" either: the delivered position was not picked out
+    # of them. Saying otherwise would credit the search with the answer.
+    assert not any(b["taken"] for b in told["bands"])
 
 
 def test_the_spec_clamp_wins_over_a_wider_band_outside_it():
@@ -202,15 +204,44 @@ def test_a_band_centre_between_grid_points_still_matches_its_band():
     even run reported `taken: false` for every band and the sidecar said the
     winner had been rejected."""
     seen_even = False
+    ran = 0
     for top in range(600, 1400, 20):
-        told = cc.explain("bottom", _zones(mid=_px(top, 300)),
+        told = cc.explain("center", _zones(mid=_px(top, 300)),
                           out_w=OUT_W, out_h=OUT_H)
-        if not told["bands"]:
+        if not told["searched"] or not told["bands"]:
             continue
+        ran += 1
         taken = [b for b in told["bands"] if b["taken"]]
         assert len(taken) == 1, (top, told["chosen"], told["bands"])
         seen_even = seen_even or any(b["steps"] % 2 == 0 for b in told["bands"])
+    assert ran, "at least one of these has to reach the scan"
     assert seen_even, "the even-length case has to actually occur"
+
+
+def test_the_bottom_preset_is_above_the_last_position_the_scan_can_reach():
+    """`bottom` is exactly `hi`, and the grid stops one step short because 59.58
+    steps truncate to 59. So a caption left at its preset sits somewhere the
+    search could not have put it — which is why an empty `taken` on the preset
+    branch is a fact about the search and not a bug in the report."""
+    lo, hi = scan_bounds(OUT_H)
+    grid = scan_grid(lo, hi)
+    _x, preset = resolve_position("bottom", {}, out_w=OUT_W, out_h=OUT_H)
+    assert preset == round(hi, 4)
+    assert grid[-1] < preset, (grid[-1], preset)
+
+    told = cc.explain("bottom", _zones(hud=_px(0, 200)),
+                      out_w=OUT_W, out_h=OUT_H)
+    assert told["reason"] == cc.PRESET_CLEAR
+    assert told["chosen_inside_a_clear_run"] is False
+
+
+def test_a_position_the_search_did_choose_is_inside_a_clear_run():
+    """The other half of the same field: when the scan ran, the answer it
+    returned is one of the runs it was choosing between."""
+    told = cc.explain("center", _zones(mid=_px(900, 200)),
+                      out_w=OUT_W, out_h=OUT_H)
+    assert told["searched"] is True
+    assert told["chosen_inside_a_clear_run"] is True
 
 
 # --- the finding it carries rather than fixes --------------------------------
@@ -286,18 +317,29 @@ def test_nested_lists_of_rectangles_are_counted_the_way_they_are_walked():
 # --- the arithmetic it must not invent ---------------------------------------
 
 
-def test_the_scan_range_comes_from_the_shipping_function():
-    """`"top"` on an empty layout IS the scan's low bound and `"bottom"` IS its
-    high one. Copying `SAFE_TOP` and `SAFE_CAPTION_BOTTOM` here would be a third
-    place they are written down."""
-    _x, lo = resolve_position("top", {}, out_w=OUT_W, out_h=OUT_H)
-    _x, hi = resolve_position("bottom", {}, out_w=OUT_W, out_h=OUT_H)
+def test_the_grid_is_the_one_the_search_evaluates():
+    """It was rebuilt from `resolve_position`'s ROUNDED return values with
+    `int(round(...))` where the search uses `int(...)`. Two small differences,
+    one wrong answer: 61 candidates against the search's 60, the extra one at
+    0.7542 above a real upper bound of 0.75 — a position that could never have
+    been chosen, reported as one that lost."""
+    lo, hi = scan_bounds(OUT_H)
     told = cc.explain("bottom", _zones(face=_px(1000, 500)),
                       out_w=OUT_W, out_h=OUT_H)
-    lowest = min(b["from"] for b in told["bands"])
-    assert lowest >= round(lo, 4) - 1e-9
-    assert all(b["to"] <= round(hi, 4) + 1e-9 for b in told["bands"])
-    assert told["scanned"] == int(round((hi - lo) / 0.01)) + 1
+    assert told["scanned"] == len(scan_grid(lo, hi))
+    assert all(b["to"] <= hi + 1e-9 for b in told["bands"]), "nothing above hi"
+    assert min(b["from"] for b in told["bands"]) >= round(lo, 4) - 1e-9
+
+
+def test_no_candidate_sits_outside_the_band_the_search_may_use():
+    """The regression, stated as the thing it broke rather than as the arithmetic
+    that broke it."""
+    lo, hi = scan_bounds(OUT_H)
+    for layout in (_zones(face=_px(1000, 500)), _zones(mid=_px(900, 200)),
+                   _zones(hud=_px(0, 60), face=_px(0, 1500))):
+        told = cc.explain("bottom", layout, out_w=OUT_W, out_h=OUT_H)
+        for band in told["bands"]:
+            assert lo - 1e-9 <= band["from"] <= band["to"] <= hi + 1e-9, band
 
 
 def test_a_pathological_output_size_does_not_produce_a_backwards_grid():

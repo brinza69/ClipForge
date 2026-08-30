@@ -18,9 +18,13 @@ nothing here recomputes a placement rule.
 - THE PRESET POSITION comes from `resolve_position` called with an EMPTY layout:
   no keep-out rectangles means nothing to avoid, so the function returns its own
   clamped base. The base is not recomputed from `SAFE_TOP` and friends.
-- THE SCAN RANGE comes the same way — `"top"` on an empty layout IS the low
-  bound of the scan and `"bottom"` IS the high one, by construction of
-  `_base_y_pct` plus the same clamp.
+- THE GRID comes from `captions.scan_grid(*captions.scan_bounds(out_h))`, the
+  same two calls `resolve_position` makes. The first version rebuilt it from
+  `resolve_position`'s ROUNDED return values with `int(round(...))` where the
+  search uses `int(...)` — two small differences and one wrong answer: the
+  report listed a candidate at 0.7542 against a real upper bound of 0.75, a
+  position the search never evaluated and could not have chosen. It was
+  reporting on a search nobody ran, which is this file's one job to not do.
 - THE COVERAGE at any position is `captions._overlap_area`, imported rather than
   restated. A private name crossing a module boundary is a smell; a second copy
   of collision arithmetic that decides where text lands is worse, and this plan
@@ -67,6 +71,8 @@ from services.clipper.captions import (
     _norm_rect,
     _overlap_area,
     resolve_position,
+    scan_bounds,
+    scan_grid,
 )
 
 __all__ = ["REASONS", "REJECTED_BECAUSE", "explain"]
@@ -218,10 +224,9 @@ def explain(position: str, layout: dict | None, *,
     # from `SAFE_TOP` and `CAPTION_BOX_H_PCT`: a second copy of the base rule is
     # a second thing to drift.
     _x, base = resolve_position(position, {}, out_w=out_w, out_h=out_h)
-    # THE SCAN RANGE, the same way. `"top"` on an empty layout IS the scan's low
-    # bound and `"bottom"` IS its high one.
-    _x, lo = resolve_position("top", {}, out_w=out_w, out_h=out_h)
-    _x, hi = resolve_position("bottom", {}, out_w=out_w, out_h=out_h)
+    # THE GRID, from the two functions the search itself calls. Reconstructing
+    # it from the rounded return values put a candidate above `hi`.
+    lo, hi = scan_bounds(out_h)
 
     census = _rect_census(zones, out_w, out_h)
     rects = [r for r in (_norm_rect(rc, out_w, out_h)
@@ -247,10 +252,7 @@ def explain(position: str, layout: dict | None, *,
                     "bands": [], "rejected": [], "coverage_at_chosen": 0.0})
         return out
 
-    if hi < lo:
-        lo = hi
-    steps = int(round((hi - lo) / SCAN_STEP_PCT))
-    grid = [round(lo + i * SCAN_STEP_PCT, 4) for i in range(steps + 1)]
+    grid = scan_grid(lo, hi)
     covered = {y: round(_overlap_area(y, rects), 6) for y in grid}
     clear = [y for y in grid if covered[y] <= 0.0]
     bands = _bands(grid, clear)
@@ -262,21 +264,29 @@ def explain(position: str, layout: dict | None, *,
                      chosen_covered=chosen_covered, clear=clear,
                      clear_in_spec=clear_in_spec)
 
-    # CONTAINMENT, NOT THE CENTRE. `_widest_band` returns a run's midpoint, so
-    # matching on the centre works only when the band search ran — and when the
-    # preset is already clear it does not run at all, `resolve_position` returns
-    # early, and the delivered position sits somewhere inside a clear run rather
-    # than at its middle. Matching on the centre marked every band `taken:
-    # false` in that case, so the sidecar reported that the winner had lost.
-    for band in bands:
-        band["taken"] = (band["from"] - _EPS <= chosen <= band["to"] + _EPS
-                         or abs(band["centre"] - chosen) <= _EPS)
-
-    # AND A SEARCH THAT NEVER RAN REJECTED NOTHING. `PRESET_CLEAR` returns
-    # before the scan; the other runs are real and worth reporting, but calling
-    # them "rejected" would say they were considered and beaten.
+    # A SEARCH THAT NEVER RAN CHOSE NOTHING AND REJECTED NOTHING.
+    # `PRESET_CLEAR` returns before the scan; the other clear runs are real and
+    # worth reporting, but calling one of them "taken" would say the delivered
+    # position was picked out of them, and calling the rest "rejected" would say
+    # they were considered and beaten.
+    #
+    # AND THE PRESET IS NOT ALWAYS EVEN REACHABLE. `bottom` is 0.75 on a
+    # 1920-tall output, which is exactly `hi` — and the grid stops at 0.7442,
+    # because 59.58 steps truncate to 59. So the scan can never select the
+    # bottom preset position, and a caption left there sits somewhere the search
+    # could not have put it. `chosen_inside_a_clear_run` is how the reader finds
+    # that out instead of inferring it from an empty `taken`.
     searched = reason in (BAND_IN_SPEC, BAND_OUTSIDE_SPEC, NOTHING_CLEAR,
                           UNEXPLAINED)
+    inside = [b for b in bands
+              if b["from"] - _EPS <= chosen <= b["to"] + _EPS
+              or abs(b["centre"] - chosen) <= _EPS]
+    for band in bands:
+        # CONTAINMENT, NOT THE CENTRE, when the search ran: `_widest_band`
+        # returns a run's midpoint, so matching on the centre works only for
+        # runs of odd length and marked every band `taken: false` otherwise —
+        # the sidecar then reported that the winner had lost.
+        band["taken"] = searched and band in inside
     widest = max((b["steps"] for b in (in_spec or bands)), default=0)
     for band in bands:
         band["rejected_because"] = (
@@ -289,6 +299,10 @@ def explain(position: str, layout: dict | None, *,
         "coverage_at_chosen": chosen_covered,
         "bands": bands,
         "searched": searched,
+        # Whether the delivered position falls in one of the clear runs at all.
+        # It does not have to: the preset branch returns before the scan, and
+        # `bottom` sits above the grid's last step by construction.
+        "chosen_inside_a_clear_run": bool(inside),
         "rejected": [b for b in bands if not b["taken"]] if searched else [],
         "reason": reason,
     })
