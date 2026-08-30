@@ -46,6 +46,7 @@ import argparse
 import asyncio
 import copy
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -232,7 +233,9 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     if not isinstance(signals, dict) or not signals:
         return {"project": project_id, "refused": "no_signals_artefact"}
     duration = float(project.duration or 0.0)
-    if duration <= 0:
+    # `NaN <= 0` is False, so a NaN sailed through a check that looks like it
+    # covers everything. Finite first, then positive.
+    if not math.isfinite(duration) or duration <= 0:
         return {"project": project_id, "refused": "no_duration_on_project"}
     cfg = project.clipper_settings or {}
     lo = float(cfg.get("min_clip_s") or settings.clipper_min_clip_s)
@@ -410,7 +413,12 @@ def main() -> int:
     # and it was coming back green because only PROJECT-level refusals reached
     # the exit code. Every way of not knowing has to fail the run.
     unbuilt = sum(1 for r in rows if (r.get("shortlist") or {}).get("refused"))
-    code = 2 if (refused or invalid or contaminated or unbuilt) else 0
+    # A window whose SCORE changed while its end did not means the scorer read
+    # something outside its own window, so the two columns differ by more than
+    # this batch. It was printed and left out of the exit code — a finding the
+    # report made and the gate ignored.
+    leaked = sum(len(r.get("changed_without_moving") or []) for r in rows)
+    code = 2 if (refused or invalid or contaminated or unbuilt or leaked) else 0
 
     if args.json:
         print(json.dumps(rows, indent=2))
@@ -422,10 +430,16 @@ def main() -> int:
     shifted = [r["project"] for r in rows
                if (r.get("shortlist") or {}).get("membership_changed")
                or (r.get("shortlist") or {}).get("refused")]
+    # SEPARATELY, because on the pilots reordering is the whole finding and
+    # membership is not — folding them together reported the quiet half.
+    reordered = [r["project"] for r in rows
+                 if (r.get("shortlist") or {}).get("order_changed")]
     print(f"\n{'POOLED':14} {moved} windows moved over "
           f"{sum(r.get('candidates', 0) for r in rows)}")
     print(f"{'':14} judge shortlist membership changed in "
           f"{len(shifted)} project(s){': ' + ', '.join(shifted) if shifted else ''}")
+    print(f"{'':14} judge shortlist REORDERED in {len(reordered)} project(s)"
+          f"{': ' + ', '.join(reordered) if reordered else ''}")
     if refused:
         print(f"{'':14} {refused} project(s) could not be measured at all")
     if invalid:
@@ -433,6 +447,10 @@ def main() -> int:
     if unbuilt:
         print(f"{'':14} {unbuilt} project(s) whose judge shortlist could not be "
               f"built at all")
+    if leaked:
+        print(f"{'':14} {leaked} window(s) changed score without moving — the "
+              f"scorer read outside its own window and the delta is not this "
+              f"batch's alone")
     if contaminated:
         print(f"{'':14} {contaminated} end(s) moved for reasons other than the "
               f"snap — the delta is not this batch's alone")

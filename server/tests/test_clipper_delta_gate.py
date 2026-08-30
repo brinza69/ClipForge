@@ -111,6 +111,48 @@ def test_a_refused_shortlist_fails_the_run(tmp_path, monkeypatch, capsys):
     assert "could not be built" in capsys.readouterr().out
 
 
+def test_a_score_that_changed_without_moving_fails_the_run(tmp_path,
+                                                           monkeypatch, capsys):
+    """A window whose score changed while its end did not means the scorer read
+    outside its own window. It was printed and left out of the exit code — a
+    finding the report made and the gate ignored."""
+    module = _module(monkeypatch, _project(tmp_path, "p", [{"start": 0.0,
+                                                           "end": 10.0}]))
+    monkeypatch.setattr(module, "_measure", lambda name, *_a, **_k: {
+        "project": name, "candidates": 1, "invalid": 0, "moved": 0,
+        "contaminated": [], "scores_changed": 1, "changed_without_moving": [0],
+        "max_delta": 0.5, "mean_abs_delta": 0.5, "order_changed": False,
+        "top_n": 80, "scorer": "heuristic_only", "windows": {},
+        "shortlist": {"windows_before": 1, "windows_after": 1,
+                      "groups_before": 1, "groups_after": 1,
+                      "membership_changed": [], "order_changed": False}})
+    assert _run(module, "p") == 2
+    assert "read outside its own window" in capsys.readouterr().out
+
+
+def test_a_non_finite_duration_is_refused(tmp_path, monkeypatch):
+    """`NaN <= 0` is False, so a NaN sailed through a check that looks like it
+    covers everything."""
+    module = _module(monkeypatch, _project(tmp_path, "p", [{"start": 0.0,
+                                                           "end": 10.0}]))
+
+    class _P:
+        duration = float("nan")
+        clipper_settings: dict = {}
+        content_type_override = None
+        content_type = "unknown"
+
+    async def _load(_pid):
+        return {"segments": [{"start": 0.0, "end": 1.0, "words": [
+            {"word": "hi", "start": 0.0, "end": 0.4}]}]}, _P()
+
+    monkeypatch.setattr(module, "_load", _load)
+    monkeypatch.setattr(module.storage, "read_artifact",
+                        lambda _pid, name: {"rms": [0.1]} if name == "signals"
+                        else None)
+    assert module._measure("p")["refused"] == "no_duration_on_project"
+
+
 def test_an_incomplete_input_is_refused_not_defaulted(tmp_path, monkeypatch):
     """`read_artifact(...) or {}` and `duration or 0.0` turn a missing input
     into a measurement taken against nothing: every signal-derived feature
@@ -160,6 +202,29 @@ def test_the_judge_sees_representatives_not_every_member(monkeypatch, tmp_path):
     out = module._shortlist_delta(rows, rows, 10.0)
     assert out["windows_before"] == out["windows_after"] == 1, "one of seven"
     assert out["membership_changed"] == []
+
+
+def test_the_same_representatives_in_another_order_is_another_question(
+        monkeypatch, tmp_path):
+    """The shortlist is a budget spent in order, so the same members asked in a
+    different order are a different question put to the judge. The pilots show
+    exactly that — membership unchanged, order changed — and nothing pinned the
+    property while the comparison was a set."""
+    module = _module(monkeypatch, tmp_path)
+    order = {"n": 0}
+
+    def _groups(rows, **_k):
+        order["n"] += 1
+        reps = [0, 1] if order["n"] == 1 else [1, 0]
+        return [{"moment_id": "m", "members": [0, 1], "representatives": reps}]
+
+    monkeypatch.setattr(module.candidate_groups, "build_groups", _groups)
+    monkeypatch.setattr(module.candidate_groups, "build_shortlist",
+                        lambda groups, **_k: {"selected": list(groups)})
+    rows = [{"start": 0.0, "end": 1.0}, {"start": 2.0, "end": 3.0}]
+    out = module._shortlist_delta(rows, rows, 10.0)
+    assert out["membership_changed"] == [], "the same two windows"
+    assert out["order_changed"] is True
 
 
 def test_a_group_that_puts_nobody_forward_is_a_refusal(monkeypatch, tmp_path):
