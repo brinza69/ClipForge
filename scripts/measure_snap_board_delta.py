@@ -25,9 +25,18 @@ WHAT IT STILL CANNOT SEE, and a clean report here is not permission to skip it:
   reports the ordering rather than the grouping.
 - **The board.** What ships is the winners after dedupe, capping and judging.
 
-So the numbers below bound the risk; they do not retire it. `TOP CHANGED` is the
-one to read: if the highest-scoring windows keep their order, the board is
-unlikely to move for reasons this pass could have seen.
+WHAT A CLEAN REPORT ENTITLES YOU TO SAY, and it is narrower than it looks. Not
+"the board is unlikely to move" — the supported sentence is: *the snap produced
+no crossings over these thresholds at the level of the windows' heuristic score;
+the effect on the judge and on what finally ships remains unknown.* Grouping can
+merge two windows whose ends moved even when the same indices stay in the top N,
+which is why the shortlist is built with the real `build_groups` and
+`build_shortlist` rather than argued about — and even then the judge's verdict
+on that shortlist is not reproducible here.
+
+SEVERAL THRESHOLDS, each named for what it is. `clip_count` is the board's own
+capacity, 20 is a diagnostic somebody chose, and 80 is the shortlist BUDGET —
+not the judge pool, which is decided after grouping and is reported separately.
 """
 
 from __future__ import annotations
@@ -51,7 +60,7 @@ from models import ProjectModel, TranscriptModel  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from services.clipper import boundary_completion as bc  # noqa: E402
-from services.clipper import storage  # noqa: E402
+from services.clipper import candidate_groups, storage, story_evidence  # noqa: E402
 from services.clipper.candidate_boundaries import _fit  # noqa: E402
 from services.clipper.candidate_terms import (  # noqa: E402
     _neighbourhood, _num, _text_of, _words_for,
@@ -80,8 +89,8 @@ async def _load(project_id: str):
     return {"language": row.language, "segments": row.segments}, project
 
 
-def _refitted(cand: dict, words, *, lo: float, hi: float,
-              ceiling: float) -> tuple[dict | None, bool]:
+def _refitted(cand: dict, words, *, lo: float, hi: float, ceiling: float,
+              atoms) -> tuple[dict | None, bool]:
     """`(the candidate as `_fit` would leave it, whether its end was in a word)`.
 
     THE CANONICAL FUNCTION, not a replica of its guards. An earlier version of
@@ -106,6 +115,14 @@ def _refitted(cand: dict, words, *, lo: float, hi: float,
     out["end"] = round(fitted_end, 3)
     out["words"] = list(inside)
     out["text"] = _text_of(inside) or str(cand.get("text") or "")
+    # THE STORY BLOCK MOVES WITH THE WINDOW. `refine_boundaries` calls
+    # `remeasure` after every step that can move an edge, and a measurement that
+    # snapped the end and scored against the OLD context/payoff/reaction numbers
+    # would be comparing a new window against an old moment — which is the exact
+    # failure `remeasure` was added to stop, reproduced in the tool built to
+    # check for it.
+    if isinstance(out.get("story"), dict):
+        story_evidence.remeasure(out, atoms=atoms)
     return out, straddled
 
 
@@ -121,6 +138,30 @@ def _order(rows: list[dict]) -> list[int]:
     """Indices, best first. Ties broken by index so the order is total."""
     return [i for i, _r in sorted(enumerate(rows),
                                   key=lambda p: (-_num(p[1].get("overall")), p[0]))]
+
+
+def _shortlist_delta(before: list[dict], after: list[dict],
+                     duration: float) -> dict:
+    """Which MOMENTS the judge would be asked about, before and after.
+
+    The windows are cuts of moments; the judge sees moments. Grouping can merge
+    two windows whose ends moved, or split one, and a stable ordering of windows
+    says nothing about that — which is why this runs the real
+    `build_groups` + `build_shortlist` rather than reasoning about them.
+    """
+    def _ids(rows: list[dict]) -> list[str]:
+        groups = candidate_groups.build_groups(rows)
+        picked = candidate_groups.build_shortlist(groups, duration=duration)
+        return [str(m.get("moment_id") or m.get("id") or "")
+                for m in (picked.get("selected") or [])]
+
+    try:
+        a, b = _ids(before), _ids(after)
+    except Exception as exc:
+        return {"refused": type(exc).__name__}
+    return {"before": len(a), "after": len(b),
+            "membership_changed": sorted(set(a) ^ set(b)),
+            "order_changed": a != b}
 
 
 def _measure(project_id: str, top_n: int = TOP_N) -> dict:
@@ -141,12 +182,16 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     cfg = project.clipper_settings or {}
     lo = float(cfg.get("min_clip_s") or settings.clipper_min_clip_s)
     hi = float(cfg.get("max_clip_s") or settings.clipper_max_clip_s)
+    target_count = int(cfg.get("clip_count") or settings.clipper_default_clip_count)
     profile = effective_content_type(project)
     platform = cfg.get("platform") or "tiktok"
     seg_types = _segment_types(project_id, duration, transcript)
     overridden = bool(project.content_type_override)
     words = _words_for({}, transcript)
     ceiling = duration or (_num(words[-1].get("end")) if words else 0.0)
+    # Read by `remeasure` to resolve back-references. Absent on the legacy path,
+    # where the story block does not exist either.
+    atoms = storage.read_artifact(project_id, "atoms")
 
     before = [copy.deepcopy(c) for c in rows]
     after = []
@@ -154,7 +199,7 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     contaminated: list[int] = []
     for i, cand in enumerate(rows):
         refitted, straddled = _refitted(cand, words, lo=lo, hi=hi,
-                                        ceiling=ceiling)
+                                        ceiling=ceiling, atoms=atoms)
         after.append(refitted if refitted is not None else copy.deepcopy(cand))
         if refitted is not None:
             moved.append(i)
@@ -174,10 +219,31 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
               for i in range(len(rows))]
     changed = [i for i, d in enumerate(deltas) if abs(d) > 1e-9]
     order_before, order_after = _order(before), _order(after)
-    top_before, top_after = order_before[:top_n], order_after[:top_n]
+
+    def _window(n: int) -> dict:
+        a, b = order_before[:n], order_after[:n]
+        return {"n": n, "set_changed": sorted(set(a) ^ set(b)),
+                "order_changed": a != b}
+
+    # SEVERAL THRESHOLDS, each named for what it actually is. One number invited
+    # the reading that a stable set at that number says something about the
+    # board, and it does not: the board is `clip_count` after grouping,
+    # shortlisting and judging, and 20 is a diagnostic somebody chose.
+    windows = {
+        "clip_count": _window(target_count),
+        "arbitrary_20": _window(20),
+        # NOT the judge pool. 80 is the shortlist BUDGET, and which 80 moments
+        # reach the judge is decided after grouping — measured separately below.
+        "top_80_windows": _window(80),
+        "requested": _window(top_n),
+    }
+
+    # And the one that is about moments rather than windows: the shortlist the
+    # judge would really be asked about, after the same grouping the run uses.
+    shortlist = _shortlist_delta(before, after, duration)
     return {
         "project": project_id,
-        "windows": len(raw),
+        "candidates": len(raw),
         "invalid": invalid,
         "moved": len(moved),
         # Ends `_fit` moved that were not inside a word. Must be zero, or the
@@ -191,8 +257,13 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
         "mean_abs_delta": round(sum(abs(d) for d in deltas) / max(1, len(deltas)), 5),
         "order_changed": order_before != order_after,
         "top_n": top_n,
-        "top_set_changed": sorted(set(top_before) ^ set(top_after)),
-        "top_order_changed": top_before != top_after,
+        "windows": windows,
+        "shortlist": shortlist,
+        # Stamped, because it will stop being true. The learned ranker is
+        # enabled in config with no model and no training rows, so
+        # `use_learned=False` reproduces today — and the day it is switched on
+        # this report would silently start describing a different scorer.
+        "scorer": "heuristic_only",
     }
 
 
@@ -200,13 +271,21 @@ def _report(row: dict) -> None:
     if row.get("refused"):
         print(f"{row['project']:14} {row['refused']}")
         return
-    print(f"{row['project']:14} {row['windows']:5} windows   moved {row['moved']:4}   "
-          f"scores changed {row['scores_changed']:4}   "
-          f"max |delta| {row['max_delta']}")
-    print(f"{'':14} order changed: {row['order_changed']}   "
-          f"top-{row['top_n']} membership changed: "
-          f"{'yes' if row['top_set_changed'] else 'no'}   "
-          f"top-{row['top_n']} order changed: {row['top_order_changed']}")
+    print(f"{row['project']:14} {row['candidates']:5} candidates   "
+          f"moved {row['moved']:4}   scores changed {row['scores_changed']:4}   "
+          f"max |delta| {row['max_delta']}   [{row['scorer']}]")
+    for name, w in row["windows"].items():
+        print(f"{'':14} {name:16} n={w['n']:<4} membership "
+              f"{'CHANGED' if w['set_changed'] else 'same':8} order "
+              f"{'changed' if w['order_changed'] else 'same'}")
+    sl = row["shortlist"]
+    if sl.get("refused"):
+        print(f"{'':14} shortlist: could not be built ({sl['refused']})")
+    else:
+        print(f"{'':14} {'judge shortlist':16} {sl['before']}->{sl['after']} "
+              f"moments, membership "
+              f"{'CHANGED' if sl['membership_changed'] else 'same':8} order "
+              f"{'changed' if sl['order_changed'] else 'same'}")
     if row.get("invalid"):
         print(f"{'':14} {row['invalid']} entries are not records — the corpus is "
               f"smaller than the file")
@@ -254,11 +333,12 @@ def main() -> int:
     for row in rows:
         _report(row)
     moved = sum(r.get("moved", 0) for r in rows)
-    top = [r["project"] for r in rows if r.get("top_set_changed")]
+    shifted = [r["project"] for r in rows
+               if (r.get("shortlist") or {}).get("membership_changed")]
     print(f"\n{'POOLED':14} {moved} windows moved over "
-          f"{sum(r.get('windows', 0) for r in rows)}")
-    print(f"{'':14} top-{args.top} membership changed in "
-          f"{len(top)} project(s){': ' + ', '.join(top) if top else ''}")
+          f"{sum(r.get('candidates', 0) for r in rows)}")
+    print(f"{'':14} judge shortlist membership changed in "
+          f"{len(shifted)} project(s){': ' + ', '.join(shifted) if shifted else ''}")
     if refused:
         print(f"{'':14} {refused} project(s) could not be measured at all")
     if invalid:
