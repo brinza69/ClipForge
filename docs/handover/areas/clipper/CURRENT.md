@@ -497,15 +497,43 @@ false` călătorește cu fiecare verdict. Restul listei R6 nu e începută.
 
 ## Punctul exact de reluare
 
-Următoarea sesiune are trei opțiuni, în ordinea asta: **un re-score pe o clonă**, care măsoară delta
-lui R5a pe scoruri/dedupe/shortlist/board fără să atingă baseline-ul; **gate-ul vizual pentru R3a,
-R3b și R4**,
-care nu se poate închide fără un om; sau **Batch R6** — captions și source hygiene — din
-[`ai-stream-clipper-production-engine-v1.md`](../../../plans/ai-stream-clipper-production-engine-v1.md),
-acum versionat în repo. Vocabularul de regimuri pe care R3 îl atribuie există deja, ca listă închisă,
-în `edit_profiles.REGIMES`.
+**Nimic din motor nu e activ.** R2, R3a, R3b, R4, R5 și R6 sunt instrumentare în umbră: calculează,
+scriu în sidecar sau în `candidates.json`, și nu mișcă niciun cadru. Singurele două care ating
+comportamentul sunt R1 (scoate tăieturile invizibile din planurile viitoare, prin construcție fără
+schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea rulare).
 
-Nu porni Batch R2–R8 în paralel și nu activa `story_v2`. Planul separă gate-ul de selecție de gate-ul
+**Ce nu pot închide agenții, în ordinea în care blochează:**
+
+1. **Gate-ul vizual R3a / R3b / R4** — patru clipuri, un om: Moist (creatorul, nu fața din browser),
+   Jensen (diagramă lizibilă), vlog (obiectele în `fit`), go ghost (fără comutări false).
+2. **Gate-ul R5** — „≥95% începuturi și finaluri acceptate la review uman".
+3. **Gate-ul R6** — „zero captions duble pe cele 15 go ghost", care cere și re-randare, și un om.
+
+**Ce poate face un agent, dar durează și atinge date:**
+
+4. **Re-score pe o CLONĂ** — măsoară delta lui R5a pe scoruri, dedupe, shortlist, judge și board.
+   Trebuie să includă `39c89ae2e16e` și `43a509687a33`, nu doar cele patru piloturi: acolo sunt cele
+   trei mutări extreme. Nu pe proiectele-baseline.
+5. **Re-randarea piloturilor** — abia atunci cele 116 tăieturi invizibile ale lui R1 devin 0 în audit,
+   și abia atunci gate-ul §6 al lui R4 poate fi măcar încercat.
+
+**Cod, în ordinea planului:**
+
+6. **R6, a doua jumătate**, strict în shadow, în ordinea confirmată la review: poziționarea captions
+   față de fețe, UI, diagrame și banda blurată; warning-uri pentru browser chrome și conținut
+   informativ acoperit; sidecar cu decizia propusă, fără modificarea exportului. **Nu materializa
+   dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
+7. **R7** — preflight de publicare și corecția bounded (maximum una).
+8. **R8** — reconstrucția secvenței livrate după trim; până atunci `edit_quality` refuză jumătatea
+   bazată pe shot-uri pe exporturile cu `drop_spans`.
+9. **S7** — închiderea infrastructurii reasoning v2.
+10. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
+11. **P** — activarea graduală.
+
+**În afara planului:** pipeline-ul TikTok nu e construit — router-ul nu e montat, sidebar-ul duce la o
+pagină inexistentă, iar cele două teste care pică în suită sunt ale lui, de dinaintea acestor sesiuni.
+
+Nu porni Batch R7–R8 în paralel și nu activa `story_v2`. Planul separă gate-ul de selecție de gate-ul
 de randare tocmai fiindcă review-ul existent le-a amestecat.
 
 ## Starea artefactului curent
