@@ -90,6 +90,12 @@ class Settings(BaseSettings):
         return self.data_dir / "tiktok"
 
     @property
+    def narrator_dir(self) -> Path:
+        """Spatiul de lucru per proiect pentru Naratorul AI pentru video
+        (sursa, cadre, analiza scenelor, transcript, voce, subtitrari, export)."""
+        return self.data_dir / "narrator"
+
+    @property
     def clipper_dir(self) -> Path:
         """Per-project workspace for the AI Stream Clipper (proxies, signals,
         sampled frames, previews, exports). Under data/, so .gitignore already
@@ -109,6 +115,7 @@ class Settings(BaseSettings):
             self.knowledge_dir,
             self.doodle_dir,
             self.tiktok_dir,
+            self.narrator_dir,
             self.clipper_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
@@ -314,6 +321,27 @@ class Settings(BaseSettings):
     # Solving also needs the challenge script: `pip install yt-dlp-ejs`.
     ytdlp_js_runtimes: str = ""
 
+    # TIKTOK NU MERGE FARA ASTA — masurat pe 30 aug 2026, dupa trei zile in care
+    # cauza a fost cautata aiurea. Cu user-agentul implicit al yt-dlp, ORICE link
+    # TikTok pica cu "Unexpected response from webpage request". Nu e verificare
+    # anti-bot si nu e nevoie de cookies: acelasi URL luat cu `curl` si un
+    # user-agent de Chrome intoarce 200 si o pagina de 409 KB care CONTINE blocul
+    # `__UNIVERSAL_DATA_FOR_REHYDRATION__` pe care yt-dlp il cauta. Cu
+    # user-agentul de mai jos, aceleasi linkuri se rezolva instant.
+    #
+    # Ce s-a incercat degeaba pana la asta, ca sa nu se reia: yt-dlp stabil
+    # 2026.08.19, nightly 2026.08.27 si 2026.08.29; cookies din Chrome si din
+    # Edge (baza e blocata cat browserul ruleaza); un cookies.txt real cu 74 de
+    # cookie-uri TikTok; si `tiktok:api_hostname`. Toate au dat aceeasi eroare.
+    #
+    # Se aplica la TOATE sursele, nu doar TikTok: un user-agent de browser real
+    # e mai compatibil peste tot, iar YouTube a fost verificat dupa schimbare.
+    # Gol = user-agentul propriu al yt-dlp.
+    ytdlp_user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    )
+
     @property
     def ytdlp_opts(self) -> dict:
         """Everything yt-dlp needs to reach a gated source. Merged at both
@@ -323,6 +351,9 @@ class Settings(BaseSettings):
                     for r in self.ytdlp_js_runtimes.split(",") if r.strip()]
         if runtimes:
             opts["js_runtimes"] = {name: {} for name in runtimes}
+        ua = self.ytdlp_user_agent.strip()
+        if ua:
+            opts["http_headers"] = {"User-Agent": ua}
         return opts
 
     @property
