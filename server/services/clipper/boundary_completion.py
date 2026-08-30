@@ -46,7 +46,7 @@ from services.clipper.segmentation import _continues, _ends_sentence
 from services.clipper.edit_quality import TAIL_TIGHT_S
 
 __all__ = ["STATUSES", "DEFECTS", "UNKNOWNS", "BLOCKING", "TECHNICAL",
-           "REFUSALS", "completeness", "boundary_view", "attach"]
+           "REFUSALS", "completeness", "eligibility", "boundary_view", "attach"]
 
 COMPLETE = "complete"
 INCOMPLETE = "incomplete"
@@ -321,6 +321,36 @@ def _repair(cand: dict, words: Sequence[dict], defects: Sequence[str], *,
     }
 
 
+def eligibility(defects: Sequence[str], unknown: Sequence[str],
+                repair: dict) -> tuple[bool | None, str | None]:
+    """`(eligible, why not)` from what was found. THE rule, in one place.
+
+    Derived, not decided: given the defects, the unknowns and the one repair,
+    there is exactly one correct verdict. It lives here as a function because
+    the audit has to check the record against it — validating the TYPE of
+    `eligible` while leaving its VALUE unchecked let a clean view claim any
+    verdict it liked, which is the same hole as a `blocking` list nobody
+    reconciled with its own defects.
+
+    ORDER IS THE WHOLE RULE. A defect that was MEASURED rejects the window
+    whatever else could not be checked: a cut inside a word needs neither
+    punctuation nor a language, and letting `unknown` swallow it hid a certain
+    defect behind an unavailable measurement. `None` is right only when nothing
+    known rejects the candidate and the verdict depends on the missing signal.
+    """
+    blocking = [d for d in defects if d in BLOCKING]
+    repaired = bool(repair.get("kind")) and not [
+        d for d in (repair.get("remaining") or []) if d in BLOCKING]
+    if blocking and not repaired:
+        return False, blocking[0]
+    if unknown:
+        # Nothing known rejects it, and the check that would decide could not be
+        # made. The board must not lose a moment for the way its transcript was
+        # written.
+        return None, UNAVAILABLE
+    return True, None
+
+
 def boundary_view(cand: dict, words: Sequence[dict], *, max_s: float,
                   ceiling: float | None = None,
                   next_start: float | None = None) -> dict:
@@ -339,30 +369,7 @@ def boundary_view(cand: dict, words: Sequence[dict], *, max_s: float,
                       next_start=next_start)
               if defects else {"kind": None, "refused": NOTHING_TO_REPAIR})
 
-    # ORDER IS THE WHOLE RULE. A defect that was MEASURED rejects the window
-    # whatever else could not be checked: a cut inside a word needs neither
-    # punctuation nor a language, and letting `unknown` swallow it hid a certain
-    # defect behind an unavailable measurement. `None` is right only when
-    # nothing known rejects the candidate and the verdict depends on the signal
-    # that is missing.
-    if blocking and not (repair.get("kind") and not [
-            d for d in repair["remaining"] if d in BLOCKING]):
-        eligible: bool | None = False
-        reason = blocking[0]
-    elif checks["unknown"]:
-        # Nothing known rejects it, and the check that would decide could not be
-        # made. The board must not lose a moment for the way its transcript was
-        # written.
-        eligible, reason = None, UNAVAILABLE
-    elif not blocking:
-        eligible, reason = True, None
-    elif repair.get("kind") and not [d for d in repair["remaining"]
-                                     if d in BLOCKING]:
-        # Repairable in one bounded move. Still eligible, and the proposal says
-        # what it would take.
-        eligible, reason = True, None
-    else:
-        eligible, reason = False, blocking[0]
+    eligible, reason = eligibility(defects, checks["unknown"], repair)
 
     return {
         "schema": "boundary_view_v1",

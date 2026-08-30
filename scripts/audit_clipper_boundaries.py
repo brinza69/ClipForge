@@ -55,7 +55,7 @@ sys.path.insert(0, str(_ROOT / "server"))
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 
 from services.clipper.boundary_completion import (  # noqa: E402
-    BLOCKING, DEFECTS, REFUSALS, REPAIR_EXTEND, TECHNICAL, UNKNOWNS,
+    BLOCKING, DEFECTS, REFUSALS, REPAIR_EXTEND, TECHNICAL, UNKNOWNS, eligibility,
 )
 
 #: Every key `boundary_view_v1` promises. A view missing one is MALFORMED, not
@@ -183,6 +183,14 @@ def _well_formed(view: dict) -> bool:
         if repair.get("refused") not in REFUSALS:
             return False
     elif repair["kind"] != REPAIR_EXTEND:
+        return False
+    # `eligible` is DERIVED, exactly like `blocking`, so it has one correct
+    # value too. Validating its TYPE while leaving its VALUE unchecked let a
+    # clean record claim any verdict it liked — a window with nothing wrong
+    # reporting False, or one with a blocking defect reporting True. The rule
+    # is imported rather than restated: two copies of a verdict are two verdicts.
+    expected, _why = eligibility(view["defects"], view["unknown"], repair)
+    if view["eligible"] is not expected:
         return False
     # A measurement is a FINITE number or an honest absence — never a string
     # that would sort and average as if it meant something, and never a NaN or

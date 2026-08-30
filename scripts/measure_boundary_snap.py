@@ -91,10 +91,17 @@ async def _load(project_id: str):
             float((project.duration if project else 0) or 0.0))
 
 
-def _measure(project_id: str) -> dict | None:
+def _measure(project_id: str) -> dict:
+    """One project's answer, ALWAYS a record.
+
+    Returning None for a project with no artefact let `main` drop it with an
+    `if r`, so a project that was never measured left the run entirely: in a
+    re-score over six clones, one clone written wrong disappears and the other
+    five come back green. A refusal is an answer and has to occupy a row.
+    """
     path = DATA / project_id / "analysis" / "candidates.json"
     if not path.exists():
-        return None
+        return {"project": project_id, "refused": "no_candidates_artefact"}
     # RAW, including entries that are not records. Filtering them here would
     # shrink the corpus without saying so — the same hole the boundary audit
     # had, repeated one script along, and a corrupt artefact would quietly make
@@ -203,7 +210,10 @@ def main() -> int:
     names = list(args.projects)
     if args.all or not names:
         names = sorted(p.name for p in DATA.glob("*") if p.is_dir())
-    rows = [r for r in (_measure(n) for n in names) if r]
+    rows = [_measure(n) for n in names]
+    # THE COUNT IS PART OF THE ANSWER. Every project asked for has to come back
+    # with a row, or the report is about a corpus somebody else chose.
+    assert len(rows) == len(names), "a project left the run without saying so"
     left = sum(r.get("truncated_after", 0) + r.get("refused_min", 0)
                + r.get("refused_max", 0) + r.get("refused_media", 0) for r in rows)
     # A truncation the snap could not clear fails the gate, and so do an

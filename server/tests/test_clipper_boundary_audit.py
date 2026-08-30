@@ -166,6 +166,34 @@ def test_an_eligible_that_is_not_a_verdict_is_malformed(tmp_path, monkeypatch):
 # --- the two ways a project can carry nothing --------------------------------
 
 
+def test_a_verdict_that_contradicts_its_own_evidence_is_malformed(tmp_path,
+                                                                  monkeypatch):
+    """`eligible` is DERIVED, exactly like `blocking`, so validating its TYPE
+    while leaving its VALUE unchecked let a clean record claim any verdict it
+    liked: a window with nothing wrong reporting False, or one with a blocking
+    defect reporting True."""
+    clean = _scored(0.0, 1.4)
+    assert clean["boundary_view"]["eligible"] is True
+    for wrong in (False, None):
+        cand = _scored(0.0, 1.4)
+        cand["boundary_view"]["eligible"] = wrong
+        audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
+        assert audit._measure("p1")["integrity"] == [audit.MALFORMED], repr(wrong)
+
+    refused = _scored(0.2, 2.15)
+    assert refused["boundary_view"]["eligible"] is False
+    refused["boundary_view"]["eligible"] = True
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p2", [refused]))
+    assert audit._measure("p2")["integrity"] == [audit.MALFORMED]
+
+
+def test_the_verdict_rule_lives_in_one_place(tmp_path, monkeypatch):
+    """The audit imports it rather than restating it. Two copies of a verdict
+    are two verdicts, and the drift would look like a corpus finding."""
+    audit = _audit_module(monkeypatch, tmp_path)
+    assert audit.eligibility is bc.eligibility
+
+
 def test_an_integer_is_not_a_verdict(tmp_path, monkeypatch):
     """`x in (True, False, None)` is a trap: `1 == True` and `0 == False` in
     Python, so an integer sailed through the strict check and was counted as
