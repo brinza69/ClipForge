@@ -39,14 +39,16 @@ job and it already carries the measurement about when NOT to — so this asks fo
 the answer rather than recomputing it, and refuses to invent one.
 
 AND THE LETTERBOX COMES FROM `dynamic_geometry.canvas_size`. The first version
-read a `frame` key off the shot. No shot has ever carried one: 161 `fit` shots
-across the 101 stored sidecars, zero with `frame` or `fit_rect`. The branch was
-dead against real data and green against fixtures that invented the key — a test
-passing on a contract production does not have.
+read a `frame` key off the shot. No shot has ever carried one: 161 `fit` shots,
+all of them inside the 58 sidecars of the pilot corpus, 27 of which contain at
+least one — and zero with `frame` or `fit_rect`. The branch was dead against
+real data and green against fixtures that invented the key — a test passing on a
+contract production does not have.
 
 (The first count written here was 70, off a file list sliced to its first 60
-entries. The conclusion held and the number did not, which is the third time in
-this plan that a figure came out of a truncated sample.)
+entries; the second said "101 sidecars", which is every sidecar on disk rather
+than the corpus the figure belongs to. The conclusion held both times and the
+denominator did not.)
 """
 
 from __future__ import annotations
@@ -79,8 +81,15 @@ NO_EVIDENCE = "no_per_shot_evidence"
 #: A `fit` shot whose source dimensions nobody supplied. Distinct from a source
 #: that is already upright and measurably has no letterbox.
 NO_GEOMETRY = "no_source_dimensions"
+#: A caption height that is not a finite fraction of the frame. Distinct from
+#: not having one: somebody stored a number nobody can place.
+BAD_CAPTION_Y = "caption_y_not_a_fraction"
+#: One shot's evidence entry is not a record. Distinct from a missing signal
+#: inside a well-formed one.
+BAD_EVIDENCE = "evidence_entry_not_a_record"
 UNAVAILABLE: tuple[str, ...] = (NO_FACES, NO_PANELS, NO_TEXT, NO_SHOTS,
-                                NO_CAPTION, NO_EVIDENCE, NO_GEOMETRY)
+                                NO_CAPTION, NO_EVIDENCE, NO_GEOMETRY,
+                                BAD_CAPTION_Y, BAD_EVIDENCE)
 
 #: The two compositions `dynamic_geometry` emits. A `crop` fills the output with
 #: a 9:16 window on the source; a `fit` puts the whole frame in the middle and
@@ -95,12 +104,24 @@ COMPOSITIONS: tuple[str, ...] = ("crop", "fit")
 #:
 #: THE HEIGHT IS `captions.CAPTION_BOX_H_PCT`, imported rather than restated.
 #: The first version put 0.12 here — a second definition of a number the
-#: geometry already had at 0.10, chosen as "a conservative guard" — and a
-#: conservative guard is exactly what an approximate band must not be when the
-#: report says "the caption is covered". `_overlap_area` places the real box
-#: with this constant; a report about a different box is a report about a
-#: caption nobody burns.
+#: geometry already had at 0.10 — and two numbers for one box is how a report
+#: ends up describing a caption nobody burns.
+#:
+#: It is the CANONICAL COLLISION geometry, not the pixel-perfect ASS rectangle:
+#: its own comment calls it a conservative approximation, and libass lays out
+#: the real text from the font, the wrap and the line count. So every overlap
+#: here is against the box the avoidance logic uses, which is the right thing to
+#: agree with and the wrong thing to call exact.
 from services.clipper.captions import CAPTION_BOX_H_PCT as CAPTION_BAND_PCT
+
+
+def _usable_pct(value: Any) -> bool:
+    """Whether a fraction of the frame is one: a finite number in 0..1."""
+    import math
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value) and 0.0 <= float(value) <= 1.0
 
 
 def band_for(y_pct: float, height_pct: float = CAPTION_BAND_PCT) -> tuple[float, float]:
@@ -155,9 +176,10 @@ def source_band(src_w: int, src_h: int) -> tuple[tuple[float, float] | None, boo
 
     From `dynamic_geometry.canvas_size`, which is the function the renderer pads
     with — not from a key on the shot. The first version read `shot["frame"]`,
-    and no shot has ever carried one: 161 `fit` shots across the 101 stored
-    sidecars, zero with `frame` or `fit_rect`. The branch was dead against real
-    data and green against fixtures that invented the key.
+    and no shot has ever carried one: 161 `fit` shots, all of them in the 58
+    sidecars of the pilot corpus, 27 of which contain at least one — and zero
+    with `frame` or `fit_rect`. The branch was dead against real data and green
+    against fixtures that invented the key.
 
     TWO ANSWERS FOR None, WHICH IS WHY THERE IS A SECOND RETURN VALUE. `(None,
     True)` is "measured, and there is no letterbox" — a source already 9:16 or
@@ -198,6 +220,13 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
     found: list[str] = []
     measured: dict[str, float] = {}
     unavailable: list[str] = []
+
+    if evidence_for is not None and not isinstance(evidence_for, dict):
+        # Not a record, so not an empty one. `(evidence_for or {}).get(key)`
+        # turned a string or a list into "every signal missing" without saying
+        # that the entry itself was wrong.
+        unavailable.append(BAD_EVIDENCE)
+        evidence_for = None
 
     for name, key, missing in ((ON_FACE, "faces", NO_FACES),
                                (ON_UI, "panels", NO_PANELS),
@@ -251,6 +280,13 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
     shot is named; the average is not offered.
     """
     unavailable: list[str] = []
+    # A caption height that is not a number in 0..1 is not a caption height. It
+    # used to reach `band_for`, which clamps — so a NaN, a string or a 7.0 came
+    # back as a band somewhere plausible and every overlap below it was measured
+    # against a caption nobody could place.
+    if y_pct is not None and not _usable_pct(y_pct):
+        y_pct = None
+        unavailable.append(BAD_CAPTION_Y)
     if y_pct is None:
         unavailable.append(NO_CAPTION)
     if not shots:

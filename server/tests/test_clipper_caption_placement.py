@@ -20,10 +20,10 @@ both the same shape — a test that passes on a contract production does not hav
 - It handed ONE list of boxes to every shot, which looks per-shot and is not.
   The evidence is per shot now, in output pixels, mapped by the caller.
 - It read a `frame` key off `fit` shots to find the letterbox. No shot has ever
-  carried one — 161 `fit` shots across the 101 stored sidecars, zero with
-  `frame` or `fit_rect` — so the branch was dead against real data and green
-  against a fixture that invented the key. It comes from
-  `dynamic_geometry.canvas_size`.
+  carried one — 161 `fit` shots, all inside the 58 sidecars of the pilot corpus,
+  27 of which contain at least one, and zero with `frame` or `fit_rect` — so the
+  branch was dead against real data and green against a fixture that invented
+  the key. It comes from `dynamic_geometry.canvas_size`.
 """
 
 from __future__ import annotations
@@ -230,6 +230,29 @@ def test_the_caption_height_is_the_one_the_geometry_burns():
     from services.clipper.captions import CAPTION_BOX_H_PCT
 
     assert cp.CAPTION_BAND_PCT is CAPTION_BOX_H_PCT
+
+
+def test_a_caption_height_that_is_not_a_fraction_is_refused():
+    """It used to reach `band_for`, which clamps — so a NaN, a string or a 7.0
+    came back as a band somewhere plausible and every overlap below it was
+    measured against a caption nobody could place."""
+    for bad in (float("nan"), float("inf"), -0.5, 7.0, "0.5", True, None):
+        view = cp.placement_view(y_pct=bad, shots=[_shot(0)], out_h=OUT_H,
+                                 evidence=[_seen()], **SRC)
+        assert view["worst"] is None, repr(bad)
+        assert cp.NO_CAPTION in view["unavailable"], repr(bad)
+        if bad is not None:
+            assert cp.BAD_CAPTION_Y in view["unavailable"], repr(bad)
+
+
+def test_an_evidence_entry_that_is_not_a_record_says_so():
+    """`(entry or {}).get(key)` turned a string or a list into "every signal
+    missing" without saying that the entry itself was wrong."""
+    for bad in ("faces", ["faces"], 3):
+        view = cp.placement_view(y_pct=0.5, shots=[_shot(0)], out_h=OUT_H,
+                                 evidence=[bad], **SRC)
+        assert cp.BAD_EVIDENCE in view["unavailable"], repr(bad)
+        assert view["shots"][0]["evidence"] == {}, repr(bad)
 
 
 def test_missing_geometry_is_not_an_upright_source():
