@@ -21,18 +21,19 @@ WHAT IT STILL CANNOT SEE, and a clean report here is not permission to skip it:
 
 - **The judge.** An LLM pass is not reproducible offline, so the shortlist that
   reaches it is measured and its verdict is not.
-- **Dedupe groups.** Two windows whose ends move can merge or split, and this
-  reports the ordering rather than the grouping.
-- **The board.** What ships is the winners after dedupe, capping and judging.
+- **The judge's verdict.** The grouping and the deterministic shortlist ARE
+  measured, with the real `build_groups` and `build_shortlist`. What the judge
+  then says about that shortlist is not reproducible offline.
+- **The board.** What ships is the winners after the judge has spoken.
 
 WHAT A CLEAN REPORT ENTITLES YOU TO SAY, and it is narrower than it looks. Not
-"the board is unlikely to move" — the supported sentence is: *the snap produced
-no crossings over these thresholds at the level of the windows' heuristic score;
-the effect on the judge and on what finally ships remains unknown.* Grouping can
-merge two windows whose ends moved even when the same indices stay in the top N,
-which is why the shortlist is built with the real `build_groups` and
-`build_shortlist` rather than argued about — and even then the judge's verdict
-on that shortlist is not reproducible here.
+"the board is unlikely to move" — the supported sentence is: *the snap does not
+change which windows the heuristic ranks highest, nor which of them the
+deterministic shortlist asks about; the effect on the judge and on what finally
+ships remains unknown.* Every threshold below is a set of WINDOWS ranked by
+heuristic score. The board is moments, after grouping, shortlisting and judging,
+and `top_clip_count_windows` coincides with its capacity numerically and not in
+population.
 
 SEVERAL THRESHOLDS, each named for what it is. `clip_count` is the board's own
 capacity, 20 is a diagnostic somebody chose, and 80 is the shortlist BUDGET —
@@ -107,11 +108,22 @@ def _refitted(cand: dict, words, *, lo: float, hi: float, ceiling: float,
     """
     start, end = _num(cand.get("start")), _num(cand.get("end"))
     straddled = bc._straddled(words, end) is not None
-    _fitted_start, fitted_end = _fit(start, end, words, lo, hi, 0.0, ceiling)
-    if abs(fitted_end - end) < 1e-6:
-        return None, straddled
-    inside, _b, _a = _neighbourhood(words, start, fitted_end)
+    fitted_start, fitted_end = _fit(start, end, words, lo, hi, 0.0, ceiling)
+    # `_fit` DOES MORE THAN THE SNAP. It also snaps the start and enforces the
+    # duration bounds, and an earlier version of this check compared only the
+    # end — so a moved START would have gone into the delta as if the snap had
+    # caused it. Any movement of the start is contamination, whatever the end
+    # did.
+    moved_start = abs(fitted_start - start) > 1e-6
+    if abs(fitted_end - end) < 1e-6 and not moved_start:
+        return None, straddled and False
+    if moved_start:
+        # Reported through the same channel: the caller counts a window as
+        # contaminated when it moved for a reason other than the snap.
+        straddled = False
+    inside, _b, _a = _neighbourhood(words, fitted_start, fitted_end)
     out = copy.deepcopy(cand)
+    out["start"] = round(fitted_start, 3)
     out["end"] = round(fitted_end, 3)
     out["words"] = list(inside)
     out["text"] = _text_of(inside) or str(cand.get("text") or "")
@@ -149,19 +161,39 @@ def _shortlist_delta(before: list[dict], after: list[dict],
     says nothing about that — which is why this runs the real
     `build_groups` + `build_shortlist` rather than reasoning about them.
     """
-    def _ids(rows: list[dict]) -> list[str]:
+    def _picked(rows: list[dict]) -> tuple[list[int], int]:
+        """`(candidate indices the judge would be asked about, group count)`.
+
+        BY INDEX, not by `moment_id`. That id falls back to the window's
+        MIDPOINT when there is no payoff, so moving an end changes it — and a
+        before/after comparison keyed on it would report every moved window as a
+        different moment whether or not anything about the selection changed.
+        The index is what stays the same thing, and `build_groups` already
+        returns its members AS indices — the first version of this tagged the
+        candidates and looked for the tag on dicts that were never dicts, so it
+        recovered nothing and reported "0 of 0, membership same".
+        """
         groups = candidate_groups.build_groups(rows)
         picked = candidate_groups.build_shortlist(groups, duration=duration)
-        return [str(m.get("moment_id") or m.get("id") or "")
-                for m in (picked.get("selected") or [])]
+        out: set[int] = set()
+        for group in picked.get("selected") or []:
+            for member in group.get("members") or []:
+                out.add(int(member))
+        if not out:
+            # 0 against 0 compares equal and says nothing. A shortlist that
+            # selected no window is a refusal, not a stable selection — and the
+            # first version of this produced exactly that, silently.
+            raise ValueError("shortlist selected no windows")
+        return sorted(out), len(groups)
 
     try:
-        a, b = _ids(before), _ids(after)
+        a, groups_before = _picked(before)
+        b, groups_after = _picked(after)
     except Exception as exc:
         return {"refused": type(exc).__name__}
-    return {"before": len(a), "after": len(b),
-            "membership_changed": sorted(set(a) ^ set(b)),
-            "order_changed": a != b}
+    return {"windows_before": len(a), "windows_after": len(b),
+            "groups_before": groups_before, "groups_after": groups_after,
+            "membership_changed": sorted(set(a) ^ set(b))}
 
 
 def _measure(project_id: str, top_n: int = TOP_N) -> dict:
@@ -193,7 +225,16 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     # where the story block does not exist either.
     atoms = storage.read_artifact(project_id, "atoms")
 
-    before = [copy.deepcopy(c) for c in rows]
+    # BOTH SIDES REMEASURED, for the reason both sides are re-scored: the story
+    # numbers stored in the artefact are whatever `story_evidence` computed when
+    # it was written, and leaving them on the "before" column would attribute
+    # every change that module has had since to this batch.
+    before = []
+    for cand in rows:
+        c = copy.deepcopy(cand)
+        if isinstance(c.get("story"), dict):
+            story_evidence.remeasure(c, atoms=atoms)
+        before.append(c)
     after = []
     moved: list[int] = []
     contaminated: list[int] = []
@@ -230,7 +271,11 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     # board, and it does not: the board is `clip_count` after grouping,
     # shortlisting and judging, and 20 is a diagnostic somebody chose.
     windows = {
-        "clip_count": _window(target_count),
+        # NOT the board. It coincides numerically with the board's capacity and
+        # the population is different — these are windows ranked by heuristic
+        # score, and the board is moments after grouping, shortlisting and
+        # judging. Named for what it is.
+        "top_clip_count_windows": _window(target_count),
         "arbitrary_20": _window(20),
         # NOT the judge pool. 80 is the shortlist BUDGET, and which 80 moments
         # reach the judge is decided after grouping — measured separately below.
@@ -282,10 +327,10 @@ def _report(row: dict) -> None:
     if sl.get("refused"):
         print(f"{'':14} shortlist: could not be built ({sl['refused']})")
     else:
-        print(f"{'':14} {'judge shortlist':16} {sl['before']}->{sl['after']} "
-              f"moments, membership "
-              f"{'CHANGED' if sl['membership_changed'] else 'same':8} order "
-              f"{'changed' if sl['order_changed'] else 'same'}")
+        print(f"{'':14} {'judge shortlist':16} "
+              f"{sl['windows_before']}->{sl['windows_after']} windows in "
+              f"{sl['groups_before']}->{sl['groups_after']} groups, membership "
+              f"{'CHANGED' if sl['membership_changed'] else 'same'}")
     if row.get("invalid"):
         print(f"{'':14} {row['invalid']} entries are not records — the corpus is "
               f"smaller than the file")
@@ -334,7 +379,8 @@ def main() -> int:
         _report(row)
     moved = sum(r.get("moved", 0) for r in rows)
     shifted = [r["project"] for r in rows
-               if (r.get("shortlist") or {}).get("membership_changed")]
+               if (r.get("shortlist") or {}).get("membership_changed")
+               or (r.get("shortlist") or {}).get("refused")]
     print(f"\n{'POOLED':14} {moved} windows moved over "
           f"{sum(r.get('candidates', 0) for r in rows)}")
     print(f"{'':14} judge shortlist membership changed in "
@@ -346,9 +392,9 @@ def main() -> int:
     if contaminated:
         print(f"{'':14} {contaminated} end(s) moved for reasons other than the "
               f"snap — the delta is not this batch's alone")
-    print(f"{'':14} This is the SCORER. The judge, the dedupe groups and the "
-          f"board are not measured here and cannot be without a re-score on a "
-          f"clone.")
+    print(f"{'':14} This is the SCORER, the grouping and the deterministic "
+          f"shortlist. The judge's verdict and the delivered board are not "
+          f"measured here and cannot be without a re-score on a clone.")
     return code
 
 

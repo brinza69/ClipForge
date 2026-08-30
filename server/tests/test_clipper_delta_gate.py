@@ -1,0 +1,112 @@
+"""Batch R5a's delta tool, exercised through `main()`.
+
+It is a measurement instrument, and the plan has now found the same defect in
+instruments eight times: something that could not be read disappears and the
+result looks like a pass. This file runs the entry point and checks what it
+returns, because every one of those eight was invisible in the branch.
+
+The case worth naming is `test_a_shortlist_that_selects_nothing_is_a_refusal`.
+The first version of the shortlist comparison recovered zero windows on both
+sides — it looked for a tag on values that were never dicts — and zero against
+zero compares equal, so the report said "membership same" about a selection it
+had entirely failed to read.
+
+`scripts/` is not a package, so the module is loaded by path.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+def _module(monkeypatch, data_dir: Path):
+    import importlib.util
+
+    monkeypatch.setenv("CLIPFORGE_DATA_DIR", str(data_dir))
+    path = (Path(__file__).resolve().parents[2] / "scripts"
+            / "measure_snap_board_delta.py")
+    spec = importlib.util.spec_from_file_location("measure_snap_board_delta", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _project(tmp_path: Path, name: str, candidates) -> Path:
+    analysis = tmp_path / "clipper" / name / "analysis"
+    analysis.mkdir(parents=True, exist_ok=True)
+    (analysis / "candidates.json").write_text(json.dumps(candidates),
+                                              encoding="utf-8")
+    return tmp_path
+
+
+def _run(module, *argv: str) -> int:
+    saved = sys.argv
+    try:
+        sys.argv = ["measure_snap_board_delta", *argv]
+        return module.main()
+    finally:
+        sys.argv = saved
+
+
+def test_a_project_with_no_transcript_is_refused_not_skipped(tmp_path,
+                                                             monkeypatch,
+                                                             capsys):
+    """A project the tool cannot measure has to occupy a row and fail the run.
+    The alternative is a corpus that quietly shrinks to whatever worked."""
+    module = _module(monkeypatch, _project(tmp_path, "p", [{"start": 0.0,
+                                                           "end": 10.0}]))
+    assert _run(module, "p") == 2
+    assert "no_transcript_or_project" in capsys.readouterr().out
+
+
+def test_a_missing_artefact_is_refused(tmp_path, monkeypatch, capsys):
+    (tmp_path / "clipper" / "gone").mkdir(parents=True)
+    module = _module(monkeypatch, tmp_path)
+    assert _run(module, "gone") == 2
+    assert "no_candidates_artefact" in capsys.readouterr().out
+
+
+def test_an_empty_corpus_is_not_a_pass(tmp_path, monkeypatch, capsys):
+    (tmp_path / "clipper").mkdir(parents=True)
+    module = _module(monkeypatch, tmp_path)
+    assert _run(module, "--all") == 2
+    assert "no projects with candidates" in capsys.readouterr().out
+
+
+def test_json_and_text_return_the_same_code(tmp_path, monkeypatch):
+    module = _module(monkeypatch, _project(tmp_path, "p", [{"start": 0.0,
+                                                           "end": 10.0}]))
+    assert _run(module, "p") == _run(module, "p", "--json") == 2
+
+
+def test_a_shortlist_that_selects_nothing_is_a_refusal(monkeypatch, tmp_path):
+    """THE case. Zero against zero compares equal, so a comparison that failed
+    to read the selection at all reported the selection as unchanged."""
+    module = _module(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.candidate_groups, "build_groups",
+                        lambda *_a, **_k: [])
+    monkeypatch.setattr(module.candidate_groups, "build_shortlist",
+                        lambda *_a, **_k: {"selected": []})
+    out = module._shortlist_delta([{"start": 0.0, "end": 1.0}],
+                                  [{"start": 0.0, "end": 1.0}], 10.0)
+    assert out.get("refused") == "ValueError"
+    assert "membership_changed" not in out
+
+
+def test_a_group_member_is_an_index(monkeypatch, tmp_path):
+    """`build_groups` returns members AS indices into the input. The first
+    version tagged the candidates and looked for the tag on dicts that were
+    never dicts, which is how it recovered nothing."""
+    module = _module(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.candidate_groups, "build_groups",
+                        lambda rows, **_k: [{"moment_id": "m",
+                                             "members": list(range(len(rows)))}])
+    monkeypatch.setattr(
+        module.candidate_groups, "build_shortlist",
+        lambda groups, **_k: {"selected": list(groups)})
+    rows = [{"start": float(i), "end": float(i) + 1.0} for i in range(3)]
+    out = module._shortlist_delta(rows, rows, 10.0)
+    assert out["windows_before"] == out["windows_after"] == 3
+    assert out["membership_changed"] == []
