@@ -231,6 +231,25 @@ def test_the_repair_reports_what_it_would_not_fix():
     assert view["eligible"] is False
 
 
+def test_a_repair_that_does_not_say_what_it_left_has_not_cleared_anything():
+    """`repair.get("remaining") or []` turned a MISSING list into an empty one,
+    so a repair that never said what it left behind counted as having cleared
+    everything — and a window with a truncated word came back eligible. Absence
+    of evidence that the blocker was cleared is not evidence that it was."""
+    from services.clipper.boundary_completion import eligibility
+
+    blocking = [bc.END_IN_WORD]
+    assert eligibility(blocking, [], {"kind": bc.REPAIR_EXTEND}) == (
+        False, bc.END_IN_WORD), "no `remaining` at all"
+    assert eligibility(blocking, [], {"kind": bc.REPAIR_EXTEND,
+                                      "remaining": None})[0] is False
+    assert eligibility(blocking, [], {"kind": bc.REPAIR_EXTEND,
+                                      "remaining": "none"})[0] is False
+    # And the one case that IS a cleared blocker: the list is there and empty.
+    assert eligibility(blocking, [], {"kind": bc.REPAIR_EXTEND,
+                                      "remaining": []}) == (True, None)
+
+
 def test_a_window_with_nothing_wrong_has_no_repair_to_propose():
     assert _view(0.0, 1.4)["repair"]["refused"] == bc.NOTHING_TO_REPAIR
 

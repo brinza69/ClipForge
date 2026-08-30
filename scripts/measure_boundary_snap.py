@@ -210,6 +210,12 @@ def main() -> int:
     names = list(args.projects)
     if args.all or not names:
         names = sorted(p.name for p in DATA.glob("*") if p.is_dir())
+    if not names:
+        # A gate that passes over zero projects is not a gate. `--all` against a
+        # wrong or empty `CLIPFORGE_DATA_DIR` claimed success on nothing; the
+        # boundary audit already refused this and this script did not.
+        print(f"no projects under {DATA}")
+        return 2
     rows = [_measure(n) for n in names]
     # THE COUNT IS PART OF THE ANSWER. Every project asked for has to come back
     # with a row, or the report is about a corpus somebody else chose.

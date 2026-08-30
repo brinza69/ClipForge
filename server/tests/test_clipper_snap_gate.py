@@ -67,6 +67,17 @@ CLEAN = [{"start": 0.0, "end": 1.6}]
 TRUNCATED = [{"start": 0.0, "end": 1.3}]
 
 
+def test_an_empty_corpus_is_not_a_pass(tmp_path, monkeypatch, capsys):
+    """A gate that passes over zero projects is not a gate. `--all` against a
+    wrong or empty data directory claimed success on nothing — the sixth time
+    in this plan that something unmeasurable read as green."""
+    (tmp_path / "clipper").mkdir(parents=True)
+    module = _module(monkeypatch, tmp_path)
+    assert _run(module, "--all") == 2
+    assert "no projects under" in capsys.readouterr().out
+    assert _run(module, "--all", "--json") == 2
+
+
 def test_a_corpus_with_nothing_wrong_passes(tmp_path, monkeypatch):
     """The gate has to be capable of returning 0, or it is not a gate."""
     module = _module(monkeypatch, _project(tmp_path, "p", CLEAN))

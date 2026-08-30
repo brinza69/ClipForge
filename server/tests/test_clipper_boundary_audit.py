@@ -147,6 +147,22 @@ def test_a_measurement_that_is_not_a_number_is_malformed(tmp_path, monkeypatch):
     assert audit._measure("p1")["integrity"] == [audit.MALFORMED]
 
 
+def test_a_repair_that_happened_must_say_what_it_did(tmp_path, monkeypatch):
+    """A record whose repair omits `remaining` made the verdict rule read
+    "nothing left", and a blocking defect turned into an eligible window."""
+    for missing in ("end", "added_s", "clears", "remaining"):
+        cand = _scored(2.0, 2.35)
+        assert cand["boundary_view"]["repair"]["kind"] == bc.REPAIR_EXTEND
+        cand["boundary_view"]["repair"].pop(missing)
+        audit = _audit_module(monkeypatch, _project(tmp_path, "p1", [cand]))
+        assert audit._measure("p1")["integrity"] == [audit.MALFORMED], missing
+
+    cand = _scored(2.0, 2.35)
+    cand["boundary_view"]["repair"]["remaining"] = "nothing"
+    audit = _audit_module(monkeypatch, _project(tmp_path, "p2", [cand]))
+    assert audit._measure("p2")["integrity"] == [audit.MALFORMED]
+
+
 def test_a_repair_with_no_reason_for_refusing_is_malformed(tmp_path, monkeypatch):
     cand = _scored(2.0, 2.35)
     cand["boundary_view"]["repair"] = {"kind": None}

@@ -339,8 +339,14 @@ def eligibility(defects: Sequence[str], unknown: Sequence[str],
     known rejects the candidate and the verdict depends on the missing signal.
     """
     blocking = [d for d in defects if d in BLOCKING]
-    repaired = bool(repair.get("kind")) and not [
-        d for d in (repair.get("remaining") or []) if d in BLOCKING]
+    # `repair.get("remaining") or []` turned a MISSING `remaining` into an empty
+    # one, so a repair that never said what it left behind counted as having
+    # cleared everything — and a window with a truncated word came back
+    # eligible. Absence of evidence that the blocker was cleared is not evidence
+    # that it was. The list has to be there and be a list.
+    remaining = repair.get("remaining")
+    repaired = (bool(repair.get("kind")) and isinstance(remaining, list)
+                and not [d for d in remaining if d in BLOCKING])
     if blocking and not repaired:
         return False, blocking[0]
     if unknown:

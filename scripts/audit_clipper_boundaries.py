@@ -184,6 +184,17 @@ def _well_formed(view: dict) -> bool:
             return False
     elif repair["kind"] != REPAIR_EXTEND:
         return False
+    else:
+        # A repair that happened has to say what it did and what it left. With
+        # `remaining` missing, the verdict rule read "nothing left" and a
+        # blocking defect turned into an eligible window.
+        if any(k not in repair for k in ("end", "added_s", "clears", "remaining")):
+            return False
+        for key in ("clears", "remaining"):
+            if not isinstance(repair[key], list):
+                return False
+            if not all(isinstance(n, str) and n in DEFECTS for n in repair[key]):
+                return False
     # `eligible` is DERIVED, exactly like `blocking`, so it has one correct
     # value too. Validating its TYPE while leaving its VALUE unchecked let a
     # clean record claim any verdict it liked — a window with nothing wrong
