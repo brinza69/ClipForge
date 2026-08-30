@@ -113,9 +113,10 @@ def test_a_refused_shortlist_fails_the_run(tmp_path, monkeypatch, capsys):
 
 def test_a_score_that_changed_without_moving_fails_the_run(tmp_path,
                                                            monkeypatch, capsys):
-    """A window whose score changed while its end did not means the scorer read
-    outside its own window. It was printed and left out of the exit code — a
-    finding the report made and the gate ignored."""
+    """A window whose score changed while its end did not is proof the two
+    columns differ by more than this batch — contamination, or a scorer that is
+    not deterministic. It was printed and left out of the exit code: a finding
+    the report made and the gate ignored."""
     module = _module(monkeypatch, _project(tmp_path, "p", [{"start": 0.0,
                                                            "end": 10.0}]))
     monkeypatch.setattr(module, "_measure", lambda name, *_a, **_k: {
@@ -127,7 +128,7 @@ def test_a_score_that_changed_without_moving_fails_the_run(tmp_path,
                       "groups_before": 1, "groups_after": 1,
                       "membership_changed": [], "order_changed": False}})
     assert _run(module, "p") == 2
-    assert "read outside its own window" in capsys.readouterr().out
+    assert "not this batch's alone" in capsys.readouterr().out
 
 
 def test_a_non_finite_duration_is_refused(tmp_path, monkeypatch):

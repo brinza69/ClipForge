@@ -333,8 +333,10 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
         # batch.
         "contaminated": contaminated,
         "scores_changed": len(changed),
-        # A window whose end never moved and whose score did is the scorer
-        # reaching outside its own window — worth seeing, never expected.
+        # A window whose end never moved and whose score did means the two
+        # columns differ by something other than the snap: contamination, or a
+        # scorer that is not deterministic. Worth seeing, never expected, and it
+        # fails the run either way.
         "changed_without_moving": sorted(set(changed) - set(moved)),
         "max_delta": max((abs(d) for d in deltas), default=0.0),
         "mean_abs_delta": round(sum(abs(d) for d in deltas) / max(1, len(deltas)), 5),
@@ -413,10 +415,12 @@ def main() -> int:
     # and it was coming back green because only PROJECT-level refusals reached
     # the exit code. Every way of not knowing has to fail the run.
     unbuilt = sum(1 for r in rows if (r.get("shortlist") or {}).get("refused"))
-    # A window whose SCORE changed while its end did not means the scorer read
-    # something outside its own window, so the two columns differ by more than
-    # this batch. It was printed and left out of the exit code — a finding the
-    # report made and the gate ignored.
+    # A window whose SCORE changed while its end did not is proof that the two
+    # columns differ by more than this batch — either the comparison is
+    # contaminated or the scorer is not deterministic. It does NOT by itself
+    # show the scorer reading outside its own window; that is one explanation
+    # among several, and the earlier comment named it as if it were the finding.
+    # Whichever it is, the answer is not this batch's, so the run fails.
     leaked = sum(len(r.get("changed_without_moving") or []) for r in rows)
     code = 2 if (refused or invalid or contaminated or unbuilt or leaked) else 0
 
@@ -449,8 +453,8 @@ def main() -> int:
               f"built at all")
     if leaked:
         print(f"{'':14} {leaked} window(s) changed score without moving — the "
-              f"scorer read outside its own window and the delta is not this "
-              f"batch's alone")
+              f"comparison is contaminated or the scorer is not deterministic, "
+              f"and either way the delta is not this batch's alone")
     if contaminated:
         print(f"{'':14} {contaminated} end(s) moved for reasons other than the "
               f"snap — the delta is not this batch's alone")
