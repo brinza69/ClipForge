@@ -39,10 +39,14 @@ job and it already carries the measurement about when NOT to — so this asks fo
 the answer rather than recomputing it, and refuses to invent one.
 
 AND THE LETTERBOX COMES FROM `dynamic_geometry.canvas_size`. The first version
-read a `frame` key off the shot. No shot has ever carried one: checked against
-70 `fit` shots in the stored sidecars, zero have `frame` or `fit_rect`. The
-branch was dead against real data and green against fixtures that invented the
-key — a test passing on a contract production does not have.
+read a `frame` key off the shot. No shot has ever carried one: 161 `fit` shots
+across the 101 stored sidecars, zero with `frame` or `fit_rect`. The branch was
+dead against real data and green against fixtures that invented the key — a test
+passing on a contract production does not have.
+
+(The first count written here was 70, off a file list sliced to its first 60
+entries. The conclusion held and the number did not, which is the third time in
+this plan that a figure came out of a truncated sample.)
 """
 
 from __future__ import annotations
@@ -72,8 +76,11 @@ NO_CAPTION = "no_caption_plan"
 #: The caller supplied no per-shot evidence at all. Distinct from a shot whose
 #: entry is missing one signal: this is nobody having mapped anything.
 NO_EVIDENCE = "no_per_shot_evidence"
+#: A `fit` shot whose source dimensions nobody supplied. Distinct from a source
+#: that is already upright and measurably has no letterbox.
+NO_GEOMETRY = "no_source_dimensions"
 UNAVAILABLE: tuple[str, ...] = (NO_FACES, NO_PANELS, NO_TEXT, NO_SHOTS,
-                                NO_CAPTION, NO_EVIDENCE)
+                                NO_CAPTION, NO_EVIDENCE, NO_GEOMETRY)
 
 #: The two compositions `dynamic_geometry` emits. A `crop` fills the output with
 #: a 9:16 window on the source; a `fit` puts the whole frame in the middle and
@@ -143,31 +150,38 @@ def overlaps(band: tuple[float, float], rect: tuple[float, float] | None) -> flo
     return min(1.0, (bottom - top) / span)
 
 
-def source_band(src_w: int, src_h: int) -> tuple[float, float] | None:
-    """Where the SOURCE frame sits on a `fit` shot, as fractions of the output.
+def source_band(src_w: int, src_h: int) -> tuple[tuple[float, float] | None, bool]:
+    """`(where the source frame sits on a `fit` shot, whether that is known)`.
 
     From `dynamic_geometry.canvas_size`, which is the function the renderer pads
     with — not from a key on the shot. The first version read `shot["frame"]`,
-    and no shot has ever carried one: 70 `fit` shots in the stored sidecars, zero
-    with `frame` or `fit_rect`. The branch was dead against real data and green
-    against fixtures that invented the key.
+    and no shot has ever carried one: 161 `fit` shots across the 101 stored
+    sidecars, zero with `frame` or `fit_rect`. The branch was dead against real
+    data and green against fixtures that invented the key.
 
-    None when the source is already 9:16 or narrower: there is no letterbox, so
-    there is no band to sit on.
+    TWO ANSWERS FOR None, WHICH IS WHY THERE IS A SECOND RETURN VALUE. `(None,
+    True)` is "measured, and there is no letterbox" — a source already 9:16 or
+    narrower fills the output. `(None, False)` is "nobody supplied the source
+    dimensions", and a `fit` shot with unknown geometry cannot be said to have a
+    band or to lack one. Collapsing them read a missing width as an upright
+    source and reported zero conflicts with zero unavailable.
     """
     from services.clipper.dynamic_geometry import canvas_size
 
     if src_w <= 0 or src_h <= 0:
-        return None
+        return None, False
     _canvas_w, canvas_h, offset = canvas_size(int(src_w), int(src_h))
-    if canvas_h <= 0 or offset <= 0:
-        return None
-    return offset / float(canvas_h), (canvas_h - offset) / float(canvas_h)
+    if canvas_h <= 0:
+        return None, False
+    if offset <= 0:
+        return None, True
+    return (offset / float(canvas_h), (canvas_h - offset) / float(canvas_h)), True
 
 
 def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
                evidence_for: dict | None,
-               frame: tuple[float, float] | None) -> dict:
+               frame: tuple[float, float] | None,
+               frame_known: bool) -> dict:
     """What the caption covers in ONE shot, from THAT shot's own evidence.
 
     `evidence_for` carries the rectangles as they land in the OUTPUT frame for
@@ -204,11 +218,16 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
         if share > 0:
             found.append(name)
 
-    if composition == "fit" and frame is not None:
-        outside = 1.0 - overlaps(band, frame)
-        if outside > 0:
-            found.append(ON_LETTERBOX)
-            measured[ON_LETTERBOX] = round(outside, 3)
+    if composition == "fit":
+        if not frame_known:
+            # A `fit` shot whose source dimensions nobody supplied cannot be
+            # said to have a letterbox or to lack one.
+            unavailable.append(NO_GEOMETRY)
+        elif frame is not None:
+            outside = 1.0 - overlaps(band, frame)
+            if outside > 0:
+                found.append(ON_LETTERBOX)
+                measured[ON_LETTERBOX] = round(outside, 3)
 
     return {"index": shot.get("index"), "composition": composition,
             "conflicts": found, "evidence": measured,
@@ -257,15 +276,19 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
 
     band = band_for(float(y_pct))
     out["band"] = [round(band[0], 4), round(band[1], 4)]
-    frame = source_band(src_w, src_h)
+    frame, frame_known = source_band(src_w, src_h)
     out["source_band"] = (None if frame is None
                           else [round(frame[0], 4), round(frame[1], 4)])
-    rows = [s for s in shots if isinstance(s, dict)]
-    views = [_shot_view(s, band, out_h=out_h,
+    out["source_band_known"] = frame_known
+    # ALIGNED WITH THE ORIGINAL LIST. Filtering the non-dicts out first and then
+    # enumerating the survivors shifted every later shot onto somebody else's
+    # evidence — one bad entry and the whole report is about the wrong frames,
+    # silently and precisely.
+    views = [_shot_view(shot, band, out_h=out_h,
                         evidence_for=(evidence[i] if evidence is not None
                                       and i < len(evidence) else None),
-                        frame=frame)
-             for i, s in enumerate(rows)]
+                        frame=frame, frame_known=frame_known)
+             for i, shot in enumerate(shots) if isinstance(shot, dict)]
     out["shots"] = views
     out["conflicts"] = sorted({c for v in views for c in v["conflicts"]})
     out["unavailable"] = sorted(set(unavailable)

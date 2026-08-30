@@ -20,9 +20,10 @@ both the same shape — a test that passes on a contract production does not hav
 - It handed ONE list of boxes to every shot, which looks per-shot and is not.
   The evidence is per shot now, in output pixels, mapped by the caller.
 - It read a `frame` key off `fit` shots to find the letterbox. No shot has ever
-  carried one — 70 `fit` shots in the stored sidecars, zero with `frame` or
-  `fit_rect` — so the branch was dead against real data and green against a
-  fixture that invented the key. It comes from `dynamic_geometry.canvas_size`.
+  carried one — 161 `fit` shots across the 101 stored sidecars, zero with
+  `frame` or `fit_rect` — so the branch was dead against real data and green
+  against a fixture that invented the key. It comes from
+  `dynamic_geometry.canvas_size`.
 """
 
 from __future__ import annotations
@@ -165,7 +166,7 @@ def test_a_crop_shot_has_no_letterbox_to_sit_on():
 def test_a_source_already_upright_has_no_letterbox_at_all():
     """`canvas_size` returns no offset for a 9:16 source, so there is no band —
     and a caption anywhere on it covers the source."""
-    assert cp.source_band(1080, 1920) is None
+    assert cp.source_band(1080, 1920) == (None, True), "measured, and none"
     view = cp.placement_view(y_pct=0.9, out_h=OUT_H, shots=[_shot(0, "fit")],
                              evidence=[_seen()], src_w=1080, src_h=1920)
     assert view["source_band"] is None
@@ -229,6 +230,40 @@ def test_the_caption_height_is_the_one_the_geometry_burns():
     from services.clipper.captions import CAPTION_BOX_H_PCT
 
     assert cp.CAPTION_BAND_PCT is CAPTION_BOX_H_PCT
+
+
+def test_missing_geometry_is_not_an_upright_source():
+    """`None` had two meanings: "measured, and there is no letterbox" and
+    "nobody supplied the dimensions". Collapsed, a missing width read as an
+    upright source and a `fit` shot came back with zero conflicts and zero
+    unavailable."""
+    assert cp.source_band(0, 0) == (None, False)
+    view = cp.placement_view(y_pct=0.9, out_h=OUT_H, shots=[_shot(0, "fit")],
+                             evidence=[_seen()], src_w=0, src_h=0)
+    assert view["source_band_known"] is False
+    assert cp.NO_GEOMETRY in view["unavailable"]
+    assert cp.ON_LETTERBOX not in view["conflicts"]
+
+    upright = cp.placement_view(y_pct=0.9, out_h=OUT_H,
+                                shots=[_shot(0, "fit")], evidence=[_seen()],
+                                src_w=1080, src_h=1920)
+    assert upright["source_band_known"] is True
+    assert cp.NO_GEOMETRY not in upright["unavailable"]
+
+
+def test_the_evidence_stays_with_its_own_shot(monkeypatch):
+    """Filtering the non-dicts out and then enumerating the survivors shifted
+    every later shot onto somebody else's evidence — one bad entry and the whole
+    report is about the wrong frames, silently and precisely."""
+    view = cp.placement_view(
+        y_pct=0.5, out_h=OUT_H, **SRC,
+        shots=["not a shot", _shot(1), _shot(2)],
+        # Aligned with the ORIGINAL list: index 0 is the junk entry, so the
+        # face belongs to shot 1 and shot 2 sees nothing.
+        evidence=[_seen(), _seen(faces=[_rect(900, 200)]), _seen()])
+    assert [s["index"] for s in view["shots"]] == [1, 2]
+    assert view["shots"][0]["evidence"][cp.ON_FACE] > 0, "shot 1 has the face"
+    assert view["shots"][1]["evidence"][cp.ON_FACE] == 0.0, "shot 2 does not"
 
 
 def test_no_evidence_at_all_is_its_own_absence():
