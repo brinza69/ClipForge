@@ -56,15 +56,24 @@ Sheet-ul romanesc, `targets.json` -> `pov_sheet_id`, tab `Sheet1`:
 Fara descriere nu se posteaza — captionul ar iesi gol. Raportezi randul, nu
 inventezi text.
 
-## Ordinea
+## Ordinea — INVERSA, nu cronologica
 
-**Continui de unde a ramas**, cu povestea intreaga. Partile aceleiasi povesti
-(`271_p1`, `271_p2`) merg pe sloturi consecutive si in ordine, cu sufixul
-`(1/2)`, `(2/2)` in caption — scriptul face asta singur.
+**Cele mai noi povesti primele.** Construiesti planul cu `--invers`:
 
-Nu reiei de la capat si nu reordonezi dupa NR: NR-ul nu e ordinea de creare.
-`build_pov_post_list.py` produce deja ordinea corecta si sare peste ce s-a
-postat, deci reluarea e comportamentul implicit.
+```
+server\.venv\Scripts\python.exe scripts\build_pov_post_list.py --invers
+```
+
+Fara flag, planul iese cronologic (cel mai vechi intai) — asa a fost pana pe
+30 aug 2026. **Nu inverta lista de mana** dupa aceea: ai sparge partile.
+
+Inversarea e intre POVESTI, nu intre fisiere: partile raman `p1, p2, p3` in
+ordine, pe sloturi consecutive, cu sufixul `(1/2)`, `(2/2)` in caption. Daca ai
+inversa lista plata, partea a doua ar fi programata inaintea primei si captionul
+`(1/2)` ar aparea dupa `(2/2)`.
+
+Nu reordona dupa NR: NR-ul **nu** e ordinea de creare. Sortarea se face pe data
+de creare de pe Drive, iar `build_pov_post_list.py` sare peste ce s-a postat deja.
 
 ## Cum postezi
 

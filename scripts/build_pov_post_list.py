@@ -14,7 +14,8 @@ Se exclud:
   - orice rand fara descriere in sheet — captionul ar fi gol.
 
 Ordinea e cea de creare pe Drive, cea mai veche intai. NR-ul NU e ordinea de
-creare.
+creare. Cu `--invers`, cele mai noi povesti ies primele — inversarea e intre
+POVESTI, nu intre fisiere, ca partile sa ramana p1, p2, p3.
 """
 import json
 import os
@@ -157,8 +158,14 @@ def fara_copii(files):
     return list(dupa_nume.values())
 
 
+# `--invers`: cele mai noi povesti primele. Ordinea se inverseaza intre POVESTI,
+# nu intre fisiere — partile aceleiasi povesti raman `p1, p2, p3`, altfel partea
+# a doua ar fi programata inaintea primei si captionul `(1/2)` ar iesi dupa
+# `(2/2)`. De aia se sorteaza cheia grupului, si abia apoi se desfac partile.
+INVERS = "--invers" in sys.argv
+
 plan = []
-for nr in sorted(pe_nr, key=lambda n: min(x["created"] for x in pe_nr[n])):
+for nr in sorted(pe_nr, key=lambda n: min(x["created"] for x in pe_nr[n]), reverse=INVERS):
     files = sorted(fara_copii(pe_nr[nr]), key=lambda x: x["part"])
     for f in files:
         plan.append({**f, "parts": len(files), "desc": desc_by_nr[nr]})

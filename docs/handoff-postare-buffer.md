@@ -213,7 +213,7 @@ acopere chiar tot, deci confirma cu utilizatorul inainte de prima rulare reala.
 Intai se construieste planul, apoi se posteaza din el:
 
 ```
-server\.venv\Scripts\python.exe scripts\build_pov_post_list.py
+server\.venv\Scripts\python.exe scripts\build_pov_post_list.py --invers
 server\.venv\Scripts\python.exe scripts\post_povestitor.py --channel facebook --dry
 server\.venv\Scripts\python.exe scripts\post_povestitor.py --channel tiktok --dry
 ```
