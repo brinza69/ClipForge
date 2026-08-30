@@ -206,6 +206,31 @@ def test_no_shot_list_is_unavailable_too():
     assert view["worst"] is None
 
 
+def test_an_unreadable_rectangle_makes_the_signal_unavailable():
+    """It used to flow into `overlaps`, which answers 0.0 for a rectangle it
+    cannot read — so a malformed box read as "covers nothing" and a shot full of
+    them read as clear. An absence of measurement presented as a measurement of
+    absence, in a new place."""
+    for bad in ({"y": 900}, {"y": 900, "h": 0}, {"y": 900, "h": -5},
+                {"y": float("nan"), "h": 10}, {"y": -50, "h": 10}, "not a rect"):
+        view = cp.placement_view(
+            y_pct=0.5, shots=[_shot(0)], out_h=OUT_H, **SRC,
+            evidence=[{"faces": [_rect(900, 200), bad], "panels": [],
+                       "text": []}])
+        assert cp.NO_FACES in view["unavailable"], repr(bad)
+        assert cp.ON_FACE not in view["shots"][0]["evidence"], repr(bad)
+        assert cp.ON_FACE not in view["conflicts"], repr(bad)
+
+
+def test_the_caption_height_is_the_one_the_geometry_burns():
+    """0.12 here was a second definition of a number the geometry already had
+    at 0.10. A report about a different box is a report about a caption nobody
+    burns."""
+    from services.clipper.captions import CAPTION_BOX_H_PCT
+
+    assert cp.CAPTION_BAND_PCT is CAPTION_BOX_H_PCT
+
+
 def test_no_evidence_at_all_is_its_own_absence():
     """Distinct from a shot whose entry is missing one signal: this is nobody
     having mapped anything into the output frame."""

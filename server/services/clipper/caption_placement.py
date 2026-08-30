@@ -85,7 +85,15 @@ COMPOSITIONS: tuple[str, ...] = ("crop", "fit")
 #: out of 16:9, so horizontal position survives the mapping poorly and the
 #: caption is centred and nearly full width anyway. Only the vertical extent is
 #: honest, so only the vertical extent is compared.
-CAPTION_BAND_PCT = 0.12
+#:
+#: THE HEIGHT IS `captions.CAPTION_BOX_H_PCT`, imported rather than restated.
+#: The first version put 0.12 here — a second definition of a number the
+#: geometry already had at 0.10, chosen as "a conservative guard" — and a
+#: conservative guard is exactly what an approximate band must not be when the
+#: report says "the caption is covered". `_overlap_area` places the real box
+#: with this constant; a report about a different box is a report about a
+#: caption nobody burns.
+from services.clipper.captions import CAPTION_BOX_H_PCT as CAPTION_BAND_PCT
 
 
 def band_for(y_pct: float, height_pct: float = CAPTION_BAND_PCT) -> tuple[float, float]:
@@ -96,7 +104,16 @@ def band_for(y_pct: float, height_pct: float = CAPTION_BAND_PCT) -> tuple[float,
 
 
 def _rows(rect: Any, height: float) -> tuple[float, float] | None:
-    """A rectangle's vertical extent as fractions, or None if it is not one."""
+    """A rectangle's vertical extent as fractions, or None if it is not one.
+
+    None means UNREADABLE, and the caller has to treat it as such. It used to
+    flow into `overlaps`, which answers 0.0 for None — so a malformed rectangle
+    read as "covers nothing" and a shot full of them read as clear. That is the
+    oldest mistake in this plan, arriving in a new place: an absence of
+    measurement presented as a measurement of absence.
+    """
+    import math
+
     if not isinstance(rect, dict) or height <= 0:
         return None
     try:
@@ -104,7 +121,7 @@ def _rows(rect: Any, height: float) -> tuple[float, float] | None:
         h = float(rect.get("h", rect.get("height", 0.0)))
     except (TypeError, ValueError):
         return None
-    if h <= 0:
+    if not (math.isfinite(y) and math.isfinite(h)) or h <= 0 or y < 0:
         return None
     return max(0.0, y / height), min(1.0, (y + h) / height)
 
@@ -175,7 +192,14 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
         if rects is None:
             unavailable.append(missing)
             continue
-        share = max((overlaps(band, _rows(r, out_h)) for r in rects), default=0.0)
+        rows = [_rows(r, out_h) for r in rects]
+        if any(row is None for row in rows):
+            # A rectangle nobody can read makes the whole signal unavailable for
+            # this shot. Skipping it and reporting the rest would answer "the
+            # caption covers nothing" out of a list that was partly unreadable.
+            unavailable.append(missing)
+            continue
+        share = max((overlaps(band, row) for row in rows), default=0.0)
         measured[name] = round(share, 3)
         if share > 0:
             found.append(name)
