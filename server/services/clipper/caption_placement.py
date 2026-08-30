@@ -27,6 +27,22 @@ each signal is allowed to say: a face box says a face is there, not who it is;
 a text box says the source has text there, not that it is a diagram or a
 subtitle; browser chrome is a WARNING about publishing, never a verdict about
 it. Every signal that is absent stays absent — it never becomes "clear".
+
+THE EVIDENCE IS PER SHOT, IN OUTPUT PIXELS, AND THE CALLER MAPS IT. The first
+version took one list of boxes for the whole clip and evaluated it against every
+shot, which LOOKS per-shot and is not: the same rectangles produce the same
+answer in a face crop and a wide game shot, so the report repeated one number
+under N headings. That is the averaging error wearing a different hat.
+
+Mapping source rectangles into the output frame is `captions.panels_to_keep_out`'s
+job and it already carries the measurement about when NOT to — so this asks for
+the answer rather than recomputing it, and refuses to invent one.
+
+AND THE LETTERBOX COMES FROM `dynamic_geometry.canvas_size`. The first version
+read a `frame` key off the shot. No shot has ever carried one: checked against
+70 `fit` shots in the stored sidecars, zero have `frame` or `fit_rect`. The
+branch was dead against real data and green against fixtures that invented the
+key — a test passing on a contract production does not have.
 """
 
 from __future__ import annotations
@@ -34,7 +50,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 __all__ = ["CONFLICTS", "UNAVAILABLE", "COMPOSITIONS", "band_for",
-           "overlaps", "placement_view"]
+           "overlaps", "source_band", "placement_view"]
 
 #: What the caption can land on, as a closed list.
 ON_FACE = "over_face"
@@ -53,8 +69,11 @@ NO_PANELS = "no_ui_detection"
 NO_TEXT = "no_text_detection"
 NO_SHOTS = "no_shot_list"
 NO_CAPTION = "no_caption_plan"
+#: The caller supplied no per-shot evidence at all. Distinct from a shot whose
+#: entry is missing one signal: this is nobody having mapped anything.
+NO_EVIDENCE = "no_per_shot_evidence"
 UNAVAILABLE: tuple[str, ...] = (NO_FACES, NO_PANELS, NO_TEXT, NO_SHOTS,
-                                NO_CAPTION)
+                                NO_CAPTION, NO_EVIDENCE)
 
 #: The two compositions `dynamic_geometry` emits. A `crop` fills the output with
 #: a 9:16 window on the source; a `fit` puts the whole frame in the middle and
@@ -107,10 +126,37 @@ def overlaps(band: tuple[float, float], rect: tuple[float, float] | None) -> flo
     return min(1.0, (bottom - top) / span)
 
 
+def source_band(src_w: int, src_h: int) -> tuple[float, float] | None:
+    """Where the SOURCE frame sits on a `fit` shot, as fractions of the output.
+
+    From `dynamic_geometry.canvas_size`, which is the function the renderer pads
+    with — not from a key on the shot. The first version read `shot["frame"]`,
+    and no shot has ever carried one: 70 `fit` shots in the stored sidecars, zero
+    with `frame` or `fit_rect`. The branch was dead against real data and green
+    against fixtures that invented the key.
+
+    None when the source is already 9:16 or narrower: there is no letterbox, so
+    there is no band to sit on.
+    """
+    from services.clipper.dynamic_geometry import canvas_size
+
+    if src_w <= 0 or src_h <= 0:
+        return None
+    _canvas_w, canvas_h, offset = canvas_size(int(src_w), int(src_h))
+    if canvas_h <= 0 or offset <= 0:
+        return None
+    return offset / float(canvas_h), (canvas_h - offset) / float(canvas_h)
+
+
 def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
-               faces: Sequence[dict] | None, panels: Sequence[dict] | None,
-               text: Sequence[dict] | None) -> dict:
-    """What the caption covers in ONE shot. Never averaged with another.
+               evidence_for: dict | None,
+               frame: tuple[float, float] | None) -> dict:
+    """What the caption covers in ONE shot, from THAT shot's own evidence.
+
+    `evidence_for` carries the rectangles as they land in the OUTPUT frame for
+    this shot, mapped by the caller. One list reused across every shot would
+    give the same answer in a face crop and a wide game shot, which is the
+    averaging error told per-shot.
 
     A `fit` shot puts the whole source frame in the middle of the output and
     blurs the rest, so a caption below the frame sits on the blurred band and
@@ -119,34 +165,41 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
     """
     composition = str(shot.get("composition") or "")
     found: list[str] = []
-    evidence: dict[str, float] = {}
+    measured: dict[str, float] = {}
+    unavailable: list[str] = []
 
-    for name, rects, missing in ((ON_FACE, faces, NO_FACES),
-                                 (ON_UI, panels, NO_PANELS),
-                                 (ON_SOURCE_TEXT, text, NO_TEXT)):
+    for name, key, missing in ((ON_FACE, "faces", NO_FACES),
+                               (ON_UI, "panels", NO_PANELS),
+                               (ON_SOURCE_TEXT, "text", NO_TEXT)):
+        rects = (evidence_for or {}).get(key)
         if rects is None:
+            unavailable.append(missing)
             continue
         share = max((overlaps(band, _rows(r, out_h)) for r in rects), default=0.0)
-        evidence[name] = round(share, 3)
+        measured[name] = round(share, 3)
         if share > 0:
             found.append(name)
 
-    if composition == "fit":
-        frame = _rows(shot.get("frame") or shot.get("fit_rect"), out_h)
-        if frame is not None and overlaps(band, frame) < 1.0:
+    if composition == "fit" and frame is not None:
+        outside = 1.0 - overlaps(band, frame)
+        if outside > 0:
             found.append(ON_LETTERBOX)
-            evidence[ON_LETTERBOX] = round(1.0 - overlaps(band, frame), 3)
+            measured[ON_LETTERBOX] = round(outside, 3)
 
     return {"index": shot.get("index"), "composition": composition,
-            "conflicts": found, "evidence": evidence}
+            "conflicts": found, "evidence": measured,
+            "unavailable": unavailable}
 
 
 def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
-                   out_h: int = 1920,
-                   faces: Sequence[dict] | None = None,
-                   panels: Sequence[dict] | None = None,
-                   text: Sequence[dict] | None = None) -> dict:
+                   evidence: Sequence[dict] | None = None,
+                   out_h: int = 1920, src_w: int = 0, src_h: int = 0) -> dict:
     """`caption_placement_v1` for one clip. Recorded, applied to nothing.
+
+    `evidence` is ONE ENTRY PER SHOT, aligned by position, each
+    `{"faces": [...] | None, "panels": [...] | None, "text": [...] | None}` in
+    OUTPUT pixels. A shorter list is not padded and a missing entry is not an
+    empty one: the shots it does not cover come back unavailable.
 
     PER SHOT, and deliberately not summarised into one number. A face crop makes
     the face fill the output while a game shot puts the same face in a small
@@ -159,10 +212,8 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
         unavailable.append(NO_CAPTION)
     if not shots:
         unavailable.append(NO_SHOTS)
-    for rects, missing in ((faces, NO_FACES), (panels, NO_PANELS),
-                           (text, NO_TEXT)):
-        if rects is None:
-            unavailable.append(missing)
+    if evidence is None:
+        unavailable.append(NO_EVIDENCE)
 
     out: dict[str, Any] = {
         "schema": "caption_placement_v1",
@@ -182,11 +233,19 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
 
     band = band_for(float(y_pct))
     out["band"] = [round(band[0], 4), round(band[1], 4)]
-    views = [_shot_view(s, band, out_h=out_h, faces=faces, panels=panels,
-                        text=text)
-             for s in shots if isinstance(s, dict)]
+    frame = source_band(src_w, src_h)
+    out["source_band"] = (None if frame is None
+                          else [round(frame[0], 4), round(frame[1], 4)])
+    rows = [s for s in shots if isinstance(s, dict)]
+    views = [_shot_view(s, band, out_h=out_h,
+                        evidence_for=(evidence[i] if evidence is not None
+                                      and i < len(evidence) else None),
+                        frame=frame)
+             for i, s in enumerate(rows)]
     out["shots"] = views
     out["conflicts"] = sorted({c for v in views for c in v["conflicts"]})
+    out["unavailable"] = sorted(set(unavailable)
+                                | {u for v in views for u in v["unavailable"]})
     scored = [(max(v["evidence"].values(), default=0.0), v) for v in views]
     if scored:
         worst = max(scored, key=lambda p: p[0])
