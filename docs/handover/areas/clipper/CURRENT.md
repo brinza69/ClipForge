@@ -461,6 +461,29 @@ pe proiectele-baseline. **Și nu doar pe cele patru piloturi:** cele trei mutăr
 testează chiar riscul tocmai descoperit. Baseline-ul R0 rămâne dovada despre cele 58 de fișiere vechi; rezultatele noi
 se ștampilează cu versiunea nouă de boundary și nu se amestecă în aceeași comparație. S8 vine după.
 
+## Batch R6 — detectorul de subtitrări arse, 30 august 2026
+
+**Prima parte din R6 e livrată:** `source_captions.py` răspunde `present | absent | unknown` la
+întrebarea dacă sursa are deja text ars. **4 din 4 împotriva etichetelor umane** —
+`pilotf81b` (go ghost) `present`, celelalte trei `absent`. Nimic nu e aplicat: detectorul nu stinge
+al doilea strat de captions.
+
+**Două abordări au eșuat înainte și sunt scrise integral** în
+[`../../../clipper-caption-detection.md`](../../../clipper-caption-detection.md) — euristici de
+luminozitate pe benzi, iar a doua a pus un negativ peste pozitiv. Documentul există exact ca tabelul
+celor patru abordări eșuate de facecam: ca să nu fie rerulate.
+
+**Ce funcționează:** greutățile CRAFT ale lui `easyocr` sunt deja în cache local, deci detecția merge
+offline, 5s pe sursă pe GPU. Dependența e OPȚIONALĂ — fără ea totul e `unknown` și analiza nu costă
+nimic.
+
+**Discriminatorul e lățimea, și e contraintuitiv:** watermark-ul lui `pilot6b38` e în 13 din 14 cadre,
+mai persistent decât adevăratul pozitiv, dar are 0,079 din lățimea cadrului față de 0,45. Persistența
+singură ar fi clasificat greșit. Fiecare negativ pică pe altă axă.
+
+**Ce NU e demonstrat:** pragurile au fost alese cu răspunsul la vedere, pe patru surse. `calibrated:
+false` călătorește cu fiecare verdict. Restul listei R6 nu e începută.
+
 ## Punctul exact de reluare
 
 Următoarea sesiune are trei opțiuni, în ordinea asta: **un re-score pe o clonă**, care măsoară delta

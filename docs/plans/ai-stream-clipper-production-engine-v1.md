@@ -602,7 +602,33 @@ versiunea nouă de boundary și nu se amestecă în aceeași comparație. Review
 `--recompute` măsoară REGULA, nu pipeline-ul: un verde acolo lasă integrarea end-to-end
 nedemonstrată, iar raportul spune pe fiecare rând `recorded` sau `recomputed`.
 
-### Batch R6 — captions și source hygiene
+### Batch R6 — captions și source hygiene — DETECTORUL EXISTĂ, 30 aug 2026
+
+**Prima parte livrată:** `source_captions.py` + `scripts/detect_source_captions.py` + teste.
+Răspunde la `present | absent | unknown`, **4 din 4 împotriva etichetelor umane** de pe piloturi.
+Nimic nu e aplicat încă — detectorul nu stinge al doilea strat de captions.
+
+**Două abordări au eșuat înainte**, ambele euristici de luminozitate pe benzi orizontale, iar a doua
+a pus un NEGATIV peste pozitiv. Sunt scrise integral în
+[`../clipper-caption-detection.md`](../clipper-caption-detection.md), ca următorul agent să nu le
+rerulze. Ce funcționează e un detector de text adevărat: greutățile CRAFT ale lui `easyocr` sunt deja
+în cache local, deci merge offline, 5 secunde pe sursă.
+
+**Discriminatorul, măsurat nu dedus:** trei proprietăți împreună — o singură bandă, persistentă, și
+**LATĂ**. Ultima e cea pe care nimic altceva nu o dă: watermark-ul lui `pilot6b38` e în 13 din 14
+cadre, deci MAI persistent decât adevăratul pozitiv, și are 0,079 din lățimea cadrului față de 0,45.
+Fiecare negativ pică pe altă axă, deci ambii discriminatori fac muncă.
+
+**`absent` e răspunsul scump** — el ar stinge al doilea strat — deci se întoarce doar când detectorul
+chiar a rulat pe destule cadre. Fără model, fișier necitibil, prea puține cadre sau dovezi între
+praguri: `unknown`, care nu schimbă nimic.
+
+**Ce NU e demonstrat:** pragurile au fost alese cu răspunsul la vedere, pe patru surse. Nu e o
+calibrare, iar `calibrated: false` călătorește cu fiecare verdict. Restul listei R6 — poziția
+captions-urilor față de față/UI/diagrame, banda blurată pe `fit`, warning-urile de browser chrome —
+nu e începută.
+
+### Batch R6 — lista originală
 
 **Scop:** captions ajută clipul și nu dublează sau ascund informația.
 
