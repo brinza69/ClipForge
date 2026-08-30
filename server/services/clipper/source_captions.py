@@ -107,6 +107,12 @@ SAMPLES_MIN = 8
 #: would let a two-line caption look like two bands.
 BANDS = 10
 
+#: How far outside the frame a box may sit before it is treated as the model
+#: failing rather than as a caption touching the edge. A detector rounding a
+#: box to the frame boundary is ordinary; one reporting a box a thousand pixels
+#: wide on a 480-pixel frame is not.
+_BOX_SLACK_PX = 2.0
+
 
 def _reader():
     """The cached CRAFT detector, or None. Never raises.
@@ -198,16 +204,29 @@ def _frame_bands(frame: Any, reader) -> dict[int, float] | None:
 
     try:
         height, width = int(frame.shape[0]), int(frame.shape[1])
+        if height < 1 or width < 1:
+            return None
         boxes = reader.detect(frame, text_threshold=0.7, low_text=0.4)[0][0]
         out: dict[int, float] = {}
         for box in boxes or []:
             x0, x1, y0, y1 = (float(box[0]), float(box[1]),
                               float(box[2]), float(box[3]))
+            # FINITE IS NOT ENOUGH. A box the detector reports as running from 0
+            # to a million is a perfectly finite number and a width of 2083
+            # frames, which clears `WIDTH_MIN` on its own and manufactures a
+            # `present` — the state that would switch ClipForge's captions off.
+            # A box has to fit inside the frame it was found in, and it has to
+            # have positive extent; anything else is the model failing, and a
+            # frame the model failed on contributes nothing.
             if not all(math.isfinite(v) for v in (x0, x1, y0, y1)):
                 return None
+            if not (0.0 <= x0 < x1 <= width + _BOX_SLACK_PX):
+                return None
+            if not (0.0 <= y0 < y1 <= height + _BOX_SLACK_PX):
+                return None
             band = min(BANDS - 1,
-                       max(0, int(((y0 + y1) / 2.0 / max(1, height)) * BANDS)))
-            out[band] = max(out.get(band, 0.0), (x1 - x0) / max(1, width))
+                       max(0, int(((y0 + y1) / 2.0 / height) * BANDS)))
+            out[band] = max(out.get(band, 0.0), (x1 - x0) / width)
         return out
     except Exception:
         return None

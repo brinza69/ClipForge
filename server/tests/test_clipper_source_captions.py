@@ -235,6 +235,48 @@ def test_a_non_finite_coordinate_fails_the_frame(monkeypatch):
     assert sc.detect("anything.mp4", reader=_Nan())["analysed"] == 0
 
 
+def test_a_box_that_cannot_fit_the_frame_fails_it(monkeypatch):
+    """FINITE IS NOT ENOUGH. A box the detector reports as running from 0 to a
+    million is a perfectly finite number and a width of two thousand frames,
+    which clears the width bar on its own and manufactures a `present` — the
+    one state that switches ClipForge's captions off."""
+    monkeypatch.setattr(sc, "_sample", lambda *_a, **_k: [_Frame()] * 14)
+
+    class _Huge:
+        def detect(self, *_a, **_k):
+            return ([[(0, 1_000_000, 200, 230)]],)
+
+    out = sc.detect("anything.mp4", reader=_Huge())
+    assert out["analysed"] == 0
+    assert not sc.disables_own_captions(out["state"])
+
+    class _Inverted:
+        def detect(self, *_a, **_k):
+            return ([[(400, 100, 200, 230)]],)     # x1 before x0
+
+    assert sc.detect("anything.mp4", reader=_Inverted())["analysed"] == 0
+
+    class _Negative:
+        def detect(self, *_a, **_k):
+            return ([[(-50, 300, 200, 230)]],)
+
+    assert sc.detect("anything.mp4", reader=_Negative())["analysed"] == 0
+
+
+def test_a_box_touching_the_frame_edge_is_ordinary(monkeypatch):
+    """The guard has to reject the impossible without rejecting a caption that
+    reaches the edge, which is what a full-width subtitle does."""
+    monkeypatch.setattr(sc, "_sample", lambda *_a, **_k: [_Frame()] * 14)
+
+    class _FullWidth:
+        def detect(self, *_a, **_k):
+            return ([[(0, 480, 200, 230)]],)       # exactly the frame width
+
+    out = sc.detect("anything.mp4", reader=_FullWidth())
+    assert out["analysed"] == 14
+    assert out["state"] == sc.PRESENT
+
+
 def test_the_thresholds_ride_with_the_answer():
     """They were chosen on four sources with the labels visible. A report that
     hid that would be claiming a calibration nobody ran."""
