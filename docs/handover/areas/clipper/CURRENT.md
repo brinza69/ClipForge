@@ -493,7 +493,27 @@ fiecare cadru ieșea `absent` — testul meu verifica benzile goale și nu verdi
 ce s-a **analizat**, nu ce s-a eșantionat.
 
 **Ce NU e demonstrat:** pragurile au fost alese cu răspunsul la vedere, pe patru surse. `calibrated:
-false` călătorește cu fiecare verdict. Restul listei R6 nu e începută.
+false` călătorește cu fiecare verdict.
+
+**A doua parte, livrată 30 august 2026:** `caption_placement.py` + `caption_placement_vocab.py`
+(ce acoperă caption-ul ars, per shot, în pixeli de output) și `caption_choice.py` (de ce stă acolo:
+poziția propusă, alternativele respinse, motivul). Nu mișcă niciun cadru.
+
+Trei axe ținute separat — `conflicts` măsurat, `unavailable` nefurnizat, `refused` furnizat greșit.
+`share` e reuniunea peste semnale și cutii, nu maximul, și e un plafon inferior când nu s-a măsurat
+tot (`share_complete`); cu nimic măsurat e `None`, nu 0,0. Lista `COMPOSITIONS` e APLICATĂ: o
+compoziție necunoscută e refuzată, nu tratată drept `crop`.
+
+**Constatare vie, neremediată:** un `safe_zone` cu NaN trece de `captions._norm_rect` și se suprapune
+peste caseta de caption la FIECARE poziție din scanare, ștergând căutarea de bandă și mutând
+caption-ul livrat (măsurat 0,3092 → 0,4642). `caption_choice` o numără; nu o repară, fiindcă reparația
+mută captions livrate.
+
+**Browser chrome:** măsurat cu easyocr pe 20 de proxy-uri × 8 cadre — 0 potriviri, din 453 de tokeni
+citiți. Corpusul nu conține niciun pozitiv, deci un detector nu poate fi calibrat aici.
+
+**Ce a mai rămas din R6:** contrastul pe banda blurată de `fit`, warning-urile de browser chrome,
+cablarea în sidecar. `panels_to_keep_out` nu e mapper generic — sare peste shot-urile de față.
 
 ## Punctul exact de reluare
 
@@ -519,10 +539,11 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
 
 **Cod, în ordinea planului:**
 
-6. **R6, a doua jumătate**, strict în shadow, în ordinea confirmată la review: poziționarea captions
-   față de fețe, UI, diagrame și banda blurată; warning-uri pentru browser chrome și conținut
-   informativ acoperit; sidecar cu decizia propusă, fără modificarea exportului. **Nu materializa
-   dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
+6. **R6, restul**, strict în shadow. Poziționarea și motivul sunt livrate (`caption_placement`,
+   `caption_choice`); au rămas contrastul pe banda blurată de `fit`, warning-urile de browser chrome
+   și cablarea în sidecar. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
+   sare deliberat peste shot-urile de față, deci fețele și textul sursei au nevoie de mapper propriu.
+   **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 7. **R7** — preflight de publicare și corecția bounded (maximum una).
 8. **R8** — reconstrucția secvenței livrate după trim; până atunci `edit_quality` refuză jumătatea
    bazată pe shot-uri pe exporturile cu `drop_spans`.

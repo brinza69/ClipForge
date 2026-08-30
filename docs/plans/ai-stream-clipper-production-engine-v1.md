@@ -631,9 +631,46 @@ aruncă pe fiecare cadru ieșea `absent`, fiindcă benzi goale sunt indistinctib
 Numitorul e acum ce s-a **analizat**, nu ce s-a eșantionat.
 
 **Ce NU e demonstrat:** pragurile au fost alese cu răspunsul la vedere, pe patru surse. Nu e o
-calibrare, iar `calibrated: false` călătorește cu fiecare verdict. Restul listei R6 — poziția
-captions-urilor față de față/UI/diagrame, banda blurată pe `fit`, warning-urile de browser chrome —
-nu e începută.
+calibrare, iar `calibrated: false` călătorește cu fiecare verdict.
+
+**A doua parte livrată, 30 aug 2026:** `caption_placement.py` (+ `caption_placement_vocab.py`) și
+`caption_choice.py`. Prima spune CE acoperă caption-ul ars, per shot, în pixeli de output; a doua
+spune DE CE stă acolo — poziția propusă, alternativele respinse, motivul. Ambele înregistrează și nu
+mișcă niciun cadru.
+
+**Trei axe, ținute separat, și asta e tot batch-ul:** `conflicts` (ce s-a măsurat), `unavailable`
+(ce nu a furnizat nimeni), `refused` (ce a furnizat cineva greșit). Împreunate, un `y_pct` NaN
+raporta „nu a setat nimeni niciun caption", iar un shot a cărui dovadă era numărul 3 raporta toate
+cele trei semnale drept simplu lipsă — cu un `worst` calculat peste el.
+
+**`share` e o REUNIUNE, nu un maxim,** peste semnale și peste cutii: o față peste 39,6% din caption
+și text peste alte 39,6% înseamnă 79,2% ilizibil, iar max-de-cutie-apoi-max-de-semnal numea mai rău
+un shot cu o singură față la 60,4%. Și e un PLAFON INFERIOR când nu s-a măsurat tot: `share_complete`
+călătorește alături, iar cu nimic măsurat `share` e `None`, nu 0,0.
+
+**Ce NU se măsoară, și de aceea nu se afirmă:** banda de letterbox e scoasă din `share` fiindcă nu
+ocluzionează sursa — dar asta nu e o afirmație că textul de acolo e lizibil. `render_v3_letterbox`
+umple banda cu o copie BLURATĂ a cadrului, nu cu negru, iar §R6 cere contrast măsurat înainte ca
+ceva să stea acolo. Punctul rămâne deschis.
+
+**Constatarea pe care `caption_choice` o cară fără s-o repare:** un `safe_zone` cu NaN trece de
+`_norm_rect` — orice comparație cu NaN e falsă — și apoi se suprapune peste caseta de caption la
+FIECARE poziție din scanare. O singură intrare malformată șterge căutarea de bandă și MUTĂ
+caption-ul livrat: măsurat 0,3092 → 0,4642 pe un rect de facecam plus un rect NaN. E comportament
+viu în `captions` și acest batch nu mută captions livrate, deci numărătoarea călătorește în raport.
+
+**Browser chrome — măsurat, fără pozitiv în corpus.** easyocr cu recognizer pornit, 20 de proxy-uri
+× 8 cadre, căutând URL-uri, domenii și placeholder-e de căutare: **0 potriviri**. Numitorul spune că
+nu e un detector mort — 453 de tokeni citiți în total, între 0 și 62 pe sursă, aproape toți numere de
+HUD și name tag-uri. Dar două surse au dat 0 tokeni, iar patru au dat tokeni fără niciunul peste
+confidence 0,5 — printre ele `pilotf81b`, singura sursă despre care știm că are captions arse. Deci:
+corpusul nu conține niciun POZITIV de browser chrome, un detector nu poate fi calibrat aici, iar ce e
+onest de construit e un warning de precizie mare prin construcție cu recall explicit nedemonstrat,
+care nu spune niciodată „curat".
+
+**Ce a mai rămas din listă:** contrastul pe banda blurată, warning-urile de browser chrome, și
+cablarea propriu-zisă în sidecar. `panels_to_keep_out` NU e un mapper generic — sare deliberat peste
+shot-urile de față — deci fețele și textul sursei au nevoie de mapper propriu.
 
 ### Batch R6 — lista originală
 
