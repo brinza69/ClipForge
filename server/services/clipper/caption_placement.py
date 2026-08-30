@@ -49,14 +49,27 @@ contract production does not have.
 entries; the second said "101 sidecars", which is every sidecar on disk rather
 than the corpus the figure belongs to. The conclusion held both times and the
 denominator did not.)
+
+THREE ANSWERS, NOT TWO. `conflicts` is what was measured, `unavailable` is what
+nobody supplied, and `refused` is what somebody supplied wrongly. The first
+version had only the first two, so a NaN caption height reported "nobody set
+one" and a shot whose evidence was the number 3 reported all three signals as
+merely missing — with a `worst` computed over it. A record that could not be
+read must not take part in any count, and must not read as a clean one.
+
+AND `share` IS A UNION, NOT A MAXIMUM. The occluded fraction of the caption,
+across every box of every signal. Per-signal maxima called a shot with one 60%
+face worse than a shot with a face over one half and text over the other — 79%
+of the caption unreadable. The letterbox is excluded on purpose: a caption on
+the black bars is a placement fact and is perfectly readable.
 """
 
 from __future__ import annotations
 
 from typing import Any, Sequence
 
-__all__ = ["CONFLICTS", "UNAVAILABLE", "COMPOSITIONS", "band_for",
-           "overlaps", "source_band", "placement_view"]
+__all__ = ["CONFLICTS", "UNAVAILABLE", "REFUSALS", "COMPOSITIONS", "band_for",
+           "overlaps", "covered", "source_band", "placement_view"]
 
 #: What the caption can land on, as a closed list.
 ON_FACE = "over_face"
@@ -81,15 +94,25 @@ NO_EVIDENCE = "no_per_shot_evidence"
 #: A `fit` shot whose source dimensions nobody supplied. Distinct from a source
 #: that is already upright and measurably has no letterbox.
 NO_GEOMETRY = "no_source_dimensions"
-#: A caption height that is not a finite fraction of the frame. Distinct from
-#: not having one: somebody stored a number nobody can place.
-BAD_CAPTION_Y = "caption_y_not_a_fraction"
-#: One shot's evidence entry is not a record. Distinct from a missing signal
-#: inside a well-formed one.
-BAD_EVIDENCE = "evidence_entry_not_a_record"
 UNAVAILABLE: tuple[str, ...] = (NO_FACES, NO_PANELS, NO_TEXT, NO_SHOTS,
-                                NO_CAPTION, NO_EVIDENCE, NO_GEOMETRY,
-                                BAD_CAPTION_Y, BAD_EVIDENCE)
+                                NO_CAPTION, NO_EVIDENCE, NO_GEOMETRY)
+
+# --- and why a record was REFUSED, which is not the same as unmeasured -------
+#
+# A corrupt record is not a record with no measurements in it. Folding the two
+# together let a NaN caption height report `no_caption_plan` as well — "nobody
+# set one" out of a record where somebody set a bad one — and let a shot whose
+# evidence was a number report all three signals as merely missing, with a
+# `worst` computed over it. A refusal keeps the record out of every count it
+# would otherwise join.
+
+#: A caption height that is not a finite fraction of the frame.
+BAD_CAPTION_Y = "caption_y_not_a_fraction"
+#: One shot's evidence entry is not a record.
+BAD_EVIDENCE = "evidence_entry_not_a_record"
+#: An entry in the shot list that is not a shot.
+BAD_SHOT = "shot_entry_not_a_record"
+REFUSALS: tuple[str, ...] = (BAD_CAPTION_Y, BAD_EVIDENCE, BAD_SHOT)
 
 #: The two compositions `dynamic_geometry` emits. A `crop` fills the output with
 #: a 9:16 window on the source; a `fit` puts the whole frame in the middle and
@@ -200,6 +223,35 @@ def source_band(src_w: int, src_h: int) -> tuple[tuple[float, float] | None, boo
     return (offset / float(canvas_h), (canvas_h - offset) / float(canvas_h)), True
 
 
+def covered(band: tuple[float, float],
+            rects: Sequence[tuple[float, float] | None]) -> float:
+    """How much of the caption band is covered by ANY of the rectangles, 0..1.
+
+    A UNION, not a maximum. Measured on a real counter-example: one shot where a
+    face covers 60.4%, and another where a face covers 39.6% and text covers a
+    DIFFERENT 39.6% — 79.2% of the caption together. Taking the largest single
+    box, then the largest single signal, called the first shot the worse one.
+    "How much of the caption can nobody read" is a question about the union of
+    what is on top of it.
+    """
+    spans = sorted((max(band[0], r[0]), min(band[1], r[1]))
+                   for r in rects if r is not None
+                   and min(band[1], r[1]) > max(band[0], r[0]))
+    width = band[1] - band[0]
+    if width <= 0 or not spans:
+        return 0.0
+    total = 0.0
+    top, bottom = spans[0]
+    for start, end in spans[1:]:
+        if start > bottom:
+            total += bottom - top
+            top, bottom = start, end
+        else:
+            bottom = max(bottom, end)
+    total += bottom - top
+    return min(1.0, total / width)
+
+
 def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
                evidence_for: dict | None,
                frame: tuple[float, float] | None,
@@ -221,12 +273,14 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
     measured: dict[str, float] = {}
     unavailable: list[str] = []
 
+    boxes: list[tuple[float, float] | None] = []
     if evidence_for is not None and not isinstance(evidence_for, dict):
-        # Not a record, so not an empty one. `(evidence_for or {}).get(key)`
-        # turned a string or a list into "every signal missing" without saying
-        # that the entry itself was wrong.
-        unavailable.append(BAD_EVIDENCE)
-        evidence_for = None
+        # REFUSED, not unmeasured. `(evidence_for or {}).get(key)` turned a
+        # string or a number into "every signal missing" and then let a `worst`
+        # be computed over the result.
+        return {"index": shot.get("index"), "composition": composition,
+                "conflicts": [], "evidence": {}, "unavailable": [],
+                "refused": [BAD_EVIDENCE], "share": None}
 
     for name, key, missing in ((ON_FACE, "faces", NO_FACES),
                                (ON_UI, "panels", NO_PANELS),
@@ -242,8 +296,9 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
             # caption covers nothing" out of a list that was partly unreadable.
             unavailable.append(missing)
             continue
-        share = max((overlaps(band, row) for row in rows), default=0.0)
+        share = covered(band, rows)
         measured[name] = round(share, 3)
+        boxes.extend(rows)
         if share > 0:
             found.append(name)
 
@@ -260,7 +315,17 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
 
     return {"index": shot.get("index"), "composition": composition,
             "conflicts": found, "evidence": measured,
-            "unavailable": unavailable}
+            "unavailable": unavailable, "refused": [],
+            # HOW MUCH OF THE CAPTION IS COVERED, as the union ACROSS SIGNALS
+            # and not the largest of them. A face over one half of the caption
+            # and text over the other is a caption nobody can read, and the
+            # per-signal maxima called that shot better than a single 60% face.
+            #
+            # `ON_LETTERBOX` IS DELIBERATELY NOT IN IT. A caption on the black
+            # bars is perfectly readable; it is a placement fact, not an
+            # occlusion. The old `max(evidence.values())` mixed the two and let
+            # "sits low on the padding" outrank "nobody can read it".
+            "share": round(covered(band, boxes), 3)}
 
 
 def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
@@ -284,10 +349,14 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
     # used to reach `band_for`, which clamps — so a NaN, a string or a 7.0 came
     # back as a band somewhere plausible and every overlap below it was measured
     # against a caption nobody could place.
+    refused: list[str] = []
     if y_pct is not None and not _usable_pct(y_pct):
+        # REFUSED, and not also reported as absent: "nobody set a caption
+        # height" out of a record where somebody set a bad one is a different
+        # and wrong sentence.
         y_pct = None
-        unavailable.append(BAD_CAPTION_Y)
-    if y_pct is None:
+        refused.append(BAD_CAPTION_Y)
+    elif y_pct is None:
         unavailable.append(NO_CAPTION)
     if not shots:
         unavailable.append(NO_SHOTS)
@@ -300,6 +369,7 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
         "y_pct": y_pct,
         "band_pct": CAPTION_BAND_PCT,
         "unavailable": unavailable,
+        "refused": refused,
         "shots": [],
         "conflicts": [],
         "worst": None,
@@ -320,20 +390,34 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
     # enumerating the survivors shifted every later shot onto somebody else's
     # evidence — one bad entry and the whole report is about the wrong frames,
     # silently and precisely.
-    views = [_shot_view(shot, band, out_h=out_h,
-                        evidence_for=(evidence[i] if evidence is not None
-                                      and i < len(evidence) else None),
-                        frame=frame, frame_known=frame_known)
-             for i, shot in enumerate(shots) if isinstance(shot, dict)]
+    views = []
+    for i, shot in enumerate(shots):
+        if not isinstance(shot, dict):
+            # A refusal with its own row. Dropping it silently shifted nothing
+            # any more, but it still removed an entry from the corpus without
+            # saying so.
+            views.append({"index": i, "composition": None, "conflicts": [],
+                          "evidence": {}, "unavailable": [],
+                          "refused": [BAD_SHOT], "share": None})
+            continue
+        views.append(_shot_view(
+            shot, band, out_h=out_h,
+            evidence_for=(evidence[i] if evidence is not None
+                          and i < len(evidence) else None),
+            frame=frame, frame_known=frame_known))
     out["shots"] = views
+    out["refused"] = sorted(set(refused)
+                            | {r for v in views for r in v["refused"]})
     out["conflicts"] = sorted({c for v in views for c in v["conflicts"]})
     out["unavailable"] = sorted(set(unavailable)
                                 | {u for v in views for u in v["unavailable"]})
-    scored = [(max(v["evidence"].values(), default=0.0), v) for v in views]
+    # A REFUSED SHOT TAKES PART IN NOTHING. A corrupt record with a `share` of
+    # zero was being offered as the worst case when it was the only one.
+    scored = [(v["share"], v) for v in views if v["share"] is not None]
     if scored:
         worst = max(scored, key=lambda p: p[0])
         # The WORST shot, named, rather than a mean over shots that frame
         # different things. An average across a face crop and a wide game shot
         # is a number about neither.
-        out["worst"] = {"share": round(worst[0], 3), **worst[1]}
+        out["worst"] = {**worst[1], "share": round(worst[0], 3)}
     return out

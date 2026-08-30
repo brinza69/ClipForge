@@ -236,13 +236,18 @@ def test_a_caption_height_that_is_not_a_fraction_is_refused():
     """It used to reach `band_for`, which clamps — so a NaN, a string or a 7.0
     came back as a band somewhere plausible and every overlap below it was
     measured against a caption nobody could place."""
-    for bad in (float("nan"), float("inf"), -0.5, 7.0, "0.5", True, None):
+    for bad in (float("nan"), float("inf"), -0.5, 7.0, "0.5", True):
         view = cp.placement_view(y_pct=bad, shots=[_shot(0)], out_h=OUT_H,
                                  evidence=[_seen()], **SRC)
         assert view["worst"] is None, repr(bad)
-        assert cp.NO_CAPTION in view["unavailable"], repr(bad)
-        if bad is not None:
-            assert cp.BAD_CAPTION_Y in view["unavailable"], repr(bad)
+        # REFUSED, and NOT also absent. Reporting `no_caption_plan` for a record
+        # that has one, badly, is a different and wrong sentence.
+        assert view["refused"] == [cp.BAD_CAPTION_Y], repr(bad)
+        assert cp.NO_CAPTION not in view["unavailable"], repr(bad)
+
+    absent = cp.placement_view(y_pct=None, shots=[_shot(0)], out_h=OUT_H,
+                               evidence=[_seen()], **SRC)
+    assert absent["refused"] == [] and cp.NO_CAPTION in absent["unavailable"]
 
 
 def test_an_evidence_entry_that_is_not_a_record_says_so():
@@ -251,8 +256,71 @@ def test_an_evidence_entry_that_is_not_a_record_says_so():
     for bad in ("faces", ["faces"], 3):
         view = cp.placement_view(y_pct=0.5, shots=[_shot(0)], out_h=OUT_H,
                                  evidence=[bad], **SRC)
-        assert cp.BAD_EVIDENCE in view["unavailable"], repr(bad)
+        assert view["refused"] == [cp.BAD_EVIDENCE], repr(bad)
+        assert view["shots"][0]["refused"] == [cp.BAD_EVIDENCE], repr(bad)
+        # A corrupt record is not a record with no measurements in it: it says
+        # nothing about faces, and it is not the worst case at 0.0 either.
         assert view["shots"][0]["evidence"] == {}, repr(bad)
+        assert view["shots"][0]["unavailable"] == [], repr(bad)
+        assert view["shots"][0]["share"] is None, repr(bad)
+        assert view["worst"] is None, repr(bad)
+
+
+def test_a_shot_that_is_not_a_shot_is_refused_out_loud():
+    """It used to vanish from the list with no refusal — an entry removed from
+    the corpus without saying so."""
+    view = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC,
+                             shots=[7, _shot(1)],
+                             evidence=[_seen(), _seen(faces=[_rect(900, 200)])])
+    assert view["refused"] == [cp.BAD_SHOT]
+    assert [s["refused"] for s in view["shots"]] == [[cp.BAD_SHOT], []]
+    assert view["worst"]["index"] == 1, "the refused shot competes for nothing"
+
+
+def test_the_coverage_is_the_union_and_not_the_biggest_box():
+    """The counter-example, executed: shot 0 has a face over 60.4% of the
+    caption; shot 1 has a face over 39.6% and text over a DIFFERENT 39.6%, so
+    79.2% of the caption is unreadable. Taking the largest single box and then
+    the largest single signal called shot 0 the worse one."""
+    # The band is 0.45..0.55 of 1920 — rows 864..1056, 192px tall.
+    view = cp.placement_view(
+        y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0), _shot(1)],
+        evidence=[_seen(faces=[_rect(864, 116)]),
+                  _seen(faces=[_rect(864, 76)], text=[_rect(980, 76)])])
+    assert view["shots"][0]["share"] == 0.604
+    assert view["shots"][1]["share"] == 0.792
+    assert view["worst"]["index"] == 1
+    # Each signal on its own is still reported, and is still the smaller number.
+    assert view["shots"][1]["evidence"][cp.ON_FACE] == 0.396
+    assert view["shots"][1]["evidence"][cp.ON_SOURCE_TEXT] == 0.396
+
+
+def test_two_boxes_of_one_signal_also_union_rather_than_max():
+    """The same mistake one level down: two faces over different halves of the
+    caption is a caption with a face over both halves."""
+    view = cp.placement_view(
+        y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0)],
+        evidence=[_seen(faces=[_rect(864, 76), _rect(980, 76)])])
+    assert view["shots"][0]["evidence"][cp.ON_FACE] == 0.792
+
+
+def test_overlapping_boxes_are_not_counted_twice():
+    """A union that added spans would report 120% of a caption covered."""
+    view = cp.placement_view(
+        y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0)],
+        evidence=[_seen(faces=[_rect(864, 192)], text=[_rect(864, 192)])])
+    assert view["shots"][0]["share"] == 1.0
+
+
+def test_the_letterbox_is_not_an_occlusion():
+    """A caption on the black bars is perfectly readable. `share` answers "how
+    much of the caption can nobody read", and the old `max(evidence.values())`
+    let "sits low on the padding" outrank it."""
+    view = cp.placement_view(y_pct=0.9, out_h=OUT_H, **SRC,
+                             shots=[_shot(0, "fit")], evidence=[_seen()])
+    assert cp.ON_LETTERBOX in view["conflicts"]
+    assert view["shots"][0]["evidence"][cp.ON_LETTERBOX] > 0
+    assert view["shots"][0]["share"] == 0.0
 
 
 def test_missing_geometry_is_not_an_upright_source():
@@ -284,9 +352,10 @@ def test_the_evidence_stays_with_its_own_shot(monkeypatch):
         # Aligned with the ORIGINAL list: index 0 is the junk entry, so the
         # face belongs to shot 1 and shot 2 sees nothing.
         evidence=[_seen(), _seen(faces=[_rect(900, 200)]), _seen()])
-    assert [s["index"] for s in view["shots"]] == [1, 2]
-    assert view["shots"][0]["evidence"][cp.ON_FACE] > 0, "shot 1 has the face"
-    assert view["shots"][1]["evidence"][cp.ON_FACE] == 0.0, "shot 2 does not"
+    assert [s["index"] for s in view["shots"]] == [0, 1, 2]
+    assert view["shots"][0]["refused"] == [cp.BAD_SHOT], "the junk entry"
+    assert view["shots"][1]["evidence"][cp.ON_FACE] > 0, "shot 1 has the face"
+    assert view["shots"][2]["evidence"][cp.ON_FACE] == 0.0, "shot 2 does not"
 
 
 def test_no_evidence_at_all_is_its_own_absence():
