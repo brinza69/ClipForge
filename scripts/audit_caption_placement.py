@@ -115,8 +115,8 @@ def _report(rows: list[dict]) -> dict:
         # COMPUTED AND WIRED, both of them. A shot the report refused was not
         # measured, and an unmeasured shot has never been a clean one anywhere
         # else in this plan.
-        "shots_with_a_moving_crop": sum(r.get("moving_crops") or 0
-                                        for r in read),
+        "shots_with_a_multi_point_size_timeline": sum(
+            r.get("moving_crops") or 0 for r in read),
         # THE FACE COLUMN AND ITS OWN DENOMINATORS.
         "shots_total": sum((r.get("faces") or {}).get("shots", 0) for r in read),
         "shots_with_no_face_sample": sum(
@@ -178,9 +178,13 @@ def _print(out: dict) -> None:
     # matters: nothing in this report depends on it. It is the precondition for
     # the evidence mapper that does not exist yet, and the day it stops being
     # zero, that mapper cannot be built on `shot["rect"]`.
-    print(f"  shots whose crop moves (gates the")
-    print(f"    future evidence mapper, not this)  "
-          f"{out['shots_with_a_moving_crop']}")
+    # NAMED FOR WHAT IT CHECKS. "shots whose crop moves" claimed more: a
+    # single-point timeline proves constant SIZE, not that the delivered window
+    # equals `shot["rect"]` — 837 of the corpus's 1,965 crops differ from it.
+    print(f"  shots with a multi-point size")
+    print(f"    timeline (constant size is not the")
+    print(f"    same as the planner's rectangle)   "
+          f"{out['shots_with_a_multi_point_size_timeline']}")
     print(f"the face signal, per shot")
     print(f"  shots                               {out['shots_total']}")
     print(f"    with no sample in their window    "

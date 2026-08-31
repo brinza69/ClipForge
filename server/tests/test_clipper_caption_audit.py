@@ -93,8 +93,11 @@ def _ok(**over) -> dict:
     body = {
         "source_start": 0.0,
         "caption_plan": {"y_pct": 0.75, "style": {"position": "bottom"}},
+        # The ANCHOR decides the delivered window, not the rectangle: the crop
+        # is centred on it and clamped into the frame.
         "dynamic_plan": {"shots": [{"index": 0, "composition": "crop",
                                     "t0": 0.0, "t1": 2.0,
+                                    "anchor": [304, 540], "shake": 0.0,
                                     "rect": {"x": 0, "y": 0,
                                              "w": 608, "h": 1080}}],
                          "src_w": 1920, "src_h": 1080},
@@ -306,14 +309,14 @@ def test_a_moving_crop_is_counted_and_does_not_fail_the_run(tmp_path,
         "style": {"push_amount": 0.0}}))
     module = _audit(monkeypatch, tmp_path)
     code, out = _run(module, ["--project", "still"])
-    assert out["shots_with_a_moving_crop"] == 0, "the label is not the motion"
+    assert out["shots_with_a_multi_point_size_timeline"] == 0, "the label is not the motion"
     assert code == 0
 
     _sidecar(tmp_path, "moving", "a", _ok(dynamic_plan={
         "shots": [labelled], "src_w": 2560, "src_h": 1440,
         "style": {"push_amount": 0.1, "push_hz": 10.0}}))
     code, out = _run(module, ["--project", "moving"])
-    assert out["shots_with_a_moving_crop"] == 1
+    assert out["shots_with_a_multi_point_size_timeline"] == 1
     assert code == 0, "it gates the mapper, not this report"
 
 

@@ -68,15 +68,39 @@ def test_x_and_y_are_scaled_separately():
     assert round(wide["w"] / wide["h"], 2) == 2.0
 
 
-def test_a_box_at_the_crop_origin_lands_at_the_output_origin():
-    """The simplest end-to-end fact: the corner of the crop is the corner of
-    the frame."""
+def test_the_crop_comes_from_the_anchor_and_not_from_the_rectangle():
+    """A single-point size timeline proves CONSTANT SIZE, not identity with
+    `shot["rect"]`. The delivered window is built by `build_sendcmd` from the
+    timeline and the ANCHOR, and across the corpus 837 of 1,965 `crop` shots
+    have a delivered window that differs from the planner's rectangle — 42.6%.
+
+    So the crop's own top-left is the corner of the frame, and the rectangle's
+    is not."""
+    shot = _crop_shot(rect={"x": 890, "y": 0, "w": 810, "h": 1440},
+                      anchor=[1295, 720])
+    crop = em.crop_window(shot, src_w=SRC_W, src_h=SRC_H)
+    assert not isinstance(crop, str)
+
+    at_the_crop = [crop[0] / (SRC_W / PROXY_W), 0, 10, 10]
     _cw, _ch, off_y = canvas_size(SRC_W, SRC_H)
-    shot = _crop_shot(rect={"x": 890, "y": 0, "w": 810, "h": 1440})
-    # A proxy box whose source position is exactly the crop's top-left.
-    box = [890 / SCALE, 0, 10, 10]
-    got = _map(box, shot)
-    assert got["x"] == 0.0 and got["y"] == 0.0
+    at_the_crop[1] = (crop[1] - off_y) / (SRC_H / PROXY_H)
+    got = _map(at_the_crop, shot)
+    assert round(got["x"], 3) == 0.0 and round(got["y"], 3) == 0.0
+
+    # ...and on the corpus's own shape they differ, in both axes and for two
+    # different reasons. Taken verbatim from a stored shot on a 1920x1080
+    # source: `_size` rounds a height of 792 to a width of 446 while the planner
+    # stored 444, and `_anchor` CLAMPS the centre to 682 because 684 would put
+    # the window's bottom past the frame.
+    #     shot["rect"]   (144, 288, 444, 792)
+    #     delivered      (143, 286, 446, 792)
+    real = _crop_shot(rect={"x": 144, "y": 288, "w": 444, "h": 792},
+                      anchor=[366, 684], shake=0.0)
+    _cw2, _ch2, off2 = canvas_size(1920, 1080)
+    delivered = em.crop_window(real, src_w=1920, src_h=1080)
+    assert (round(delivered[2]), round(delivered[3])) == (446, 792)
+    assert round(delivered[0]) == 143, "not the rectangle's 144"
+    assert round(delivered[1] - off2) == 286, "not the rectangle's 288"
 
 
 def test_a_full_crop_box_fills_the_output():

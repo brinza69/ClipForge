@@ -28,14 +28,31 @@ renderer this repo abandoned.
 
 THREE THINGS IT REFUSES RATHER THAN APPROXIMATES.
 
-A SHOT WHOSE CROP MOVES. `shot["rect"]` looks like the crop and is not:
-`dynamic_geometry.visual_key` calls the picture "what `build_sendcmd`
-schedules", and refuses any shot whose size timeline has more than one point.
-Across the 2,126 stored shots every timeline is a single point, so the rectangle
-IS the crop today — but 2,024 of them are LABELLED `move: push` or `pull` and
-stand still only because `push_amount` is 0.0 in every stored style. Reading the
-label instead of the timeline says "95% of shots move", which is the opposite of
-the truth and is the reason this module reads the timeline.
+A SHOT WHOSE CROP MOVES. Its window is not one rectangle, so there is nothing
+to map through. `dynamic_geometry.visual_key` refuses the same shots for the
+same reason. Across the 2,126 stored shots every timeline is a single point —
+but 2,024 of them are LABELLED `move: push` or `pull` and stand still only
+because `push_amount` is 0.0 in every stored style, so reading the label instead
+of the timeline says "95% of shots move", the opposite of the truth.
+
+AND A SINGLE-POINT TIMELINE PROVES CONSTANT SIZE, NOT `shot["rect"]`. That was
+the first version's mistake and it was wrong on nearly half the corpus: the
+delivered crop is built by `build_sendcmd` from the SIZE TIMELINE and the
+ANCHOR, and the planner's rectangle takes no part in it beyond seeding the
+height. Checked with the renderer's own functions over all 2,126 shots — 1,965
+`crop` shots, of which 837 have a delivered window that differs from
+`shot["rect"]`, 42.6%. The differences are a few pixels in the source (up to 4
+on x, 2 on y, 2 on width) because the planner rounds down to even while `_size`
+rounds to the nearest even and `_anchor` re-clamps the centre — but a face crop
+is magnified 5-8x on the way to the output, so four source pixels are ten to
+thirty output pixels, against a caption band 192 pixels tall.
+
+    shot["rect"]     (144, 288, 444, 792)
+    delivered crop   (143, 286, 446, 792)
+
+So this module computes the window the way `build_sendcmd` does, and never reads
+the rectangle except through `_size_timeline`, which is where the renderer reads
+it too.
 
 MISSING PROXY DIMENSIONS. `dynamic_edit` falls back to `or src_w`, which assumes
 the proxy is the source — a scale factor of 1 where the real one is 5.3 on the
@@ -122,14 +139,16 @@ def _box(raw: Any) -> tuple[float, float, float, float] | None:
 
 def crop_window(shot: dict, *, src_w: int, src_h: int,
                 style: dict | None = None) -> tuple[float, float, float, float] | str:
-    """The shot's crop in CANVAS pixels, or a refusal reason.
+    """The shot's DELIVERED crop in CANVAS pixels, or a refusal reason.
 
-    Built the way `dynamic_render.build_dynamic_filtergraph` builds it, including
-    the `+ off_y` that turns a source-space rectangle into a canvas-space one,
-    and including the `fit` branch that takes the whole canvas.
+    BUILT THE WAY `build_sendcmd` BUILDS IT — size from `_size_timeline`,
+    position from `_position_exprs`, which centres the window on the clamped
+    anchor rather than on the planner's rectangle. The first version returned
+    `shot["rect"] + off_y`, which is the same window for 1,128 of the corpus's
+    1,965 `crop` shots and a different one for the other 837.
     """
-    from services.clipper.dynamic_geometry import (canvas_size, composition_of,
-                                                   _size_timeline)
+    from services.clipper.dynamic_geometry import (_anchor, _size_timeline,
+                                                   canvas_size, composition_of)
 
     sw, sh = _positive(src_w), _positive(src_h)
     if sw is None or sh is None:
@@ -142,8 +161,9 @@ def crop_window(shot: dict, *, src_w: int, src_h: int,
     # moves — a specific claim about geometry, made about a record nobody could
     # read.
     fit = composition_of(shot) == "fit"
-    rect = None if fit else _box(shot.get("rect"))
-    if not fit and rect is None:
+    # The rectangle is still required, because `_size_timeline` seeds the crop
+    # height from it — but its x and y take no part in the delivered window.
+    if not fit and _box(shot.get("rect")) is None:
         return NO_CROP
     if _finite(shot.get("t0")) is None or _finite(shot.get("t1")) is None:
         return BAD_SHOT
@@ -156,9 +176,31 @@ def crop_window(shot: dict, *, src_w: int, src_h: int,
         return MOVING_CROP
 
     if fit:
+        # `_position_exprs` returns "0","0" for a `fit` shot, and the timeline's
+        # single point is the whole canvas.
         return 0.0, 0.0, float(canvas_w), float(canvas_h)
-    x, y, w, h = rect
-    return x, y + off_y, w, h
+
+    timeline = _size_timeline(shot, style or {}, int(sw), int(sh))
+    if not timeline:
+        return BAD_SHOT
+    _t, w, h = timeline[0]
+    biggest = (max(p[1] for p in timeline), max(p[2] for p in timeline))
+
+    # `x = ax - out_w/2` and `y = ay - out_h/2` in the filtergraph, where
+    # `out_w`/`out_h` are the CROP's own current size. With a single-point
+    # timeline that is exactly `w` and `h`.
+    shake = _finite(shot.get("shake")) or 0.0
+    anchor = shot.get("anchor")
+    if not (isinstance(anchor, (list, tuple)) and len(anchor) >= 2
+            and _finite(anchor[0]) is not None
+            and _finite(anchor[1]) is not None):
+        # `_position_exprs` defaults to the frame centre. Copied rather than
+        # refused, because it is the renderer's own behaviour and refusing here
+        # would report a window the viewer does receive as unmappable.
+        anchor = (sw / 2.0, sh / 2.0)
+    ax = _anchor(float(anchor[0]), int(sw), biggest[0], shake + 2.0)
+    ay = _anchor(float(anchor[1]), int(sh), biggest[1], shake + 2.0) + off_y
+    return ax - w / 2.0, ay - h / 2.0, float(w), float(h)
 
 
 def map_box(raw: Any, *, proxy_w: int, proxy_h: int, src_w: int, src_h: int,
