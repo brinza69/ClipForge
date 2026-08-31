@@ -47,6 +47,34 @@ Mapping source rectangles into the output frame is `captions.panels_to_keep_out`
 job and it already carries the measurement about when NOT to — so this asks for
 the answer rather than recomputing it, and refuses to invent one.
 
+THE CONTRACT FOR WHOEVER WRITES THE MISSING MAPPER, measured rather than
+reasoned, because the obvious version of it is wrong in a way the corpus
+currently hides.
+
+`shot["rect"]` is in SOURCE coordinates and looks like the crop the renderer
+takes. It is not, by construction: `dynamic_geometry.visual_key` says so in its
+own words — "the picture is not the plan's rectangle, it is what `build_sendcmd`
+schedules: a size timeline and a pair of position expressions" — and it returns
+None for any shot whose size timeline has more than one point, because such a
+shot changes size across its own length.
+
+So a mapper that projects a face through `shot["rect"]` is right only while that
+timeline is a single point. Today it always is: `_size_timeline` over all 2,126
+shots in the stored corpus returns exactly one point every time. But that is a
+property of the STYLE in use, not of the design — 2,024 of those shots are
+LABELLED `move: push` or `pull`, and they stand still only because
+`push_amount` is 0.0 in all 89 stored styles. Turn it up and the label becomes
+true, and a mapper built on the rectangle is silently wrong for 95% of shots.
+
+(That near-miss is worth keeping: reading the `move` label rather than the
+timeline gives "95% of shots move", which is the opposite of the truth and
+would have argued for a much larger piece of work.)
+
+THEREFORE: the mapper reads the size timeline, not the rectangle, and REFUSES a
+shot whose timeline has more than one point rather than approximating it. That
+is the same rule R1 already applies to the same fact, and refusing is cheap
+while the count is zero.
+
 AND THE LETTERBOX COMES FROM `dynamic_geometry.canvas_size`. The first version
 read a `frame` key off the shot. No shot has ever carried one: 161 `fit` shots,
 all of them inside the 58 sidecars of the pilot corpus, 27 of which contain at

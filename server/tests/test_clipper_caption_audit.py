@@ -259,3 +259,33 @@ def test_the_position_checked_is_the_one_the_style_asked_for(tmp_path,
         caption_plan={"y_pct": 0.51, "style": {"position": "center"}}))
     code, out = _run(module, ["--project", "q"])
     assert out["position_no_preset_reproduces"] == 0 and code == 0
+
+
+def test_a_moving_crop_is_counted_and_does_not_fail_the_run(tmp_path,
+                                                            monkeypatch):
+    """PRINTED AND NOT WIRED, deliberately: nothing in this report depends on
+    it. It is the precondition for the evidence mapper that does not exist yet,
+    and the day it stops being zero, that mapper cannot be built on
+    `shot["rect"]`.
+
+    `move: push` is a LABEL. The shot stands still unless `push_amount` is above
+    zero, which it is in none of the 89 stored styles — so reading the label
+    instead of the size timeline says "95% of shots move", the opposite of the
+    truth."""
+    labelled = {"index": 0, "composition": "crop", "move": "push",
+                "t0": 0.0, "t1": 4.0, "rect": {"x": 0, "y": 0,
+                                               "w": 810, "h": 1440}}
+    _sidecar(tmp_path, "still", "a", _ok(dynamic_plan={
+        "shots": [labelled], "src_w": 2560, "src_h": 1440,
+        "style": {"push_amount": 0.0}}))
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, ["--project", "still"])
+    assert out["shots_with_a_moving_crop"] == 0, "the label is not the motion"
+    assert code == 0
+
+    _sidecar(tmp_path, "moving", "a", _ok(dynamic_plan={
+        "shots": [labelled], "src_w": 2560, "src_h": 1440,
+        "style": {"push_amount": 0.1, "push_hz": 10.0}}))
+    code, out = _run(module, ["--project", "moving"])
+    assert out["shots_with_a_moving_crop"] == 1
+    assert code == 0, "it gates the mapper, not this report"

@@ -97,6 +97,45 @@ def _rendered_height(mp4: Path) -> tuple[int, bool]:
     return (height, False) if height > 0 else (ASSUMED_OUT_H, True)
 
 
+def _moving_crops(plan: dict) -> int:
+    """Shots whose crop CHANGES SIZE across their own length.
+
+    A PRECONDITION FOR WORK NOT YET DONE, counted here because the count is the
+    thing that decides whether that work is possible the cheap way. Nothing in
+    this report depends on it — the letterbox is geometry, not crop — so it does
+    not fail the run.
+
+    `shot["rect"]` looks like the crop the renderer takes and is not:
+    `dynamic_geometry.visual_key` says the picture is what `build_sendcmd`
+    schedules, and returns None for any shot with a multi-point size timeline.
+    A mapper that projects a face through the rectangle is therefore right only
+    while every timeline is a single point. Across the stored corpus every one
+    of them is — but 2,024 of 2,126 shots are LABELLED `move: push` or `pull`
+    and stand still only because `push_amount` is 0.0 in every stored style.
+    Reading the label instead of the timeline says "95% of shots move", which is
+    the opposite of the truth.
+    """
+    from services.clipper.dynamic_geometry import _size_timeline
+
+    style = plan.get("style")
+    style = style if isinstance(style, dict) else {}
+    src_w, src_h = plan.get("src_w") or 0, plan.get("src_h") or 0
+    if not (src_w and src_h):
+        return 0
+    moving = 0
+    for shot in plan.get("shots") or []:
+        if not isinstance(shot, dict):
+            continue
+        try:
+            if len(_size_timeline(shot, style, src_w, src_h)) > 1:
+                moving += 1
+        except Exception:
+            # Unreadable is not "static". It joins the count it would join if
+            # it were moving, because the mapper could not use it either way.
+            moving += 1
+    return moving
+
+
 def _requested_position(caption: dict) -> str | None:
     """The position name the clip's own style asked for, if it recorded one."""
     import ast
@@ -193,6 +232,7 @@ def _measure(path: Path) -> dict:
             plan.get("shots"), list) else None,
         "fit_shots": sum(1 for s in (plan.get("shots") or [])
                          if isinstance(s, dict) and s.get("composition") == "fit"),
+        "moving_crops": _moving_crops(plan),
         "on_letterbox": cp.ON_LETTERBOX in view["lands_on"],
         "placement_refused": view["refused"],
         "placement_unavailable": view["unavailable"],
@@ -277,6 +317,8 @@ def _report(rows: list[dict]) -> dict:
         # COMPUTED AND WIRED, both of them. A shot the report refused was not
         # measured, and an unmeasured shot has never been a clean one anywhere
         # else in this plan.
+        "shots_with_a_moving_crop": sum(r.get("moving_crops") or 0
+                                        for r in read),
         "placement_refusals": len([r for r in read if r.get("placement_refused")]),
         "choice_refusals": len([r for r in read if r.get("choice_refused")]),
         "output_geometry_assumed": len([r for r in read
@@ -312,6 +354,13 @@ def _print(out: dict) -> None:
     print(f"  the explanation refused             {out['choice_refusals']}")
     print(f"  rendered height assumed, not read   "
           f"{out['output_geometry_assumed']}")
+    # PRINTED AND NOT WIRED, deliberately, and the difference from the rule
+    # matters: nothing in this report depends on it. It is the precondition for
+    # the evidence mapper that does not exist yet, and the day it stops being
+    # zero, that mapper cannot be built on `shot["rect"]`.
+    print(f"  shots whose crop moves (gates the")
+    print(f"    future evidence mapper, not this)  "
+          f"{out['shots_with_a_moving_crop']}")
     print(f"of the sidecars read, keep-out rects")
     print(f"  with a non-finite rectangle         "
           f"{out['with_a_non_finite_keep_out']}")
