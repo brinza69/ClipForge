@@ -54,6 +54,7 @@ agent can test it against a real corpus rather than adopt it from this one.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Sequence
 
@@ -179,8 +180,6 @@ def _frame_hits(frame: Any, reader) -> list[dict] | None:
     ATOMIC, like `source_captions._frame_bands` and for the same reason: a
     partial frame is a measurement of the model's failure, not of the picture.
     """
-    import math
-
     try:
         height, width = int(frame.shape[0]), int(frame.shape[1])
         if height < 1 or width < 1:
@@ -194,12 +193,26 @@ def _frame_hits(frame: Any, reader) -> list[dict] | None:
             # against a NaN is false — and manufactured a `detected` out of a
             # model that had failed; a NaN coordinate reached the report and the
             # JSON; and a box outside the frame was kept as if it had been read.
+            # A NUMBER, and not a bool: `conf=True` became 1.0 and read as a
+            # perfect confidence. `isinstance(True, int)` is the reason, and it
+            # is the third time that fact has cost something in this batch.
+            if isinstance(conf, bool) or not isinstance(conf, (int, float)):
+                return None
             value = float(conf)
             if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                return None
+            if (not isinstance(box, (list, tuple)) or len(box) < 3
+                    or any(not isinstance(pt, (list, tuple)) or len(pt) < 2
+                           for pt in box)):
                 return None
             ys = [float(p[1]) for p in box]
             xs = [float(p[0]) for p in box]
             if not all(math.isfinite(v) for v in ys + xs):
+                return None
+            # STRICTLY POSITIVE EXTENT. A box of zero width or height is not a
+            # read of anything, and it was fabricating hits: the frame checks
+            # below all passed for a degenerate rectangle.
+            if max(xs) - min(xs) <= 0 or max(ys) - min(ys) <= 0:
                 return None
             if not (0.0 <= min(ys) and max(ys) <= height + _BOX_SLACK_PX):
                 return None
@@ -243,8 +256,13 @@ def detect(video: str, *, every_s: float = EVERY_S, reader=None) -> dict:
     # A DIFFERENT CADENCE IS REFUSED, not rescaled. Two frames is 0.1 seconds of
     # video at one cadence and 60 at another, and the separation behind the
     # threshold was measured at exactly one frame per second.
-    if not isinstance(every_s, (int, float)) or isinstance(every_s, bool) \
-            or abs(float(every_s) - EVERY_S) > 1e-9:
+    # `math.isfinite` FIRST. `abs(nan - EVERY_S) > 1e-9` is False, so a NaN
+    # cadence walked past the guard that exists to refuse a cadence — the same
+    # shape as the NaN confidence one function along, and the same shape as the
+    # NaN keep-out rectangle a module away.
+    if (not isinstance(every_s, (int, float)) or isinstance(every_s, bool)
+            or not math.isfinite(float(every_s))
+            or abs(float(every_s) - EVERY_S) > 1e-9):
         out["why_unavailable"] = WRONG_CADENCE
         return out
 

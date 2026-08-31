@@ -246,3 +246,115 @@ def test_a_different_cadence_is_refused_rather_than_rescaled(monkeypatch):
     ok = sc.detect("x.mp4", reader=_Reader([[]] * 10))
     assert ok["state"] == sc.NOT_DETECTED
     assert ok["every_s"] == sc.EVERY_S == ok["measured_at_every_s"]
+
+
+# --- the measurement itself, replayed --------------------------------------
+
+
+def _measurement():
+    """The per-frame hit counts from the run the thresholds were chosen on.
+
+    VERSIONED, because a threshold defended by a number in a docstring is
+    defended by nothing. `server/tests/data/source_chrome_measurement.json`
+    holds every export's analysed-frame count, token count and per-frame hits,
+    so the 14/14 and 27/27 in the module's own comment are reproducible from
+    data in the repository rather than from a summary somebody typed.
+    """
+    import json
+    from pathlib import Path
+
+    path = (Path(__file__).parent / "data" / "source_chrome_measurement.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _replay(row):
+    hits = list(row["hits_per_frame"])
+    hits += [0] * (row["frames_analysed"] - len(hits))
+    return sc.classify(hits, row["frames_analysed"])[0]
+
+
+def test_the_corpus_measurement_is_reproduced_from_stored_data():
+    """14 of 14 positives and 27 of 27 negatives, replayed through the shipping
+    `classify` rather than asserted from a comment."""
+    data = _measurement()
+    assert data["measured_at_every_s"] == sc.EVERY_S
+    assert data["conf_min"] == sc.CONF_MIN
+    assert len(data["positives"]) == 14 and len(data["negatives"]) == 27
+
+    assert [_replay(r) for r in data["positives"]] == [sc.DETECTED] * 14
+    assert [_replay(r) for r in data["negatives"]] == [sc.NOT_DETECTED] * 27
+
+
+def test_the_threshold_table_in_the_docstring_is_the_one_in_the_data():
+    """`>= 1` lets one negative through and `>= 2` does not — the row that was
+    chosen, and the row above it that was not."""
+    data = _measurement()
+    frames = lambda row: sum(1 for n in row["hits_per_frame"] if n > 0)  # noqa: E731
+    pos = [frames(r) for r in data["positives"]]
+    neg = [frames(r) for r in data["negatives"]]
+
+    assert min(pos) == 5, "the weakest positive"
+    assert max(neg) == 1, "the strongest negative"
+    for k, expect_neg in ((1, 1), (2, 0), (3, 0)):
+        assert sum(1 for v in pos if v >= k) == 14, k
+        assert sum(1 for v in neg if v >= k) == expect_neg, k
+
+
+def test_the_url_family_earned_its_removal():
+    """It matched 39 times on the positives and 0 on the negatives, and every
+    one of the 39 was below the confidence floor. Zero real URLs in 1,805
+    analysed frames and 14,170 tokens — the reason the hypothesis this module
+    was planned around is not in it."""
+    data = _measurement()
+    rows = data["positives"] + data["negatives"]
+    assert sum(r["frames_analysed"] for r in rows) == 1805
+    assert sum(r["tokens_read"] for r in rows) == 14170
+    assert sum(r["url_hits_at_any_confidence"] for r in rows) == 39
+    assert sum(r["url_hits_above_conf_min"] for r in rows) == 0
+
+
+def test_the_vocabulary_that_fired_is_the_vocabulary_in_the_module():
+    """Every word the positives produced has to be matched by `CONTROLS`, or
+    the reported precision belongs to a list nobody ran."""
+    data = _measurement()
+    words = {w for r in data["positives"] for w in r["words"]}
+    assert words == {"watch later", "share", "save", "search", "subscribe"}
+    for word in words:
+        assert sc.CONTROLS.match(word), word
+
+
+# --- the two guards that let an impossible read through ----------------------
+
+
+def test_a_nan_cadence_does_not_walk_past_the_cadence_guard(monkeypatch):
+    """`abs(nan - EVERY_S) > 1e-9` is False, so a NaN cadence passed the guard
+    that exists to refuse a cadence."""
+    monkeypatch.setattr(sc, "_sample",
+                        lambda video, every_s: [(0.0, object_frame())] * 10)
+    got = sc.detect("x.mp4", every_s=float("nan"), reader=_Reader([[]] * 10))
+    assert got["why_unavailable"] == sc.WRONG_CADENCE
+
+
+def test_a_box_with_no_area_is_not_a_read():
+    """The frame checks all passed for a degenerate rectangle, so it fabricated
+    a hit."""
+    flat = [[10, 100], [10, 100], [10, 120], [10, 120]]
+    thin = [[10, 100], [200, 100], [200, 100], [10, 100]]
+    for box in (flat, thin):
+        assert sc._frame_hits(object_frame(),
+                              _Reader([[(box, "SHARE", 0.9)]])) is None
+
+
+def test_a_confidence_that_is_a_bool_is_not_a_confidence():
+    """`conf=True` became 1.0 and read as a perfect confidence, because
+    `isinstance(True, int)`. The third time that fact has cost something."""
+    for bad in (True, False, "0.9", None, [0.9]):
+        assert sc._frame_hits(object_frame(),
+                              _Reader([[(_box(), "SHARE", bad)]])) is None
+
+
+def test_a_box_that_is_not_a_polygon_is_not_a_read():
+    for bad in ("box", [[0, 0]], [[0, 0], [1, 1]], [[0, 0], [1], [2, 2], [3, 3]],
+                None):
+        assert sc._frame_hits(object_frame(),
+                              _Reader([[(bad, "SHARE", 0.9)]])) is None

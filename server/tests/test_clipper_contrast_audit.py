@@ -253,3 +253,29 @@ def test_the_counts_are_per_distinct_verdict_and_still_sum(tmp_path,
                     for r in out["distinct_palettes_on_disk"])
     assert counts == [1, 3]
     assert sum(counts) == out["sidecars_read"] == 4
+
+
+def test_an_accepted_preset_is_accepted_on_a_STORED_EXPORT_too(tmp_path,
+                                                               monkeypatch):
+    """THE TEST THAT WAS PROMISED. The exception took its name from the caller,
+    which passes a preset id for the presets and `project/clip (x99)` for a
+    stored export — so the same palette matched in one population and not the
+    other, and the first real use of `Neon Pop` would have made the presets pass
+    and the exports fail on it."""
+    _sidecar(tmp_path, "a", NEON)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    disk = out["distinct_palettes_on_disk"]
+    assert len(disk) == 1
+    assert disk[0]["accepted"], "the stored export matches the exception"
+    assert disk[0]["highlight"]["clears_large_text"] is False
+    assert out["failures"] == [] and code == 0
+
+
+def test_a_stored_export_with_a_repainted_neon_pop_still_fails(tmp_path,
+                                                              monkeypatch):
+    _sidecar(tmp_path, "a", {**NEON, "highlight_color": "#FF0033"})
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert out["distinct_palettes_on_disk"][0]["accepted"] is None
+    assert code == 1

@@ -1,0 +1,652 @@
+{
+ "schema": "source_chrome_measurement_v1",
+ "what": "per-export, per-frame control-label hits from the run the thresholds were chosen on",
+ "measured_at_every_s": 1.0,
+ "conf_min": 0.6,
+ "positives_are": "the 14 Moist exports; the v2 human review lists browser UI among the v3 defects",
+ "negatives_are": "27 exports across the ten other projects with a rendered export",
+ "positives": [
+  {
+   "project": "pilot2c8a",
+   "export": "003a5c53c51d",
+   "frames_analysed": 90,
+   "tokens_read": 952,
+   "hits_per_frame": [
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "save",
+    "share",
+    "watch later"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "20c670227eda",
+   "frames_analysed": 16,
+   "tokens_read": 90,
+   "hits_per_frame": [
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "watch later"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "2a59b1e41880",
+   "frames_analysed": 40,
+   "tokens_read": 211,
+   "hits_per_frame": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "save",
+    "share"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "36194ff1a9b5",
+   "frames_analysed": 23,
+   "tokens_read": 2085,
+   "hits_per_frame": [
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 1,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "subscribe"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "38aa005c7c1f",
+   "frames_analysed": 55,
+   "tokens_read": 764,
+   "hits_per_frame": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 3,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "save",
+    "share"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "502c0017d141",
+   "frames_analysed": 38,
+   "tokens_read": 372,
+   "hits_per_frame": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "watch later"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "612fe03e06f5",
+   "frames_analysed": 57,
+   "tokens_read": 2873,
+   "hits_per_frame": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "search",
+    "watch later"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "77d9d5079ad9",
+   "frames_analysed": 35,
+   "tokens_read": 225,
+   "hits_per_frame": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "watch later"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "8cb13e48ef30",
+   "frames_analysed": 32,
+   "tokens_read": 284,
+   "hits_per_frame": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "watch later"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "ad1b8004ece9",
+   "frames_analysed": 56,
+   "tokens_read": 1014,
+   "hits_per_frame": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 35,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "save",
+    "share"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "d646da7201ad",
+   "frames_analysed": 17,
+   "tokens_read": 100,
+   "hits_per_frame": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "save",
+    "search",
+    "share"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "e2576b0a0e3b",
+   "frames_analysed": 51,
+   "tokens_read": 266,
+   "hits_per_frame": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "watch later"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "e2d3a7785c20",
+   "frames_analysed": 35,
+   "tokens_read": 251,
+   "hits_per_frame": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "watch later"
+   ]
+  },
+  {
+   "project": "pilot2c8a",
+   "export": "ec47597c60f2",
+   "frames_analysed": 38,
+   "tokens_read": 215,
+   "hits_per_frame": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "save",
+    "search",
+    "share"
+   ]
+  }
+ ],
+ "negatives": [
+  {
+   "project": "0c9685df852b",
+   "export": "205a6ec12b00",
+   "frames_analysed": 39,
+   "tokens_read": 38,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "2d3375ee3420",
+   "export": "315cb95d4aef",
+   "frames_analysed": 57,
+   "tokens_read": 466,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "2d3375ee3420",
+   "export": "329d1b110b60",
+   "frames_analysed": 49,
+   "tokens_read": 259,
+   "hits_per_frame": [
+    1
+   ],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": [
+    "search"
+   ]
+  },
+  {
+   "project": "2d3375ee3420",
+   "export": "54c068c64dcd",
+   "frames_analysed": 40,
+   "tokens_read": 219,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "39c89ae2e16e",
+   "export": "30d045851a64",
+   "frames_analysed": 34,
+   "tokens_read": 311,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "39c89ae2e16e",
+   "export": "9fc63c77e3c1",
+   "frames_analysed": 77,
+   "tokens_read": 266,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "43a509687a33",
+   "export": "04fe4320db02",
+   "frames_analysed": 47,
+   "tokens_read": 169,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "43a509687a33",
+   "export": "0ba320270547",
+   "frames_analysed": 38,
+   "tokens_read": 81,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "43a509687a33",
+   "export": "0cce66f8f2c2",
+   "frames_analysed": 44,
+   "tokens_read": 154,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "504acbb49afa",
+   "export": "093a1f97eeba",
+   "frames_analysed": 32,
+   "tokens_read": 374,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "504acbb49afa",
+   "export": "346308d2426b",
+   "frames_analysed": 41,
+   "tokens_read": 232,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "504acbb49afa",
+   "export": "e04296a41083",
+   "frames_analysed": 24,
+   "tokens_read": 106,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "547301635e54",
+   "export": "0a7ab25eb301",
+   "frames_analysed": 26,
+   "tokens_read": 244,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "547301635e54",
+   "export": "307b0f5dfe85",
+   "frames_analysed": 41,
+   "tokens_read": 239,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "547301635e54",
+   "export": "e8fa6b35ea66",
+   "frames_analysed": 40,
+   "tokens_read": 183,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilot6b38",
+   "export": "3359e0f70249",
+   "frames_analysed": 56,
+   "tokens_read": 60,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilot6b38",
+   "export": "42e168b0582c",
+   "frames_analysed": 83,
+   "tokens_read": 104,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilot6b38",
+   "export": "46921099031e",
+   "frames_analysed": 61,
+   "tokens_read": 104,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilotee0e",
+   "export": "10b22f789e7b",
+   "frames_analysed": 89,
+   "tokens_read": 76,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilotee0e",
+   "export": "2b875022bb35",
+   "frames_analysed": 82,
+   "tokens_read": 97,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilotee0e",
+   "export": "2e5e9cba2ca4",
+   "frames_analysed": 31,
+   "tokens_read": 22,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilotf81b",
+   "export": "30d7c6d4eae5",
+   "frames_analysed": 19,
+   "tokens_read": 36,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilotf81b",
+   "export": "52afdf25163d",
+   "frames_analysed": 40,
+   "tokens_read": 95,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "pilotf81b",
+   "export": "5331ff266a9f",
+   "frames_analysed": 18,
+   "tokens_read": 48,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "slice4h00test",
+   "export": "02dea6f0a9e9",
+   "frames_analysed": 38,
+   "tokens_read": 218,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "slice4h00test",
+   "export": "1be6162a1a1b",
+   "frames_analysed": 41,
+   "tokens_read": 185,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  },
+  {
+   "project": "slice4h00test",
+   "export": "3e42c5a399c2",
+   "frames_analysed": 35,
+   "tokens_read": 82,
+   "hits_per_frame": [],
+   "url_hits_at_any_confidence": 0,
+   "url_hits_above_conf_min": 0,
+   "words": []
+  }
+ ]
+}

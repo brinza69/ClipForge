@@ -82,11 +82,19 @@ def main() -> int:
     # PRINTED AS THEY ARE MEASURED. The first version collected every row and
     # printed at the end, so an interruption threw away hours of OCR — which is
     # how this measurement was nearly lost twice.
+    # AND IN `--json` MODE TOO, as JSONL on stderr. The first version printed
+    # rows only in text mode, so a `--json` run over the whole corpus held every
+    # result until the end and an interruption threw away the hours that
+    # produced them. stderr rather than stdout, because stdout has to stay a
+    # single parsable document.
     rows = []
     for path in paths:
         row = _measure(path, args.every, reader)
         rows.append(row)
-        if not args.json:
+        if args.json:
+            print(json.dumps({k: v for k, v in row.items() if k != "hits"}),
+                  file=sys.stderr, flush=True)
+        else:
             _print(row)
 
     states = {s: len([r for r in rows if r["state"] == s]) for s in sc.STATES}
