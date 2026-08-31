@@ -267,15 +267,30 @@ def test_an_unreadable_keep_out_is_counted_not_hidden():
     assert told["chosen"] == round(y, 4)
 
 
-def test_an_entry_that_is_not_a_rectangle_is_counted_too():
-    """`_iter_rects` ignores anything without `w` and `h`. Offered and thrown
-    away at the other gate is still offered and thrown away."""
+def test_a_record_without_w_and_h_is_counted_as_lost():
+    """`_iter_rects` ignores anything without them. Something shaped like a
+    record going past without a word is the suspicious case."""
     told = cc.explain("bottom", {"safe_zones": {"a": {"x": 0, "y": 1000},
-                                                "b": "not a rect"}},
+                                                "b": {"nope": 1}}},
                       out_w=OUT_W, out_h=OUT_H)
     assert told["keep_out"]["offered"] == 2
     assert told["keep_out"]["recognised_as_rectangles"] == 0
     assert told["keep_out"]["unreadable"] == 2
+
+
+def test_a_sibling_scalar_is_not_a_lost_rectangle():
+    """A real `safe_zones` is four scalars and one list of rectangles. Counting
+    the scalars as offered reported four unreadable on every export in the
+    corpus — a loud false alarm about numbers that were never rectangles."""
+    real = {"safe_zones": {"top": 200, "caption_bottom": 480,
+                           "caption_center": 120, "hook_mid_y": 700,
+                           "keep_out": [{"x": 264, "y": 440, "w": 696,
+                                         "h": 696, "kind": "face"}]}}
+    told = cc.explain("bottom", real, out_w=OUT_W, out_h=OUT_H)
+    assert told["keep_out"]["not_rectangle_shaped"] == 4
+    assert told["keep_out"]["offered"] == 1
+    assert told["keep_out"]["used"] == 1
+    assert told["keep_out"]["unreadable"] == 0
 
 
 _NAN_RECT = {"x": 0, "y": float("nan"), "w": OUT_W, "h": float("nan")}

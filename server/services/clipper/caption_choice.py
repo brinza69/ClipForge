@@ -122,23 +122,44 @@ def _rect_census(zones: Any, out_w: int, out_h: int) -> dict:
     being re-implemented; the only thing computed here is how many values the
     container held, which is arithmetic on a list and not a rule.
     """
-    offered = 0
     values: Iterable[Any] = ()
     if isinstance(zones, dict):
         values = list(zones.values())
     elif isinstance(zones, (list, tuple)):
         values = list(zones)
+
+    # WHAT COULD HAVE BEEN A RECTANGLE, and not simply what was in the
+    # container. A real `safe_zones` is `{"top": 200, "caption_bottom": 480,
+    # "caption_center": 120, "hook_mid_y": 700, "keep_out": [{...}]}` — four
+    # scalars that are sibling fields and one list that holds the rectangles. The
+    # first version counted all five as offered and reported four unreadable on
+    # every export in the corpus, which is a loud false alarm about numbers that
+    # were never rectangles and were never meant to be.
+    candidates: list[Any] = []
+    scalars = 0
     for value in values:
         # One level of nesting, because that is the shape `_iter_rects` walks.
-        offered += len(value) if isinstance(value, (list, tuple)) else 1
+        if isinstance(value, (list, tuple)):
+            candidates.extend(value)
+        elif isinstance(value, dict):
+            candidates.append(value)
+        else:
+            scalars += 1
 
+    # A dict WITHOUT `w` and `h` is the suspicious one: something shaped like a
+    # record went past `_iter_rects` without a word. A scalar is not.
+    shapeless = [c for c in candidates
+                 if not (isinstance(c, dict) and "w" in c and "h" in c)]
     yielded = list(_iter_rects(zones))
     used = [_norm_rect(r, out_w, out_h) for r in yielded]
     kept = [r for r in used if r is not None]
     not_finite = [r for r in kept
                   if not all(math.isfinite(v) for v in r)]
     return {
-        "offered": offered,
+        "offered": len(candidates),
+        # Sibling fields in the same container. Reported so the denominator is
+        # visible, never counted as a rectangle that was lost.
+        "not_rectangle_shaped": scalars,
         "recognised_as_rectangles": len(yielded),
         "used": len(kept),
         # Survived `_norm_rect` and then covers the caption box at EVERY scan
@@ -146,8 +167,9 @@ def _rect_census(zones: Any, out_w: int, out_h: int) -> dict:
         # changes where the caption is burned; see the module docstring for the
         # measurement.
         "not_finite": len(not_finite),
-        # Offered and thrown away without a word, at either gate.
-        "unreadable": offered - len(kept),
+        # Something that could have been a rectangle and was thrown away
+        # without a word, at either gate.
+        "unreadable": len(shapeless) + (len(yielded) - len(kept)),
     }
 
 
