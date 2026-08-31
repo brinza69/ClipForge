@@ -532,9 +532,20 @@ GARANTA 3,0:1. Citirea precisă: există o luminanță de fundal la care separar
 textul nu atinge niciodată 3:1. Ambele sunt presete livrabile azi, iar reparația schimbă o culoare
 livrată — decizie pentru om, nu pentru un batch în umbră.
 
+**`evidence_map.py` mapează dovezile în cadrul de output**, prin lanțul rendererului: proxy → sursă
+(scări separate), `+ canvas_offset` fiindcă padding-ul precede cropul, fereastra de crop, apoi o
+scalare. Refuză un shot al cărui crop se mișcă, unul care nu poate fi citit, dimensiuni proxy lipsă și
+o cutie malformată; o cutie care ratează cropul e `off_frame`, nici refuz nici zero.
+
+**Primele cifre pentru semnalul de față:** 2126 de shot-uri, **951 fără niciun eșantion în fereastra
+lor** (detectorul eșantionează la ~2s, shot-urile au 1–4s), 1175 cu fețe mapate, 470 de cutii care
+ratează cropul, și **26 din cele 99 de clipuri plasate au caption-ul peste o față detectată**. Cifra e
+un PLAFON INFERIOR: cele 951 de shot-uri neeșantionate plus semnalele de UI și text-sursă, care nu au
+detecție per shot, fac ca **zero clipuri să aibă cazul cel mai rău stabilit**.
+
 **Ce a mai rămas din R6:** warning-urile de browser chrome (blocate pe rata de fals-pozitiv, în curs
-de măsurare) și cablarea în sidecar. `panels_to_keep_out` nu e mapper generic — sare peste shot-urile
-de față.
+de măsurare), detecția per-shot pentru UI și pentru textul sursei, și cablarea în sidecar.
+`panels_to_keep_out` nu e mapper generic — sare peste shot-urile de față.
 
 ## Punctul exact de reluare
 
@@ -563,9 +574,10 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
 
 **Cod, în ordinea planului:**
 
-7. **R6, restul**, strict în shadow. Poziționarea, motivul și contrastul sunt livrate
-   (`caption_placement`, `caption_choice`, `caption_contrast`); au rămas warning-urile de browser
-   chrome și cablarea în sidecar. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
+7. **R6, restul**, strict în shadow. Poziționarea, motivul, contrastul și maparea dovezilor sunt
+   livrate (`caption_placement`, `caption_choice`, `caption_contrast`, `evidence_map`); au rămas
+   warning-urile de browser chrome, detecția per-shot pentru UI și textul sursei — fără ele două din
+   trei semnale rămân `unavailable` — și cablarea în sidecar. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
    sare deliberat peste shot-urile de față, deci fețele și textul sursei au nevoie de mapper propriu.
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 8. **R7** — preflight de publicare și corecția bounded (maximum una).

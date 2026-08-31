@@ -746,9 +746,48 @@ Ce NU e: o podea de LUMINANȚĂ, nu o dovadă de lizibilitate (WCAG ignoră nuan
 uniform sub fiecare glif, ceea ce blur-ul produce și un `crop` peste sursă detaliată nu; iar pragurile
 sunt WCAG 2.1 AA, scrise pentru pagini web, deci `calibrated: false`.
 
+**MAPPERUL EXISTĂ, iar semnalul de față are pentru prima dată cifre** (`evidence_map.py`).
+`caption_placement` a spus dintotdeauna că APELANTUL mapează dovezile, și nimeni nu o făcea, deci
+toate trei semnalele de ocluziune erau `unavailable` de când a fost scris.
+
+**Lanțul e citit din renderer, nu presupus:** proxy → sursă cu scări separate pe X și Y; apoi
+`y += canvas_offset`, fiindcă `dynamic_render` face PAD ÎNAINTE DE CROP și comentariul lui explică de
+ce — `scale` își fixează dimensiunea la configurare, deci letterbox-ul din față e ce face fiecare
+crop 9:16, iar un mapper care taie înainte de padding descrie un renderer abandonat; apoi fereastra
+de crop a shot-ului; apoi o singură scalare la 1080×1920.
+
+**Refuză în patru locuri:** un shot cu timeline de dimensiune multi-punct (dreptunghiul e fereastra
+livrată doar cât timp nu se mișcă); un shot care nu poate fi citit deloc, refuz SEPARAT de precedentul;
+dimensiuni proxy lipsă (`dynamic_edit` cade pe `or src_w`, adică scară 1 unde realitatea e 5,3); și o
+cutie care nu e patru numere finite. O cutie care ratează cropul e `off_frame` — nici refuz, nici zero.
+
+**Cifrele, pe cele 101 sidecare:**
+
+```
+shot-uri                                2126
+  fără niciun eșantion în fereastra lor   951
+  cu fețe mapate în output               1175
+cutii de față care ratează cropul         470
+clipuri cu caption peste o față detectată  26
+clipuri cu cazul cel mai rău STABILIT       0
+```
+
+**951 e titlul, nu 26.** Detectorul eșantionează la ~2 secunde iar un shot are tipic 1–4, deci aproape
+jumătate din shot-uri nu conțin niciun eșantion. Alea sunt `unavailable` — `None`, niciodată listă
+goală, fiindcă o listă goală spune „ne-am uitat și nu era nicio față".
+
+**Deci 26 e un plafon inferior pe toate axele.** Cele 951 de shot-uri neeșantionate pot conține
+fiecare o față peste caption, iar semnalele de UI și de text-sursă nu au nicio detecție per shot —
+deci `share_complete` e fals pentru fiecare shot din corpus și ZERO clipuri au cazul cel mai rău
+stabilit. Raportul tipărește asta lângă cifră, fiindcă altfel „26 de clipuri" se citește „și celelalte
+73 sunt curate".
+
+Câteva dintre cele 26 au `worst = 1,0`: banda de caption complet acoperită de o față.
+
 **Ce a mai rămas din listă:** warning-urile de browser chrome (blocate pe rata de fals-pozitiv, care
-se măsoară acum) și cablarea propriu-zisă în sidecar. `panels_to_keep_out` NU e un mapper generic —
-sare deliberat peste shot-urile de față — deci fețele și textul sursei au nevoie de mapper propriu.
+se măsoară acum), detecția per-shot pentru UI și pentru textul sursei — fără ele două din trei
+semnale rămân `unavailable` și niciun caz nu poate fi stabilit — și cablarea propriu-zisă în sidecar.
+`panels_to_keep_out` NU e un mapper generic: sare deliberat peste shot-urile de față.
 
 ### Batch R6 — lista originală
 
