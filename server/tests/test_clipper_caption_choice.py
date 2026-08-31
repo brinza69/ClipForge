@@ -416,3 +416,31 @@ def test_a_position_that_is_a_name_nobody_defined_is_still_explained():
         _x, shipped = resolve_position(position or "bottom", {},
                                        out_w=OUT_W, out_h=OUT_H)
         assert told["proposed"] == round(shipped, 4), repr(position)
+
+
+def test_the_scalar_keys_are_the_ones_the_layout_engine_emits():
+    """`SIBLING_KEYS` is a copy of a schema `layout_geom._safe_zones` owns, and
+    a copy that nothing checks is the mistake Batch R5 paid for. This holds it
+    against the producer."""
+    from services.clipper.layout_geom import _safe_zones
+
+    emitted = set(_safe_zones("fullscreen", None, None, None, [], 0.3))
+    assert cc.SIBLING_KEYS == emitted - {"keep_out"}, emitted
+
+
+def test_a_corrupt_rectangle_container_is_not_furniture():
+    """Waving a value through because it is not a dict or a list is how a set
+    where the rectangle list belongs produced a clean census."""
+    for bad in ({"oops"}, "keep_out", 7, object()):
+        told = cc.explain("bottom", {"safe_zones": {"top": 200,
+                                                    "keep_out": bad}},
+                          out_w=OUT_W, out_h=OUT_H)
+        assert told["keep_out"]["not_rectangle_shaped"] == 1, repr(bad)
+        assert told["keep_out"]["unreadable"] >= 1, repr(bad)
+
+
+def test_a_scalar_under_a_key_nobody_defined_is_suspicious():
+    told = cc.explain("bottom", {"safe_zones": {"top": 200, "mystery": 42}},
+                      out_w=OUT_W, out_h=OUT_H)
+    assert told["keep_out"]["not_rectangle_shaped"] == 1, "only `top`"
+    assert told["keep_out"]["unreadable"] == 1, "`mystery` is unaccounted for"

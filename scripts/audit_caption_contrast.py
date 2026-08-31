@@ -18,7 +18,10 @@ so both are counted, with their own denominators.
 
 WHAT FAILS THE RUN:
 
-    a style that cannot be read        an unreadable colour is not a black one
+    a style that cannot be READ        an unreadable colour is not a black one.
+                                       A style that is ABSENT is different: an
+                                       export can carry no captions, so that is
+                                       counted and printed, never failed on
     a fill below the large-text bar    the body text is unreadable by the only
                                        published standard available
     a highlight below it               the word the animation paints is the one
@@ -113,6 +116,15 @@ def _failures(presets: list[dict], disk: list[dict],
     for line in disk_refused:
         bad.append(f"sidecar refused: {line}")
     for row in presets + disk:
+        if row["refused"] == [cc.NO_STYLE]:
+            # NOT A FAILURE, and counted rather than dropped. An export can
+            # genuinely carry no captions, and a sidecar can have lost the
+            # style, and nothing here tells the two apart — so it is
+            # `unavailable`, exactly as `audit_caption_placement` treats the
+            # same fact. Failing on it would keep the gate permanently red for
+            # a legitimate state; hiding it would let a palette count claim to
+            # cover renders it never saw.
+            continue
         if row["refused"]:
             bad.append(f"{row['name']}: refused ({', '.join(row['refused'])})")
             continue

@@ -108,6 +108,16 @@ NARROWER = "a_wider_clear_band_existed"
 OUT_OF_SPEC = "outside_the_55_75_spec_clamp_while_one_inside_it_existed"
 REJECTED_BECAUSE: tuple[str, ...] = (NARROWER, OUT_OF_SPEC)
 
+#: The scalar keys `layout_geom._safe_zones` puts BESIDE the rectangles, as a
+#: closed list. Recognising a sibling by TYPE alone — "it is a number, so it is
+#: not a broken rectangle" — waves through anything that is not a dict or a
+#: list, so `{"keep_out": {"oops"}}` reported a clean census over a corrupt
+#: rectangle container. A scalar under a key nobody defined is suspicious;
+#: `test_the_scalar_keys_are_the_ones_the_layout_engine_emits` holds this
+#: against the producer so the copy cannot drift.
+SIBLING_KEYS: frozenset[str] = frozenset(
+    {"top", "caption_bottom", "caption_center", "hook_mid_y"})
+
 #: Half a scan step. A band's centre is the midpoint of its run, so it lands
 #: between grid points whenever the run has an even length — matching the
 #: chosen position to a band therefore needs a tolerance, and half a step is
@@ -135,16 +145,29 @@ def _rect_census(zones: Any, out_w: int, out_h: int) -> dict:
     # first version counted all five as offered and reported four unreadable on
     # every export in the corpus, which is a loud false alarm about numbers that
     # were never rectangles and were never meant to be.
+    #
+    # BY SCHEMA AND NOT BY TYPE. Waving a value through because it is not a dict
+    # or a list is how `{"keep_out": {"oops"}}` — a set where the rectangle list
+    # belongs — produced a clean census over a corrupt container. A number under
+    # one of the four keys the layout engine emits is a sibling; anything else
+    # is something nobody can account for, and it goes in the suspicious pile.
+    items = (list(zones.items()) if isinstance(zones, dict)
+             else [(None, v) for v in values])
     candidates: list[Any] = []
     scalars = 0
-    for value in values:
+    for key, value in items:
         # One level of nesting, because that is the shape `_iter_rects` walks.
         if isinstance(value, (list, tuple)):
             candidates.extend(value)
         elif isinstance(value, dict):
             candidates.append(value)
-        else:
+        elif (key in SIBLING_KEYS and not isinstance(value, bool)
+              and isinstance(value, (int, float))):
             scalars += 1
+        else:
+            # Not a rectangle, not a container, and not one of the four fields
+            # this schema defines. Counted as lost rather than as furniture.
+            candidates.append(value)
 
     # A dict WITHOUT `w` and `h` is the suspicious one: something shaped like a
     # record went past `_iter_rects` without a word. A scalar is not.
