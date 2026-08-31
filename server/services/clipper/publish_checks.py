@@ -100,12 +100,26 @@ def geometry(sidecar: Any) -> dict:
         # outranks a half nobody could look at.
         return pf.check(pf.FAIL, why=",".join(sorted(defects)),
                         severity=pf.REJECTABLE, evidence=defects)
-    missing = [name for name, key in (("no_duration", "duration_s"),
-                                      ("no_composition", "composition"))
-               if report.get(key) == EQ_UNAVAILABLE]
+    # COMPOSITION IS A DISTRIBUTION, NOT A SCALAR. `clip_report` returns the
+    # string `"unavailable"` only when the shot list itself could not be read;
+    # when it CAN be read it returns a counter, and a counter of unknowns looks
+    # like `{"unavailable": 19}`. Comparing the whole field to the sentinel is
+    # therefore false for every one of those, and 31 of the 89 clips this check
+    # passed had every single shot's composition unknown. It is the same
+    # mistake, one level in, as the one this function exists to fix: a container
+    # is not the scalar it contains.
+    composition = report.get("composition")
+    known = (composition != EQ_UNAVAILABLE and isinstance(composition, dict)
+             and bool(composition)
+             and EQ_UNAVAILABLE not in composition)
+    missing = []
+    if report.get("duration_s") == EQ_UNAVAILABLE:
+        missing.append("no_duration")
+    if not known:
+        missing.append("no_composition")
     evidence = {"duration_s": report.get("duration_s"),
                 "clock": report.get("duration_clock"),
-                "composition": report.get("composition"),
+                "composition": composition,
                 "shots": report.get("shots")}
     if missing:
         return pf.check(pf.UNAVAILABLE, why=",".join(missing), evidence=evidence)

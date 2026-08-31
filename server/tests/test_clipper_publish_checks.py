@@ -54,7 +54,30 @@ def test_a_duration_with_no_geometry_beside_it_does_not_pass():
 def test_both_halves_present_is_the_only_pass():
     got = pc.geometry(_sidecar())
     assert got["state"] == pf.PASS
-    assert got["evidence"]["composition"] != "unavailable"
+    assert got["evidence"]["composition"] == {"crop": 2}
+
+
+def test_a_distribution_of_unknowns_is_not_a_known_composition():
+    """`clip_report` returns the STRING `"unavailable"` only when the shot list
+    itself is unreadable; when it can be read it returns a counter, and a
+    counter of unknowns is `{"unavailable": 19}`. Comparing the whole field to
+    the sentinel is false for every one of those — 31 of the 89 clips this
+    check passed had every shot's composition unknown. A container is not the
+    scalar it contains, which is the same mistake one level in."""
+    body = _sidecar(dynamic_plan={"shots": [
+        {"index": 0, "t0": 0.0, "t1": 15.0},
+        {"index": 1, "t0": 15.0, "t1": 30.0}], "src_w": 1920, "src_h": 1080})
+    got = pc.geometry(body)
+    assert got["evidence"]["composition"] == {"unavailable": 2}
+    assert got["state"] == pf.UNAVAILABLE
+    assert "no_composition" in got["why"]
+
+
+def test_a_partly_unknown_composition_is_not_established_either():
+    body = _sidecar(dynamic_plan={"shots": [
+        {"index": 0, "composition": "crop", "t0": 0.0, "t1": 15.0},
+        {"index": 1, "t0": 15.0, "t1": 30.0}], "src_w": 1920, "src_h": 1080})
+    assert pc.geometry(body)["state"] == pf.UNAVAILABLE
 
 
 def test_a_sidecar_nobody_can_read_is_unavailable():
