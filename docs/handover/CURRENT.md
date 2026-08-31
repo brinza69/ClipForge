@@ -91,8 +91,14 @@ source → ingest → transcribe → analyze → score → candidate clips → p
    fiindcă verdictul cere un om care se uită la patru clipuri.
 2. Re-score al piloturilor: singurul lucru care face gate-ul R5 măsurabil, și nu cere
    pe nimeni.
-3. Clipper Batch R6: captions și source hygiene.
-4. Clipper R7–R8: preflight și reconstrucția montajului după trim.
+3. Clipper Batch R6: captions și source hygiene. **Livrat 30-31 august 2026**, plus un defect
+   livrat găsit de review uman: pe shot-urile `fit` caption-ul nu era desenat deloc (barele
+   transparente + subtitrări arse înainte de `overlay`), 331 de secunde din 27 de clipuri. Reparat,
+   cele 58 de exporturi ale piloturilor re-randate.
+4. Clipper R7: preflight de publicare. **Livrat 31 august 2026.** Pe corpus: 0 APPROVE, 33 REVISE,
+   37 REJECT, 31 UNDECIDED — cele 37 de respingeri sunt captions-urile duble din sursă, defectul cu
+   care s-a deschis R0. Nu e cablat la randare.
+5. Clipper R8: reconstrucția montajului după trim — NEÎNCEPUT.
 5. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
 6. Consistență între DB și filesystem și idempotency pentru job-urile de export.
 7. Upload streaming și limite reale de memorie/disk.

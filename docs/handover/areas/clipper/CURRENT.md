@@ -563,6 +563,110 @@ nu un mapper, fiindcă `regions.hud` are 8 dreptunghiuri în tot corpusul și to
 colț — și cablarea în sidecar. `panels_to_keep_out` nu e mapper generic: sare peste shot-urile de
 față.
 
+## DEFECT LIVRAT, GĂSIT DE OM ȘI REPARAT — 31 august 2026
+
+**Pe shot-urile `fit` caption-ul nu era desenat deloc.** `pad=...:color=black@0` face barele de
+letterbox TRANSPARENTE ca să se vadă copia blurată; arderea subtitrărilor peste cadrul acela scria
+textul în planurile de culoare și lăsa alfa pe zero, deci `[bg][fg]overlay` îl compunea afară. Pe
+`crop` cadrul e opac și caption-ul supraviețuia; pe `fit` caption-ul stă în bară prin construcție.
+
+**331 de secunde din 27 dintre cele 88 de clipuri stocate, 7,7% din corpus.** `pilotee0e/a9f653576eb7`
+era mut pe 88% din lungime, `pilot2c8a/ad1b8004ece9` pe 71%.
+
+Reparat mutând `subtitles` după `overlay` în `dynamic_render`. Dovedit în trei pași: cadru din
+exportul stocat fără text deși `.ass` are un eveniment activ; reproducere izolată cu două etichete,
+una peste sursă și una peste bară, din care apărea doar prima; re-randare și același cadru cu textul
+acolo.
+
+**Toate cele 58 de exporturi ale piloturilor sunt re-randate** (`scripts/rerender_pilots.py`, 54 de
+minute, zero refuzuri). Originalele sunt în `<proiect>/exports_pre_caption_fix/`, iar scriptul refuză
+să pornească a doua oară peste ele. Verificat automat: banda de caption s-a schimbat pe 19 din 27; pe
+celelalte 8 caption-ul era deja în cadrul sursă.
+
+**Ce a arătat instrumentul, și de ce nu l-a prins:** `caption_placement.ON_LETTERBOX` raporta acele
+27 de clipuri drept „caption-ul cade pe banda de letterbox". Adevărat despre GEOMETRIE, și nu întreba
+niciodată dacă textul e desenat. O măsurătoare despre unde cade ceva nu e o măsurătoare că acel ceva
+există.
+
+## DOUĂ CIFRE CORECTATE, ambele găsite verificând reparația
+
+**Poziția livrată e în `.ass`, nu în `caption_plan.y_pct`.** Sidecar-ul stochează PRESET-ul; `.ass`
+poartă ce a decis `resolve_position` după keep-out-uri, și ăla se arde. Coincid pe 53 din 99 și
+diferă pe 46, cu până la 933 de pixeli. `caption_corpus` citește acum din `.ass`, cu
+`caption_y_source` care spune `ass` sau `caption_plan`. Corecția mută „clipuri cu caption peste o
+față detectată" de la **26 la 38**.
+
+**„Ar produce regula de azi poziția asta" NU se poate răspunde din sidecar.** `clipper_captions`
+re-plasează caption-ul la randare cu keep-out-urile stocate PLUS `panels_to_keep_out(panels, shots)`,
+iar `panels` nu e stocat nicăieri. Comparând `y_pct` a ieșit „8 din 99"; comparând poziția arsă cu
+aceleași keep-out-uri incomplete a ieșit 54. **Niciunul nu era un fapt despre regulă.** E
+`unavailable` acum, cu motivul numit, și nu pică rularea — e o proprietate a formatului stocat.
+
+## Batch R7 — preflight de publicare, LIVRAT 31 august 2026
+
+**Defectul pe care îl repară e chiar în verdict**, și e declarat ca proprietate intenționată în
+docstring-ul lui `review.py`: „a review that fails must not lose an export. It returns a verdict of
+APPROVE with a warning, which is the same shape as a clean pass." Cinci căi de eșec întorc APPROVE.
+**Măsurat: 12 din 101 de clipuri primesc APPROVE cu `sampled: 0`** — 18% din toate aprobările de pe
+disc sunt aprobări ale unor clipuri pe care nu s-a uitat nimeni.
+
+**Al patrulea cuvânt: `UNDECIDED`.** Nimic nu a picat și ceva nu a putut fi privit. Regula e că nu e
+niciodată `APPROVE`; failure-safe se păstrează prin ce face în aval — nu blochează nimic, ca și azi —
+nu prin a-l numi trecere. Cele două alternative sunt scrise în modul ca să nu fie reluate: a plia o
+verificare imposibilă într-un `revise` pune două fapte sub un cuvânt, iar a păstra `APPROVE` cu un
+steag `established` lângă lasă cuvântul care poartă decizia să mintă — forma lui
+`changed_without_moving`.
+
+**Patru module:**
+
+- `publish_preflight.py` — vocabularul și verdictul. `APPROVE` doar când toate cele șapte trec. O
+  listă goală e `UNDECIDED`. O a opta verificare e refuzată, nu raportată. O verificare care nu trece
+  TREBUIE să spună de ce, un eșec TREBUIE să poarte severitate, ambele impuse la construcție.
+- `publish_checks.py` — citirea fiecărui semnal, fiecare cu linia lui.
+- `publish_corpus.py` — unde stă fiecare semnal. Nu ghicește: ori găsește intrarea, ori o numește pe
+  cea lipsă, iar `missing_inputs` călătorește lângă verdict.
+- `bounded_correction.py` — singura corecție permisă și cele patru condiții ale ei.
+
+**Rezultatul pe corpus** (`scripts/audit_publish_preflight.py --with-source-captions`):
+
+```
+APPROVE 0    REVISE 33    REJECT 37    UNDECIDED 31
+
+geometry_and_duration                  pass 101   fail  0   unavailable   0
+cut_equivalence_and_profile_rhythm     pass  35   fail 23   unavailable  43
+subject_present_when_required          pass   0   fail  0   unavailable 101
+usable_frame_in_fit_and_no_chrome      pass   0   fail  0   unavailable 101
+captions_not_duplicated_or_unreadable  pass   0   fail 37   unavailable  64
+boundary_complete                      pass  59   fail 22   unavailable  20
+provenance_complete                    pass   0   fail  0   unavailable 101
+```
+
+**Cele 37 de respingeri sunt defectul cu care s-a deschis R0:** `pilotf81b`, `39c89ae2e16e` și
+`43a509687a33` au captions arse în SURSĂ. Detectorul e de acord cu cele patru etichete umane —
+celelalte trei piloturi ies `absent`.
+
+Clipul e legat de candidat pe AMBELE margini ale ferestrei: 100 din 101 se potrivesc exact, iar cel
+care nu se potrivește e raportat nelegat, fiindcă R5a a mutat 261 de finaluri și „aproape pe o
+margine" e exact forma unei potriviri vechi.
+
+**Corecția mărginită.** Mutarea caption-ului e singura oferită: singurul eșec din cele șapte a cărui
+reparație există deja, e deterministă și poate fi verificată ÎNAINTE de aplicare. Patru condiții —
+acționabilă (doar `revise`), singura, verificată (poziția propusă trece înapoi prin aceeași
+verificare), stabilă (a propune din nou pe starea corectată nu întoarce nimic). **Keep-out-urile vin
+de la apelant**, fiindcă la randare setul include `panels_to_keep_out(panels, shots)` care nu ajunge
+în sidecar.
+
+**De ce fiecare `unavailable` rămâne așa:**
+- **subject** — semnalul există (`dynamic_regimes` dă `creator_unknown`); lista profilurilor care CER
+  un subiect nu există nicăieri, și a o inventa în aceeași mișcare în care o verific e greșit.
+- **frame** — cere OCR pe fiecare export, câteva minute fiecare. Opt-in prin `--with-chrome`, cu
+  cache pe disc ca `<clip>.chrome.json`. **Rularea peste corpus a fost pornită și oprită după un
+  singur export** — se poate relua, cache-ul o face reluabilă.
+- **provenance** — sidecarele nu poartă `input_fingerprint`; apare doar la o randare prin calea de
+  job, iar `scripts/rerender_pilots.py` rescrie doar mp4-urile.
+- **captions** parțial — `worst_share_complete` e fals pe fiecare shot fiindcă semnalele de UI și
+  text-sursă n-au detecție per shot.
+
 ## Punctul exact de reluare
 
 **Nimic din motor nu e activ.** R2, R3a, R3b, R4, R5 și R6 sunt instrumentare în umbră: calculează,
@@ -599,7 +703,15 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
 7. **R6, restul**, strict în shadow. Poziționarea, motivul, contrastul, maparea dovezilor și
    warning-ul de browser chrome sunt livrate (`caption_placement`, `caption_choice`,
    `caption_contrast`, `evidence_map`, `source_chrome`). A rămas detecția per-shot pentru UI și
-   textul sursei — fără ele două din trei semnale rămân `unavailable` — și cablarea în sidecar. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
+   textul sursei — lipsește un DETECTOR, nu un mapper — și cablarea în sidecar.
+7a. **R7 e LIVRAT** (`publish_preflight`, `publish_checks`, `publish_corpus`,
+   `bounded_correction`, `scripts/audit_publish_preflight.py`). Nimic nu e cablat la randare:
+   `applied` e fals peste tot. Ce se poate face fără decizii noi, în ordinea valorii:
+   **(a)** reluat `--with-chrome` peste corpus, ~3 ore de OCR cu cache reluabil pe disc, ceea ce
+   închide verificarea de cadru; **(b)** o randare prin calea de job ca sidecarele să capete
+   `input_fingerprint` și verificarea de provenance să înceteze a mai fi `unavailable`;
+   **(c)** cablat preflight-ul în `clipper_render_jobs` ca verdictul să ajungă pe sidecar lângă cel
+   vechi — dar NU ca poartă, fiindcă asta e o decizie de produs pe care n-a luat-o nimeni. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
    sare deliberat peste shot-urile de față, deci fețele și textul sursei au nevoie de mapper propriu.
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 8. **R7** — preflight de publicare și corecția bounded (maximum una).
@@ -680,6 +792,19 @@ Reparat, dar artefactul existent păstrează cifra veche: la o comparație, ia `
   randării; nu se șterg și nu se consideră înlocuite.
 - **Rendererul v3 nu este aprobat pentru publicare automată.** Geometria trece, dar auditul a găsit
   116 tăieturi invizibile, ritm de 29,3/min, boundaries fără padding, captions duble și browser UI.
+  Din lista aia, captions-urile duble sunt acum DETECTATE (R7 respinge 37 de clipuri pentru ele) și
+  browser UI e detectat (`source_chrome`, 14/14 pe Moist); restul rămâne.
+- **Sidecarul nu înregistrează setul de keep-out față de care s-a plasat caption-ul.**
+  `panels_to_keep_out(panels, shots)` se adaugă la randare și `panels` nu se scrie nicăieri, deci
+  decizia de plasare NU e reproductibilă din ce e stocat. Nu e o problemă a vreunui clip; e o gaură
+  de provenance în format, și e motivul pentru care `audit_caption_placement` refuză întrebarea
+  „ar produce regula de azi poziția asta".
+- **`caption_plan.y_pct` nu e poziția livrată.** E preset-ul; `.ass` poartă poziția rezolvată, și
+  diferă pe 46 din 99 de clipuri cu până la 933px. Orice cod nou care vrea să știe unde a aterizat
+  caption-ul citește `.ass`.
+- **R7 nu e cablat la randare.** Verdictul se calculează, nu se scrie pe sidecar și nu blochează
+  nimic. Dacă e sau nu o poartă e o decizie de produs pe care n-a luat-o nimeni — la fel ca la
+  `review.py`, unde comentariul spune exact asta.
 
 ## Riscuri de urmărit
 
