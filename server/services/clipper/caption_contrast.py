@@ -272,6 +272,13 @@ def verdict(style: Any) -> dict:
         "outline_width": None,
         "fill": None,
         "highlight": None,
+        # WHY THIS PALETTE IS ALLOWED TO MISS THE BAR, travelling WITH the
+        # verdict. It was reachable only by calling `accepted_shortfall` with
+        # the style, which the publish check does not have — so the check
+        # reported `Neon Pop`'s 2.33 as a fresh defect, re-opening a decision a
+        # human took on 2026-08-31. A verdict that carries the floor has to
+        # carry its acceptance, or every consumer re-derives it or forgets to.
+        "accepted_shortfall": accepted_shortfall(style),
         "applied": False,
     }
     if not isinstance(style, dict):

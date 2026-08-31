@@ -94,7 +94,47 @@ def test_a_check_outside_the_seven_is_refused():
     got = pf.preflight({**_all(), "vibes": pf.check(pf.PASS)})
     assert "vibes" not in got["checks"]
     assert any(pf.NOT_IN_THE_LIST in line for line in got["refused"])
-    assert got["verdict"] == pf.APPROVE, "the seven still decide it"
+
+
+# --- a refusal is not an unavailable input -----------------------------------
+#
+# This is where the two used to be treated as the same thing. `refused` was
+# computed, printed, and left out of the verdict — the exact shape of
+# `changed_without_moving`, one module over.
+
+
+def test_a_refusal_blocks_APPROVE():
+    """Seven passing checks and an objection nobody could act on is not a clean
+    pass. It was, and the objection rode along in a field beside it."""
+    for extra in ({"vibes": pf.check(pf.PASS)},   # an eighth check
+                  {pf.GEOMETRY: 7}):              # a result that is not a record
+        got = pf.preflight({**_all(), **extra})
+        assert got["refused"], extra
+        assert got["verdict"] != pf.APPROVE, extra
+        assert got["verdict"] == pf.UNDECIDED, extra
+
+
+def test_a_second_correction_blocks_APPROVE_too():
+    """§R7 allows one. Two used to be reported and approved in the same breath."""
+    got = pf.preflight(_all(), corrections=("moved the caption", "and again"))
+    assert any("more_than_one_correction" in line for line in got["refused"])
+    assert got["verdict"] == pf.UNDECIDED
+
+
+def test_a_refusal_does_not_invent_a_defect_in_the_clip():
+    """UNDECIDED, not REVISE: nothing here says the export is defective, only
+    that this report is not one an APPROVE may be read out of."""
+    got = pf.preflight({**_all(), "vibes": pf.check(pf.PASS)})
+    assert got["failed"] == []
+    assert got["established"] == "7/7"
+
+
+def test_a_refusal_does_not_upgrade_a_verdict_that_already_failed():
+    results = _all()
+    results[pf.CAPTIONS] = pf.check(pf.FAIL, why="two_layers",
+                                    severity=pf.REJECTABLE)
+    got = pf.preflight({**results, "vibes": pf.check(pf.PASS)})
+    assert got["verdict"] == pf.REJECT
 
 
 # --- a check has to be able to say why ---------------------------------------

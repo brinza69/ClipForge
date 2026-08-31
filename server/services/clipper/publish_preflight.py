@@ -36,6 +36,14 @@ THE SEVEN CHECKS ARE §R7's OWN LIST, as a closed vocabulary. Any of them may be
 `unavailable`, and today most of them are: this module's first value is showing
 what a publish decision actually rests on, which turns out to be less than the
 list suggests.
+
+A REFUSAL IS NOT AN UNAVAILABLE INPUT. An eighth check, a check result that is
+not a record, a second correction — none of those is "nobody could measure this",
+they are "this report is not one a decision may be read out of". They now block
+APPROVE. They did not, and the shape of that miss is the one this repo keeps
+finding: `refused` was computed, printed, and left out of the verdict, so seven
+passing checks plus a refusal came back APPROVE with the objection in a field
+beside it, and the audit exited 0.
 """
 
 from __future__ import annotations
@@ -175,11 +183,25 @@ def preflight(results: dict[str, Any] | None,
 
     extra = list(corrections)[1:]
     if extra:
-        # The gate's own words: at most one correction. Reported rather than
-        # enforced, because this module decides nothing — but a verdict that
-        # rests on three corrections is not the same claim as one that rests on
-        # none, and the count is the only thing that says which it is.
+        # The gate's own words: at most one correction. A verdict that rests on
+        # three corrections is not the same claim as one that rests on none, and
+        # the count is the only thing that says which it is.
         refused.append(f"more_than_one_correction: {', '.join(extra)}")
+
+    if refused and got == APPROVE:
+        # A REFUSAL IS NOT AN UNAVAILABLE INPUT, and this is where the two used
+        # to be treated as the same thing: `refused` was computed, printed, and
+        # left out of the verdict, so seven passing checks plus two corrections
+        # — or plus a name nobody agreed to — came back APPROVE with the
+        # objection in a field beside it. That is `changed_without_moving`
+        # exactly: the diagnostic that would invalidate the answer, wired to
+        # nothing.
+        #
+        # It becomes UNDECIDED rather than REVISE because a refusal is not a
+        # finding about the CLIP. Nothing here says the export is defective; it
+        # says this report is not one an APPROVE may be read out of.
+        got = UNDECIDED
+        refused.append("verdict_demoted_from_APPROVE_by_the_refusals_above")
 
     return {
         "schema": "publish_preflight_v1",

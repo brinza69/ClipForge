@@ -45,14 +45,49 @@ _EDGE_S = 0.01
 
 
 def _style(sidecar: dict) -> Any:
-    """The caption style, which the clipper has stored as a repr since it shipped."""
-    style = (sidecar.get("caption_plan") or {}).get("style")
+    """The caption style, which the clipper has stored as a repr since it shipped.
+
+    A SUB-RECORD THAT IS NOT A RECORD IS NOT AN EMPTY ONE. `(x or {}).get(...)`
+    returns the list itself for `caption_plan: [1]`, and `.get` on a list
+    raises — out of a loop over the corpus, so the audit reported on the clips
+    before the corrupt one and never said it had stopped. `caption_corpus.measure`
+    already refuses this shape by name; this path did not, and a refusal one
+    function upstream does not protect a read two functions along.
+    """
+    plan = sidecar.get("caption_plan")
+    if not isinstance(plan, dict):
+        return None
+    style = plan.get("style")
     if isinstance(style, str):
         try:
             return ast.literal_eval(style)
         except Exception:
             return None
     return style
+
+
+def _own_caption_layer(placement: Any) -> bool | None:
+    """Did THIS export burn a ClipForge caption layer — True, False, or unknown.
+
+    The second half of the duplicate-caption question, and the half a reject
+    used to be issued without. `caption_corpus.measure` reads the `.ass` beside
+    the render, so `caption_y_source == "ass"` means a caption layer was burned
+    in with a position of its own, and `no_ass` means there was no layer to
+    burn. Anything else — an unreadable file, no `\\pos`, more than one — is a
+    file that could not answer, which is not a no.
+
+    IT IS THE BURN INSTRUCTION, NOT A FRAME READ, and the difference is not
+    academic here: the R6 defect was an `.ass` event libass drew into a
+    transparent bar. So this establishes that a layer was ASKED for. The
+    residual travels in the check's evidence.
+    """
+    if not isinstance(placement, dict):
+        return None
+    if placement.get("caption_y_source") == "ass":
+        return True
+    if placement.get("caption_y_why_not_ass") == "no_ass":
+        return False
+    return None
 
 
 def _candidate(analysis: Path, sidecar: dict) -> tuple[dict | None, str | None]:
@@ -85,30 +120,49 @@ def _candidate(analysis: Path, sidecar: dict) -> tuple[dict | None, str | None]:
     return None, "no_candidate_matches_this_window_on_both_edges"
 
 
-def _boundary_view(cand: dict | None, why: str | None) -> Any:
-    """`boundary_completion`'s verdict for the candidate, or None."""
+def _boundary_view(cand: dict | None, words: Any) -> tuple[Any, str | None]:
+    """`boundary_completion`'s verdict for the candidate, or why there is none.
+
+    THE WORDS ARE THE WHOLE TRANSCRIPT, and passing `cand["words"]` instead was
+    a defect that silently disabled the two checks the gate names. The candidate
+    carries `_neighbourhood(...)`'s `inside` list, which drops a word straddling
+    either edge — it is neither before the cut, after it, nor wholly inside —
+    and a straddling word is EXACTLY what `start_inside_word` and
+    `end_inside_word` look for. `_straddled`'s docstring says so. Fed the
+    candidate's own list, `_straddled` searched the one collection built by
+    removing what it was searching for, and every window came back clean on the
+    defect R5a spent a batch removing from 261 of them.
+
+    Reproduced on one window: `eligible=True` with the candidate's words,
+    `False` / `end_inside_word` with the transcript's.
+
+    So the transcript is required rather than defaulted. It lives in the DB and
+    this module is DB-free, so the caller loads it — and a caller who does not
+    gets `unavailable`, not a pass.
+    """
     if cand is None:
-        return None
+        return None, None
+    if not isinstance(words, list) or not words:
+        return None, "no_transcript_words"
     from services.clipper.boundary_completion import boundary_view
 
-    words = cand.get("words")
-    if not isinstance(words, list):
-        return None
     try:
         return boundary_view(cand, words,
                              max_s=float(cand.get("end", 0.0))
-                             - float(cand.get("start", 0.0)))
-    except Exception:
-        return None
+                             - float(cand.get("start", 0.0))), None
+    except Exception as exc:
+        return None, f"boundary_view_raised_{type(exc).__name__}"
 
 
 def assemble(path: Path, *, source_captions: Any = None,
-             chrome: Any = None) -> dict:
+             chrome: Any = None, words: Any = None) -> dict:
     """Everything one clip's seven checks need, and what is missing.
 
-    `source_captions` and `chrome` are passed in rather than computed: the first
-    is a property of the project and the second costs seconds of OCR per frame,
-    so the caller decides how often each is paid for.
+    `source_captions`, `chrome` and `words` are passed in rather than computed:
+    the first is a property of the project, the second costs seconds of OCR per
+    frame, and the third lives in the database, which this module does not
+    touch. The caller decides how often each is paid for; a caller that supplies
+    none of them gets `unavailable`, never a pass.
     """
     from services.clipper import caption_contrast as cc
     from services.clipper.caption_corpus import measure
@@ -125,6 +179,7 @@ def assemble(path: Path, *, source_captions: Any = None,
         sidecar = None
 
     placement = measure(path) if sidecar is not None else None
+    own_layer = _own_caption_layer(placement)
     if isinstance(placement, dict) and placement.get("refused"):
         out["missing"].append(f"placement_refused_{placement['refused']}")
         placement = None
@@ -136,15 +191,16 @@ def assemble(path: Path, *, source_captions: Any = None,
     cand, why = _candidate(path.parent.parent / "analysis", sidecar or {})
     if why:
         out["missing"].append(why)
-    view = _boundary_view(cand, why)
-    if cand is not None and view is None:
-        out["missing"].append("boundary_view_could_not_be_computed")
+    view, view_why = _boundary_view(cand, words)
+    if view_why:
+        out["missing"].append(view_why)
 
     if source_captions is None:
         out["missing"].append("no_source_caption_verdict")
     if chrome is None:
         out["missing"].append("no_chrome_verdict")
 
+    out["own_caption_layer"] = own_layer
     out["inputs"] = {"sidecar": sidecar, "placement": placement,
                      "contrast": contrast, "boundary_view": view,
                      "source_captions": source_captions, "chrome": chrome}
@@ -152,15 +208,33 @@ def assemble(path: Path, *, source_captions: Any = None,
 
 
 def preflight_for(path: Path, *, source_captions: Any = None,
-                  chrome: Any = None, corrections: tuple[str, ...] = ()) -> dict:
-    """One clip's assembled inputs, run through the seven checks and the verdict."""
-    got = assemble(path, source_captions=source_captions, chrome=chrome)
+                  chrome: Any = None, words: Any = None,
+                  corrections: tuple[str, ...] = ()) -> dict:
+    """One clip's assembled inputs, run through the seven checks and the verdict.
+
+    EVERY CLIP GETS A ROW, INCLUDING THE ONE THAT BROKE. A corrupt sub-record
+    used to raise out of the loop, so the audit printed the clips before it,
+    exited on the traceback, and never said which clip it had stopped at. The
+    named refusals below are the ones anybody has reproduced; this catch is for
+    the next shape of corruption, and it makes the run fail LOUDLY — the reason
+    reaches `missing_inputs`, and `missing_inputs` reaches the exit code.
+    """
+    try:
+        got = assemble(path, source_captions=source_captions, chrome=chrome,
+                       words=words)
+    except Exception as exc:
+        report = pf.preflight({}, corrections=corrections)
+        report["project"] = path.parent.parent.name
+        report["clip"] = path.stem
+        report["missing_inputs"] = [f"assemble_raised_{type(exc).__name__}"]
+        return report
     inputs = got["inputs"]
     checks = pk.checks_for(
         inputs["sidecar"], chrome=inputs["chrome"],
         placement=inputs["placement"], contrast=inputs["contrast"],
         source_captions=inputs["source_captions"],
-        boundary_view=inputs["boundary_view"])
+        boundary_view=inputs["boundary_view"],
+        own_caption_layer=got["own_caption_layer"])
     report = pf.preflight(checks, corrections=corrections)
     report["project"] = got["project"]
     report["clip"] = got["clip"]
