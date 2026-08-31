@@ -728,7 +728,14 @@ Viral Gradient               2,72     Neon Pop        2,33
 ```
 
 `Neon Pop` și `Viral Gradient` nu pot GARANTA 3,0:1 pentru cuvântul evidențiat. **Ambele sunt
-presete livrabile azi.**
+presete livrabile azi, și rămân așa — decis 31 august 2026.** Motivul e în aritmetică: podeaua e
+`sqrt(contrast(fill, contur))`, deci 3,0 cere 9:1 între cele două culori ale glifului. `Viral
+Gradient` e la 7,41 și `#FF9364` l-ar duce la 3,10; `Neon Pop` e la 5,42 și nici cu contur negru pur
+nu depășește 2,43 — o culoare saturată de luminanță medie nu poate rămâne saturată ȘI trece o bară de
+luminanță. Niciunul nu a fost folosit: toate cele 99 de exporturi cu stil sunt `Bold Impact`.
+Excepția stă în `caption_contrast.KNOWN_SHORTFALLS`, cheiată pe PALETĂ nu pe nume, deci o revopsire
+care le înrăutățește repornește poarta; iar linia de trecere a auditului le numește, fiindcă „toate
+paletele trec bara" tipărit peste două care nu trec e o rulare verde care contrazice propriul tabel.
 
 **Fraza asta are o citire precisă și una laxă, iar cea laxă e falsă.** O podea de 2,33 înseamnă că
 EXISTĂ o luminanță de fundal la care separarea coboară acolo — nu că textul nu atinge niciodată 3:1.

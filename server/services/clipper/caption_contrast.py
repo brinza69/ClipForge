@@ -71,8 +71,54 @@ from __future__ import annotations
 import math
 from typing import Any
 
-__all__ = ["LARGE_TEXT_MIN", "NORMAL_TEXT_MIN", "REFUSALS", "luminance",
-           "contrast", "floor", "verdict"]
+__all__ = ["LARGE_TEXT_MIN", "NORMAL_TEXT_MIN", "REFUSALS", "KNOWN_SHORTFALLS",
+           "palette_key", "accepted_shortfall", "luminance", "contrast",
+           "floor", "verdict"]
+
+#: THE TWO PALETTES THAT CANNOT REACH THE BAR AND ARE SHIPPING ANYWAY, decided
+#: by the project owner on 31 August 2026 after the measurement below. Neither
+#: has ever been used: all 99 stored exports with a style are `Bold Impact`,
+#: whose highlight floor is 3.87.
+#:
+#: The reason for accepting rather than fixing is in the arithmetic. The floor is
+#: `sqrt(contrast(fill, outline))`, so reaching 3.0 needs the glyph's two colours
+#: to differ by 9:1. `Viral Gradient` is at 7.41 and a small lightening to
+#: `#FF9364` would clear it — but `Neon Pop` is at 5.42, and even a pure black
+#: outline only lifts it to 2.43; its pink would have to go to about `#FF9DBB`,
+#: which is a different preset. A saturated mid-luminance colour cannot both stay
+#: saturated and clear a luminance bar.
+#:
+#: KEYED ON THE PALETTE, NOT ON THE NAME. An exception by name would let somebody
+#: repaint `Neon Pop` into something worse and keep the pass. Change any of the
+#: four colours or the outline width and the key stops matching, the exception
+#: stops applying, and the gate fires.
+KNOWN_SHORTFALLS: dict[tuple, str] = {
+    ("Neon Pop", "#FFFFFF", "#FF3366", "#1A0033", "5"):
+        "highlight floor 2.33; the palette cannot reach 3.0 without ceasing to "
+        "be this palette. Accepted 2026-08-31, never used in any stored export.",
+    ("Viral Gradient", "#FFFFFF", "#FF6B35", "#000000", "5"):
+        "highlight floor 2.72; `#FF9364` would reach 3.10 if it is ever wanted. "
+        "Accepted 2026-08-31, never used in any stored export.",
+}
+
+
+def palette_key(name: Any, style: Any) -> tuple:
+    """What makes two styles the same VERDICT: the name and every colour in it.
+
+    The outline width is in the key because the floor depends on the outline
+    being drawn at all, and a stored `None` and a stored `5` are different
+    palettes even with identical colours.
+    """
+    got = style if isinstance(style, dict) else {}
+    return (str(name), str(got.get("text_color")),
+            str(got.get("highlight_color")), str(got.get("outline_color")),
+            str(got.get("outline_width")))
+
+
+def accepted_shortfall(name: Any, style: Any) -> str | None:
+    """Why this exact palette is allowed to miss the bar, or None."""
+    return KNOWN_SHORTFALLS.get(palette_key(name, style))
+
 
 #: WCAG 2.1 AA. BORROWED, not derived: written for static text on web pages,
 #: not for a caption on screen for a second and a half. Named so the next reader

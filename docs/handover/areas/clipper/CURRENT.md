@@ -560,9 +560,15 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    Jensen (diagramă lizibilă), vlog (obiectele în `fit`), go ghost (fără comutări false).
 2. **Gate-ul R5** — „≥95% începuturi și finaluri acceptate la review uman".
 3. **Gate-ul R6** — „zero captions duble pe cele 15 go ghost", care cere și re-randare, și un om.
-4. **Culorile de highlight ale lui `Neon Pop` și `Viral Gradient`** — podea de 2,33 și 2,72, sub
-   pragul de 3,0:1, adică paleta nu poate GARANTA bara pe orice fundal. Măsurat, nu presupus. Reparația schimbă o culoare livrată, deci
-   nu aparține unui batch în umbră; `scripts/audit_caption_contrast.py` pică până se decide.
+4. ~~Culorile de highlight ale lui `Neon Pop` și `Viral Gradient`~~ — **DECIS 31 august 2026: rămân
+   cum sunt, documentate.** Podea de 2,33 și 2,72, sub pragul de 3,0:1, adică paleta nu poate
+   GARANTA bara pe orice fundal. Motivul acceptării e în aritmetică: podeaua e
+   `sqrt(contrast(fill, contur))`, deci 3,0 cere 9:1 între cele două culori ale glifului. `Viral
+   Gradient` e la 7,41 și s-ar repara ușor cu `#FF9364`, dar `Neon Pop` e la 5,42 și nici cu contur
+   negru pur nu trece de 2,43 — roz-ul lui ar trebui deschis până pe la `#FF9DBB`, ceea ce e alt
+   preset. Niciunul nu a fost folosit vreodată: toate cele 99 de exporturi cu stil sunt
+   `Bold Impact`. Excepția e în `caption_contrast.KNOWN_SHORTFALLS`, **cheiată pe PALETĂ nu pe
+   nume**, deci o revopsire care le înrăutățește repornește poarta.
 
 **Ce poate face un agent, dar durează și atinge date:**
 

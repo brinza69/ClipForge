@@ -32,6 +32,11 @@ WHAT FAILS THE RUN:
                                        published standard available
     a highlight below it               the word the animation paints is the one
                                        the eye goes to
+                                       ...UNLESS the exact palette is in
+                                       `caption_contrast.KNOWN_SHORTFALLS`, a
+                                       decision recorded with its reason and
+                                       keyed on every colour, so a repaint that
+                                       makes it worse fires the gate again
     an empty population                a pass over nothing is not a pass
 
 The last one matters here more than usual: this script's whole method is a sweep
@@ -109,7 +114,11 @@ def _rows(population: list[tuple[str, Any]]) -> list[dict]:
     out = []
     for name, style in population:
         told = cc.verdict(style)
-        out.append({"name": name, **told})
+        # The name in the row carries a count suffix for the disk rows, so the
+        # key is built from the bare name the palette was registered under.
+        bare = name.split(" (x")[0]
+        out.append({"name": name,
+                    "accepted": cc.accepted_shortfall(bare, style), **told})
     return out
 
 
@@ -126,7 +135,8 @@ def _print(title: str, rows: list[dict]) -> None:
         high = row["highlight"]
         mark = "" if fill["clears_large_text"] else "  <- fill below 3.0"
         hmark = ("" if high is None or high["clears_large_text"]
-                 else "  <- highlight below 3.0")
+                 else ("  <- highlight below 3.0, ACCEPTED"
+                       if row.get("accepted") else "  <- highlight below 3.0"))
         print(f"  {row['name']:40} {fill['floor']:6.2f} "
               f"{(high['floor'] if high else 0.0):10.2f}{mark}{hmark}")
 
@@ -153,11 +163,16 @@ def _failures(presets: list[dict], disk: list[dict],
         if row["refused"]:
             bad.append(f"{row['name']}: refused ({', '.join(row['refused'])})")
             continue
-        if not row["fill"]["clears_large_text"]:
+        # A KNOWN SHORTFALL IS EXCUSED, and only this exact palette is. The
+        # exception is keyed on every colour and the outline width, so
+        # repainting the preset into something worse stops matching it and the
+        # gate fires again.
+        excused = row["accepted"]
+        if not row["fill"]["clears_large_text"] and not excused:
             bad.append(f"{row['name']}: fill floor {row['fill']['floor']} is "
                        f"below {cc.LARGE_TEXT_MIN}")
         high = row["highlight"]
-        if high is not None and not high["clears_large_text"]:
+        if high is not None and not high["clears_large_text"] and not excused:
             bad.append(f"{row['name']}: highlight floor {high['floor']} is "
                        f"below {cc.LARGE_TEXT_MIN}")
     return bad
@@ -226,8 +241,18 @@ def main() -> int:
         print()
         for line in bad:
             print(f"FAIL: {line}")
+        # THE PASS LINE HAS TO SAY WHAT HAPPENED. "every palette clears the bar"
+        # was printed over two that do not and are merely excused, which is a
+        # green run reporting the opposite of its own table.
         if not bad:
-            print("every palette clears the large-text bar on both colours")
+            excused = [r for r in presets + disk if r.get("accepted")]
+            if excused:
+                print(f"no palette misses the bar except {len(excused)} "
+                      f"accepted below it:")
+                for row in excused:
+                    print(f"  {row['name']}: {row['accepted']}")
+            else:
+                print("every palette clears the large-text bar on both colours")
     return 1 if bad else 0
 
 

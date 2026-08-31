@@ -83,20 +83,50 @@ def test_a_clean_population_passes(tmp_path, monkeypatch):
     assert out["failures"] == [] and code == 0
 
 
-def test_the_two_real_presets_fail_the_run(tmp_path, monkeypatch):
-    """The finding, through `main()`: it is in the palette, and looking only at
-    the body text would have called both clean."""
+NEON = {"name": "Neon Pop", "text_color": WHITE, "outline_width": 5,
+        "highlight_color": "#FF3366", "outline_color": "#1A0033"}
+VIRAL = {"name": "Viral Gradient", "text_color": WHITE, "outline_width": 5,
+         "highlight_color": "#FF6B35", "outline_color": BLACK}
+
+
+def test_the_two_real_presets_are_accepted_below_the_bar(tmp_path, monkeypatch):
+    """The finding is real and the decision was to ship it: neither preset has
+    ever been used, and `Neon Pop` cannot reach 3.0 without ceasing to be a
+    saturated pink. Accepted, with the number recorded."""
+    _sidecar(tmp_path, "a", GOOD)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"neon": NEON, "viral": VIRAL})
+    assert out["failures"] == [] and code == 0
+    accepted = [r for r in out["presets"] if r["accepted"]]
+    assert len(accepted) == 2
+    assert all(r["highlight"]["clears_large_text"] is False for r in accepted)
+
+
+def test_repainting_an_accepted_preset_fires_the_gate_again(tmp_path,
+                                                            monkeypatch):
+    """KEYED ON THE PALETTE, NOT ON THE NAME. An exception by name would let
+    somebody repaint `Neon Pop` into something worse and keep the pass."""
+    _sidecar(tmp_path, "a", GOOD)
+    module = _audit(monkeypatch, tmp_path)
+    for changed in ({**NEON, "highlight_color": "#FF0033"},
+                    {**NEON, "outline_color": "#330066"},
+                    {**NEON, "outline_width": 3},
+                    {**NEON, "text_color": "#EEEEEE"}):
+        code, out = _run(module, presets={"neon": changed})
+        assert code == 1, changed
+        assert out["presets"][0]["accepted"] is None, changed
+
+
+def test_a_new_preset_that_misses_the_bar_still_fails(tmp_path, monkeypatch):
+    """The exception is two palettes, not a rule that anything may miss."""
     _sidecar(tmp_path, "a", GOOD)
     module = _audit(monkeypatch, tmp_path)
     code, out = _run(module, presets={
-        "neon": {"name": "Neon Pop", "text_color": WHITE, "outline_width": 5,
-                 "highlight_color": "#FF3366", "outline_color": "#1A0033"},
-        "viral": {"name": "Viral Gradient", "text_color": WHITE,
-                  "outline_width": 5, "highlight_color": "#FF6B35",
-                  "outline_color": BLACK}})
+        "new": {"name": "Something New", "text_color": WHITE,
+                "outline_width": 5, "highlight_color": "#FF6B35",
+                "outline_color": BLACK}})
     assert code == 1
-    assert len(out["failures"]) == 2
-    assert all("highlight floor" in line for line in out["failures"])
+    assert any("highlight floor" in line for line in out["failures"])
 
 
 def test_an_unreadable_colour_fails_the_run(tmp_path, monkeypatch):
