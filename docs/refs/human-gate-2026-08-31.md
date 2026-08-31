@@ -173,6 +173,46 @@ R4 tratează schimbarea de tratament drept motiv OBLIGATORIU de tăietură — t
 de cuvânt și chiar peste `min_shot_s`. Nimic din lanț nu întreabă cât de mare e saltul pe care îl
 produce.
 
+### Al patrulea vlog, cel neexplicat: 17 tăieturi invizibile
+
+`pilotee0e/a9f653576eb7` are **o singură** schimbare de compoziție, deci diagnosticul de mai sus nu
+îl acoperea. Rulat prin funcția livrată a lui R1 (`dynamic_geometry.merge_equivalent_shots`):
+**20 de shot-uri devin 3.** 39 de secunde tăiate în 20 de bucăți, dintre care **17 tăieturi nu
+schimbă absolut nimic** — de la 4,64s încolo sunt 18 shot-uri `fit` consecutive, iar un `fit` livrează
+cadrul întreg indiferent de ancoră.
+
+Pe tot corpusul: **exact 116 tăieturi invizibile, pe 23 din 58 de clipuri** — cifra de bază a lui R0,
+neschimbată. R1 a reparat plannerul pe 29 august și **reparația n-a ajuns niciodată într-un export**,
+fiindcă re-randarea din 31 august a rejucat planurile stocate în loc să re-planifice.
+
+Suprapunerea cu verdictele umane nu e întâmplătoare: din cele 11 clipuri marcate `bad`, **cel puțin
+șase poartă tăieturi invizibile** — `a9f653576eb7` 17, `46921099031e` 10, `ad094a7ba1bb` 6,
+`10b22f789e7b` 6, `2b875022bb35` 6, `38aa005c7c1f` 5. Deci prin verdictele lui trec DOUĂ defecte
+independente, iar al doilea e deja reparat în planner și așteaptă doar o re-planificare.
+
+### Fereastra `fit` mai îngustă: MĂSURATĂ ȘI RESPINSĂ
+
+Sugestia era a mea: dacă `fit` ar folosi o fereastră 4:5 în loc de tot cadrul, saltul ar coborî de la
+3,16x la ~1,4x. Măsurat pe 50 de cadre `fit` din 27 de clipuri, luând cutia de conținut non-negru din
+banda sursei:
+
+```
+pilot2c8a  median 1,00   min 1,00      pilot6b38  median 1,00   min 0,71
+pilotee0e  median 1,00   min 0,96      pilotf81b  median 1,00   min 1,00
+
+cadre care încap într-o fereastră de 80% din lățime:   2/50
+cadre care încap într-o fereastră de 70% din lățime:   0/50
+o fereastră 4:5 păstrează 45% din lățimea sursei
+```
+
+**48 din 50 folosesc toată lățimea.** O fereastră 4:5 ar tăia conținut pe practic fiecare shot `fit`
+din corpus — exact lucrul pentru care `fit` există. Ideea e moartă, și e bine că a murit pe o
+măsurătoare de zece minute și nu pe un batch.
+
+Rămâne deci o singură pârghie pentru cele 54 de joncțiuni: **animarea tranziției**. Și trebuie spus
+cinstit că nu a fost respinsă de nimeni — am prezentat-o ca opțiune ne-recomandată fără să fi măsurat
+nimic despre ea.
+
 ## Ce urmează din asta
 
 Defectul e în **randare, la joncțiunea dintre compoziții** — nu în detecția de fețe, pe care el o
@@ -183,13 +223,17 @@ schimbare de compoziție, unde `crop` se reconfigurează și `scale` îl urmeaz�
 S-a măsurat: e un **salt de scală**, median 3,58x, minim 3,16x, pe toate cele 84 de joncțiuni.
 Vezi secțiunea de mai sus.
 
-**Direcția e decisă (31 august, de om): nu se mai taie acolo.** Nu se animă tranziția. O schimbare
-de compoziție care ar produce un salt peste prag nu mai e motiv de tăietură — se preferă păstrarea
-compoziției curente. Motivul pentru care asta e alegerea mai bună dintre cele două: animarea ar
-ascunde un salt pe care regula nu ar fi trebuit să-l ceară, iar cele două secunde proaste ar deveni
-două secunde de zoom vizibil. Cealaltă variantă respinsă — „mai măsoară întâi pe alte surse" — e
-respinsă fiindcă minimul de 3,16x e o identitate a geometriei 16:9, nu o observație despre acest
-corpus, deci mai multe surse nu pot schimba concluzia.
+**Direcția aleasă (31 august): nu se mai taie acolo** — implementat ca
+`absorb_brief_fit_islands`.
+
+**Cum s-a luat decizia, fiindcă asta contează pentru cine o recitește:** i-am pus omului trei
+opțiuni și am marcat-o pe asta „recomandat". A ales-o. Deci este alegerea MEA validată de el, nu una
+independentă — și în special **animarea tranziției nu a fost respinsă de nimeni**, doar
+ne-recomandată de mine, fără nicio măsurătoare în spate. Prima versiune a acestui document scria că
+a respins-o; era o supra-interpretare.
+
+Ce rămâne adevărat fără interpretare: minimul de 3,16x e o identitate a geometriei 16:9, deci „mai
+măsoară pe alte surse" nu putea schimba concluzia.
 
 ## Ce NU demonstrează
 
