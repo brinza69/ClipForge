@@ -67,14 +67,31 @@ Toate patru `ok`. Semnalul `over_face`, care era mort până azi și acum marche
 **adevărat geometric și fără consecință vizuală pe eșantionul ăsta**. Nu îl șterge — dar ca
 `REVISABLE` în preflight e prea strict, și e primul lucru pe care o măsurătoare umană l-a contrazis.
 
-### R6, captions duble — NECONCLUDENT, și trebuie reîntrebat
+### R6, captions duble — PICAT, 4 din 4, confirmat de om
 
-Toate patru notele spun **„se mai vede subtitrarea"**, dar trei clipuri sunt marcate `ok` și unul
-`bad`. Verdictul și nota trag în direcții opuse: dacă „se mai vede" înseamnă că subtitrarea SURSEI e
-încă vizibilă, atunci defectul cu care s-a deschis planul e prezent pe 4 din 4 și gate-ul a picat;
-dacă înseamnă că a NOASTRĂ se vede bine, gate-ul a trecut.
+Toate patru notele spun **„se mai vede subtitrarea"**, dar trei clipuri erau marcate `ok` și unul
+`bad` — verdictul și nota trăgeau în direcții opuse, și diferența decidea poarta. Întrebat direct,
+omul a răspuns: **e subtitrarea SURSEI.** Sub stratul nostru se mai vede cel ars în videoclipul
+original.
 
-**Nu se poate deduce din date.** Rămâne deschis până când omul spune care dintre cele două.
+Deci **defectul cu care s-a deschis tot planul e încă prezent, pe 4 din 4 clipuri privite**, pe
+corpusul RE-RANDAT de pe 31 august. Poarta R6 („zero captions duble pe cele 15 go ghost") a picat.
+
+Ce validează asta, și e prima confirmare umană pe care o primește vreunul dintre instrumentele
+astea:
+
+- **`source_captions` avea dreptate.** Verdictul `present` pe `pilotf81b` nu era un fals pozitiv al
+  unui detector cu `calibrated: false` — omul vede exact ce a raportat el.
+- **Cele 37 de respingeri ale preflight-ului sunt confirmate.** Erau singura cifră din R7 despre care
+  Codex spunea că rămâne „suspiciune de duplicare, nu duplicare demonstrată". Pe eșantionul ăsta e
+  demonstrată.
+- **Cerința celor două straturi era corectă.** `own_layer` — adăugat fiindcă un verdict despre
+  proxy-ul proiectului nu e o propoziție despre un export — dă exact răspunsul care s-a adeverit:
+  sursa are text ars ȘI exportul poartă `.ass`-ul lui.
+
+Ce NU e închis: nimeni nu a stins încă al doilea strat. Detectorul e `calibrated: false` pe patru
+surse, iar handover-ul cere explicit să nu se materializeze dezactivarea captions-urilor cât timp e
+așa. Confirmarea asta e un argument pentru calibrare, nu un substitut pentru ea.
 
 ## Diagnosticul, derivat din timpii pe care i-a dat
 
@@ -164,9 +181,15 @@ declară explicit bună, și nu în alegerea momentului. Asta îl scoate din R3a
 schimbare de compoziție, unde `crop` se reconfigurează și `scale` îl urmează în același `sendcmd`.
 
 S-a măsurat: e un **salt de scală**, median 3,58x, minim 3,16x, pe toate cele 84 de joncțiuni.
-Vezi secțiunea de mai sus. Ce NU s-a măsurat e dacă o tranziție animată l-ar face acceptabil sau
-dacă tăietura însăși trebuie evitată — prima e muncă de randare, a doua e o regulă în R4, și alegerea
-dintre ele nu se poate face din datele astea.
+Vezi secțiunea de mai sus.
+
+**Direcția e decisă (31 august, de om): nu se mai taie acolo.** Nu se animă tranziția. O schimbare
+de compoziție care ar produce un salt peste prag nu mai e motiv de tăietură — se preferă păstrarea
+compoziției curente. Motivul pentru care asta e alegerea mai bună dintre cele două: animarea ar
+ascunde un salt pe care regula nu ar fi trebuit să-l ceară, iar cele două secunde proaste ar deveni
+două secunde de zoom vizibil. Cealaltă variantă respinsă — „mai măsoară întâi pe alte surse" — e
+respinsă fiindcă minimul de 3,16x e o identitate a geometriei 16:9, nu o observație despre acest
+corpus, deci mai multe surse nu pot schimba concluzia.
 
 ## Ce NU demonstrează
 
