@@ -7,12 +7,18 @@ asks the two questions the batch exists to answer:
     can the delivered position be EXPLAINED at all, and does the caption land
     on the letterbox band?
 
-WHY THE SECOND QUESTION IS THE ONLY ONE WITH AN ANSWER HERE. The face, UI and
-source-text evidence has to be MAPPED into the output frame per shot, and
-nothing maps it yet — `panels_to_keep_out` deliberately skips face shots, so
-there is no mapper for the faces and none for the source text. Those three
-signals therefore come back `unavailable`, which is what they are. The letterbox
-needs only geometry, so it is measured.
+AND SINCE `evidence_map` EXISTS, THE FACE SIGNAL IS ANSWERED TOO. It maps the
+detector's proxy-pixel boxes through the renderer's own chain — proxy to source,
+pad, crop, scale — and refuses a shot whose crop moves rather than approximating
+it. The UI and source-text signals stay `unavailable`: `regions` are detected
+once for the whole source rather than per shot, and nothing detects the source's
+own text at all.
+
+THE SAMPLING IS SPARSER THAN THE SHOTS, and that decides most of the answer. The
+face detector runs on a grid of about one sample every two seconds while a shot
+is typically one to four; a shot with no sample inside it has no face evidence,
+which is `unavailable` and not "no face". The count of those is printed, because
+it is the denominator of everything the face column says.
 
     python scripts/audit_caption_placement.py
     python scripts/audit_caption_placement.py --json
@@ -58,216 +64,8 @@ sys.path.insert(0, str(_ROOT / "server"))
 
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 
-from services.clipper import caption_choice as cc  # noqa: E402
 from services.clipper import caption_placement as cp  # noqa: E402
-
-#: The preset names `_base_y_pct` knows. Anything else falls through to the
-#: bottom preset, so trying more names would only find the same answer twice.
-POSITIONS = ("bottom", "top", "center", "hook")
-
-
-#: What the pipeline renders at, used ONLY as a declared assumption when the
-#: file itself cannot be measured.
-ASSUMED_OUT_H = 1920
-
-
-def _rendered_height(mp4: Path) -> tuple[int, bool]:
-    """`(the export's frame height, whether it had to be assumed)`.
-
-    A PAIR, because a silent 1920 is a second source of truth about output
-    geometry — the thing R0 refused outright — and an early return on a missing
-    file is worse in the other direction: it took the whole row down, so a
-    corpus with no renders on disk reported nothing about caption positions
-    either, none of which depend on the render.
-
-    So: measured when the file is there, assumed and SAID when it is not, and
-    the assumption fails the run because the letterbox column rests on it.
-    """
-    try:
-        import cv2
-    except Exception:
-        return ASSUMED_OUT_H, True
-    if not mp4.exists():
-        return ASSUMED_OUT_H, True
-    cap = cv2.VideoCapture(str(mp4))
-    try:
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    finally:
-        cap.release()
-    return (height, False) if height > 0 else (ASSUMED_OUT_H, True)
-
-
-def _moving_crops(plan: dict) -> int:
-    """Shots whose crop CHANGES SIZE across their own length.
-
-    A PRECONDITION FOR WORK NOT YET DONE, counted here because the count is the
-    thing that decides whether that work is possible the cheap way. Nothing in
-    this report depends on it — the letterbox is geometry, not crop — so it does
-    not fail the run.
-
-    `shot["rect"]` looks like the crop the renderer takes and is not:
-    `dynamic_geometry.visual_key` says the picture is what `build_sendcmd`
-    schedules, and returns None for any shot with a multi-point size timeline.
-    A mapper that projects a face through the rectangle is therefore right only
-    while every timeline is a single point. Across the stored corpus every one
-    of them is — but 2,024 of 2,126 shots are LABELLED `move: push` or `pull`
-    and stand still only because `push_amount` is 0.0 in every stored style.
-    Reading the label instead of the timeline says "95% of shots move", which is
-    the opposite of the truth.
-    """
-    from services.clipper.dynamic_geometry import _size_timeline
-
-    style = plan.get("style")
-    style = style if isinstance(style, dict) else {}
-    src_w, src_h = plan.get("src_w") or 0, plan.get("src_h") or 0
-    if not (src_w and src_h):
-        return 0
-    moving = 0
-    for shot in plan.get("shots") or []:
-        if not isinstance(shot, dict):
-            continue
-        try:
-            if len(_size_timeline(shot, style, src_w, src_h)) > 1:
-                moving += 1
-        except Exception:
-            # Unreadable is not "static". It joins the count it would join if
-            # it were moving, because the mapper could not use it either way.
-            moving += 1
-    return moving
-
-
-def _requested_position(caption: dict) -> str | None:
-    """The position name the clip's own style asked for, if it recorded one."""
-    import ast
-
-    style = caption.get("style")
-    if isinstance(style, str):
-        try:
-            style = ast.literal_eval(style)
-        except Exception:
-            return None
-    if not isinstance(style, dict):
-        return None
-    name = style.get("position")
-    return name if isinstance(name, str) and name else None
-
-
-def _explained_by(y_pct: float, layout: dict, out_h: int,
-                  asked_for: str | None) -> list[str]:
-    """Which preset positions TODAY'S `resolve_position` turns into this `y_pct`.
-
-    EMPTY IS THE INTERESTING ANSWER, and it means the export was burned by a
-    different rule — these sidecars predate the band scan that replaced six
-    fixed ±4% nudges. Not corruption, and the difference matters in the useful
-    direction: on `0c9685df852b/205a6ec12b00` the stored caption sits at 0.75
-    inside a face keep-out spanning 0.229 to 0.797, and today's rule moves it to
-    0.1642. So a mismatch is a clip whose placement cannot be used as evidence
-    about the current rule, in either direction.
-    """
-    hits = []
-    # The one it asked for, when it said. Otherwise all of them, and the row
-    # carries `asked_for: null` so the weaker check is visible in the output.
-    for name in ([asked_for] if asked_for else POSITIONS):
-        told = cc.explain(name, layout, out_h=out_h)
-        if told["chosen"] is not None and abs(told["chosen"] - y_pct) < 5e-4:
-            hits.append(name)
-    return hits
-
-
-def _measure(path: Path) -> dict:
-    row: dict = {"project": path.parent.parent.name, "clip": path.stem}
-    try:
-        side = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        # A REFUSAL WITH ITS OWN ROW. A sidecar that cannot be read must never
-        # drop out of the corpus; it makes every figure below a fraction of a
-        # smaller thing than the header claims.
-        row["refused"] = f"sidecar_unreadable: {type(exc).__name__}"
-        return row
-    if not isinstance(side, dict):
-        row["refused"] = "sidecar_not_a_record"
-        return row
-
-    # A SUB-RECORD THAT IS NOT A RECORD IS A REFUSAL. `side.get("dynamic_plan")
-    # or {}` returns the list itself for `[1]`, and `.get` on a list raises —
-    # out of a loop over the corpus, so the audit reports on the part before the
-    # crash and never says it crashed.
-    parts = {}
-    for key in ("dynamic_plan", "caption_plan", "layout_plan"):
-        value = side.get(key)
-        if value is None:
-            parts[key] = {}
-        elif isinstance(value, dict):
-            parts[key] = value
-        else:
-            row["refused"] = f"{key}_not_a_record"
-            return row
-    plan, caption, layout = (parts["dynamic_plan"], parts["caption_plan"],
-                             parts["layout_plan"])
-    y_pct = caption.get("y_pct")
-
-    # THE RENDERED HEIGHT, READ RATHER THAN ASSUMED. 1920 was hardcoded, which
-    # is a second source of truth about output geometry. When the file is not
-    # there the fallback is DECLARED rather than silent, and it fails the run:
-    # the letterbox column rests on it, and nothing else in the row does.
-    out_h, assumed = _rendered_height(path.with_suffix(".mp4"))
-    row["out_h"] = out_h
-    row["output_geometry_assumed"] = assumed
-
-    view = cp.placement_view(
-        y_pct=y_pct,
-        shots=plan.get("shots"),
-        # NOTHING MAPS THE OTHER THREE SIGNALS YET, so they are unavailable and
-        # not zero. Passing empty lists here would report "the caption covers no
-        # faces" out of a run in which nobody looked for one.
-        evidence=None,
-        out_h=out_h,
-        src_w=plan.get("src_w") or 0,
-        src_h=plan.get("src_h") or 0)
-
-    told = cc.explain("bottom", layout, out_h=out_h)
-    row.update({
-        "y_pct": y_pct,
-        "shots": len(plan.get("shots") or []) if isinstance(
-            plan.get("shots"), list) else None,
-        "fit_shots": sum(1 for s in (plan.get("shots") or [])
-                         if isinstance(s, dict) and s.get("composition") == "fit"),
-        "moving_crops": _moving_crops(plan),
-        "on_letterbox": cp.ON_LETTERBOX in view["lands_on"],
-        "placement_refused": view["refused"],
-        "placement_unavailable": view["unavailable"],
-        "keep_out": told["keep_out"],
-        "choice_refused": told["refused"],
-        # THE POSITION THE CLIP ASKED FOR, when it recorded one. Trying all
-        # four presets and accepting any match would let a position produced by
-        # accident from a preset nobody chose count as an explanation. Every one
-        # of the 99 styles on disk says `bottom`, so today's figure does not
-        # move — but a mixed corpus is exactly where the weaker check would
-        # start passing things.
-        "asked_for": _requested_position(caption),
-        "explained_by": (_explained_by(float(y_pct), layout, out_h,
-                                       _requested_position(caption))
-                         if isinstance(y_pct, (int, float))
-                         and not isinstance(y_pct, bool) else None),
-        # AND WHETHER THE STORED POSITION SITS ON SOMETHING. For a clip today's
-        # rule would not produce, this is the whole question: was the old rule
-        # merely different, or was it wrong?
-        "stored_covers": _coverage(y_pct, layout, out_h),
-    })
-    return row
-
-
-def _coverage(y_pct, layout: dict, out_h: int) -> float | None:
-    """How much keep-out the STORED position overlaps, or None if unmeasurable."""
-    from services.clipper.captions import _iter_rects, _norm_rect, _overlap_area
-
-    if not isinstance(y_pct, (int, float)) or isinstance(y_pct, bool):
-        return None
-    rects = [r for r in (_norm_rect(rc, 1080, out_h)
-                         for rc in _iter_rects((layout or {}).get("safe_zones")))
-             if r is not None]
-    return round(_overlap_area(float(y_pct), rects), 6)
-
+from services.clipper.caption_corpus import measure  # noqa: E402
 
 def _report(rows: list[dict]) -> dict:
     """The figures, with the denominator computed before any of the counts."""
@@ -319,6 +117,28 @@ def _report(rows: list[dict]) -> dict:
         # else in this plan.
         "shots_with_a_moving_crop": sum(r.get("moving_crops") or 0
                                         for r in read),
+        # THE FACE COLUMN AND ITS OWN DENOMINATORS.
+        "shots_total": sum((r.get("faces") or {}).get("shots", 0) for r in read),
+        "shots_with_no_face_sample": sum(
+            (r.get("faces") or {}).get("no_sample", 0) for r in read),
+        "shots_with_mapped_faces": sum(
+            (r.get("faces") or {}).get("mapped", 0) for r in read),
+        "face_boxes_off_frame": sum(
+            (r.get("faces") or {}).get("off_frame", 0) for r in read),
+        "clips_with_unreadable_face_inputs": len(
+            [r for r in read if (r.get("faces") or {}).get("unreadable_inputs")]),
+        "clips_with_no_source_start": len(
+            [r for r in read if (r.get("faces") or {}).get("no_source_start")]),
+        "map_refusals": sorted({why for r in read
+                                for why in (r.get("faces") or {}).get("refused", [])}),
+        "caption_on_a_face": len([r for r in placed if r.get("on_face")]),
+        # AND WHETHER ANY OF IT IS ESTABLISHED. `worst_share_complete` is true
+        # only when every share that took part is a measurement, and two of the
+        # three occlusion signals are never measured at all — so this is 0 by
+        # construction today, and printing it is the only thing that stops
+        # "26 clips" being read as "26 clips, and the other 73 are clean".
+        "worst_case_fully_measured": len(
+            [r for r in placed if r.get("worst_share_complete") is True]),
         "placement_refusals": len([r for r in read if r.get("placement_refused")]),
         "choice_refusals": len([r for r in read if r.get("choice_refused")]),
         "output_geometry_assumed": len([r for r in read
@@ -361,6 +181,25 @@ def _print(out: dict) -> None:
     print(f"  shots whose crop moves (gates the")
     print(f"    future evidence mapper, not this)  "
           f"{out['shots_with_a_moving_crop']}")
+    print(f"the face signal, per shot")
+    print(f"  shots                               {out['shots_total']}")
+    print(f"    with no sample in their window    "
+          f"{out['shots_with_no_face_sample']}")
+    print(f"    with faces mapped into the output {out['shots_with_mapped_faces']}")
+    print(f"  face boxes that miss the crop       {out['face_boxes_off_frame']}")
+    print(f"  clips whose face inputs are unreadable "
+          f"{out['clips_with_unreadable_face_inputs']}")
+    print(f"  clips that do not say where in the")
+    print(f"    source they came from             "
+          f"{out['clips_with_no_source_start']}")
+    for why in out["map_refusals"]:
+        print(f"    map refused: {why}")
+    print(f"  clips whose caption lands on a face {out['caption_on_a_face']}")
+    print(f"    ^ A FLOOR, on every axis: {out['shots_with_no_face_sample']} "
+          f"shots have no sample,")
+    print(f"      and the UI and source-text signals are never measured.")
+    print(f"  clips whose worst case is established "
+          f"{out['worst_case_fully_measured']}")
     print(f"of the sidecars read, keep-out rects")
     print(f"  with a non-finite rectangle         "
           f"{out['with_a_non_finite_keep_out']}")
@@ -406,6 +245,12 @@ def _failures(out: dict) -> list[str]:
     if out["choice_refusals"]:
         bad.append(f"{out['choice_refusals']} clip(s) the placement EXPLANATION "
                    "refused")
+    if out["clips_with_unreadable_face_inputs"]:
+        bad.append(f"{out['clips_with_unreadable_face_inputs']} clip(s) whose "
+                   "face inputs could not be read — that is not 'no faces'")
+    if out["map_refusals"]:
+        bad.append("the evidence mapper refused: "
+                   + ", ".join(out["map_refusals"]))
     if out["output_geometry_assumed"]:
         bad.append(f"{out['output_geometry_assumed']} clip(s) whose rendered "
                    "height could not be measured, so the letterbox answer "
@@ -431,7 +276,7 @@ def main() -> int:
         missing = [name for name in wanted if name not in present]
         paths = [p for p in paths if p.parent.parent.name in set(wanted)]
 
-    rows = [_measure(p) for p in paths]
+    rows = [measure(p) for p in paths]
     out = _report(rows)
     out["projects_not_found"] = missing
     bad = _failures(out)

@@ -61,21 +61,42 @@ def _render_bytes() -> bytes:
     return _RENDER[0]
 
 
+def _analysis(tmp_path: Path, project: str, *, samples=None,
+              proxy=(480, 270)) -> None:
+    """The face inputs the audit reads. Written by default, because a project
+    without them is a REFUSAL — "the inputs could not be read" is not "no
+    faces" — and a fixture that always triggers it would test only that."""
+    d = tmp_path / "clipper" / project / "analysis"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "signals.json").write_text(
+        json.dumps({"proxy_width": proxy[0], "proxy_height": proxy[1]}),
+        encoding="utf-8")
+    (d / "faces.json").write_text(
+        json.dumps({"samples": samples if samples is not None else []}),
+        encoding="utf-8")
+
+
 def _sidecar(tmp_path: Path, project: str, clip: str, body: dict,
-             render: bool = True) -> Path:
+             render: bool = True, analysis: bool = True) -> Path:
     exports = tmp_path / "clipper" / project / "exports"
     exports.mkdir(parents=True, exist_ok=True)
     (exports / f"{clip}.json").write_text(json.dumps(body), encoding="utf-8")
     if render:
         (exports / f"{clip}.mp4").write_bytes(_render_bytes())
+    if analysis:
+        _analysis(tmp_path, project)
     return exports / f"{clip}.json"
 
 
 def _ok(**over) -> dict:
     """A sidecar today's rule reproduces: bottom preset, nothing in the way."""
     body = {
+        "source_start": 0.0,
         "caption_plan": {"y_pct": 0.75, "style": {"position": "bottom"}},
-        "dynamic_plan": {"shots": [{"index": 0, "composition": "crop"}],
+        "dynamic_plan": {"shots": [{"index": 0, "composition": "crop",
+                                    "t0": 0.0, "t1": 2.0,
+                                    "rect": {"x": 0, "y": 0,
+                                             "w": 608, "h": 1080}}],
                          "src_w": 1920, "src_h": 1080},
         "layout_plan": {"safe_zones": {"top": 200, "keep_out": []}},
     }
@@ -138,6 +159,11 @@ def test_json_returns_the_run_s_exit_code(tmp_path, monkeypatch):
     code, out = _run(module, [])
     assert out["without_a_caption_position"] == 1
     assert out["read"] == 2 and out["with_a_caption_position"] == 1
+    # It also cannot say where in the source it came from, so its face column
+    # is unavailable — counted under its own name, and not the same fact as
+    # analysis files nobody could read.
+    assert out["clips_with_no_source_start"] == 1
+    assert out["clips_with_unreadable_face_inputs"] == 0
     assert code == 0
 
     # ...while one that cannot be read is.
@@ -289,3 +315,50 @@ def test_a_moving_crop_is_counted_and_does_not_fail_the_run(tmp_path,
     code, out = _run(module, ["--project", "moving"])
     assert out["shots_with_a_moving_crop"] == 1
     assert code == 0, "it gates the mapper, not this report"
+
+
+# --- the face signal ---------------------------------------------------------
+
+
+def test_unreadable_face_inputs_fail_the_run(tmp_path, monkeypatch):
+    """"The inputs could not be read" is not "no faces", and it is the one that
+    voids the face column."""
+    _sidecar(tmp_path, "p", "a", _ok(), analysis=False)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, [])
+    assert out["clips_with_unreadable_face_inputs"] == 1
+    assert code == 1
+
+
+def test_a_shot_with_no_sample_in_its_window_is_unavailable_not_clean(
+        tmp_path, monkeypatch):
+    """The detector samples about every two seconds and a shot is typically one
+    to four, so most shots contain no sample at all. Reporting an empty list
+    there would say "we looked at this shot and there was no face"."""
+    _sidecar(tmp_path, "p", "a", _ok())
+    _analysis(tmp_path, "p", samples=[{"t": 99.0, "boxes": [[0, 0, 40, 40]]}])
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, [])
+    assert out["shots_with_no_face_sample"] == 1
+    assert out["shots_with_mapped_faces"] == 0
+    assert out["caption_on_a_face"] == 0
+    assert out["worst_case_fully_measured"] == 0, "nothing was established"
+    assert code == 0, "an unsampled shot is not a failure"
+
+
+def test_a_face_over_the_caption_is_reported(tmp_path, monkeypatch):
+    """End to end: a detector box in proxy pixels, through the renderer's chain,
+    landing on the burned caption band."""
+    # The crop is x 0..608 of a 1920x1080 source; the caption sits at 0.75 of
+    # the output, so a proxy box low in the left third covers it.
+    _sidecar(tmp_path, "p", "a", _ok())
+    _analysis(tmp_path, "p",
+              samples=[{"t": 1.0, "boxes": [[10, 190, 140, 70]]}])
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, [])
+    assert out["shots_with_mapped_faces"] == 1
+    assert out["caption_on_a_face"] == 1
+    # ...and it is still a floor, because the UI and text signals are never
+    # measured, so no clip's worst case is established.
+    assert out["worst_case_fully_measured"] == 0
+    assert code == 0
