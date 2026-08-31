@@ -765,18 +765,19 @@ cutie care nu e patru numere finite. O cutie care ratează cropul e `off_frame` 
 
 ```
 shot-uri                                2126
-  fără niciun eșantion în fereastra lor   951
-  cu fețe mapate în output               1175
-cutii de față care ratează cropul         470
+  fără niciun eșantion în fereastra lor   964
+  cu fețe mapate în output               1162
+  cu MAI MULT de un eșantion               161
+cutii de față care ratează cropul         459
 clipuri cu caption peste o față detectată  26
 clipuri cu cazul cel mai rău STABILIT       0
 ```
 
-**951 e titlul, nu 26.** Detectorul eșantionează la ~2 secunde iar un shot are tipic 1–4, deci aproape
+**964 e titlul, nu 26.** Detectorul eșantionează la ~2 secunde iar un shot are tipic 1–4, deci aproape
 jumătate din shot-uri nu conțin niciun eșantion. Alea sunt `unavailable` — `None`, niciodată listă
 goală, fiindcă o listă goală spune „ne-am uitat și nu era nicio față".
 
-**Deci 26 e un plafon inferior pe toate axele.** Cele 951 de shot-uri neeșantionate pot conține
+**Deci 26 e un plafon inferior pe toate axele.** Cele 964 de shot-uri neeșantionate pot conține
 fiecare o față peste caption, iar semnalele de UI și de text-sursă nu au nicio detecție per shot —
 deci `share_complete` e fals pentru fiecare shot din corpus și ZERO clipuri au cazul cel mai rău
 stabilit. Raportul tipărește asta lângă cifră, fiindcă altfel „26 de clipuri" se citește „și celelalte

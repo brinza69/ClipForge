@@ -537,10 +537,10 @@ livrată — decizie pentru om, nu pentru un batch în umbră.
 scalare. Refuză un shot al cărui crop se mișcă, unul care nu poate fi citit, dimensiuni proxy lipsă și
 o cutie malformată; o cutie care ratează cropul e `off_frame`, nici refuz nici zero.
 
-**Primele cifre pentru semnalul de față:** 2126 de shot-uri, **951 fără niciun eșantion în fereastra
-lor** (detectorul eșantionează la ~2s, shot-urile au 1–4s), 1175 cu fețe mapate, 470 de cutii care
+**Primele cifre pentru semnalul de față:** 2126 de shot-uri, **964 fără niciun eșantion în fereastra
+lor** (detectorul eșantionează la ~2s, shot-urile au 1–4s), 1162 cu fețe mapate, 459 de cutii care
 ratează cropul, și **26 din cele 99 de clipuri plasate au caption-ul peste o față detectată**. Cifra e
-un PLAFON INFERIOR: cele 951 de shot-uri neeșantionate plus semnalele de UI și text-sursă, care nu au
+un PLAFON INFERIOR: cele 964 de shot-uri neeșantionate plus semnalele de UI și text-sursă, care nu au
 detecție per shot, fac ca **zero clipuri să aibă cazul cel mai rău stabilit**.
 
 **Ce a mai rămas din R6:** warning-urile de browser chrome (blocate pe rata de fals-pozitiv, în curs

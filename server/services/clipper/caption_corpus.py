@@ -24,7 +24,22 @@ AND THE SAMPLING IS SPARSER THAN THE SHOTS. The face detector runs about every
 two seconds and a shot is typically one to four, so a shot with no sample inside
 it has no face evidence: `None`, which is `unavailable`, never an empty list.
 Nearly half the corpus's shots are in that state, and it is the denominator of
-everything the face column says.
+everything the face column says. Measured:
+
+    samples in a shot's window    0: 951   1: 1007   2: 152   3: 13   7: 1   8: 2
+
+A UNION OVER TIME, AND IT ANSWERS A NARROWER QUESTION THAN IT LOOKS. Where a
+shot holds more than one sample — 168 of 2,126 — every sample's boxes go into
+one list, so the report answers "was the caption over a face at ANY point in
+this shot", not "throughout it". That is the conservative direction for a
+warning and the wrong one for a claim of cleanliness, which is why it is stated
+here rather than left to be inferred from the shape of the code.
+
+AND A SAMPLE ON A BOUNDARY BELONGS TO ONE SHOT. The window used to be closed at
+both ends, so a sample landing exactly on a cut counted for the shot that ended
+and the shot that began — 20 of them in the corpus. The frame at that timestamp
+is the one the new shot shows, so the window is half-open, and only the clip's
+last shot keeps its endpoint, because nothing follows it to take the sample.
 """
 
 from __future__ import annotations
@@ -151,6 +166,17 @@ def _explained_by(y_pct: float, layout: dict, out_h: int,
     return hits
 
 
+def _in_window(t: float, lo: float, hi: float, *, last: bool) -> bool:
+    """Whether a sample at `t` belongs to a window `[lo, hi)`.
+
+    HALF-OPEN, because a closed window counted a sample landing exactly on a cut
+    for both the shot that ended and the shot that began — 20 of them in the
+    corpus. The frame at that timestamp is the one the new shot shows. The
+    clip's last shot keeps its endpoint: nothing follows it to take the sample.
+    """
+    return lo <= t <= hi if last else lo <= t < hi
+
+
 def _face_evidence(analysis: Path, side: dict, plan: dict,
                    shots: list) -> tuple[list[dict | None], dict]:
     """Per-shot face boxes in OUTPUT pixels, and what could not be answered.
@@ -162,7 +188,7 @@ def _face_evidence(analysis: Path, side: dict, plan: dict,
     """
     stats = {"shots": len(shots), "no_sample": 0, "mapped": 0,
              "refused": [], "off_frame": 0, "unreadable_inputs": None,
-             "no_source_start": False}
+             "no_source_start": False, "multi_sample": 0}
     try:
         signals = json.loads((analysis / "signals.json").read_text(encoding="utf-8"))
         faces = json.loads((analysis / "faces.json").read_text(encoding="utf-8"))
@@ -194,7 +220,8 @@ def _face_evidence(analysis: Path, side: dict, plan: dict,
     src_w, src_h = plan.get("src_w") or 0, plan.get("src_h") or 0
 
     out: list[dict | None] = []
-    for shot in shots:
+    for index, shot in enumerate(shots):
+        last = index == len(shots) - 1
         if not isinstance(shot, dict):
             out.append(None)
             continue
@@ -205,13 +232,19 @@ def _face_evidence(analysis: Path, side: dict, plan: dict,
             stats["no_sample"] += 1
             continue
         lo, hi = float(start) + float(t0), float(start) + float(t1)
-        boxes = [b for s in samples
-                 if isinstance(s, dict)
-                 and isinstance(s.get("t"), (int, float))
-                 and lo <= float(s["t"]) <= hi
-                 for b in (s.get("boxes") or [])]
-        if not any(isinstance(s, dict) and isinstance(s.get("t"), (int, float))
-                   and lo <= float(s["t"]) <= hi for s in samples):
+        inside = [s for s in samples
+                  if isinstance(s, dict)
+                  and isinstance(s.get("t"), (int, float))
+                  and not isinstance(s.get("t"), bool)
+                  and _in_window(float(s["t"]), lo, hi, last=last)]
+        # EVERY SAMPLE'S BOXES IN ONE LIST, which answers "was the caption over
+        # a face at ANY point in this shot" rather than "throughout it". The
+        # conservative direction for a warning, and the wrong one for a claim of
+        # cleanliness — so the count of shots this applies to is reported.
+        boxes = [b for s in inside for b in (s.get("boxes") or [])]
+        if len(inside) > 1:
+            stats["multi_sample"] += 1
+        if not inside:
             # NO SAMPLE IN THE WINDOW. Not "no face in this shot".
             out.append(None)
             stats["no_sample"] += 1

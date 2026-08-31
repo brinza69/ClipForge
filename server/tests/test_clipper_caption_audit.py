@@ -365,3 +365,50 @@ def test_a_face_over_the_caption_is_reported(tmp_path, monkeypatch):
     # measured, so no clip's worst case is established.
     assert out["worst_case_fully_measured"] == 0
     assert code == 0
+
+
+def test_a_sample_on_a_cut_belongs_to_the_shot_that_begins(tmp_path,
+                                                           monkeypatch):
+    """A closed window counted it for the shot that ended AND the shot that
+    began — 20 of them in the corpus. The frame at that timestamp is the one the
+    new shot shows."""
+    two = _ok(dynamic_plan={
+        "shots": [{"index": 0, "composition": "crop", "t0": 0.0, "t1": 2.0,
+                   "anchor": [304, 540], "shake": 0.0,
+                   "rect": {"x": 0, "y": 0, "w": 608, "h": 1080}},
+                  {"index": 1, "composition": "crop", "t0": 2.0, "t1": 4.0,
+                   "anchor": [304, 540], "shake": 0.0,
+                   "rect": {"x": 0, "y": 0, "w": 608, "h": 1080}}],
+        "src_w": 1920, "src_h": 1080})
+    _sidecar(tmp_path, "p", "a", two)
+    _analysis(tmp_path, "p", samples=[{"t": 2.0, "boxes": [[10, 190, 140, 70]]}])
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, [])
+    # Exactly one of the two shots gets it, and it is the second.
+    assert out["shots_with_mapped_faces"] == 1
+    assert out["shots_with_no_face_sample"] == 1
+
+
+def test_the_last_shot_keeps_its_endpoint(tmp_path, monkeypatch):
+    """Nothing follows it to take the sample, so a half-open window there would
+    drop a real measurement."""
+    _sidecar(tmp_path, "p", "a", _ok())
+    _analysis(tmp_path, "p", samples=[{"t": 2.0, "boxes": [[10, 190, 140, 70]]}])
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, [])
+    assert out["shots_with_mapped_faces"] == 1, "t == t1 on the final shot"
+
+
+def test_a_shot_with_two_samples_answers_at_any_point(tmp_path, monkeypatch):
+    """Every sample's boxes go into one list, so the answer is "was the caption
+    over a face at ANY point in this shot", not "throughout it". The
+    conservative direction for a warning and the wrong one for a claim of
+    cleanliness, so the count is reported."""
+    _sidecar(tmp_path, "p", "a", _ok())
+    _analysis(tmp_path, "p", samples=[
+        {"t": 0.5, "boxes": [[10, 190, 140, 70]]},
+        {"t": 1.5, "boxes": [[10, 10, 20, 20]]}])
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, [])
+    assert out["shots_with_more_than_one_sample"] == 1
+    assert out["caption_on_a_face"] == 1, "the low box counts, at some point"

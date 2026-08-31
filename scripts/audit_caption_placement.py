@@ -123,6 +123,11 @@ def _report(rows: list[dict]) -> dict:
             (r.get("faces") or {}).get("no_sample", 0) for r in read),
         "shots_with_mapped_faces": sum(
             (r.get("faces") or {}).get("mapped", 0) for r in read),
+        # WHERE THE ANSWER IS A UNION OVER TIME. More than one sample in a
+        # shot's window means the report says "at any point in this shot", not
+        # "throughout it".
+        "shots_with_more_than_one_sample": sum(
+            (r.get("faces") or {}).get("multi_sample", 0) for r in read),
         "face_boxes_off_frame": sum(
             (r.get("faces") or {}).get("off_frame", 0) for r in read),
         "clips_with_unreadable_face_inputs": len(
@@ -190,6 +195,9 @@ def _print(out: dict) -> None:
     print(f"    with no sample in their window    "
           f"{out['shots_with_no_face_sample']}")
     print(f"    with faces mapped into the output {out['shots_with_mapped_faces']}")
+    print(f"    with MORE than one sample, so the")
+    print(f"      answer is \"at any point\"          "
+          f"{out['shots_with_more_than_one_sample']}")
     print(f"  face boxes that miss the crop       {out['face_boxes_off_frame']}")
     print(f"  clips whose face inputs are unreadable "
           f"{out['clips_with_unreadable_face_inputs']}")
