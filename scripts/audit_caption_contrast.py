@@ -1,4 +1,10 @@
-"""Batch R6: what every caption palette guarantees, and which two cannot.
+"""Batch R6: the minimum separation a caption palette can GUARANTEE.
+
+WHAT A FLOOR BELOW 3.0 MEANS, precisely, because the loose phrasing says
+something much stronger and false: it means the palette cannot GUARANTEE 3:1
+against every uniform backdrop. It does NOT mean the caption never reaches 3:1
+— on most real backdrops it does, comfortably. The number is a worst case, and
+the worst case is a specific backdrop luminance, not the typical one.
 
 §R6 asks whether the caption "passes the contrast" on the blurred letterbox
 band. The corpus says that is not a corner case — 27 of the 27 clips with a
@@ -68,14 +74,33 @@ def _styles_on_disk() -> tuple[list[tuple[str, Any]], list[str]]:
         except Exception as exc:
             refused.append(f"{name}: sidecar_unreadable {type(exc).__name__}")
             continue
-        style = ((side.get("caption_plan") or {}).get("style")
-                 if isinstance(side, dict) else None)
+        if not isinstance(side, dict):
+            refused.append(f"{name}: sidecar_not_a_record")
+            continue
+        # A SUB-RECORD THAT IS NOT A RECORD IS A REFUSAL. `side.get(
+        # "caption_plan") or {}` returns the list itself for `[1]`, and `.get`
+        # on a list raises — out of a loop over the corpus, so the audit reports
+        # on the part before the crash and never says it crashed. The placement
+        # audit was taught this and this one was not.
+        plan = side.get("caption_plan")
+        if plan is not None and not isinstance(plan, dict):
+            refused.append(f"{name}: caption_plan_not_a_record")
+            continue
+        style = (plan or {}).get("style")
         if isinstance(style, str):
             try:
                 style = ast.literal_eval(style)
             except Exception:
                 refused.append(f"{name}: style_repr_unparsable")
                 continue
+        if style is not None and not isinstance(style, dict):
+            # PRESENT AND NOT A RECORD, which `verdict` would call `no_caption_
+            # style` — the one refusal this audit deliberately does not fail on.
+            # An absent style is a legitimate export with no captions; a style
+            # that is the number 7 is a corrupt record, and they must not spell
+            # the same.
+            refused.append(f"{name}: style_not_a_record")
+            continue
         found.append((name, style))
     return found, refused
 

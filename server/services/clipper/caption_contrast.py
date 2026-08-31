@@ -35,15 +35,25 @@ the one word the karaoke animation paints, is a different palette:
     Bold Impact                   3.87      Clean Minimal   3.44
     Viral Gradient                2.72      Neon Pop        2.33
 
-`Neon Pop` and `Viral Gradient` cannot clear 3.0:1 for their highlighted word
-against ANY uniform backdrop. That is not a letterbox problem and no frame
-sample would have named it: it is in the palette.
+`Neon Pop` and `Viral Gradient` cannot GUARANTEE 3.0:1 for their highlighted
+word. That is not a letterbox problem and no frame sample would have named it:
+it is in the palette.
+
+AND THE PRECISE READING OF THAT SENTENCE MATTERS, because the loose one says
+something much stronger and false. A floor of 2.33 means: there EXISTS a
+backdrop luminance at which the separation falls to 2.33. On most real backdrops
+`Neon Pop` reads perfectly well. What it cannot do is promise.
+
+The honest one-line form of any verdict here is: "the minimum separation this
+palette can guarantee, assuming a uniform backdrop, an opaque fill and a visible
+outline." Not "the rendered contrast passes".
 
 WHAT THIS IS NOT.
 
 It is a LUMINANCE floor. WCAG contrast ignores hue, so two colours that differ
 only in hue score 1:1 here and are perfectly distinguishable on screen. The
-number is a lower bound on separation, not a measurement of legibility.
+number is a lower bound on separation, not a measurement of legibility, and not
+a measurement of any frame that was actually rendered.
 
 It assumes a UNIFORM backdrop under each glyph. A blurred letterbox is about as
 uniform as video gets — that is what the blur does — but a `crop` shot over

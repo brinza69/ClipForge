@@ -727,8 +727,14 @@ Bold Impact                  3,87     Clean Minimal   3,44
 Viral Gradient               2,72     Neon Pop        2,33
 ```
 
-`Neon Pop` și `Viral Gradient` nu pot atinge 3,0:1 pentru cuvântul evidențiat împotriva niciunui
-fundal uniform. **Ambele sunt presete livrabile azi.**
+`Neon Pop` și `Viral Gradient` nu pot GARANTA 3,0:1 pentru cuvântul evidențiat. **Ambele sunt
+presete livrabile azi.**
+
+**Fraza asta are o citire precisă și una laxă, iar cea laxă e falsă.** O podea de 2,33 înseamnă că
+EXISTĂ o luminanță de fundal la care separarea coboară acolo — nu că textul nu atinge niciodată 3:1.
+Pe majoritatea fundalurilor reale îl atinge lejer. Forma onestă a oricărui verdict de aici e
+„separarea minimă pe care o poate garanta paleta, presupunând fundal uniform, umplutură opacă și
+contur vizibil", niciodată „contrastul randat trece".
 
 Și fiecare număr de acolo presupune că sunt DOUĂ culori pe ecran: un `outline_width` zero lasă o
 umplutură goală, al cărei cel mai rău fundal e propria ei culoare, la 1,0. Lipsa sau grosimea zero

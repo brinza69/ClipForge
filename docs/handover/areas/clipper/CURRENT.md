@@ -527,8 +527,9 @@ una dintre cele două culori ale lui, deci există o podea, cu formă închisă:
 contrastului dintre cele două culori proprii ale glifului, `sqrt(21) = 4,58` pentru alb în negru. Un
 sweep pe 256 de griuri o supraestima cu 0,025, fiindcă un pixel colorat are luminanța între nivelele
 de gri. **Descoperirea e în paletă, nu pe letterbox:** toate
-umpluturile trec, dar highlight-ul lui `Neon Pop` (2,33) și al lui `Viral Gradient` (2,72) nu ating
-3,0:1 împotriva niciunui fundal. Ambele sunt presete livrabile azi, iar reparația schimbă o culoare
+umpluturile trec, dar highlight-ul lui `Neon Pop` (2,33) și al lui `Viral Gradient` (2,72) nu pot
+GARANTA 3,0:1. Citirea precisă: există o luminanță de fundal la care separarea coboară acolo, nu că
+textul nu atinge niciodată 3:1. Ambele sunt presete livrabile azi, iar reparația schimbă o culoare
 livrată — decizie pentru om, nu pentru un batch în umbră.
 
 **Ce a mai rămas din R6:** warning-urile de browser chrome (blocate pe rata de fals-pozitiv, în curs
@@ -548,8 +549,8 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    Jensen (diagramă lizibilă), vlog (obiectele în `fit`), go ghost (fără comutări false).
 2. **Gate-ul R5** — „≥95% începuturi și finaluri acceptate la review uman".
 3. **Gate-ul R6** — „zero captions duble pe cele 15 go ghost", care cere și re-randare, și un om.
-4. **Culorile de highlight ale lui `Neon Pop` și `Viral Gradient`** — 2,33 și 2,72, sub pragul de
-   3,0:1 împotriva oricărui fundal. Măsurat, nu presupus. Reparația schimbă o culoare livrată, deci
+4. **Culorile de highlight ale lui `Neon Pop` și `Viral Gradient`** — podea de 2,33 și 2,72, sub
+   pragul de 3,0:1, adică paleta nu poate GARANTA bara pe orice fundal. Măsurat, nu presupus. Reparația schimbă o culoare livrată, deci
    nu aparține unui batch în umbră; `scripts/audit_caption_contrast.py` pică până se decide.
 
 **Ce poate face un agent, dar durează și atinge date:**

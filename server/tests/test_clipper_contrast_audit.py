@@ -152,3 +152,43 @@ def test_a_style_stored_as_a_parsable_repr_is_read(tmp_path, monkeypatch):
     code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
     assert out["distinct_palettes_on_disk"][0]["fill"]["floor"] == 4.58
     assert code == 0
+
+
+def test_a_caption_plan_that_is_not_a_record_is_refused_not_raised(tmp_path,
+                                                                   monkeypatch):
+    """`side.get("caption_plan") or {}` returns the list itself for `[1]`, and
+    `.get` on a list raises — out of a loop over the corpus, so the audit
+    reports on the part before the crash and never says it crashed. The
+    placement audit was taught this and this one was not."""
+    _sidecar(tmp_path, "a", GOOD)
+    (tmp_path / "clipper" / "p" / "exports" / "b.json").write_text(
+        json.dumps({"caption_plan": [1]}), encoding="utf-8")
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert any("caption_plan_not_a_record" in line
+               for line in out["sidecars_refused"])
+    assert code == 1
+
+
+def test_a_style_that_is_present_and_corrupt_is_not_an_absent_one(tmp_path,
+                                                                  monkeypatch):
+    """An absent style is a legitimate export with no captions and does not fail
+    the run. A style that is the number 7 is a corrupt record, and `verdict`
+    would spell both `no_caption_style`."""
+    _sidecar(tmp_path, "a", GOOD)
+    _sidecar(tmp_path, "b", 7)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert any("style_not_a_record" in line for line in out["sidecars_refused"])
+    assert code == 1
+
+
+def test_a_sidecar_that_is_not_a_record_is_refused(tmp_path, monkeypatch):
+    _sidecar(tmp_path, "a", GOOD)
+    (tmp_path / "clipper" / "p" / "exports" / "b.json").write_text(
+        "[1, 2, 3]", encoding="utf-8")
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert any("sidecar_not_a_record" in line
+               for line in out["sidecars_refused"])
+    assert code == 1
