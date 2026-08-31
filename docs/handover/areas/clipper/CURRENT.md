@@ -517,8 +517,21 @@ secundă. Ce rămâne valabil: recognizer-ul citește prost conținutul care con
 singura sursă cu captions arse cunoscute, nu a dat niciun token peste confidence 0,5), deci recall-ul
 e mic și `not_detected` nu poate însemna „curat".
 
-**Ce a mai rămas din R6:** contrastul pe banda blurată de `fit`, warning-urile de browser chrome,
-cablarea în sidecar. `panels_to_keep_out` nu e mapper generic — sare peste shot-urile de față.
+**Rulate pe corpusul real** (`scripts/audit_caption_placement.py`, 101 sidecare): **27 din 27** de
+clipuri cu shot `fit` și geometrie cunoscută au caption-ul pe banda de letterbox, deci contrastul e
+starea fiecărui export letterboxat, nu un caz-limită. Și 8 din 99 de poziții nu pot fi produse de
+regula de azi — exporturi anterioare scanării de bandă; unul singur stă peste un keep-out de față.
+
+**Contrastul e aritmetic** (`caption_contrast.py`): un glif cu contur se separă de orice fundal prin
+una dintre cele două culori ale lui, deci există o podea — alb în negru 4,61:1, cel mai rău la gri
+117 — și niciun cadru nu poate fi sub ea. **Descoperirea e în paletă, nu pe letterbox:** toate
+umpluturile trec, dar highlight-ul lui `Neon Pop` (2,34) și al lui `Viral Gradient` (2,73) nu ating
+3,0:1 împotriva niciunui fundal. Ambele sunt presete livrabile azi, iar reparația schimbă o culoare
+livrată — decizie pentru om, nu pentru un batch în umbră.
+
+**Ce a mai rămas din R6:** warning-urile de browser chrome (blocate pe rata de fals-pozitiv, în curs
+de măsurare) și cablarea în sidecar. `panels_to_keep_out` nu e mapper generic — sare peste shot-urile
+de față.
 
 ## Punctul exact de reluare
 
@@ -533,28 +546,31 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    Jensen (diagramă lizibilă), vlog (obiectele în `fit`), go ghost (fără comutări false).
 2. **Gate-ul R5** — „≥95% începuturi și finaluri acceptate la review uman".
 3. **Gate-ul R6** — „zero captions duble pe cele 15 go ghost", care cere și re-randare, și un om.
+4. **Culorile de highlight ale lui `Neon Pop` și `Viral Gradient`** — 2,34 și 2,73, sub pragul de
+   3,0:1 împotriva oricărui fundal. Măsurat, nu presupus. Reparația schimbă o culoare livrată, deci
+   nu aparține unui batch în umbră; `scripts/audit_caption_contrast.py` pică până se decide.
 
 **Ce poate face un agent, dar durează și atinge date:**
 
-4. **Re-score pe o CLONĂ** — măsoară delta lui R5a pe scoruri, dedupe, shortlist, judge și board.
+5. **Re-score pe o CLONĂ** — măsoară delta lui R5a pe scoruri, dedupe, shortlist, judge și board.
    Trebuie să includă `39c89ae2e16e` și `43a509687a33`, nu doar cele patru piloturi: acolo sunt cele
    trei mutări extreme. Nu pe proiectele-baseline.
-5. **Re-randarea piloturilor** — abia atunci cele 116 tăieturi invizibile ale lui R1 devin 0 în audit,
+6. **Re-randarea piloturilor** — abia atunci cele 116 tăieturi invizibile ale lui R1 devin 0 în audit,
    și abia atunci gate-ul §6 al lui R4 poate fi măcar încercat.
 
 **Cod, în ordinea planului:**
 
-6. **R6, restul**, strict în shadow. Poziționarea și motivul sunt livrate (`caption_placement`,
-   `caption_choice`); au rămas contrastul pe banda blurată de `fit`, warning-urile de browser chrome
-   și cablarea în sidecar. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
+7. **R6, restul**, strict în shadow. Poziționarea, motivul și contrastul sunt livrate
+   (`caption_placement`, `caption_choice`, `caption_contrast`); au rămas warning-urile de browser
+   chrome și cablarea în sidecar. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
    sare deliberat peste shot-urile de față, deci fețele și textul sursei au nevoie de mapper propriu.
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
-7. **R7** — preflight de publicare și corecția bounded (maximum una).
-8. **R8** — reconstrucția secvenței livrate după trim; până atunci `edit_quality` refuză jumătatea
+8. **R7** — preflight de publicare și corecția bounded (maximum una).
+9. **R8** — reconstrucția secvenței livrate după trim; până atunci `edit_quality` refuză jumătatea
    bazată pe shot-uri pe exporturile cu `drop_spans`.
-9. **S7** — închiderea infrastructurii reasoning v2.
-10. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
-11. **P** — activarea graduală.
+10. **S7** — închiderea infrastructurii reasoning v2.
+11. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
+12. **P** — activarea graduală.
 
 **În afara planului:** pipeline-ul TikTok nu e construit — router-ul nu e montat, sidebar-ul duce la o
 pagină inexistentă, iar cele două teste care pică în suită sunt ale lui, de dinaintea acestor sesiuni.

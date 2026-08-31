@@ -684,9 +684,55 @@ confidence 0,5 — printre ele `pilotf81b`, singura sursă despre care ȘTIM că
 recall-ul unui warning bazat pe recunoaștere de text e mic și nedemonstrat, iar `not_detected` nu
 poate însemna niciodată „curat".
 
-**Ce a mai rămas din listă:** contrastul pe banda blurată, warning-urile de browser chrome, și
-cablarea propriu-zisă în sidecar. `panels_to_keep_out` NU e un mapper generic — sare deliberat peste
-shot-urile de față — deci fețele și textul sursei au nevoie de mapper propriu.
+**Rulate pe corpusul real, nu pe fixture-uri** (`scripts/audit_caption_placement.py`, 101 sidecare):
+
+```
+sidecars found                        101
+  refused                               0
+of those, with a caption position      99
+  without one (unavailable, not a fail)  2
+  today's rule would not produce it      8
+    ...and it sits on a keep-out         1
+of those, `fit` + known geometry       27
+  caption lands on the letterbox       27
+```
+
+**27 din 27.** Fiecare clip cu shot `fit` și geometrie cunoscută are caption-ul pe banda de
+letterbox. Linia §R6 despre contrast nu e un caz-limită de acoperit cândva; e starea fiecărui export
+letterboxat deja livrat.
+
+**8 din 99 poziții pe care regula de azi nu le-ar produce.** Nu corupție — exporturile sunt
+anterioare scanării de bandă care a înlocuit cele șase nudge-uri de ±4%. Auditul verifică poziția pe
+care a CERUT-O stilul clipului, nu oricare dintre cele patru presete: verificarea laxă declara șase
+clipuri din `2d3375ee3420` explicate fiindcă stau la 0,51, valoarea `center`, sub un stil care spune
+`bottom`. Unul singur dintre cele opt (`0c9685df852b/205a6ec12b00`, y=0,75) stă peste 7,8% dintr-un
+keep-out de față, pe care regula actuală îl evită.
+
+**CONTRASTUL E ARITMETIC, nu un eșantion de cadre** (`caption_contrast.py`,
+`scripts/audit_caption_contrast.py`). Un glif cu contur se separă de ORICE fundal prin una dintre
+cele două culori ale lui — conturul pe fundal deschis, umplutura pe fundal întunecat — deci există o
+podea, iar niciun cadru nu poate fi sub ea. Alb în negru: 4,61:1, cel mai rău la gri 117.
+
+**Și descoperirea nu e pe letterbox, e în paletă.** Toate umpluturile trec (4,42–4,61). Culoarea de
+HIGHLIGHT, singurul cuvânt pe care îl pictează animația karaoke, nu:
+
+```
+Classic White / Boxed White  4,61     Karaoke Yellow  4,08
+Bold Impact                  3,88     Clean Minimal   3,45
+Viral Gradient               2,73     Neon Pop        2,34
+```
+
+`Neon Pop` și `Viral Gradient` nu pot atinge 3,0:1 pentru cuvântul evidențiat împotriva niciunui
+fundal uniform. **Ambele sunt presete livrabile azi.** Repararea înseamnă schimbarea unei culori,
+adică schimbarea a ce se livrează, deci nu aparține unui batch în umbră — e o decizie pentru om.
+
+Ce NU e: o podea de LUMINANȚĂ, nu o dovadă de lizibilitate (WCAG ignoră nuanța); presupune fundal
+uniform sub fiecare glif, ceea ce blur-ul produce și un `crop` peste sursă detaliată nu; iar pragurile
+sunt WCAG 2.1 AA, scrise pentru pagini web, deci `calibrated: false`.
+
+**Ce a mai rămas din listă:** warning-urile de browser chrome (blocate pe rata de fals-pozitiv, care
+se măsoară acum) și cablarea propriu-zisă în sidecar. `panels_to_keep_out` NU e un mapper generic —
+sare deliberat peste shot-urile de față — deci fețele și textul sursei au nevoie de mapper propriu.
 
 ### Batch R6 — lista originală
 
