@@ -54,15 +54,41 @@ def _source_captions(project: str, reader) -> dict | None:
 
 
 def _chrome(path: Path, reader) -> dict | None:
+    """The export's chrome verdict, cached beside it as `<clip>.chrome.json`.
+
+    CACHED BECAUSE IT COSTS MINUTES PER EXPORT, so a run over the corpus is
+    hours and an interruption without a cache throws all of them away — which
+    has happened twice in this batch already. The cache is a real artefact next
+    to the render, not a scratch file: anything else that wants the verdict can
+    read it instead of paying for it again.
+
+    A cached verdict is trusted only if it was measured at the cadence the
+    threshold belongs to. `EVERY_S` is stamped into every verdict for exactly
+    this reason.
+    """
     from services.clipper import source_chrome as sc
 
     mp4 = path.with_suffix(".mp4")
     if not mp4.exists():
         return None
+    cache = path.with_suffix(".chrome.json")
+    if cache.exists():
+        try:
+            got = json.loads(cache.read_text(encoding="utf-8"))
+        except Exception:
+            got = None
+        if (isinstance(got, dict) and got.get("state") in sc.STATES
+                and got.get("every_s") == sc.EVERY_S):
+            return got
     try:
-        return sc.detect(str(mp4), reader=reader)
+        got = sc.detect(str(mp4), reader=reader)
     except Exception:
         return None
+    try:
+        cache.write_text(json.dumps(got), encoding="utf-8")
+    except Exception:
+        pass
+    return got
 
 
 def main() -> int:
