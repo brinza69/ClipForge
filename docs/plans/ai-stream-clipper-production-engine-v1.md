@@ -840,7 +840,31 @@ lipsește un DETECTOR, nu un mapper — și cablarea propriu-zisă în sidecar.
 **Gate:** zero captions duble pe cele 15 go ghost; zero captions peste fețele și diagramele din
 setul de regresie; text lizibil pe toate compozițiile.
 
-### Batch R7 — preflight de publicare și corecția bounded
+### Batch R7 — LIVRAT, 31 august 2026
+
+**Defectul pe care îl repară e chiar în verdict.** `review.review_plan` are cinci căi de eșec care
+întorc toate `APPROVE`, iar docstring-ul o declară ca proprietate intenționată. Măsurat: **12 din 101
+de clipuri primesc APPROVE cu `sampled: 0`** — 18% din toate aprobările de pe disc.
+
+**Al patrulea cuvânt, `UNDECIDED`:** nimic nu a picat și ceva nu a putut fi privit. Nu e niciodată
+`APPROVE`; failure-safe se păstrează prin ce face în aval, nu prin a-l numi trecere.
+
+`publish_preflight` (vocabular + verdict), `publish_checks` (citirea fiecărui semnal),
+`publish_corpus` (unde stă fiecare), `bounded_correction` (singura corecție și cele patru condiții),
+`scripts/audit_publish_preflight.py`.
+
+```
+APPROVE 0    REVISE 33    REJECT 37    UNDECIDED 31
+```
+
+Cele 37 de respingeri sunt captions-urile duble din sursă — defectul cu care s-a deschis R0.
+`geometry` trece 101, `equivalence` 35/23/43, `boundary` 59/22/20; `subject`, `frame` și
+`provenance` sunt `unavailable` de 101 ori fiecare, fiecare pentru un motiv scris în cod.
+
+**Nu e cablat la randare.** Verdictul se calculează și nu blochează nimic; dacă e sau nu o poartă e o
+decizie de produs pe care n-a luat-o nimeni.
+
+### Batch R7 — lista originală
 
 **Scop:** niciun clip tehnic defect nu intră automat pe board/export.
 
