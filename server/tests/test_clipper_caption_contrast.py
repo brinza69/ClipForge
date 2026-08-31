@@ -137,15 +137,30 @@ def test_an_outline_that_is_not_drawn_is_not_an_outline():
         assert told["refused"] == [cc.NO_OUTLINE_WIDTH], repr(bad)
 
 
-def test_a_colour_with_an_alpha_channel_is_refused_rather_than_guessed():
-    """The two conventions disagree about which end is opaque: ASS writes `00`
-    for opaque, CSS writes `FF`. The shadow carries one and is never read here;
-    a fill or an outline that carries one is a colour whose opacity nobody can
-    settle, and the floor argument depends on both being drawn solid."""
+def test_the_alpha_convention_is_read_from_the_codebase_not_guessed():
+    """`hex_to_ass_color` turns `#RRGGBBAA` into `&HAABBGGRR` and
+    `_rgba_from_hex` hands the same byte to `pysubs2.Color`, and both default a
+    6-digit colour to `a = 0`. That is ASS transparency: 00 is opaque. So an
+    8-digit colour whose alpha is 00 is exactly as solid as the 6-digit form."""
+    assert cc.luminance("#FFFFFF00") == cc.luminance(WHITE)
+    assert cc.luminance("#00000000") == cc.luminance(BLACK)
+    told = cc.verdict({"text_color": "#FFFFFF00", "outline_color": "#00000000",
+                       "outline_width": 5})
+    assert told["refused"] == [] and told["fill"]["floor"] == 4.58
+
+
+def test_a_translucent_colour_is_refused_for_a_reason_rather_than_out_of_doubt():
+    """A translucent glyph composites WITH the backdrop, so its effective colour
+    is a function of the thing it is being compared against — and the whole
+    floor argument assumes two fixed colours. The shadow is the one place a
+    translucent colour appears, and the shadow is never read here."""
+    assert cc.luminance("#000000B0") is None, "31% opaque is not black"
     told = cc.verdict({"text_color": "#FFFFFFB0", "outline_color": BLACK,
                        "outline_width": 5})
-    assert told["refused"] == [cc.ALPHA_UNDECIDABLE]
-    assert cc.luminance("#000000B0") is None
+    assert told["refused"] == [cc.NOT_OPAQUE]
+    outlined = cc.verdict({"text_color": WHITE, "outline_color": "#000000FF",
+                           "outline_width": 5})
+    assert outlined["refused"] == [cc.NOT_OPAQUE], "FF is invisible in ASS"
 
 
 def test_a_style_with_no_highlight_reports_none_rather_than_a_pass():

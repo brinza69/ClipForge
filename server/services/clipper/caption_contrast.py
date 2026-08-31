@@ -93,30 +93,44 @@ NO_OUTLINE = "style_has_no_outline_colour"
 #: colours without ever asking whether the outline is drawn.
 NO_OUTLINE_WIDTH = "style_has_no_outline_width"
 NO_OUTLINE_DRAWN = "outline_width_is_zero"
-#: A colour with an alpha channel, where the two conventions disagree about
-#: which end is opaque: ASS writes `00` for opaque, CSS writes `FF`. The shadow
-#: carries one and is never read here; a fill or an outline that carries one is
-#: refused rather than guessed at.
-ALPHA_UNDECIDABLE = "colour_carries_an_undecidable_alpha"
+#: A fill or outline that is not fully opaque. THE CONVENTION IS SETTLED IN THIS
+#: CODEBASE and does not need guessing: `captioner_presets.hex_to_ass_color`
+#: turns `#RRGGBBAA` into `&HAABBGGRR` and `caption_overlays._rgba_from_hex`
+#: hands the same byte to `pysubs2.Color` — and both default a 6-digit colour to
+#: `a = 0`. That is ASS transparency: 00 is opaque, FF is invisible. So
+#: `#000000B0` is about 31% opaque, which is what a soft shadow should be.
+#:
+#: It is still refused, but for a reason rather than out of doubt: a translucent
+#: glyph composites WITH the backdrop, so its effective colour is a function of
+#: the thing it is being compared against, and the whole floor argument assumes
+#: two fixed colours. No shipping preset uses one for a fill or an outline; the
+#: shadow does, and the shadow is never read here.
+NOT_OPAQUE = "colour_is_not_fully_opaque"
 REFUSALS: tuple[str, ...] = (BAD_COLOUR, NO_STYLE, NO_FILL, NO_OUTLINE,
-                             NO_OUTLINE_WIDTH, NO_OUTLINE_DRAWN,
-                             ALPHA_UNDECIDABLE)
+                             NO_OUTLINE_WIDTH, NO_OUTLINE_DRAWN, NOT_OPAQUE)
 
 
 def _rgb(value: Any) -> tuple[int, int, int] | None:
     """`#RRGGBB` to a triplet, or None if it is not one.
 
-    AN ALPHA CHANNEL IS REFUSED RATHER THAN DROPPED. The two conventions in this
-    codebase disagree about which end is opaque — ASS writes `00` for opaque and
-    CSS writes `FF` — so `#000000B0` is either a mostly-opaque shadow or a
-    mostly-transparent one depending on who wrote it. The shadow does carry one
-    and is never read here; a fill or an outline that carries one is a colour
-    whose opacity nobody can settle, and the floor argument depends on both
-    being drawn solid.
+AN ALPHA CHANNEL IS READ, NOT DROPPED AND NOT GUESSED AT. `hex_to_ass_color`
+    turns `#RRGGBBAA` into `&HAABBGGRR` and `_rgba_from_hex` hands the same byte
+    to `pysubs2.Color`, and both default a 6-digit colour to `a = 0` — ASS
+    transparency, where 00 is opaque. An 8-digit colour with `AA` of 00 is
+    therefore exactly as solid as the 6-digit form and is read; anything else is
+    translucent, and `luminance` returns None for it because a translucent glyph
+    has no fixed colour to measure.
     """
     if not isinstance(value, str):
         return None
     text = value.strip().lstrip("#")
+    if len(text) == 8:
+        try:
+            if int(text[6:8], 16) != 0:
+                return None
+        except ValueError:
+            return None
+        text = text[:6]
     if len(text) != 6:
         return None
     try:
@@ -246,9 +260,14 @@ def verdict(style: Any) -> dict:
 
 
 def _colour_refusal(value: Any) -> str:
-    """Why a colour could not be read: undecidable alpha, or simply not one."""
-    if isinstance(value, str) and len(value.strip().lstrip("#")) == 8:
-        return ALPHA_UNDECIDABLE
+    """Why a colour could not be read: not opaque, or simply not a colour."""
+    text = value.strip().lstrip("#") if isinstance(value, str) else ""
+    if len(text) == 8:
+        try:
+            if int(text[6:8], 16) != 0:
+                return NOT_OPAQUE
+        except ValueError:
+            return BAD_COLOUR
     return BAD_COLOUR
 
 
