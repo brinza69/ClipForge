@@ -43,7 +43,10 @@ sys.path.insert(0, str(_ROOT / "server"))
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 
 from services.clipper import publish_preflight as pf  # noqa: E402
-from services.clipper.publish_corpus import preflight_for  # noqa: E402
+from services.clipper.publish_corpus import (  # noqa: E402
+    is_integrity_failure,
+    preflight_for,
+)
 
 
 def _source_captions(project: str, reader) -> dict | None:
@@ -70,18 +73,18 @@ def _source_captions(project: str, reader) -> dict | None:
 #: of the gate it was collected for is worse than no cache.
 _CACHE_DIR = "chrome_cache"
 
-#: The markers that separate CORRUPT from MERELY ABSENT in `missing_inputs`, and
-#: the separation is the whole of the exit contract. An export with no caption
-#: plan refuses `no_caption_style` and that is an honest absence — a corpus of
-#: them is a finding, not a broken run. A `caption_plan` that is the list `[1]`
-#: is somebody having supplied a record that is not one, and every figure the
-#: run prints is then a fraction of a smaller corpus than the header claims.
+#: THE SEPARATION IS THE WHOLE OF THE EXIT CONTRACT, and it is not this
+#: script's to make. An export with no caption plan is an honest absence — a
+#: corpus of them is a finding, not a broken run. A `caption_plan` that is the
+#: list `[1]` is somebody having supplied a record that is not one, and every
+#: figure the run prints is then a fraction of a smaller corpus than the header
+#: claims.
 #:
-#: Substrings rather than a list of names, because the refusals are produced by
-#: four modules with their own vocabularies; each of those lists is closed where
-#: it lives, and what they share is this shape.
-_CORRUPT = ("not_a_record", "not_a_list", "not_a_sequence", "not_a_fraction",
-            "unreadable", "assemble_raised_")
+#: This used to be decided HERE, by looking for substrings in the reason text,
+#: and that is not a contract: five separately corrupt inputs walked through
+#: with exit 0 and `integrity: true` because their producers phrased the refusal
+#: differently. The producer knows which of the three happened;
+#: `publish_corpus.is_integrity_failure` is the one place that reads it.
 
 
 def _cache_path(path: Path) -> Path:
@@ -100,6 +103,24 @@ def _identity(mp4: Path) -> dict:
     return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
+def _config() -> dict:
+    """Every constant the cached verdict depends on.
+
+    ENUMERATED FROM THE MODULE rather than listed by hand, because a hand-kept
+    list is a list that goes stale exactly once and silently: `SAMPLES_MIN`
+    moving from 6 to 7 left every cached verdict valid while the classifier had
+    started refusing the same six frames. Anything upper-case, numeric and
+    public in `source_chrome` is part of the configuration by construction, so a
+    constant added later joins the key without anybody remembering to add it.
+    """
+    from services.clipper import source_chrome as sc
+
+    return {name: getattr(sc, name) for name in dir(sc)
+            if name.isupper() and not name.startswith("_")
+            and isinstance(getattr(sc, name), (int, float))
+            and not isinstance(getattr(sc, name), bool)}
+
+
 def _usable(got: Any, mp4: Path) -> bool:
     """Whether a cached verdict still describes THIS file, at THIS detector.
 
@@ -114,8 +135,7 @@ def _usable(got: Any, mp4: Path) -> bool:
         return False
     if got.get("schema") != "source_chrome_v1":
         return False
-    if (got.get("every_s") != sc.EVERY_S or got.get("frames_min") != sc.FRAMES_MIN
-            or got.get("conf_min") != sc.CONF_MIN):
+    if got.get("measured_with") != _config():
         return False
     try:
         return got.get("measured_on") == _identity(mp4)
@@ -146,12 +166,26 @@ def _chrome(path: Path, reader) -> dict | None:
             got = None
         if _usable(got, mp4):
             return got
+    # THE IDENTITY IS TAKEN BEFORE AND AFTER, and both have to agree. Reading it
+    # only afterwards stamps the NEW file's size and mtime onto a verdict
+    # measured from the old one — a minute of OCR is long enough for a re-render
+    # to land in the middle of it, and the result would then look freshly valid
+    # for a file nobody had looked at.
+    try:
+        before = _identity(mp4)
+    except OSError:
+        return None
     try:
         got = sc.detect(str(mp4), reader=reader)
     except Exception:
         return None
     try:
-        got["measured_on"] = _identity(mp4)
+        if _identity(mp4) != before:
+            # The file changed under the detector. The verdict describes neither
+            # version, so it is not returned and not cached.
+            return None
+        got["measured_on"] = before
+        got["measured_with"] = _config()
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(got), encoding="utf-8")
     except Exception:
@@ -235,8 +269,8 @@ def main() -> int:
     per_check: dict[str, collections.Counter] = {
         name: collections.Counter(r["checks"][name]["state"] for r in rows)
         for name in pf.CHECKS}
-    missing = collections.Counter(m.split("_refused")[0]
-                                  for r in rows for m in r["missing_inputs"])
+    missing = collections.Counter(
+        f'{m["kind"]}:{m["input"]}' for r in rows for m in r["missing_inputs"])
 
     out = {
         "clips": len(rows),
@@ -261,11 +295,21 @@ def main() -> int:
     bad: list[str] = []
     if not rows:
         bad.append("no sidecars found — a pass over nothing is not a pass")
+    # A RENDER WITH NO PLAN IS PART OF THE POPULATION TOO. Enumerating only the
+    # JSON omits an mp4 nobody wrote a sidecar for, which is a clip this audit
+    # then never mentions — R0 calls it an orphan and exits 2, and a later audit
+    # must not reintroduce a more weakly checked population.
+    planned = {p.with_suffix("") for p in paths}
+    for mp4 in sorted(DATA.glob("*/exports/*.mp4")):
+        if mp4.with_suffix("") not in planned:
+            bad.append(f"{mp4.parent.parent.name}/{mp4.stem}: "
+                       f"export with no sidecar, not in the denominator")
     for row in rows:
         where = f"{row['project']}/{row['clip']}"
         for miss in row["missing_inputs"]:
-            if any(mark in miss for mark in _CORRUPT):
-                bad.append(f"{where}: {miss}")
+            if is_integrity_failure(miss):
+                bad.append(f"{where}: {miss['kind']} {miss['input']}"
+                           f" ({miss.get('detail')})")
         for line in row["refused"]:
             # A refusal is somebody's mistake rather than a missing input, and
             # it already stops the verdict reaching APPROVE. It stops the run

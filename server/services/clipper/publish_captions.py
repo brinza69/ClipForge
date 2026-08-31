@@ -92,7 +92,16 @@ def captions(placement: Any, contrast: Any, source: Any,
         unestablished.append("no_source_caption_verdict")
 
     # --- half two: can the palette be read at all --------------------------
-    if isinstance(contrast, dict) and not contrast.get("refused"):
+    # BOTH LEGS HAVE TO BE THERE. `{}` is a dict with no `refused` key, so it
+    # walked into this branch, found neither `fill` nor `highlight` to object
+    # to, and left the palette half looking demonstrated — a check reading a
+    # verdict nobody produced. `fill` is the one leg every style has; a style
+    # with no highlight paints every word in the fill, so `highlight` may be
+    # absent, but `caption_contrast` always emits the key.
+    _legs_present = (isinstance(contrast, dict) and "fill" in contrast
+                     and "highlight" in contrast
+                     and isinstance(contrast.get("fill"), dict))
+    if isinstance(contrast, dict) and not contrast.get("refused") and _legs_present:
         accepted = contrast.get("accepted_shortfall")
         for part in ("fill", "highlight"):
             leg = contrast.get(part)

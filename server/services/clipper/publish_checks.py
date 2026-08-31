@@ -68,6 +68,30 @@ __all__ = ["geometry", "equivalence", "subject", "frame", "captions",
            "boundary", "provenance", "checks_for", "ON_A_FACE", "TWO_LAYERS"]
 
 
+def _num(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if out != out else out
+
+
+def _overlaps(shot: dict, seg: dict) -> bool:
+    """Do a shot and an evidence segment share any time at all.
+
+    Half-open on purpose: a segment that ENDS exactly where the shot begins
+    describes seconds the shot does not contain, and counting it would let a
+    neighbour's evidence answer for this one.
+    """
+    a0, a1 = _num(shot.get("t0")), _num(shot.get("t1"))
+    b0, b1 = _num(seg.get("t0")), _num(seg.get("t1"))
+    if None in (a0, a1, b0, b1):
+        return False
+    return a0 < b1 and b0 < a1
+
+
 def _report(sidecar: Any) -> dict | None:
     from services.clipper.edit_quality import clip_report
 
@@ -219,17 +243,68 @@ def subject(sidecar: Any) -> dict:
     basis = (view.get("target_basis") if isinstance(view, dict) else None)
     evidence = {"shots": len(shots), "crop_shots": len(needs),
                 "target_basis": basis}
-    if basis == "stable_anchor":
-        return pf.check(pf.PASS, evidence=evidence)
+    if not basis:
+        return pf.check(
+            pf.UNAVAILABLE, evidence=evidence,
+            why="crop_shots_need_a_target_and_regime_view.target_basis_is_absent")
     if basis == "unanchored_face":
         # A face was followed; nothing established it was the RIGHT face. That
-        # is the Moist case — 14 of 14 exports carry the browser's face — and it
-        # is neither a demonstrated defect nor a demonstrated target.
+        # is the Moist case — 14 of 14 exports carry the browser's face, and a
+        # human confirmed on 31 August that the crop does follow it — and it is
+        # neither a demonstrated defect nor a demonstrated target.
         return pf.check(pf.UNAVAILABLE, evidence=evidence,
                         why="the_crop_followed_a_face_nothing_anchored")
-    return pf.check(
-        pf.UNAVAILABLE, evidence=evidence,
-        why="crop_shots_need_a_target_and_regime_view.target_basis_is_absent")
+
+    # `target_basis` SAYS HOW THE TARGET WAS DEFINED, NOT WHETHER IT WAS THERE,
+    # and treating it as the answer passed two states that are the check's own
+    # subject: sixteen samples with `evidence.target == 0.0`, and zero samples
+    # with `target_covered: false`. A basis is a method; presence is a
+    # measurement, and only the measurement can settle this.
+    #
+    # ONLY THE EVIDENCE IS READ, never the segment's proposed regime. The face
+    # timeline is a measurement of the source; the regime beside it is R3b's
+    # PROPOSAL, and nothing here demonstrates the delivered shots materialised
+    # it — reading it would compare a delivered crop against a plan.
+    if view.get("target_covered") is not True:
+        return pf.check(pf.UNAVAILABLE, evidence=evidence,
+                        why="the_target_timeline_did_not_cover_this_clip")
+    segments = view.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return pf.check(pf.UNAVAILABLE, evidence=evidence,
+                        why="no_per_segment_target_evidence")
+
+    absent, unmeasured = [], []
+    for i in needs:
+        shot = shots[i]
+        seen = present = False
+        for seg in segments:
+            if not isinstance(seg, dict):
+                continue
+            if _overlaps(shot, seg):
+                got = (seg.get("evidence") or {}).get("target")
+                covered = (seg.get("evidence_coverage") or {}).get("target")
+                if not isinstance(covered, int) or covered <= 0:
+                    continue
+                if not isinstance(got, (int, float)) or isinstance(got, bool):
+                    continue
+                seen = True
+                # ANY presence at all, which is the weakest claim the evidence
+                # supports. A fraction would be a threshold chosen to fit an
+                # answer, and §4's bands are already the cautionary tale.
+                present = present or float(got) > 0.0
+        (unmeasured if not seen else absent if not present else []).append(i)
+
+    evidence.update({"crop_shots_with_no_target": absent,
+                     "crop_shots_never_sampled": unmeasured})
+    if absent:
+        # MEASURED. The frame held a 9:16 window on an anchor over a stretch
+        # where the subject was demonstrably not there.
+        return pf.check(pf.FAIL, severity=pf.REVISABLE, evidence=evidence,
+                        why="a_crop_holds_on_a_span_with_no_target_present")
+    if unmeasured:
+        return pf.check(pf.UNAVAILABLE, evidence=evidence,
+                        why="a_crop_spans_seconds_nobody_sampled")
+    return pf.check(pf.PASS, evidence=evidence)
 
 
 def frame(chrome: Any) -> dict:
@@ -291,11 +366,22 @@ def boundary(view: Any) -> dict:
 
     if not isinstance(view, dict):
         return pf.check(pf.UNAVAILABLE, why="no_boundary_view")
+    from services.clipper.boundary_completion import DEFECTS, UNKNOWNS
+
     defects, unknown = view.get("defects"), view.get("unknown")
     if not isinstance(defects, list) or not isinstance(unknown, list):
         # Supplied wrongly, which is not the same as not supplied — and the
         # difference is somebody's mistake rather than a missing transcript.
         return pf.check(pf.UNAVAILABLE, why="boundary_view_is_not_a_record")
+    # THE CONTAINER WAS VALIDATED AND THE CONTENTS WERE NOT, which just moved
+    # the hole: `defects=[7]` is a list, so it passed the type check, matched
+    # nothing in the closed sets, and came out a clean PASS. So did a defect
+    # name with a typo in it. A record that speaks a vocabulary this does not
+    # know is refused, not read as free of defects.
+    if any(str(d) not in DEFECTS for d in defects):
+        return pf.check(pf.UNAVAILABLE, why="boundary_defect_not_in_the_closed_list")
+    if any(str(u) not in UNKNOWNS for u in unknown):
+        return pf.check(pf.UNAVAILABLE, why="boundary_unknown_not_in_the_closed_list")
 
     found = [str(d) for d in defects if str(d) in BLOCKING | TECHNICAL]
     evidence = {"defects": [str(d) for d in defects],

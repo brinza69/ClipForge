@@ -137,13 +137,56 @@ def test_a_crop_needs_its_anchors_target_and_no_sidecar_carries_one():
     assert "target_basis" in got["why"] and got["evidence"]["crop_shots"] == 2
 
 
+def _regime(target=1.0, covered=1, **over) -> dict:
+    """A `regime_view` with per-segment target evidence over the whole clip."""
+    return {"target_basis": "stable_anchor", "target_covered": True,
+            "segments": [{"t0": 0.0, "t1": 30.0,
+                          "evidence": {"target": target},
+                          "evidence_coverage": {"target": covered}}],
+            **over}
+
+
 def test_a_crop_that_followed_an_unanchored_face_is_not_a_pass():
     """The Moist case: 14 of 14 exports follow *a* face, and it is the one in
-    the browser. Followed-a-face is not followed-the-subject."""
+    the browser — a human confirmed it on 31 August. Followed-a-face is not
+    followed-the-subject."""
     body = _sidecar(regime_view={"target_basis": "unanchored_face"})
     assert pc.subject(body)["state"] == pf.UNAVAILABLE
-    body["regime_view"] = {"target_basis": "stable_anchor"}
+    body["regime_view"] = _regime()
     assert pc.subject(body)["state"] == pf.PASS
+
+
+def test_a_basis_is_a_method_and_presence_is_a_measurement():
+    """`target_basis` says HOW the target was defined, never whether it was
+    there — and reading it as the answer passed both of the states this check
+    exists to catch."""
+    absent = _sidecar(regime_view=_regime(target=0.0, covered=16))
+    got = pc.subject(absent)
+    assert got["state"] == pf.FAIL and got["severity"] == pf.REVISABLE
+    assert got["evidence"]["crop_shots_with_no_target"] == [0, 1]
+
+    never = _sidecar(regime_view=_regime(target=0.0, covered=0))
+    got = pc.subject(never)
+    assert got["state"] == pf.UNAVAILABLE
+    assert "nobody_sampled" in got["why"]
+
+
+def test_a_target_timeline_that_did_not_cover_the_clip_is_unavailable():
+    body = _sidecar(regime_view=_regime(covered=4))
+    body["regime_view"]["target_covered"] = False
+    assert pc.subject(body)["state"] == pf.UNAVAILABLE
+
+
+def test_evidence_from_a_segment_the_shot_does_not_touch_does_not_answer_for_it():
+    """A segment ending exactly where the shot begins describes seconds the
+    shot does not contain."""
+    body = _sidecar(regime_view=_regime())
+    body["regime_view"]["segments"] = [
+        {"t0": 0.0, "t1": 15.0, "evidence": {"target": 1.0},
+         "evidence_coverage": {"target": 8}}]
+    got = pc.subject(body)
+    assert got["state"] == pf.UNAVAILABLE
+    assert got["evidence"]["crop_shots_never_sampled"] == [1]
 
 
 def test_an_absent_composition_is_old_and_a_wrong_one_is_broken():
@@ -424,3 +467,35 @@ def test_a_clip_with_no_extra_artefacts_is_undecided_not_approved():
     assert got["established"] == "1/7"
     assert set(got["unavailable"]) == {pf.EQUIVALENCE, pf.SUBJECT, pf.FRAME,
                                        pf.CAPTIONS, pf.BOUNDARY, pf.PROVENANCE}
+
+
+# --- the container was validated and the contents were not -------------------
+#
+# Moving `boundary` from `eligible` to the defect lists closed one hole and
+# moved another: a list is a list whatever is in it.
+
+
+def test_a_defect_name_nothing_knows_is_refused_not_read_as_clean():
+    for bad in ([7], ["end_inside_wrod"], ["", None]):
+        got = pc.boundary({"defects": bad, "unknown": []})
+        assert got["state"] == pf.UNAVAILABLE, repr(bad)
+        assert "closed_list" in got["why"], repr(bad)
+
+
+def test_an_unknown_name_nothing_knows_is_refused_too():
+    got = pc.boundary({"defects": [], "unknown": ["because_reasons"]})
+    assert got["state"] == pf.UNAVAILABLE and "closed_list" in got["why"]
+
+
+def test_an_empty_contrast_record_is_not_a_readable_palette():
+    """`{}` is a dict with no `refused` key, so it walked into the branch, found
+    neither leg to object to, and left the palette half looking demonstrated."""
+    got = pc.captions(_placed(), {}, _clean_source())
+    assert got["state"] == pf.UNAVAILABLE
+    assert "contrast_unavailable" in got["why"]
+
+
+def test_a_contrast_record_missing_a_leg_is_not_readable_either():
+    got = pc.captions(_placed(), {"fill": None, "highlight": None},
+                      _clean_source())
+    assert got["state"] == pf.UNAVAILABLE

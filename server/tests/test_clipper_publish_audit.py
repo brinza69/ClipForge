@@ -178,8 +178,8 @@ def test_a_cached_verdict_does_not_survive_a_re_render(tmp_path):
     mp4 = tmp_path / "a.mp4"
     mp4.write_bytes(b"one render")
     good = {"schema": "source_chrome_v1", "state": sc.NOT_DETECTED,
-            "every_s": sc.EVERY_S, "frames_min": sc.FRAMES_MIN,
-            "conf_min": sc.CONF_MIN, "measured_on": module._identity(mp4)}
+            "measured_with": module._config(),
+            "measured_on": module._identity(mp4)}
     assert module._usable(good, mp4)
 
     mp4.write_bytes(b"a different render entirely")
@@ -202,11 +202,18 @@ def test_a_cache_measured_at_another_configuration_is_not_reused(tmp_path):
     mp4 = tmp_path / "a.mp4"
     mp4.write_bytes(b"one render")
     base = {"schema": "source_chrome_v1", "state": sc.NOT_DETECTED,
-            "every_s": sc.EVERY_S, "frames_min": sc.FRAMES_MIN,
-            "conf_min": sc.CONF_MIN, "measured_on": module._identity(mp4)}
-    for key, value in (("every_s", sc.EVERY_S + 1), ("frames_min", 99),
-                       ("conf_min", 0.01), ("schema", "source_chrome_v0"),
-                       ("state", "probably")):
+            "measured_with": module._config(),
+            "measured_on": module._identity(mp4)}
+    for key, value in (("schema", "source_chrome_v0"), ("state", "probably")):
         assert not module._usable({**base, key: value}, mp4), key
     assert not module._usable({k: v for k, v in base.items()
                                if k != "measured_on"}, mp4)
+
+    # EVERY numeric constant, enumerated from the module rather than listed by
+    # hand: a hand-kept list goes stale exactly once and silently, which is what
+    # `SAMPLES_MIN` moving from 6 to 7 did — every cached verdict stayed valid
+    # while the classifier had started refusing the same six frames.
+    assert module._config(), "the configuration is not empty"
+    for name in module._config():
+        spoiled = {**base["measured_with"], name: 999}
+        assert not module._usable({**base, "measured_with": spoiled}, mp4), name
