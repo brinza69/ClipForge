@@ -81,6 +81,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `promises.py` | setups that could pay off later, and what a callback costs (§4) |
 | `story.py` | the payoff-first reasoning: anchors, context debt, hook latency, archetypes, edit variants |
 | `story_evidence.py` | the ONE representation of the narrative evidence. Deterministic grounding of a model claim against the atoms it names, `remeasure` after every boundary change, and `semantic_payoff` — the payoff features read now instead of the audio detector's. Marks a failed match, never drops it |
+| `quote_resolver.py` | Batch S7: where a quote actually IS in the transcript. `story_evidence.ground_claim` asks a yes/no — is the quote inside the claimed atom plus one neighbour, about 9.3s — and **measured over six sources and 164 claims it binds 64.0%**. This turns the question round: where does the quote occur, over the whole transcript, using the SAME normalisation and the same whole-token rule (a test asserts the two agree on every quote, because a second tokeniser here would drift and the comparison would stop meaning anything). Three states, and **`ambiguous` is the guard that makes the others safe**: a phrase like "you know what I mean" occurs dozens of times in a three-hour stream, and binding it to the nearest occurrence would MANUFACTURE a grounding the evidence does not support. **WHY IT CAME BEFORE WIDENING THE WINDOW,** which was the obvious cheaper move: `_NEIGHBOURS = 1` is a constant nobody derived, and raising it until the numbers improve is choosing a threshold to fit an answer. The drift distribution is what a window should be derived FROM — and it says the window is not the answer: median 0.9s but p90 18.1s and max 78.1s, with 99 of 128 located claims already inside the shipped reach and 29 outside it. Widening to catch those 29 needs 20s+, which raises the 9.1% ambiguity directly. Applied to nothing |
 
 ### Choosing clips
 
@@ -270,6 +271,7 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_publish_corpus.py` (R7: assembling the inputs, and naming the missing ones) ·
 `test_clipper_bounded_correction.py` (R7: the one correction, and its four conditions) ·
 `test_clipper_publish_audit.py` (R7: what reaches the exit code, and where the OCR cache may not live) ·
+`test_clipper_quote_resolver.py` (S7: where a quote is, and what the resolver refuses to guess) ·
 `test_clipper_caption_contrast.py` (R6: what the palette guarantees) ·
 `test_clipper_caption_placement.py` (R6: what the caption lands on) ·
 `test_clipper_evidence_map.py` (R6: where a detected box lands in the output) ·
