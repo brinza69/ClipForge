@@ -678,15 +678,16 @@ omul.
 - `bounded_correction.py` — singura corecție permisă și cele patru condiții, dintre care două nu erau
   de fapt impuse.
 
-**Rezultatul pe corpus** (`scripts/audit_publish_preflight.py --with-source-captions`, 101 clipuri):
+**Rezultatul pe corpus** (`scripts/audit_publish_preflight.py --with-source-captions
+--with-chrome`, 101 clipuri, integritate curată, exit 0):
 
 ```
-APPROVE 0    REVISE 53    REJECT 37    UNDECIDED 11
+APPROVE 0    REVISE 59    REJECT 37    UNDECIDED 5
 
-geometry_and_duration                  pass 89   fail  0   unavailable  12
+geometry_and_duration                  pass 58   fail  0   unavailable  43
 cut_equivalence_and_profile_rhythm     pass  0   fail 23   unavailable  78
 subject_present_when_required          pass  0   fail  0   unavailable 101
-usable_frame_in_fit_and_no_chrome      pass  0   fail  0   unavailable 101
+usable_frame_in_fit_and_no_chrome      pass  0   fail 16   unavailable  85
 captions_not_duplicated_or_unreadable  pass  0   fail 64   unavailable  37
 boundary_complete                      pass 44   fail 56   unavailable   1
 provenance_complete                    pass  0   fail  0   unavailable 101
@@ -695,7 +696,55 @@ provenance_complete                    pass  0   fail  0   unavailable 101
 Defalcarea eșecurilor, fiindcă totalul singur nu spune nimic: captions = **37 duplicat de strat**
 (rejectable) + **38 caption peste o față** (revisable, se suprapun pe 11 clipuri); boundary = 16
 `clipped_release`, 16 `end_mid_sentence`, 12 `end_inside_word`+`end_mid_sentence`, 11
-`clipped_release`+`end_mid_sentence`, 1 cu `orphan_tail`.
+`clipped_release`+`end_mid_sentence`, 1 cu `orphan_tail`; frame = **16 exporturi cu chrome de
+player**, restul `not_detected`, care nu e o trecere.
+
+## Al doilea review Codex — cinci P1 și două P2, toate reparate
+
+Prima versiune a reparațiilor trecea toate testele ei și era greșită în șapte locuri. Cea mai
+usturătoare: **reparația mea de geometrie purta chiar defectul pe care îl repara.** `clip_report`
+întoarce stringul `"unavailable"` doar când lista de shot-uri nu se poate citi; când SE poate, dă un
+contor, iar un contor de necunoscute arată `{"unavailable": 19}`. Comparam tot câmpul cu santinela.
+**31 din cele 89 de treceri aveau fiecare compoziție necunoscută** — de aceea cifra e acum 58, nu 89.
+Un container nu e scalarul pe care îl conține.
+
+- **De ce lipsește un input e TIPAT acum** — `absent` / `refused` / `unreadable`, decis de producător.
+  Auditul sorta corupt de absent căutând fragmente în textul motivului, ceea ce nu e un contract:
+  **cinci intrări corupte diferite treceau prin `main()` cu exit 0 și `integrity: true`** fiindcă
+  producătorii formulau refuzul altfel. Refuzurile pistei de fețe nu ieșeau deloc din `faces`.
+- **Populația e verificată, nu presupusă.** Un sidecar care declară alt `clip_id` sau alt
+  `project_id` e refuzat, iar un mp4 fără sidecar e numit. Poarta R0 face deja ambele.
+- **O BAZĂ E O METODĂ, NU O MĂSURĂTOARE.** `target_basis: stable_anchor` trecea verificarea de
+  subiect pe șaisprezece eșantioane cu `evidence.target = 0.0` și pe zero eșantioane cu
+  `target_covered: false`. Acum intersectează fiecare shot `crop` cu dovada per segment, iar un crop
+  ținut peste un interval unde ținta e măsurat absentă e o constatare, nu o trecere. Se citește DOAR
+  dovada, niciodată regimul propus alături — ăla ar compara un crop livrat cu un plan.
+- **Nu mai există `False` pentru `own_layer`.** Un `.ass` lipsă însemna „exportul ăsta n-are strat
+  propriu", și nu înseamnă: `.ass`-ul e instrucțiunea, mp4-ul e artefactul, iar ștergerea
+  instrucțiunii după ardere nu scoate nimic din video — și absența aia e ce lăsa verificarea de
+  duplicat să treacă.
+- **Validarea containerelor mutase gaura cu un nivel mai jos:** `defects=[7]` e o listă, deci trecea
+  verificarea de tip, nu se potrivea cu nimic din mulțimile închise, și ieșea curat. La fel un nume
+  de defect scris greșit. La fel `contrast={}`, care intra în ramura „paletă lizibilă" fără nicio
+  latură de obiectat.
+- **Cache-ul se cheiază pe toate constantele detectorului**, enumerate din modul de către PRODUCĂTOR.
+  Lista ținută de consumator era deja incompletă cu una: `SAMPLES_MIN` e citit de `classify` și nu
+  era în cheie. Și identitatea mp4-ului se ia ÎNAINTE și DUPĂ detecție — un minut de OCR e destul ca
+  o re-randare să aterizeze la mijloc.
+
+## OCR-ul de chrome — rulat, și de ce n-a mers prima dată
+
+**`server/.venv` avea `torch 2.13.0+cpu`.** `torch.cuda.is_available()` era `False`, deci
+`source_chrome._reader()` încerca `gpu=True`, eșua și cădea tăcut pe CPU: **zero verdicte în 38 de
+minute**. CUDA-ul care merge e al lui `ctranslate2` (whisper) și nu se transmite la torch.
+
+Reparat cu `torch 2.13.0+cu126` — aceeași versiune, doar backend-ul. **Măsurat: 68s per export,
+~115 minute pe corpus.** Estimarea de „~3 ore" era corectă pentru un GPU; venv-ul doar nu avea unul.
+
+Cele 101 de verdicte sunt în `<proiect>/chrome_cache/`, migrate cu
+`scripts/migrate_chrome_cache.py` ca să poarte `measured_with`. Migrarea e VERIFICATĂ: trei din cele
+patru constante erau deja în fiecare verdict și scriptul refuză orice fișier ale cărui valori diferă
+de ale modulului; a patra n-a fost schimbată niciodată de la `dbd1cc0`.
 
 **Cele 37 de respingeri sunt defectul cu care s-a deschis R0**, dar acum fiecare se sprijină pe
 AMBELE straturi: sursa are captions arse (`pilotf81b`, `39c89ae2e16e`, `43a509687a33`) **și** exportul
@@ -720,9 +769,10 @@ datorează nicio față. Clipurile numai-`fit` TREC. Un crop cere `regime_view.t
 - **subject** — cerința e derivată acum, dar `regime_view` nu e pe niciun sidecar stocat; apare la
   prima randare prin `clipper_shadow_views`. 58 de clipuri au shot-uri `crop`, 31 n-au `composition`
   deloc, 12 n-au listă de shot-uri.
-- **frame** — cere OCR pe fiecare export. Opt-in prin `--with-chrome`, cu cache reluabil în
-  `<proiect>/chrome_cache/`. **Rularea peste corpus NU se poate face în timp util pe rig-ul ăsta, și
-  motivul e măsurat: `server/.venv` are `torch 2.13.0+cpu`.** `torch.version.cuda` e `None` și
+- **frame** — RULAT. 16 exporturi au chrome de player; restul de 85 ies `not_detected`, care
+  nu e o trecere (recall mic și nedemonstrat, iar modulul o spune). Istoric păstrat fiindcă e o
+  capcană de rig: prima încercare a dat **zero verdicte în 38 de minute** fiindcă `server/.venv`
+  avea `torch 2.13.0+cpu`. `torch.version.cuda` e `None` și
   `torch.cuda.is_available()` e `False`, deci `source_chrome._reader()` încearcă `gpu=True`, eșuează
   și cade tăcut pe `gpu=False`. Pornită pe 31 august, rularea a produs **zero verdicte în 38 de
   minute** — estimarea de „~3 ore" din handover-ul anterior presupunea GPU și era greșită. CUDA-ul
