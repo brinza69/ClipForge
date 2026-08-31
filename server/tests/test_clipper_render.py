@@ -347,3 +347,39 @@ def test_preview_constants_are_low_res_and_cheap():
     assert (render.PREVIEW_W, render.PREVIEW_H) == (540, 960)
     assert render.PREVIEW_CRF == 30
     assert render.PREVIEW_PRESET == "veryfast"
+
+
+def test_the_caption_is_burned_after_the_overlay_not_before():
+    """A DEFECT A HUMAN FOUND AND EVERY INSTRUMENT HERE MISSED.
+
+    `pad=...:color=black@0` makes the letterbox bars transparent so the blurred
+    copy can show through. Burning the subtitles onto that frame draws the text
+    into the colour planes and leaves the alpha at zero, so `overlay`
+    composited it away — on a `crop` shot the frame is opaque and the caption
+    survived, on a `fit` shot the caption sits in the bar by construction and
+    vanished.
+
+    Measured before the fix: 331 seconds across 27 of the 88 stored clips had no
+    caption at all, and one was silent for 88% of its length.
+    """
+    from services.clipper.dynamic_render import build_dynamic_filtergraph
+
+    plan = {"shots": [{"index": 0, "composition": "fit", "t0": 0.0, "t1": 2.0}],
+            "style": {}}
+    graph, _label = build_dynamic_filtergraph(plan, "c.txt", "x.ass",
+                                              src_w=1920, src_h=1080)
+    assert "overlay=0:0,subtitles=" in graph, graph
+    # ...and NOT on the foreground branch, which is where the alpha is zero.
+    foreground = graph.split("[fg];")[0]
+    assert "subtitles=" not in foreground, foreground
+
+
+def test_no_caption_file_means_no_subtitles_filter_anywhere():
+    from services.clipper.dynamic_render import build_dynamic_filtergraph
+
+    plan = {"shots": [{"index": 0, "composition": "fit", "t0": 0.0, "t1": 2.0}],
+            "style": {}}
+    graph, _label = build_dynamic_filtergraph(plan, "c.txt", None,
+                                              src_w=1920, src_h=1080)
+    assert "subtitles=" not in graph
+    assert graph.endswith("overlay=0:0[vout]"), graph

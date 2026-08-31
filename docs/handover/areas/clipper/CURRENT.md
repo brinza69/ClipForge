@@ -549,6 +549,15 @@ proiecte — deci pragul de 2 cadre separă complet, cu marjă de 5 la 1. Ipotez
 39 de potriviri pe pozitive, toate la confidence 0,00–0,01, zero URL-uri reale. `not_detected` nu
 înseamnă curat, și `is_a_warning()` o spune în cod.
 
+**DEFECT LIVRAT, GĂSIT DE OM ȘI REPARAT (31 august 2026):** pe shot-urile `fit` caption-ul nu era
+desenat deloc. `pad=...:color=black@0` face barele TRANSPARENTE ca să se vadă blur-ul, iar arderea
+subtitrărilor peste cadrul acela scria textul în planurile de culoare și lăsa alfa pe zero — deci
+`overlay` îl compunea afară. Pe `crop` cadrul e opac și caption-ul supraviețuia; pe `fit` caption-ul
+stă în bară prin construcție și dispărea. **331 de secunde din 27 dintre cele 88 de clipuri stocate,
+7,7% din corpus, un clip mut pe 88% din lungime.** `caption_placement` raportase acele 27 ca „caption-ul
+cade pe banda de letterbox" — adevărat despre geometrie, și nu întreba niciodată dacă textul e desenat.
+Reparat mutând `subtitles` după `overlay`; dovedit re-randând clipul și extrăgând același cadru.
+
 **Ce a mai rămas din R6:** detecția per-shot pentru UI și pentru textul sursei — lipsește un DETECTOR
 nu un mapper, fiindcă `regions.hud` are 8 dreptunghiuri în tot corpusul și toate sunt cutii fixe de
 colț — și cablarea în sidecar. `panels_to_keep_out` nu e mapper generic: sare peste shot-urile de

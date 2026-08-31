@@ -184,11 +184,30 @@ def build_dynamic_filtergraph(plan: dict, cmd_path: str, ass_path: str | None,
         "setsar=1",
         _eq_filter(plan),
     ]
+    # THE CAPTION IS BURNED AFTER THE OVERLAY, and this is the whole of a defect
+    # a human found and every instrument here missed.
+    #
+    # `pad=...:color=black@0` makes the letterbox bars TRANSPARENT so the blurred
+    # copy below can show through them. Burning the subtitles onto that frame
+    # draws the text into the colour planes and leaves the alpha where it was —
+    # zero — so `overlay` composited it away. On a `crop` shot the frame is
+    # opaque everywhere and the caption survived; on a `fit` shot the caption
+    # sits in the bar by construction and vanished.
+    #
+    # MEASURED before the fix: 331 seconds across 27 of the 88 stored clips had
+    # no caption at all, 7.7% of the corpus, and one clip was silent for 88% of
+    # its length. `caption_placement` reported those 27 clips as "the caption
+    # lands on the letterbox band" — geometrically true, and it never asked
+    # whether the text was drawn.
+    #
+    # Reproduced in isolation with two labels, one over the source and one over
+    # the bar: before the change only the first rendered, after it both do.
+    subtitle_filter = ""
     if ass_path:
         from services.font_manager import fonts_dir
 
-        chain.append(
-            f"subtitles=filename='{escape_filter_path(ass_path)}'"
+        subtitle_filter = (
+            f",subtitles=filename='{escape_filter_path(ass_path)}'"
             f":fontsdir='{escape_filter_path(fonts_dir())}'"
         )
 
@@ -212,7 +231,7 @@ def build_dynamic_filtergraph(plan: dict, cmd_path: str, ass_path: str | None,
             ":force_original_aspect_ratio=increase,"
             f"crop={even(out_w)}:{even(out_h)},gblur=sigma={BACKDROP_SIGMA}[bg]")
     return (f"[0:v]split=2[a][b];[a]{','.join(chain)}[fg];{fill};"
-            "[bg][fg]overlay=0:0[vout]", "[vout]")
+            f"[bg][fg]overlay=0:0{subtitle_filter}[vout]", "[vout]")
 
 
 def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,

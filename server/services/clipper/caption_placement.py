@@ -101,6 +101,15 @@ of the caption unreadable. The letterbox is excluded on purpose: it occludes
 nothing of the source. That is NOT a claim that the text there is readable — the
 strip is a blurred copy of the frame, not black, and §R6 wants a contrast
 measurement before anything is placed on it. Neither an occlusion nor a pass.
+
+AND UNTIL 31 AUGUST 2026 THE TEXT WAS NOT THERE AT ALL. `ON_LETTERBOX` said the
+caption lands on the bar, which was true about geometry and never asked whether
+the caption was drawn: `dynamic_render` burned the subtitles onto a frame whose
+bars are TRANSPARENT, so the text kept an alpha of zero and the overlay
+composited it away. 331 seconds across 27 of the 88 stored clips had no caption
+at all — one clip for 88% of its length — and a human found it by watching a
+clip while every instrument here reported the opposite. The renderer burns the
+subtitles after the overlay now, so this axis measures a caption that exists.
 """
 
 from __future__ import annotations
