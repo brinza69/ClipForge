@@ -602,7 +602,7 @@ iar `panels` nu e stocat nicăieri. Comparând `y_pct` a ieșit „8 din 99"; co
 aceleași keep-out-uri incomplete a ieșit 54. **Niciunul nu era un fapt despre regulă.** E
 `unavailable` acum, cu motivul numit, și nu pică rularea — e o proprietate a formatului stocat.
 
-## Batch R7 — preflight de publicare, LIVRAT 31 august 2026
+## Batch R7 — preflight de publicare, LIVRAT 31 august 2026, CORECTAT după review-ul Codex
 
 **Defectul pe care îl repară e chiar în verdict**, și e declarat ca proprietate intenționată în
 docstring-ul lui `review.py`: „a review that fails must not lose an export. It returns a verdict of
@@ -617,55 +617,117 @@ verificare imposibilă într-un `revise` pune două fapte sub un cuvânt, iar a 
 steag `established` lângă lasă cuvântul care poartă decizia să mintă — forma lui
 `changed_without_moving`.
 
-**Patru module:**
+### Cele opt defecte pe care le-a găsit Codex, și ce a arătat fiecare
+
+Prima versiune trecea toate testele ei și era greșită în șapte locuri din opt. **Trei verificări
+erau ORBITE STRUCTURAL** — fiecare citea un câmp care nu exista în ce primea, deci semnalul pe care
+existau ca să-l poarte nu ajungea nicăieri, iar rezultatul arăta ca o măsurătoare curată:
+
+1. **Boundary-ul se măsura pe `cand["words"]`** — adică pe lista `inside` a lui `_neighbourhood`,
+   construită tocmai prin ARUNCAREA cuvântului care încalecă marginea, care e exact ce caută
+   `start_inside_word` și `end_inside_word`. Docstring-ul lui `_straddled` o spune. Verificarea
+   căuta în colecția făcută prin scoaterea a ceea ce caută. Pe transcriptul întreg: **12 exporturi
+   livrate se termină în interiorul unui cuvânt.** Defectul pe care R5a l-a scos din 261 de
+   ferestre, reintrodus la consumator.
+2. **Captions căuta `lands_on`/`worst`/`refused`**, numele lui `placement_view` cu un strat mai jos,
+   în timp ce `caption_corpus.measure` trimite `on_face`/`worst_share`/`placement_refused`. Deci
+   `ON_FACE in placement["lands_on"]` era `in []` pe toate cele 101 clipuri. **Acum ajunge la 38.**
+3. **Boundary citea `eligible`**, care e verdictul MOMENTULUI și pe care R5 îl lasă `True` pe baza
+   unei reparații pe care `boundary_view` doar A PROPUS-O. Nimeni n-a aplicat-o exportului de pe
+   disc. Aceeași familie cu `caption_plan.y_pct`. Citește acum DEFECTELE, și ia și axa `technical`
+   pe care R5 a lăsat-o deliberat afară numind R7 drept proprietarul întrebării.
+4. **Refuzurile coexistau cu APPROVE.** `refused` era calculat, tipărit și lăsat în afara
+   verdictului — șapte verificări trecute plus o a opta verificare refuzată, sau plus a doua
+   corecție, ieșeau `APPROVE` cu obiecția într-un câmp alături, iar auditul ieșea 0. Exact forma lui
+   `changed_without_moving`. Acum orice refuz blochează `APPROVE` și pică rularea.
+5. **Trei verificări treceau pe o singură jumătate a propriului nume.** `{"duration": 30}` fără
+   nicio listă de shot-uri trecea `geometry_and_duration` — **12 din 101 de clipuri au forma asta**;
+   zero tăieturi echivalente trecea toată „echivalență ȘI ritm" deși §4 însuși spune că ritmul nu se
+   măsoară; iar o rețetă goală cu hash-ul ei corect trecea `provenance_complete`, fiindcă
+   `render_input` completează cu `None` orice cheie absentă. Un hash valid nu atinge nicăieri
+   fișierul livrat.
+6. **Auditul crăpa pe un sub-record corupt.** `caption_plan: [1]` → `AttributeError` din mijlocul
+   buclei, deci raportul acoperea clipurile dinainte și nu spunea niciodată unde s-a oprit.
+7. **Cache-ul de OCR scria `<clip>.chrome.json` în `exports/`**, unde ȘASE locuri din repo citesc
+   `*.json` ca sidecar de clip. Singurul fișier lăsat de rularea întreruptă făcea deja
+   `audit_clipper_exports` să raporteze `orphan_sidecar` **și să iasă cu 2** — un cache care strica
+   poarta de bază pentru care fusese colectat. Mutat în `<proiect>/chrome_cache/`, legat de
+   dimensiunea și mtime-ul mp4-ului plus toată configurația detectorului; OCR-ul deja plătit e
+   păstrat.
+8. **Corecția nu-și impunea propria condiție.** Verificatorul era opțional, deci calea NEVERIFICATĂ
+   era cea implicită, iar unul care întorcea `None` o trecea. Și citea NUMELE verificării: `captions`
+   răspunde la trei întrebări și doar una e despre poziție, deci `highlight_floor_2.33` cumpăra o
+   mutare de caption care nu repară o paletă. Acum citește motivul, față de `publish_checks.ON_A_FACE`,
+   verificatorul e obligatoriu și numai `False` îl eliberează.
+
+O corecție a mea, găsită rulând pe corpus: **31 de clipuri n-au `composition` pe niciun shot** —
+sunt de dinaintea cheii. Prima versiune a verificării de subiect le numea „în afara listei închise",
+adică 31 de înregistrări corupte. Verdictul e `unavailable` în ambele cazuri; motivul e ce citește
+omul.
+
+### Cele cinci module
 
 - `publish_preflight.py` — vocabularul și verdictul. `APPROVE` doar când toate cele șapte trec. O
-  listă goală e `UNDECIDED`. O a opta verificare e refuzată, nu raportată. O verificare care nu trece
-  TREBUIE să spună de ce, un eșec TREBUIE să poarte severitate, ambele impuse la construcție.
-- `publish_checks.py` — citirea fiecărui semnal, fiecare cu linia lui.
-- `publish_corpus.py` — unde stă fiecare semnal. Nu ghicește: ori găsește intrarea, ori o numește pe
-  cea lipsă, iar `missing_inputs` călătorește lângă verdict.
-- `bounded_correction.py` — singura corecție permisă și cele patru condiții ale ei.
+  listă goală e `UNDECIDED`. **Un refuz nu e un input indisponibil** și blochează `APPROVE`.
+- `publish_checks.py` — șase verificări. **Ordinea e regula:** un defect MĂSURAT e `fail` orice
+  altceva n-ar fi putut fi privit; abia apoi o jumătate nemăsurabilă îl face `unavailable`; un `pass`
+  cere fiecare jumătate a propriului nume demonstrată.
+- `publish_captions.py` — a șaptea, desprinsă la limita de 500 de linii. Singura care împacă patru
+  surse.
+- `publish_corpus.py` — unde stă fiecare semnal. Transcriptul e OBLIGATORIU, nu implicit.
+- `bounded_correction.py` — singura corecție permisă și cele patru condiții, dintre care două nu erau
+  de fapt impuse.
 
-**Rezultatul pe corpus** (`scripts/audit_publish_preflight.py --with-source-captions`):
+**Rezultatul pe corpus** (`scripts/audit_publish_preflight.py --with-source-captions`, 101 clipuri):
 
 ```
-APPROVE 0    REVISE 33    REJECT 37    UNDECIDED 31
+APPROVE 0    REVISE 53    REJECT 37    UNDECIDED 11
 
-geometry_and_duration                  pass 101   fail  0   unavailable   0
-cut_equivalence_and_profile_rhythm     pass  35   fail 23   unavailable  43
-subject_present_when_required          pass   0   fail  0   unavailable 101
-usable_frame_in_fit_and_no_chrome      pass   0   fail  0   unavailable 101
-captions_not_duplicated_or_unreadable  pass   0   fail 37   unavailable  64
-boundary_complete                      pass  59   fail 22   unavailable  20
-provenance_complete                    pass   0   fail  0   unavailable 101
+geometry_and_duration                  pass 89   fail  0   unavailable  12
+cut_equivalence_and_profile_rhythm     pass  0   fail 23   unavailable  78
+subject_present_when_required          pass  0   fail  0   unavailable 101
+usable_frame_in_fit_and_no_chrome      pass  0   fail  0   unavailable 101
+captions_not_duplicated_or_unreadable  pass  0   fail 64   unavailable  37
+boundary_complete                      pass 44   fail 56   unavailable   1
+provenance_complete                    pass  0   fail  0   unavailable 101
 ```
 
-**Cele 37 de respingeri sunt defectul cu care s-a deschis R0:** `pilotf81b`, `39c89ae2e16e` și
-`43a509687a33` au captions arse în SURSĂ. Detectorul e de acord cu cele patru etichete umane —
-celelalte trei piloturi ies `absent`.
+Defalcarea eșecurilor, fiindcă totalul singur nu spune nimic: captions = **37 duplicat de strat**
+(rejectable) + **38 caption peste o față** (revisable, se suprapun pe 11 clipuri); boundary = 16
+`clipped_release`, 16 `end_mid_sentence`, 12 `end_inside_word`+`end_mid_sentence`, 11
+`clipped_release`+`end_mid_sentence`, 1 cu `orphan_tail`.
 
-Clipul e legat de candidat pe AMBELE margini ale ferestrei: 100 din 101 se potrivesc exact, iar cel
-care nu se potrivește e raportat nelegat, fiindcă R5a a mutat 261 de finaluri și „aproape pe o
-margine" e exact forma unei potriviri vechi.
+**Cele 37 de respingeri sunt defectul cu care s-a deschis R0**, dar acum fiecare se sprijină pe
+AMBELE straturi: sursa are captions arse (`pilotf81b`, `39c89ae2e16e`, `43a509687a33`) **și** exportul
+are `.ass`-ul lui. Un verdict despre proxy-ul proiectului nu e o propoziție despre un export anume,
+iar direcția inversă — lipsa verdictului de sursă — putea ajunge `PASS` pe o verificare al cărei prim
+cuvânt e „nedublat".
 
-**Corecția mărginită.** Mutarea caption-ului e singura oferită: singurul eșec din cele șapte a cărui
-reparație există deja, e deterministă și poate fi verificată ÎNAINTE de aplicare. Patru condiții —
-acționabilă (doar `revise`), singura, verificată (poziția propusă trece înapoi prin aceeași
-verificare), stabilă (a propune din nou pe starea corectată nu întoarce nimic). **Keep-out-urile vin
-de la apelant**, fiindcă la randare setul include `panels_to_keep_out(panels, shots)` care nu ajunge
-în sidecar.
+**Două contracte, ținute separat** (a doua decizie a lui Codex). Auditul DESCRIPTIV poate ieși verde
+peste un corpus aproape integral `UNDECIDED` — că majoritatea celor șapte n-au intrare ESTE
+constatarea, iar o poartă permanent roșie ar îngropa-o. POARTA DE PUBLICARE e celălalt contract:
+numai `APPROVE`, fără refuzuri, cu dovezi actuale — și nimic nu e cablat la ea. Ce datorează totuși
+rularea descriptivă e INTEGRITATEA, și de asta e codul de ieșire: sidecar necitibil, înregistrare care
+a aruncat, corpus gol, orice refuz.
+
+**Cerința de subiect vine din TRATAMENTUL LIVRAT** (prima decizie a lui Codex), nu dintr-o listă de
+profile pe care nu a scris-o nimeni: un `crop` pune o fereastră 9:16 undeva fiindcă a spus o ancoră,
+deci cere dovada țintei; un `fit` păstrează cadrul întreg, deci o diagramă sau un plan larg nu
+datorează nicio față. Clipurile numai-`fit` TREC. Un crop cere `regime_view.target_basis`, iar
+`unanchored_face` nu e destul — cazul Moist urmărește *o* față, cea din browser.
 
 **De ce fiecare `unavailable` rămâne așa:**
-- **subject** — semnalul există (`dynamic_regimes` dă `creator_unknown`); lista profilurilor care CER
-  un subiect nu există nicăieri, și a o inventa în aceeași mișcare în care o verific e greșit.
+- **subject** — cerința e derivată acum, dar `regime_view` nu e pe niciun sidecar stocat; apare la
+  prima randare prin `clipper_shadow_views`. 58 de clipuri au shot-uri `crop`, 31 n-au `composition`
+  deloc, 12 n-au listă de shot-uri.
 - **frame** — cere OCR pe fiecare export, câteva minute fiecare. Opt-in prin `--with-chrome`, cu
-  cache pe disc ca `<clip>.chrome.json`. **Rularea peste corpus a fost pornită și oprită după un
-  singur export** — se poate relua, cache-ul o face reluabilă.
-- **provenance** — sidecarele nu poartă `input_fingerprint`; apare doar la o randare prin calea de
-  job, iar `scripts/rerender_pilots.py` rescrie doar mp4-urile.
-- **captions** parțial — `worst_share_complete` e fals pe fiecare shot fiindcă semnalele de UI și
-  text-sursă n-au detecție per shot.
+  cache reluabil în `<proiect>/chrome_cache/`. **Rularea peste corpus tot nu a fost făcută** — un
+  singur export e în cache.
+- **provenance** — două motive acum, nu unul: sidecarele n-au `input_fingerprint`, și chiar când vor
+  avea, un digest valid acoperă rețeta, nu fișierul livrat. Nu există azi drum către un `pass`.
+- **captions** parțial (37) — `worst_share_complete` e fals fiindcă semnalele de UI și text-sursă
+  n-au detecție per shot.
+- **equivalence** (78) — 43 fără listă de shot-uri citibilă, 35 fiindcă ritmul nu se evaluează.
 
 ## Punctul exact de reluare
 
@@ -704,9 +766,11 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    warning-ul de browser chrome sunt livrate (`caption_placement`, `caption_choice`,
    `caption_contrast`, `evidence_map`, `source_chrome`). A rămas detecția per-shot pentru UI și
    textul sursei — lipsește un DETECTOR, nu un mapper — și cablarea în sidecar.
-7a. **R7 e LIVRAT** (`publish_preflight`, `publish_checks`, `publish_corpus`,
-   `bounded_correction`, `scripts/audit_publish_preflight.py`). Nimic nu e cablat la randare:
-   `applied` e fals peste tot. Ce se poate face fără decizii noi, în ordinea valorii:
+7a. **R7 e LIVRAT și CORECTAT** (`publish_preflight`, `publish_checks`, `publish_captions`,
+   `publish_corpus`, `bounded_correction`, `scripts/audit_publish_preflight.py`). Cele opt defecte
+   ale review-ului Codex sunt reparate; **nu i-am trimis reparațiile la re-review**, deci verdictul
+   lui de acum e cel pe versiunea `d2b2079`. Nimic nu e cablat la randare: `applied` e fals peste
+   tot. Ce se poate face fără decizii noi, în ordinea valorii:
    **(a)** reluat `--with-chrome` peste corpus, ~3 ore de OCR cu cache reluabil pe disc, ceea ce
    închide verificarea de cadru; **(b)** o randare prin calea de job ca sidecarele să capete
    `input_fingerprint` și verificarea de provenance să înceteze a mai fi `unavailable`;
@@ -804,7 +868,22 @@ Reparat, dar artefactul existent păstrează cifra veche: la o comparație, ia `
   caption-ul citește `.ass`.
 - **R7 nu e cablat la randare.** Verdictul se calculează, nu se scrie pe sidecar și nu blochează
   nimic. Dacă e sau nu o poartă e o decizie de produs pe care n-a luat-o nimeni — la fel ca la
-  `review.py`, unde comentariul spune exact asta.
+  `review.py`, unde comentariul spune exact asta. Codex a adăugat un motiv în plus pentru care
+  cablarea nu e o formalitate: **căile `APPROVE`-la-eșec din `review.py` au rămas acolo**, deci un
+  consumator care ar citi „verdictul" ar avea două verdicte cu același nume și semantici opuse.
+- **`provenance_complete` NU ARE azi drum către un `pass`, și e o proprietate a formatului.**
+  Amprenta se ia peste `FINGERPRINT_KEYS`, iar `render_input` completează cu `None` orice cheie
+  absentă — deci un sidecar care nu poartă decât digestul unei rețete goale se validează perfect. Și
+  chiar completă, rețeta nu atinge nicăieri fișierul livrat: nici dimensiune, nici hash, nici durata
+  mp4-ului. Propriul comentariu al lui `FINGERPRINT_KEYS` spune că dimensiunea de ieșire n-are o
+  autoritate comună de unde să fie citită. Un digest valid demonstrează că planul n-a fost editat
+  după randare; atât.
+- **`exports/*.json` e un namespace cu ȘASE cititori care îl interpretează ca sidecar de clip.**
+  `audit_clipper_exports`, `audit_caption_placement`, `audit_caption_contrast`,
+  `audit_publish_preflight`, `build_shot_merge_fixture` și `rerender_pilots`. Nimic altceva nu are
+  voie să scrie acolo un `.json`. Un singur fișier de cache pus acolo a făcut poarta R0 să iasă cu 2
+  — și a stat așa, nedescoperit, până a citit Codex codul. Artefactele auxiliare merg în directorul
+  lor (`<proiect>/chrome_cache/` e primul).
 
 ## Riscuri de urmărit
 
