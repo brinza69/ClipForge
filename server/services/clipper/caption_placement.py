@@ -152,7 +152,14 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
     # earlier version stripped before comparing, which accepted `"fit "` while
     # refusing `"CROP"` — a closed list with a private spelling rule is two
     # rules, and the second one is undocumented.
-    composition = str(shot.get("composition") or "")
+    #
+    # AND `or ""` TURNED AN INVALID COMPOSITION INTO AN ABSENT ONE. A shot whose
+    # composition is `0`, `False` or `[]` is falsy, so it became the empty
+    # string and was reported as "nobody said how this is composed" — the
+    # unavailable answer — when somebody had said something nobody defined.
+    # `None` and a missing key are the only two absences.
+    raw = shot.get("composition")
+    composition = "" if raw is None else str(raw)
     found: list[str] = []
     measured: dict[str, float] = {}
     unavailable: list[str] = []
@@ -195,7 +202,7 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
         if share > 0:
             found.append(name)
 
-    if not composition.strip():
+    if raw is None or not composition.strip():
         # NOBODY SAID. The face and text signals do not depend on how the shot
         # is composed and stay measured; only the letterbox question loses its
         # answer, so only that becomes unavailable.

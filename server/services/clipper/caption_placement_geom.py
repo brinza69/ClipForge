@@ -57,6 +57,12 @@ def band_for(y_pct: float, height_pct: float = CAPTION_BAND_PCT) -> tuple[float,
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
+#: How far past the frame a mapped rectangle may sit before it is treated as
+#: the mapping failing rather than as a box touching the edge. Two pixels, the
+#: same slack `source_captions` allows its detector.
+_FRAME_SLACK_PX = 2.0
+
+
 def _rows(rect: Any, height: float) -> tuple[float, float] | None:
     """A rectangle's vertical extent as fractions, or None if it is not one.
 
@@ -65,6 +71,19 @@ def _rows(rect: Any, height: float) -> tuple[float, float] | None:
     read as "covers nothing" and a shot full of them read as clear. That is the
     oldest mistake in this plan, arriving in a new place: an absence of
     measurement presented as a measurement of absence.
+
+    AND A RECTANGLE THAT DOES NOT FIT THE FRAME IS UNREADABLE TOO. `min(1.0,
+    ...)` used to clamp it in silence, so a box mapped to rows 3000-3200 of a
+    1920-tall output came back as an interval ending at 1.0 — and one mapped
+    entirely below the frame came back inverted and covering nothing, which
+    reads as a clean measurement of a caption nobody occluded. These rectangles
+    arrive from a CALLER'S MAPPING, and a mapping that puts a face off the
+    bottom of the frame has failed; reporting its output as "covers nothing" is
+    the same error the 5-8x scale factor produced in `panels_to_keep_out`.
+
+    The slack is the same one `source_captions._frame_bands` uses and for the
+    same reason: a detector rounding a box to the frame boundary is ordinary,
+    one reporting a box a thousand pixels past it is not.
     """
     import math
 
@@ -77,7 +96,9 @@ def _rows(rect: Any, height: float) -> tuple[float, float] | None:
         return None
     if not (math.isfinite(y) and math.isfinite(h)) or h <= 0 or y < 0:
         return None
-    return max(0.0, y / height), min(1.0, (y + h) / height)
+    if y + h > height + _FRAME_SLACK_PX:
+        return None
+    return y / height, min(1.0, (y + h) / height)
 
 
 def overlaps(band: tuple[float, float], rect: tuple[float, float] | None) -> float:

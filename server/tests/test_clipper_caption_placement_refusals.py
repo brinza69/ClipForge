@@ -304,3 +304,53 @@ def test_a_shorter_evidence_list_is_still_legitimate():
     assert view["refused"] == []
     assert view["shots"][1]["share"] is None
     assert cp.NO_FACES in view["shots"][1]["unavailable"]
+
+
+def test_an_invalid_composition_is_not_an_absent_one():
+    """`or ""` turned a falsy composition into the empty string, so a shot
+    whose composition is `0`, `False` or `[]` was reported as "nobody said how
+    this is composed" — the unavailable answer — when somebody had said
+    something nobody defined."""
+    for bad in (0, False, [], {}, 0.0):
+        view = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC,
+                                 shots=[{"index": 0, "composition": bad}],
+                                 evidence=[_seen()])
+        shot = view["shots"][0]
+        assert shot["refused"] == [cp.BAD_COMPOSITION], repr(bad)
+        assert cp.NO_COMPOSITION not in shot["unavailable"], repr(bad)
+
+    # `None` and a missing key are the only two absences.
+    for absent in ({"index": 0}, {"index": 0, "composition": None}):
+        view = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC,
+                                 shots=[absent], evidence=[_seen()])
+        shot = view["shots"][0]
+        assert shot["refused"] == [], repr(absent)
+        assert cp.NO_COMPOSITION in shot["unavailable"], repr(absent)
+
+
+def test_a_rectangle_mapped_outside_the_frame_is_not_a_clean_measurement():
+    """`min(1.0, ...)` clamped it in silence, so a box mapped to rows 3000-3200
+    of a 1920-tall output came back as an interval ending at 1.0, and one mapped
+    entirely below the frame came back covering nothing — which reads as a clean
+    measurement of a caption nobody occluded. These rectangles come from a
+    CALLER'S MAPPING, and a mapping that puts a face off the bottom of the frame
+    has failed."""
+    for bad in ({"x": 0, "y": 3000, "w": 1080, "h": 200},
+                {"x": 0, "y": 1900, "w": 1080, "h": 200},
+                {"x": 0, "y": 0, "w": 1080, "h": 5000}):
+        view = cp.placement_view(
+            y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0)],
+            evidence=[{"faces": [bad], "panels": [], "text": []}])
+        shot = view["shots"][0]
+        assert cp.NO_FACES in shot["unavailable"], repr(bad)
+        assert cp.ON_FACE not in shot["evidence"], repr(bad)
+        assert shot["share_complete"] is False, repr(bad)
+
+    # A box that reaches exactly the bottom edge is ordinary, and so is one two
+    # pixels past it — the same slack `source_captions` allows its detector.
+    for fine in ({"x": 0, "y": 1720, "w": 1080, "h": 200},
+                 {"x": 0, "y": 1720, "w": 1080, "h": 202}):
+        view = cp.placement_view(
+            y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0)],
+            evidence=[{"faces": [fine], "panels": [], "text": []}])
+        assert view["shots"][0]["share_complete"] is True, repr(fine)
