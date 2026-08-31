@@ -65,6 +65,27 @@ A BOX THAT MISSES THE CROP. It is not in the output at all, which is a different
 answer from "it is in the output covering nothing" — the first is absence, the
 second is a measurement, and `caption_placement` has an axis for each.
 
+WHY THE OTHER TWO SIGNALS STAY UNAVAILABLE, and it is not for want of a mapper.
+This module would map any rectangle; there is nothing honest to give it.
+
+THE UI SIGNAL. `regions.hud` holds 8 rectangles across all 20 projects, and
+every one of them is EXACTLY 60x44 at either (0, 224) or (420, 0) in a 480x270
+frame. That is `content_geom`'s corner heuristic emitting a fixed box when it
+fires, not a measurement of a panel's extent — the confidence field says 0.0
+where there are none and 0.63 to 0.88 where there are. Mapping those would
+report "the caption covers this much of the game UI" out of a rectangle whose
+size nobody measured, which is the ancestor of the 66% claim. `regions.chat` is
+`None` in all 20.
+
+THE SOURCE-TEXT SIGNAL. Nothing produces per-shot text rectangles at all.
+`source_captions` answers a different question — whether the SOURCE carries
+burned-in subtitles — and its evidence is band indices and widths over the whole
+frame, not boxes in a shot.
+
+So both stay `None`, `share_complete` stays false for every shot, and no clip's
+worst case is established. That is the state, and the fix is a detector rather
+than a mapper.
+
 WHAT THIS IS NOT. It is not `panels_to_keep_out`, and must never become it: that
 function deliberately SKIPS face shots, because mapping a game panel through a
 face crop is arithmetic with no referent at a 5-8x scale factor, and it once
