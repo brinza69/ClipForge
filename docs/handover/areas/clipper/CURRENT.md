@@ -786,6 +786,77 @@ datorează nicio față. Clipurile numai-`fit` TREC. Un crop cere `regime_view.t
   n-au detecție per shot.
 - **equivalence** (78) — 43 fără listă de shot-uri citibilă, 35 fiindcă ritmul nu se evaluează.
 
+## GATE-UL VIZUAL UMAN — FĂCUT, 31 august 2026
+
+Vezi [`docs/refs/human-gate-2026-08-31.md`](../../../refs/human-gate-2026-08-31.md) pentru verdicte
+verbatim și diagnostic. 20 de clipuri alese pe dovadă, **11 bad / 9 ok**. Trei porți care stăteau de
+patru sesiuni s-au închis — toate trei **PICAT**:
+
+- **R3a PICAT.** Crop-ul chiar urmărește personajul din browser pe Moist. Confirmă ce refuzau
+  comentariile din cod să afirme în vreo direcție: `stable_track` găsește un cluster geometric, nu o
+  persoană.
+- **R3b PICAT, 8 din 8.** Nota decisivă: „detecția pe fețe e bună, doar în momentul în care intră
+  16:9 cam 2 secunde nu e tranziția bună."
+- **R6 captions duble PICAT, 4 din 4**, pe corpusul RE-RANDAT. Întrebat direct a cui subtitrare se
+  vede, omul a răspuns: **a SURSEI.** Prima confirmare umană pe care o primește vreunul dintre
+  instrumentele astea, și validează trei lucruri deodată: `source_captions` nu dădea fals pozitiv,
+  cele 37 de respingeri ale preflight-ului sunt DEMONSTRATE (exact ce refuza Codex să le acorde), iar
+  cerința celor două straturi era corectă.
+- **Caption peste față TRECUT, 4 din 4.** Semnalul e adevărat geometric și fără consecință vizuală pe
+  eșantion. **Primul lucru pe care o măsurătoare umană l-a contrazis** — ca `REVISABLE` în preflight
+  pare prea strict.
+
+### Joncțiunea crop↔fit e un salt de scară de minim 3,16x, prin construcție
+
+Pe clipul cu timpi exacți: patru schimbări de compoziție, **toate patru în cele patru ferestre
+raportate, zero ratate.** Ipoteza concurentă e falsificată de aceleași date — salturile de ancoră de
+960px, 844px și **1138px, cel mai mare din clip**, sunt neraportate.
+
+Măsurat pe toate cele 84 de joncțiuni: **median 3,58x, max 13,52x, niciuna sub 3x.** Minimul e o
+identitate a geometriei 16:9 (`crop` 1,78x, `fit` 0,5625x), nu un număr de reglat.
+
+**Livrat:** `dynamic_geometry.absorb_brief_fit_islands` — o insulă `fit` sub 4s, doar interioară,
+doar spre `crop`, înainte de merge. **Prima schimbare din tot batch-ul care modifică imaginea
+livrată, nu doar înregistrează lângă ea.** Direcția vine din corpus: insulele `crop` sunt 18 cu
+minimul la 3,6s, cele `fit` sunt 39 cu 15 sub 4s.
+
+**Ce NU repară, scris și în cod:** elimină 30 din 84, și **niciuna dintre cele patru pe care le-a
+cronometrat omul** — alea sunt secvențe lungi și câștigate (8,8s / 13,8s / 15,8s / 14,6s / 7,5s).
+
+### Fereastra `fit` mai îngustă — sugestia mea, măsurată și moartă
+
+48 din 50 de cadre `fit` folosesc TOATĂ lățimea sursei; zero încap în 70%; o fereastră 4:5 ar păstra
+45%. Ar tăia conținut pe practic fiecare shot `fit`. `scripts/measure_fit_content_width.py`.
+
+### Cele 116 tăieturi invizibile sunt încă acolo
+
+Al patrulea clip vlog, pe care diagnosticul de joncțiune nu-l acoperea, are **17 tăieturi
+invizibile** — 20 de shot-uri devin 3 prin `merge_equivalent_shots`. Pe tot corpusul: **exact 116, pe
+23 din 58**, cifra de bază a lui R0 neschimbată. **R1 a reparat plannerul pe 29 august și reparația
+n-a ajuns niciodată într-un export**, fiindcă re-randarea din 31 august a rejucat planurile stocate
+în loc să re-planifice. Cel puțin 6 din cele 11 clipuri marcate `bad` poartă și tăieturi invizibile.
+
+## Batch S7 — primul item livrat, 31 august 2026
+
+`quote_resolver.py` + `scripts/measure_quote_drift.py`. Vezi
+[`docs/refs/grounding-2026-08-31.md`](../../../refs/grounding-2026-08-31.md).
+
+**164 de afirmații pe 6 surse: bound 128 (78,0%), ambiguous 15 (9,1%), absent 21 (12,8%),
+|drift| median 0,9s, p90 18,1s, max 78,1s.**
+
+**Rezultatul contrazice așteptarea cu care a fost construit.** Driftul NU se grupează: 99 din 128 de
+afirmații localizate sunt deja în raza de ~9,3s a regulii livrate, 29 nu sunt, iar prinderea lor cere
+o rază de peste 20s care crește direct ambiguitatea de 9,1%. **Deci fereastra nu e răspunsul** — iar
+mutarea evidentă, `_NEIGHBOURS` de la 1 la 3, ar fi urcat cifra ascunzând că un sfert dintre ratări
+n-au legătură cu fereastra. De aia resolverul trebuia primul.
+
+Cele 21 `absent` reconciliază exact măsurătoarea veche: 10 „fără potrivire" + 11 `subsequence`, o
+subsecvență fiind o parafrază, nu o potrivire slabă.
+
+**Pasul doi se schimbă pe baza datelor:** nu remăsurare după lărgire, ci **A/B de prompt cu
+`atom_ids`** — `matched_by` e `timestamp` pe toate cele 164, deci modelul nu numește niciodată un
+atom.
+
 ## Punctul exact de reluare
 
 **Nimic din motor nu e activ.** R2, R3a, R3b, R4, R5 și R6 sunt instrumentare în umbră: calculează,
@@ -795,10 +866,14 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
 
 **Ce nu pot închide agenții, în ordinea în care blochează:**
 
-1. **Gate-ul vizual R3a / R3b / R4** — patru clipuri, un om: Moist (creatorul, nu fața din browser),
-   Jensen (diagramă lizibilă), vlog (obiectele în `fit`), go ghost (fără comutări false).
-2. **Gate-ul R5** — „≥95% începuturi și finaluri acceptate la review uman".
-3. **Gate-ul R6** — „zero captions duble pe cele 15 go ghost", care cere și re-randare, și un om.
+1. ~~**Gate-ul vizual R3a / R3b / R4**~~ — **FĂCUT 31 august, PICAT.** Vezi secțiunea de mai sus.
+   Ce a mai rămas de la un om: `pilotee0e/a9f653576eb7` a ieșit `bad` și are o singură schimbare de
+   compoziție — explicat ulterior prin cele 17 tăieturi invizibile, dar nimeni n-a confirmat că
+   ALEA erau ce a deranjat.
+2. **Gate-ul R5** — „≥95% începuturi și finaluri acceptate la review uman". Încă nefăcut.
+3. ~~**Gate-ul R6, captions duble**~~ — **FĂCUT 31 august, PICAT 4/4**, cu sursa confirmată de om.
+   Rămâne calibrarea detectorului: `calibrated: false` pe patru surse, și handover-ul cere explicit
+   să nu se materializeze dezactivarea captions-urilor cât timp e așa.
 4. ~~Culorile de highlight ale lui `Neon Pop` și `Viral Gradient`~~ — **DECIS 31 august 2026: rămân
    cum sunt, documentate.** Podea de 2,33 și 2,72, sub pragul de 3,0:1, adică paleta nu poate
    GARANTA bara pe orice fundal. Motivul acceptării e în aritmetică: podeaua e
