@@ -196,12 +196,23 @@ def _rect_census(zones: Any, out_w: int, out_h: int) -> dict:
     }
 
 
-def _bands(grid: Sequence[float], clear: Sequence[float]) -> list[dict]:
-    """Runs of consecutive clear positions, each with its centre and extent.
+def _bands(clear: Sequence[float]) -> list[dict]:
+    """Runs of consecutive positions, each with its centre and extent.
 
-    These are the alternatives. `_widest_band` picks among exactly these, so
-    reporting them is reporting the search's own candidate set rather than a
-    parallel one invented for the report.
+    THE CALLER DECIDES WHICH POSITIONS. That is the whole correction here: the
+    first version ran this over every clear position and then labelled each run
+    `in_spec` by its CENTRE, which is not what `resolve_position` does. The
+    search filters POSITIONS by the clamp first and finds the widest run among
+    the survivors — so a run from 0.1542 to 0.6742 is not a candidate that
+    happens to be centred outside the clamp, it is a run the search never sees:
+    what it sees is the clipped 0.5542 to 0.6742.
+
+    The report said that band was `in_spec: false` AND `taken: true` while the
+    reason beside it read "widest clear band inside the spec clamp" — a
+    contradiction inside one payload. Worse, the sweep written to look for
+    exactly that contradiction asked the report whether an in-clamp band
+    existed, and the report said no, so it found nothing. A check that consults
+    the representation it is checking compares it with itself.
     """
     out: list[dict] = []
     run: list[float] = []
@@ -216,23 +227,24 @@ def _bands(grid: Sequence[float], clear: Sequence[float]) -> list[dict]:
         out.append(run)
     return [{"from": round(r[0], 4), "to": round(r[-1], 4),
              "steps": len(r), "centre": round((r[0] + r[-1]) / 2.0, 4),
-             "in_spec": SPEC_BAND_LO <= (r[0] + r[-1]) / 2.0 <= SPEC_BAND_HI}
+             }
             for r in out]
 
 
-def _why_rejected(band: dict, *, any_in_spec: bool, widest: int) -> str | None:
-    """Why a clear band that existed was not the one taken, or None.
+def _why_rejected(band: dict, *, widest: int) -> str | None:
+    """Why a band in the search's candidate set was not the one taken, or None.
 
-    THE ORDER MATTERS: a band outside the clamp loses to the clamp first,
-    whatever its width, because that is the order the search applies them in.
+    ONLY WIDTH IS LEFT HERE. The clamp does its work BEFORE the runs are built —
+    it filters positions, not bands — so a run it removed never enters this set
+    at all and is reported separately with `OUT_OF_SPEC`. The first version
+    asked this function to apply both rules to runs built over every clear
+    position, which is not the order the search uses.
 
-    None is a real answer and not a gap. A band as wide as the winner, under the
-    same clamp, lost to nothing this module can name — `_widest_band` breaks
-    that tie by scan order, which is an implementation detail and not a reason.
-    Calling it `NARROWER` would be a guess dressed as a finding.
+    None is a real answer and not a gap. A band as wide as the winner lost to
+    nothing this module can name: `_widest_band` breaks that tie by scan order,
+    which is an implementation detail and not a reason. Calling it `NARROWER`
+    would be a guess dressed as a finding.
     """
-    if any_in_spec and not band["in_spec"]:
-        return OUT_OF_SPEC
     if band["steps"] < widest:
         return NARROWER
     return None
@@ -283,6 +295,7 @@ def _refusal(position: Any, why: list[str]) -> dict:
         "proposed": None, "chosen": None, "moved": None,
         "keep_out": None, "reason": None, "scanned": 0, "clear": 0,
         "bands": [], "rejected": [], "searched": False,
+        "excluded_by_clamp": [], "clamp_applied": None,
         "chosen_inside_a_clear_run": None, "coverage_at_chosen": None,
         "refused": sorted(set(why)),
         "changes_anything": False,
@@ -355,15 +368,49 @@ def explain(position: str, layout: dict | None, *,
         # that lost. Saying "zero rejected" out of a run that never scanned
         # would read as "every other position was considered and beaten".
         out.update({"reason": NO_RECTS, "scanned": 0, "clear": 0,
-                    "bands": [], "rejected": [], "coverage_at_chosen": 0.0})
+                    "bands": [], "rejected": [], "coverage_at_chosen": 0.0,
+                    "excluded_by_clamp": [], "clamp_applied": False})
         return out
 
     grid = scan_grid(lo, hi)
     covered = {y: round(_overlap_area(y, rects), 6) for y in grid}
     clear = [y for y in grid if covered[y] <= 0.0]
-    bands = _bands(grid, clear)
-    in_spec = [b for b in bands if b["in_spec"]]
+
+    # THE SEARCH'S OWN CANDIDATE SET, built the way the search builds it:
+    # `_widest_band(inside or clear)`, where `inside` is the clear positions
+    # FILTERED by the clamp. Not the clear runs labelled by where their centres
+    # fall.
     clear_in_spec = [y for y in clear if SPEC_BAND_LO <= y <= SPEC_BAND_HI]
+    clamped = bool(clear_in_spec)
+    bands = _bands(clear_in_spec or clear)
+    for band in bands:
+        band["inside_clamp"] = clamped
+
+    # ...and the runs the CLAMP removed, which are alternatives that lost to it
+    # rather than to a wider band. Only meaningful when the clamp did work: with
+    # nothing clear inside it, the search falls back to every clear run and the
+    # clamp rejected nothing.
+    runs = _bands(clear)
+    dropped = ([b for b in runs
+                if not (SPEC_BAND_LO <= b["to"] and b["from"] <= SPEC_BAND_HI)]
+               if clamped else [])
+    for band in dropped:
+        band["inside_clamp"] = False
+        band["taken"] = False
+        band["rejected_because"] = OUT_OF_SPEC
+
+    # AND A RUN THE CLAMP ONLY TRIMMED IS NOT A RUN IT REMOVED. The clear run
+    # 0.1542-0.6742 survives as 0.5542-0.6742; reporting the discarded half as a
+    # band that lost would invent a candidate the search never had, and saying
+    # nothing would let the reader think the band was that short all along.
+    for band in bands:
+        source = next((r for r in runs
+                       if r["from"] <= band["from"] and band["to"] <= r["to"]),
+                      None)
+        band["clipped_from"] = (
+            [source["from"], source["to"]]
+            if source and (source["from"] < band["from"]
+                           or band["to"] < source["to"]) else None)
 
     chosen_covered = round(_overlap_area(chosen, rects), 6)
     reason = _reason(chosen=chosen, base=base, rects_used=len(rects),
@@ -393,23 +440,28 @@ def explain(position: str, layout: dict | None, *,
         # runs of odd length and marked every band `taken: false` otherwise —
         # the sidecar then reported that the winner had lost.
         band["taken"] = searched and band in inside
-    widest = max((b["steps"] for b in (in_spec or bands)), default=0)
+    widest = max((b["steps"] for b in bands), default=0)
     for band in bands:
         band["rejected_because"] = (
             None if band["taken"] or not searched
-            else _why_rejected(band, any_in_spec=bool(in_spec), widest=widest))
+            else _why_rejected(band, widest=widest))
 
     out.update({
         "scanned": len(grid),
         "clear": len(clear),
         "coverage_at_chosen": chosen_covered,
         "bands": bands,
+        # The runs the CLAMP removed, kept apart from the ones that lost on
+        # width: they lost to a different rule, applied earlier.
+        "excluded_by_clamp": dropped,
+        "clamp_applied": clamped,
         "searched": searched,
         # Whether the delivered position falls in one of the clear runs at all.
         # It does not have to: the preset branch returns before the scan, and
         # `bottom` sits above the grid's last step by construction.
         "chosen_inside_a_clear_run": bool(inside),
-        "rejected": [b for b in bands if not b["taken"]] if searched else [],
+        "rejected": (([b for b in bands if not b["taken"]] + dropped)
+                     if searched else []),
         "reason": reason,
     })
     return out

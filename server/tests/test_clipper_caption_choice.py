@@ -104,21 +104,41 @@ def test_a_search_that_never_ran_rejected_nothing():
 
 
 def test_the_spec_clamp_wins_over_a_band_outside_it():
-    """The clamp is applied first and width second, and the rejection reason
-    has to say which one did the work.
+    """A clear run that lies entirely outside the clamp is removed BY the clamp,
+    and the rejection reason has to say so rather than blaming its width.
 
     NO SILENT SKIP. The first version returned early if the geometry did not
     produce `BAND_IN_SPEC`, so it passed on any change that stopped producing
-    it — a test that cannot fail is a test that is not run. The layout below is
-    one of 135 found by sweeping rect positions and heights for exactly this
-    case, and if it stops being one, this fails."""
+    it — a test that cannot fail is a test that is not run."""
     told = cc.explain("hook", _zones(mid=_px(400, 300)),
                       out_w=OUT_W, out_h=OUT_H)
     assert told["reason"] == cc.BAND_IN_SPEC, told["reason"]
+    assert told["clamp_applied"] is True
     assert SPEC_BAND_LO <= told["chosen"] <= SPEC_BAND_HI
-    losers = [b for b in told["rejected"] if not b["in_spec"]]
-    assert losers, "a band outside the clamp existed"
+    losers = told["excluded_by_clamp"]
+    assert losers, "a run outside the clamp existed"
     assert all(b["rejected_because"] == cc.OUT_OF_SPEC for b in losers)
+    assert all(b in told["rejected"] for b in losers)
+
+
+def test_the_candidate_bands_are_the_ones_the_search_filtered_to():
+    """The report ran over every clear position and labelled each run `in_spec`
+    by its CENTRE, which is not what `resolve_position` does — it filters
+    POSITIONS by the clamp and finds the widest run among the survivors. So a
+    run from 0.1542 to 0.6742 was reported as the taken band, marked
+    `in_spec: false`, beside a reason reading "inside the spec clamp": a
+    contradiction inside one payload."""
+    told = cc.explain("bottom", _zones(a=_px(1400, 300)),
+                      out_w=OUT_W, out_h=OUT_H)
+    assert told["reason"] == cc.BAND_IN_SPEC
+    band = [b for b in told["bands"] if b["taken"]][0]
+    assert band["inside_clamp"] is True, "no longer contradicts the reason"
+    assert band["from"] >= SPEC_BAND_LO and band["to"] <= SPEC_BAND_HI
+    assert band["centre"] == told["chosen"]
+    # ...and the run it was clipped out of is named, because saying nothing
+    # would let the reader think the band was that short all along.
+    assert band["clipped_from"] == [0.1542, 0.6742]
+    assert told["excluded_by_clamp"] == [], "the run was trimmed, not removed"
 
 
 def test_nothing_clear_anywhere_says_so_and_reports_the_coverage():
@@ -166,27 +186,20 @@ def test_the_bands_are_the_search_s_own_candidates():
     assert told["rejected"] == [b for b in told["bands"] if not b["taken"]]
 
 
-def test_the_clamp_is_applied_before_the_width():
-    """That is the order the search applies them in, so a band outside the clamp
-    loses to the clamp whatever its width — and the rejection reason has to say
-    which of the two did the work."""
-    wide_outside = {"steps": 30, "in_spec": False}
-    narrow_inside = {"steps": 2, "in_spec": True}
-    assert cc._why_rejected(wide_outside, any_in_spec=True,
-                            widest=2) == cc.OUT_OF_SPEC
-    assert cc._why_rejected(narrow_inside, any_in_spec=True,
-                            widest=30) == cc.NARROWER
-    # With nothing clear inside the clamp, the clamp does no work at all.
-    assert cc._why_rejected(wide_outside, any_in_spec=False,
-                            widest=30) is None
+def test_only_width_separates_the_candidates():
+    """The clamp does its work BEFORE the runs are built — it filters positions,
+    not bands — so a run it removed never enters this set at all and is reported
+    separately. Asking one function to apply both rules to runs built over every
+    clear position is not the order the search uses."""
+    assert cc._why_rejected({"steps": 2}, widest=30) == cc.NARROWER
+    assert cc._why_rejected({"steps": 30}, widest=30) is None
 
 
 def test_a_band_as_wide_as_the_winner_is_not_given_a_made_up_reason():
     """`_widest_band` breaks that tie by scan order, which is an implementation
     detail and not a reason. `NARROWER` there would be a guess dressed as a
     finding, so the answer is None."""
-    tied = {"steps": 12, "in_spec": True}
-    assert cc._why_rejected(tied, any_in_spec=True, widest=12) is None
+    assert cc._why_rejected({"steps": 12}, widest=12) is None
 
 
 def test_the_rejection_reasons_on_real_geometry_stay_in_the_vocabulary():
@@ -444,3 +457,53 @@ def test_a_scalar_under_a_key_nobody_defined_is_suspicious():
                       out_w=OUT_W, out_h=OUT_H)
     assert told["keep_out"]["not_rectangle_shaped"] == 1, "only `top`"
     assert told["keep_out"]["unreadable"] == 1, "`mystery` is unaccounted for"
+
+
+def test_the_report_agrees_with_the_shipping_function_across_the_sweep():
+    """CHECKED AGAINST `resolve_position`, NOT AGAINST THE REPORT. The first
+    version of this sweep asked the report whether an in-clamp band existed, and
+    the report's own `in_spec` was computed from a band's centre — so it said no
+    on exactly the layouts where the contradiction lived, and found nothing. A
+    check that consults the representation it is checking compares it with
+    itself.
+
+    3,513 layouts reach the scan out of the grid below, and the invariants are:
+    exactly one band is taken, its centre IS the position the renderer burns,
+    and when any clear position lies inside the clamp the taken band lies inside
+    it too."""
+    from services.clipper.captions import (_iter_rects, _norm_rect,
+                                           _overlap_area, resolve_position,
+                                           scan_bounds, scan_grid)
+
+    lo, hi = scan_bounds(OUT_H)
+    grid = scan_grid(lo, hi)
+    ran = 0
+    for top in range(0, 1900, 100):
+        for height in range(40, 1500, 180):
+            for position in ("bottom", "top", "center", "hook"):
+                layout = _zones(a=_px(top, height))
+                told = cc.explain(position, layout, out_w=OUT_W, out_h=OUT_H)
+                if not told["searched"]:
+                    continue
+                ran += 1
+                assert told["reason"] != cc.UNEXPLAINED, (position, top, height)
+                if told["reason"] == cc.NOTHING_CLEAR:
+                    continue
+
+                rects = [r for r in (_norm_rect(rc, OUT_W, OUT_H)
+                                     for rc in _iter_rects(layout["safe_zones"]))
+                         if r is not None]
+                clear = [y for y in grid if _overlap_area(y, rects) <= 0.0]
+                inside = [y for y in clear
+                          if SPEC_BAND_LO <= y <= SPEC_BAND_HI]
+                _x, chosen = resolve_position(position, layout,
+                                              out_w=OUT_W, out_h=OUT_H)
+
+                taken = [b for b in told["bands"] if b["taken"]]
+                assert len(taken) == 1, (position, top, height)
+                assert abs(taken[0]["centre"] - chosen) < 1e-9
+                if inside:
+                    assert taken[0]["inside_clamp"] is True
+                    assert SPEC_BAND_LO <= taken[0]["from"]
+                    assert taken[0]["to"] <= SPEC_BAND_HI
+    assert ran > 100, f"the sweep has to reach the scan, reached {ran}"

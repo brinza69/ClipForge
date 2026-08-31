@@ -56,7 +56,8 @@ def _run(module, presets: dict | None = None) -> tuple[int, dict]:
     return code, json.loads(buffer.getvalue())
 
 
-GOOD = {"text_color": WHITE, "highlight_color": WHITE, "outline_color": BLACK}
+GOOD = {"text_color": WHITE, "highlight_color": WHITE,
+        "outline_color": BLACK, "outline_width": 5}
 
 
 def test_an_empty_preset_list_is_not_a_pass(tmp_path, monkeypatch):
@@ -88,17 +89,19 @@ def test_the_two_real_presets_fail_the_run(tmp_path, monkeypatch):
     _sidecar(tmp_path, "a", GOOD)
     module = _audit(monkeypatch, tmp_path)
     code, out = _run(module, presets={
-        "neon": {"name": "Neon Pop", "text_color": WHITE,
+        "neon": {"name": "Neon Pop", "text_color": WHITE, "outline_width": 5,
                  "highlight_color": "#FF3366", "outline_color": "#1A0033"},
         "viral": {"name": "Viral Gradient", "text_color": WHITE,
-                  "highlight_color": "#FF6B35", "outline_color": BLACK}})
+                  "outline_width": 5, "highlight_color": "#FF6B35",
+                  "outline_color": BLACK}})
     assert code == 1
     assert len(out["failures"]) == 2
     assert all("highlight floor" in line for line in out["failures"])
 
 
 def test_an_unreadable_colour_fails_the_run(tmp_path, monkeypatch):
-    _sidecar(tmp_path, "a", {"text_color": "puce", "outline_color": BLACK})
+    _sidecar(tmp_path, "a", {"text_color": "puce", "outline_color": BLACK,
+                             "outline_width": 5})
     module = _audit(monkeypatch, tmp_path)
     code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
     assert code == 1
@@ -147,5 +150,5 @@ def test_a_style_stored_as_a_parsable_repr_is_read(tmp_path, monkeypatch):
     _sidecar(tmp_path, "a", str(GOOD))
     module = _audit(monkeypatch, tmp_path)
     code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
-    assert out["distinct_palettes_on_disk"][0]["fill"]["floor"] == 4.61
+    assert out["distinct_palettes_on_disk"][0]["fill"]["floor"] == 4.58
     assert code == 0

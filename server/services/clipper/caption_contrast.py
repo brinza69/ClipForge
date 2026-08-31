@@ -12,18 +12,28 @@ the outline does the work, against a dark one the fill does. So there is a floor
 — the worst backdrop luminance for the pair, where neither is doing much — and
 it can be computed once instead of hunted for in frames.
 
-    white #FFFFFF inside black #000000   4.61:1 at grey 117
+    white #FFFFFF inside black #000000   4.58:1, at relative luminance 0.179
 
-No backdrop does worse than that, blurred or otherwise. Sampling frames could
-only ever find a number above it.
+AND THE FLOOR HAS A CLOSED FORM: it is the SQUARE ROOT of the contrast between
+the glyph's own two colours. `sqrt(21) = 4.58` for white in black. The worst
+backdrop is the geometric mean of the two, `sqrt((Lhi+0.05)(Llo+0.05)) - 0.05`,
+where neither colour is doing much and both are doing the same amount.
+
+The first version swept 256 greys instead, with a comment claiming the closed
+form only held when the two colours were the extremes. That was wrong — it holds
+for any pair, `Neon Pop`'s dark-purple outline included — and the sweep was
+wrong in the direction that flatters: quantising the backdrop to 8-bit greys
+overstated every floor, white in black by 0.025. A backdrop pixel is 8-bit per
+CHANNEL, but a coloured pixel's luminance is a weighted sum of three of them and
+lands anywhere in between, so the bound has to be continuous.
 
 AND THE FLOOR IS WHERE THE REAL FINDING IS. Run it over the seven shipping
-presets and the fills are all fine — 4.42 to 4.61 — but the HIGHLIGHT colour,
+presets and the fills are all fine — 4.39 to 4.58 — but the HIGHLIGHT colour,
 the one word the karaoke animation paints, is a different palette:
 
-    Classic White / Boxed White   4.61      Karaoke Yellow  4.08
-    Bold Impact                   3.88      Clean Minimal   3.45
-    Viral Gradient                2.73      Neon Pop        2.34
+    Classic White / Boxed White   4.58      Karaoke Yellow  4.07
+    Bold Impact                   3.87      Clean Minimal   3.44
+    Viral Gradient                2.72      Neon Pop        2.33
 
 `Neon Pop` and `Viral Gradient` cannot clear 3.0:1 for their highlighted word
 against ANY uniform backdrop. That is not a letterbox problem and no frame
@@ -67,21 +77,37 @@ BAD_COLOUR = "colour_not_a_hex_triplet"
 NO_STYLE = "no_caption_style"
 NO_FILL = "style_has_no_text_colour"
 NO_OUTLINE = "style_has_no_outline_colour"
-REFUSALS: tuple[str, ...] = (BAD_COLOUR, NO_STYLE, NO_FILL, NO_OUTLINE)
+#: The whole floor argument rests on there BEING an outline. A style that names
+#: an outline colour and a width of zero has a bare fill, whose worst case is a
+#: backdrop of its own colour — 1.0, invisible — and the audit was checking the
+#: colours without ever asking whether the outline is drawn.
+NO_OUTLINE_WIDTH = "style_has_no_outline_width"
+NO_OUTLINE_DRAWN = "outline_width_is_zero"
+#: A colour with an alpha channel, where the two conventions disagree about
+#: which end is opaque: ASS writes `00` for opaque, CSS writes `FF`. The shadow
+#: carries one and is never read here; a fill or an outline that carries one is
+#: refused rather than guessed at.
+ALPHA_UNDECIDABLE = "colour_carries_an_undecidable_alpha"
+REFUSALS: tuple[str, ...] = (BAD_COLOUR, NO_STYLE, NO_FILL, NO_OUTLINE,
+                             NO_OUTLINE_WIDTH, NO_OUTLINE_DRAWN,
+                             ALPHA_UNDECIDABLE)
 
 
 def _rgb(value: Any) -> tuple[int, int, int] | None:
-    """`#RRGGBB` or `#RRGGBBAA` to a triplet, or None if it is not one.
+    """`#RRGGBB` to a triplet, or None if it is not one.
 
-    ALPHA IS DROPPED, DELIBERATELY AND ONLY HERE. The shadow colour carries one
-    (`#000000B0`) and the shadow sits BEHIND the outline, so it changes what the
-    backdrop looks like and never what the glyph edge is made of. This function
-    is asked only about the fill and the outline, both opaque.
+    AN ALPHA CHANNEL IS REFUSED RATHER THAN DROPPED. The two conventions in this
+    codebase disagree about which end is opaque — ASS writes `00` for opaque and
+    CSS writes `FF` — so `#000000B0` is either a mostly-opaque shadow or a
+    mostly-transparent one depending on who wrote it. The shadow does carry one
+    and is never read here; a fill or an outline that carries one is a colour
+    whose opacity nobody can settle, and the floor argument depends on both
+    being drawn solid.
     """
     if not isinstance(value, str):
         return None
     text = value.strip().lstrip("#")
-    if len(text) not in (6, 8):
+    if len(text) != 6:
         return None
     try:
         return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
@@ -112,29 +138,35 @@ def contrast(a: Any, b: Any) -> float | None:
     return (hi + 0.05) / (lo + 0.05)
 
 
-def floor(fill: Any, outline: Any) -> tuple[float, int] | None:
-    """`(worst separation, the grey that causes it)` for an outlined glyph.
+def floor(fill: Any, outline: Any) -> tuple[float, float] | None:
+    """`(worst separation, the backdrop luminance that causes it)`.
 
     The glyph separates from the backdrop by whichever of its two colours is
     further from it, so its separation is `max(contrast(fill), contrast(
     outline))` — and the floor is the smallest that maximum gets over every
-    possible backdrop luminance.
+    backdrop.
 
-    Swept over all 256 greys rather than solved, because the closed form
-    (`(L+0.05)² = 0.0525` for white and black) only holds when the two colours
-    are the extremes. A preset with a dark-purple outline like `Neon Pop` is not
-    that case, and a formula that is right for one preset and quietly wrong for
-    another is worse than a loop nobody will ever notice the cost of.
+    SOLVED, NOT SWEPT. Each of the two contrast curves is a V with its minimum
+    of 1.0 at its own colour's luminance, so their maximum is smallest exactly
+    where they cross, between the two. Setting `(L+0.05)/(Llo+0.05)` equal to
+    `(Lhi+0.05)/(L+0.05)` gives `L = sqrt((Lhi+0.05)(Llo+0.05)) - 0.05` and a
+    value of `sqrt((Lhi+0.05)/(Llo+0.05))` — which is the square root of the
+    contrast between the glyph's two colours, and nothing else.
+
+    The first version swept 256 greys, with a comment claiming this form only
+    held when the two colours were the extremes. It holds for every pair; the
+    sweep was the approximation, and it erred high — white in black came back
+    4.6075 against a true 4.5826. The crossing always lies between the two
+    luminances, so it is always a backdrop that can exist.
     """
-    if luminance(fill) is None or luminance(outline) is None:
+    import math
+
+    lf, lo_ = luminance(fill), luminance(outline)
+    if lf is None or lo_ is None:
         return None
-    worst: tuple[float, int] | None = None
-    for level in range(256):
-        grey = f"#{level:02X}{level:02X}{level:02X}"
-        best = max(contrast(fill, grey) or 0.0, contrast(outline, grey) or 0.0)
-        if worst is None or best < worst[0]:
-            worst = (best, level)
-    return worst
+    hi, low = max(lf, lo_), min(lf, lo_)
+    return (math.sqrt((hi + 0.05) / (low + 0.05)),
+            math.sqrt((hi + 0.05) * (low + 0.05)) - 0.05)
 
 
 def verdict(style: Any) -> dict:
@@ -153,6 +185,7 @@ def verdict(style: Any) -> dict:
         # rides with `source_captions`.
         "calibrated": False,
         "refused": [],
+        "outline_width": None,
         "fill": None,
         "highlight": None,
         "applied": False,
@@ -167,11 +200,23 @@ def verdict(style: Any) -> dict:
     if outline is None:
         refused.append(NO_OUTLINE)
     elif luminance(outline) is None:
-        refused.append(BAD_COLOUR)
+        refused.append(_colour_refusal(outline))
     if fill is None:
         refused.append(NO_FILL)
     elif luminance(fill) is None:
-        refused.append(BAD_COLOUR)
+        refused.append(_colour_refusal(fill))
+
+    # AND WHETHER THE OUTLINE IS DRAWN AT ALL. Every number below assumes two
+    # colours are on screen; a width of zero leaves one, and a bare fill's worst
+    # backdrop is its own colour at 1.0.
+    width = style.get("outline_width")
+    if width is None:
+        refused.append(NO_OUTLINE_WIDTH)
+    elif isinstance(width, bool) or not isinstance(width, (int, float)):
+        refused.append(NO_OUTLINE_WIDTH)
+    elif width <= 0:
+        refused.append(NO_OUTLINE_DRAWN)
+    out["outline_width"] = width if isinstance(width, (int, float)) else None
     if refused:
         out["refused"] = sorted(set(refused))
         return out
@@ -184,22 +229,29 @@ def verdict(style: Any) -> dict:
     highlight = style.get("highlight_color")
     if highlight is not None:
         if luminance(highlight) is None:
-            out["refused"] = [BAD_COLOUR]
+            out["refused"] = [_colour_refusal(highlight)]
             return out
         out["highlight"] = _leg(highlight, outline)
     return out
+
+
+def _colour_refusal(value: Any) -> str:
+    """Why a colour could not be read: undecidable alpha, or simply not one."""
+    if isinstance(value, str) and len(value.strip().lstrip("#")) == 8:
+        return ALPHA_UNDECIDABLE
+    return BAD_COLOUR
 
 
 def _leg(colour: str, outline: str) -> dict:
     """One colour's floor, and which published bars it clears."""
     worst = floor(colour, outline)
     assert worst is not None  # both colours were checked by the caller
-    ratio, grey = worst
+    ratio, at = worst
     return {
         "colour": colour,
         "outline": outline,
         "floor": round(ratio, 2),
-        "worst_backdrop_grey": grey,
+        "worst_backdrop_luminance": round(at, 4),
         "clears_large_text": ratio >= LARGE_TEXT_MIN,
         "clears_normal_text": ratio >= NORMAL_TEXT_MIN,
     }
