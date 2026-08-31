@@ -82,6 +82,11 @@ oversight", "do not re-litigate without a new signal", "`_two_halves()` in the t
 for this", the table of four failed facecam-detection approaches. That is the only place the
 knowledge lives. Reformat over it and the next agent re-runs the same failed experiments.
 
+### 12. Handover organization
+Keep the current state in `docs/handover/areas/<module>/CURRENT.md` and the application-wide
+snapshot in `docs/handover/CURRENT.md`. Put superseded handovers in `docs/handover/archive/`,
+update `docs/handover/INDEX.md` when adding or moving one, and avoid duplicate sources of truth.
+
 ---
 
 ## Key File Map
@@ -135,7 +140,7 @@ clipforge/
 │                                       clipper_render_jobs, remix_, parallel_,
 │                                       doodle_, utility_jobs (tiktok_ PLANNED)
 ├── docs/clipper-map.md              ← the clipper's file map — KEEP IT CURRENT
-├── docs/handoff-clipper-session-4.md ← state of the world, known problems, traps
+├── docs/handover/areas/clipper/CURRENT.md ← current Clipper state; historical sessions are in `docs/handover/archive/clipper/`
 └── PRPs/                            ← Implementation blueprints for each feature batch
 ```
 
@@ -161,6 +166,44 @@ clipforge/
 # CRITICAL: the job queue has TWO lanes. With CLIPFORGE_MAX_CONCURRENT_JOBS=1 and any pipeline
 #           running, a new heavy job sits at queued/0% with an empty message. That is the lane
 #           working as designed, NOT a hang — check /api/jobs/?status=running,queued first.
+# CRITICAL: a thing that could not be read must never read as a pass. Found REPEATEDLY,
+#           one layer apart each time — the count kept going up while this comment was
+#           being written: a candidate with no verdict counted as clean, a corpus figure
+#           summed off a `tail`-truncated report, an entry filtered out before the
+#           denominator, `--json` returning 0 unconditionally, a whole project dropped by
+#           an `if r`, an empty corpus passing, and a missing `remaining` list reading as
+#           "nothing left to fix". Print the denominator BEFORE the count, give a refusal
+#           its own row, and make the exit code belong to the run rather than to how it is
+#           printed. Every one was found by RUNNING the entry point; none was visible in
+#           the branch, which always looked right on its own.
+# CRITICAL: any diagnostic that would INVALIDATE the conclusion has to reach the exit
+#           code, and needs a test through `main()` that demonstrates the non-zero exit.
+#           Computing it, printing it and not wiring it up is its own failure mode, and a
+#           quieter one than the missing denominator: `changed_without_moving` was in the
+#           report from the first version and in the gate from none of them, so the
+#           instrument found the single fact that would void its own answer and returned 0.
+# CRITICAL: a check that consults the representation it is checking compares it with
+#           itself. A sweep looked for "a taken band outside the clamp while in-clamp
+#           bands exist" by asking the REPORT whether an in-clamp band existed — and the
+#           report's own flag was computed from the band's centre, which was the bug. It
+#           said no on exactly the layouts where the contradiction lived, and found zero
+#           across 9,600 cases. Check against the shipping function and its raw inputs.
+# CRITICAL: a LABEL is not a measurement. 2,024 of 2,126 shots carry `move: push`, and
+#           every one of them stands still, because `push_amount` is 0.0 in every stored
+#           style. Reading the label gives "95% of shots move" — the opposite of the
+#           truth, and an argument for a much larger piece of work. Run the function that
+#           produces the thing (`_size_timeline`), never the field that describes it.
+# CRITICAL: and a CONSTANT is not an IDENTITY. A single-point size timeline proves the
+#           crop does not change size; it does not prove the crop is `shot["rect"]`. The
+#           delivered window comes from the anchor, and 837 of 1,965 crops differ from
+#           the planner's rectangle.
+# CRITICAL: refusing an input and then setting it to None puts the refusal straight back
+#           into `unavailable`, because `if not shots` reads None as "there were none".
+#           Committed in the commit that fixed exactly that, three guards later. Carry the
+#           state in a flag, and test BOTH directions: a refused list is not a missing one,
+#           and a missing one is not a refused one.
+# CRITICAL: `x in (True, False, None)` is not a type check — `1 == True` and `0 == False`,
+#           so an integer passes as a verdict. Use `is None or isinstance(x, bool)`.
 # CRITICAL: transcriber._clean_text strips ALL punctuation and lowercases. Pass
 #           keep_punctuation=True when you need sentence boundaries (the clipper does).
 ```

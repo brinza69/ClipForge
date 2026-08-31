@@ -19,4 +19,4 @@ Start here:
 |---|---|
 | the project's rules and file map | [`CLAUDE.md`](CLAUDE.md) |
 | the AI Stream Clipper, file by file | [`docs/clipper-map.md`](docs/clipper-map.md) |
-| the state of the world and the known problems | [`docs/handoff-clipper-session-4.md`](docs/handoff-clipper-session-4.md) |
+| the state of the world and the known problems | [`docs/handover/areas/clipper/CURRENT.md`](docs/handover/areas/clipper/CURRENT.md) |
