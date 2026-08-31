@@ -720,9 +720,16 @@ datorează nicio față. Clipurile numai-`fit` TREC. Un crop cere `regime_view.t
 - **subject** — cerința e derivată acum, dar `regime_view` nu e pe niciun sidecar stocat; apare la
   prima randare prin `clipper_shadow_views`. 58 de clipuri au shot-uri `crop`, 31 n-au `composition`
   deloc, 12 n-au listă de shot-uri.
-- **frame** — cere OCR pe fiecare export, câteva minute fiecare. Opt-in prin `--with-chrome`, cu
-  cache reluabil în `<proiect>/chrome_cache/`. **Rularea peste corpus tot nu a fost făcută** — un
-  singur export e în cache.
+- **frame** — cere OCR pe fiecare export. Opt-in prin `--with-chrome`, cu cache reluabil în
+  `<proiect>/chrome_cache/`. **Rularea peste corpus NU se poate face în timp util pe rig-ul ăsta, și
+  motivul e măsurat: `server/.venv` are `torch 2.13.0+cpu`.** `torch.version.cuda` e `None` și
+  `torch.cuda.is_available()` e `False`, deci `source_chrome._reader()` încearcă `gpu=True`, eșuează
+  și cade tăcut pe `gpu=False`. Pornită pe 31 august, rularea a produs **zero verdicte în 38 de
+  minute** — estimarea de „~3 ore" din handover-ul anterior presupunea GPU și era greșită. CUDA-ul
+  care merge e al lui `ctranslate2` (whisper) și nu se transmite la torch. **Orice cifră din
+  documente de forma „5s pe sursă pe GPU" pentru o cale easyocr nu a fost măsurată în venv-ul
+  ăsta** — asta include `source_captions`. Se deblochează cu un wheel de torch cu CUDA (rig-ul e un
+  RTX 2080 Super); până atunci OCR-ul e muncă de peste noapte, nu de o pauză de cafea.
 - **provenance** — două motive acum, nu unul: sidecarele n-au `input_fingerprint`, și chiar când vor
   avea, un digest valid acoperă rețeta, nu fișierul livrat. Nu există azi drum către un `pass`.
 - **captions** parțial (37) — `worst_share_complete` e fals fiindcă semnalele de UI și text-sursă
