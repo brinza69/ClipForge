@@ -122,6 +122,40 @@ sunt exact trei dintre cele patru pe care le-a marcat el:**
 O tranziție proastă la fiecare 9 secunde nu se notează pe momente, se notează pe clip. Al patrulea
 are o singură schimbare și e tot `bad` — deci pentru el mai există și altceva, **nemăsurat**.
 
+### Ce se vede în cadre, și cifra care îl explică
+
+Cadre extrase din `46921099031e` în jurul joncțiunii de la 8,82s:
+
+- **8,70s (`crop`)** — diagrama de proteină e tăiată într-o **fâșie verticală**: se vede o coloană
+  din mijlocul unui grafic lat, mărită. Ca imagine e nelizibilă ca întreg.
+- **9,00s (`fit`)** — aceeași diagramă apare deodată **mică, în mijloc**, ocupând vreo treime din
+  înălțime, cu două benzi blurate mari sus și jos.
+
+Deci același obiect își schimbă instantaneu mărimea aparentă. Măsurat pe toate joncțiunile din cele
+58 de exporturi, comparând zoom-ul efectiv al fiecărei părți (`1080/lățimea ferestrei` pentru `crop`,
+`1080/lățimea sursei` pentru `fit`):
+
+```
+joncțiuni crop<->fit         84
+salt de scară median       3,58x
+minim / maxim        3,16x / 13,52x
+sub 1,5x (blânde)             0
+peste 3x                     84
+```
+
+**Toate cele 84. Niciuna sub 3x.**
+
+Și minimul nu e o coincidență, e o identitate: pentru o sursă 16:9, `crop` ia o fereastră de
+`1080·(1080/1920) = 607,5`px și o mărește la 1080 (zoom 1,78x), iar `fit` ia toți cei 1920 și îi
+strânge la 1080 (zoom 0,5625x). Raportul e `1,78 / 0,5625 = 3,16` **prin construcție**. Nu există
+reglaj care să-l coboare fără a schimba ce înseamnă `fit`.
+
+**Asta mută defectul din categoria „tranziție de înmuiat" în „tăietură pe care regula n-ar trebui să
+o facă".** Un cut între două compoziții e un salt de zoom de cel puțin 3,16x pe același subiect, iar
+R4 tratează schimbarea de tratament drept motiv OBLIGATORIU de tăietură — taie chiar și fără graniță
+de cuvânt și chiar peste `min_shot_s`. Nimic din lanț nu întreabă cât de mare e saltul pe care îl
+produce.
+
 ## Ce urmează din asta
 
 Defectul e în **randare, la joncțiunea dintre compoziții** — nu în detecția de fețe, pe care el o
@@ -129,9 +163,10 @@ declară explicit bună, și nu în alegerea momentului. Asta îl scoate din R3a
 și regimul) și îl pune lângă R1: e o proprietate a felului în care `dynamic_render` exprimă o
 schimbare de compoziție, unde `crop` se reconfigurează și `scale` îl urmează în același `sendcmd`.
 
-Nu s-a măsurat CE anume e greșit vizual în acele ~2 secunde — dacă e un salt de scală, un cadru
-reconfigurat, sau blur-ul de fundal care intră târziu. Următorul pas e extragerea cadrelor din jurul
-unei joncțiuni cunoscute (8,82s în `46921099031e`) și privitul lor unul câte unul.
+S-a măsurat: e un **salt de scală**, median 3,58x, minim 3,16x, pe toate cele 84 de joncțiuni.
+Vezi secțiunea de mai sus. Ce NU s-a măsurat e dacă o tranziție animată l-ar face acceptabil sau
+dacă tăietura însăși trebuie evitată — prima e muncă de randare, a doua e o regulă în R4, și alegerea
+dintre ele nu se poate face din datele astea.
 
 ## Ce NU demonstrează
 
