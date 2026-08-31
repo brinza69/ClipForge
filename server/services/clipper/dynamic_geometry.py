@@ -32,7 +32,8 @@ from services.clipper.dynamic_cameras import ASPECT
 from services.clipper.ffmpeg_tools import even
 
 __all__ = ["COMPOSITIONS", "canvas_size", "composition_of", "visual_key",
-           "merge_equivalent_shots", "build_sendcmd", "write_sendcmd"]
+           "merge_equivalent_shots", "build_sendcmd", "write_sendcmd",
+           "MIN_FIT_DWELL_S", "absorb_brief_fit_islands"]
 
 # Two shots are contiguous when the second starts where the first ended. Float
 # noise from json, not an editorial judgement — the same tolerance the audit
@@ -92,6 +93,90 @@ COMPOSITIONS = ("crop", "fit")
 
 def composition_of(shot: dict) -> str:
     return "fit" if str((shot or {}).get("composition") or "crop") == "fit" else "crop"
+
+
+#: How long a `fit` stretch has to last before switching to it is worth what the
+#: switch costs. CHOSEN, not derived — say so, the way §4's rhythm bands do.
+#:
+#: WHAT THE SWITCH COSTS IS FIXED AND LARGE. A `crop` shows a 607.5px window of
+#: a 1920px source blown up to 1080 (1.78x); a `fit` shows all 1920 squeezed
+#: into 1080 (0.5625x). The same subject therefore changes apparent size by
+#: 1.78/0.5625 = 3.16x across the junction, and that is an IDENTITY of 16:9
+#: geometry, not a number that can be tuned down. Measured across the 58 pilot
+#: exports: 84 junctions, median jump 3.58x, worst 13.52x, and not one below 3x.
+#: A human watching four clips timestamped the junctions and nothing else.
+#:
+#: WHY ONLY IN ONE DIRECTION, and this is the part the measurement decided. The
+#: interior runs split cleanly:
+#:
+#:     `crop` islands   18, median 14.2s, SHORTEST 3.6s
+#:     `fit`  islands   39, median  5.3s, shortest 0.6s — 15 under 4s
+#:
+#: A short `crop` island barely exists, so there is nothing to absorb there, and
+#: absorbing one would shrink a subject that was demonstrably present. A short
+#: `fit` island is the common case and it is best read as the subject detector
+#: BLINKING — the subject is there before it and there after it — so returning
+#: those seconds to `crop` restores continuity rather than sacrificing framing.
+#:
+#: WHAT THIS DOES NOT FIX, stated here so nobody reads a bigger claim into it:
+#: a long, earned `fit` run still costs its 3.16x on the way in and on the way
+#: out. On the clip whose junctions a human timestamped, the runs are 8.8s,
+#: 13.8s, 15.8s, 14.6s and 7.5s, so this rule removes NONE of them. It removes
+#: 30 of the corpus's 84 junctions; the other 54 need either an animated
+#: transition or a different idea of what `fit` frames, and both are somebody's
+#: decision rather than this function's.
+MIN_FIT_DWELL_S = 4.0
+
+
+def absorb_brief_fit_islands(shots: list[dict], *,
+                             min_dwell_s: float = MIN_FIT_DWELL_S) -> list[dict]:
+    """Return `shots` with short interior `fit` runs put back to `crop`.
+
+    BOUNDED ON BOTH SIDES BY `crop`, which is what makes it an island rather
+    than an opening or an ending. That is not tidiness: the claim being made is
+    "the subject was there before and after, so it did not really leave", and a
+    leading or trailing `fit` run has no evidence on one side. Those are left
+    alone.
+
+    Every shot already carries the `rect` it would be cropped to — `rect` is
+    computed for all shots and `composition` only decides whether the renderer
+    uses it — so flipping the label needs no geometry and invents none.
+
+    Call this BEFORE `merge_equivalent_shots`: absorbing an island can make
+    neighbouring shots deliver the same picture, and the merge is what removes
+    the cut between them. Afterwards would be too late, for the same reason the
+    merge itself has to run on the finished list.
+    """
+    if not isinstance(shots, list) or len(shots) < 3:
+        return shots
+    runs: list[list[int]] = []
+    for i, shot in enumerate(shots):
+        if runs and composition_of(shots[runs[-1][0]]) == composition_of(shot):
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+
+    for pos, run in enumerate(runs):
+        if pos == 0 or pos == len(runs) - 1:
+            continue
+        if composition_of(shots[run[0]]) != "fit":
+            continue
+        try:
+            span = float(shots[run[-1]]["t1"]) - float(shots[run[0]]["t0"])
+        except (KeyError, TypeError, ValueError):
+            # A shot whose clock cannot be read is not a short one. Absent is
+            # not zero, and a zero here would silently absorb it.
+            continue
+        if span != span or span >= min_dwell_s:
+            continue
+        for i in run:
+            shots[i] = {**shots[i], "composition": "crop",
+                        # WHY THIS SHOT IS NOT WHAT THE SUBJECT PASS SAID, kept
+                        # on the shot because the next reader will otherwise
+                        # find a `crop` over a span with no detected subject and
+                        # conclude the detector was wrong.
+                        "composition_absorbed": round(span, 3)}
+    return shots
 
 
 def _size_timeline(shot: dict, style: dict, src_w: int, src_h: int
