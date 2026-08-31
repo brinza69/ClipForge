@@ -88,10 +88,19 @@ __all__ = ["LARGE_TEXT_MIN", "NORMAL_TEXT_MIN", "REFUSALS", "KNOWN_SHORTFALLS",
 #: which is a different preset. A saturated mid-luminance colour cannot both stay
 #: saturated and clear a luminance bar.
 #:
-#: KEYED ON THE PALETTE, NOT ON THE NAME. An exception by name would let somebody
-#: repaint `Neon Pop` into something worse and keep the pass. Change any of the
-#: four colours or the outline width and the key stops matching, the exception
-#: stops applying, and the gate fires.
+#: KEYED ON THE PALETTE, NOT ON THE NAME ALONE. An exception by name would let
+#: somebody repaint `Neon Pop` into something worse and keep the pass. The key is
+#: the name plus the three colours the floor is computed from — fill, highlight,
+#: outline — plus the outline width. NOT `shadow_color`, which nothing here
+#: reads. Change any of them and the key stops matching, the exception stops
+#: applying, and the gate fires.
+#:
+#: AND THE NAME COMES FROM THE STYLE, so the same palette matches wherever it is
+#: found. The first version took the name from the CALLER, which passes a preset
+#: id for the shipping presets and `project/clip` for a stored export — so a
+#: preset in the exception list matched in one population and not in the other,
+#: and the first real use of an accepted preset would have made the presets pass
+#: and the exports fail on the same palette.
 KNOWN_SHORTFALLS: dict[tuple, str] = {
     ("Neon Pop", "#FFFFFF", "#FF3366", "#1A0033", "5"):
         "highlight floor 2.33; the palette cannot reach 3.0 without ceasing to "
@@ -102,22 +111,28 @@ KNOWN_SHORTFALLS: dict[tuple, str] = {
 }
 
 
-def palette_key(name: Any, style: Any) -> tuple:
-    """What makes two styles the same VERDICT: the name and every colour in it.
+def palette_key(style: Any) -> tuple:
+    """What makes two styles the same VERDICT: the style's own name and the
+    three colours the floor is computed from, plus the outline width.
 
-    The outline width is in the key because the floor depends on the outline
-    being drawn at all, and a stored `None` and a stored `5` are different
-    palettes even with identical colours.
+    THE NAME COMES FROM THE STYLE, not from whatever the caller happens to be
+    calling it. The audit labels a stored export `project/clip (x99)` and a
+    preset by its id, and a key built from those matches the same palette in one
+    population and not in the other.
+
+    The width is in the key because the floor depends on the outline being drawn
+    at all, so a stored `None` and a stored `5` are different palettes even with
+    identical colours.
     """
     got = style if isinstance(style, dict) else {}
-    return (str(name), str(got.get("text_color")),
+    return (str(got.get("name")), str(got.get("text_color")),
             str(got.get("highlight_color")), str(got.get("outline_color")),
             str(got.get("outline_width")))
 
 
-def accepted_shortfall(name: Any, style: Any) -> str | None:
+def accepted_shortfall(style: Any) -> str | None:
     """Why this exact palette is allowed to miss the bar, or None."""
-    return KNOWN_SHORTFALLS.get(palette_key(name, style))
+    return KNOWN_SHORTFALLS.get(palette_key(style))
 
 
 #: WCAG 2.1 AA. BORROWED, not derived: written for static text on web pages,

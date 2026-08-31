@@ -114,11 +114,11 @@ def _rows(population: list[tuple[str, Any]]) -> list[dict]:
     out = []
     for name, style in population:
         told = cc.verdict(style)
-        # The name in the row carries a count suffix for the disk rows, so the
-        # key is built from the bare name the palette was registered under.
-        bare = name.split(" (x")[0]
+        # THE STYLE CARRIES ITS OWN NAME. Stripping a suffix off the row label
+        # worked for the presets and never for a stored export, whose label is
+        # `project/clip`.
         out.append({"name": name,
-                    "accepted": cc.accepted_shortfall(bare, style), **told})
+                    "accepted": cc.accepted_shortfall(style), **told})
     return out
 
 

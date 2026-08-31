@@ -80,7 +80,15 @@ NO_DETECTOR = "no_text_recogniser_installed"
 NO_VIDEO = "video_unreadable"
 TOO_FEW = "too_few_frames_analysed"
 DETECTOR_FAILED = "detector_failed_on_every_frame"
-REASONS: tuple[str, ...] = (NO_DETECTOR, NO_VIDEO, TOO_FEW, DETECTOR_FAILED)
+#: The denominator and the per-frame counts disagree. `classify([1, 1],
+#: analysed=6)` used to answer `detected`, honouring a `SAMPLES_MIN` of 6 over a
+#: list of two — a caller could hand it any denominator it liked.
+COUNTS_DISAGREE = "frame_counts_do_not_match_the_denominator"
+#: The frames were sampled at a cadence the threshold was not measured at. Two
+#: frames means 0.1 seconds at one cadence and 60 at another.
+WRONG_CADENCE = "sampled_at_a_cadence_the_threshold_was_not_measured_at"
+REASONS: tuple[str, ...] = (NO_DETECTOR, NO_VIDEO, TOO_FEW, DETECTOR_FAILED,
+                            COUNTS_DISAGREE, WRONG_CADENCE)
 
 #: The closed vocabulary the measurement was made with. Five of these fired on
 #: the positives — `watch later` 70 times, `share` 67, `save` 63, `search` 14,
@@ -102,6 +110,11 @@ FRAMES_MIN = 2
 CONF_MIN = 0.6
 #: Fewer analysed frames than this and two is not a threshold, it is a coin.
 SAMPLES_MIN = 6
+#: THE CADENCE THE THRESHOLD WAS MEASURED AT, in seconds. `FRAMES_MIN` counts
+#: frames, so it means one thing at one frame per second and something entirely
+#: different at one per minute — the measurement was made at 1.0 and the verdict
+#: is refused at anything else rather than quietly rescaled.
+EVERY_S = 1.0
 
 
 def classify(hits_per_frame: Sequence[int], analysed: int) -> tuple[str, str | None]:
@@ -111,7 +124,21 @@ def classify(hits_per_frame: Sequence[int], analysed: int) -> tuple[str, str | N
     model that throws on every frame leaves no hits, and no hits from no looks
     is indistinguishable from no hits from many — which is the mistake
     `source_captions` had to be taught, one module along.
+
+    AND THE TWO HAVE TO AGREE. `classify([1, 1], analysed=6)` answered
+    `detected`, honouring a `SAMPLES_MIN` of 6 over a list of two: the
+    denominator was whatever the caller said it was. One entry per analysed
+    frame, each a non-negative integer, or the verdict is refused.
     """
+    if (not isinstance(hits_per_frame, Sequence)
+            or isinstance(hits_per_frame, (str, bytes))
+            or not isinstance(analysed, int) or isinstance(analysed, bool)):
+        return UNAVAILABLE, COUNTS_DISAGREE
+    if any(isinstance(n, bool) or not isinstance(n, int) or n < 0
+           for n in hits_per_frame):
+        return UNAVAILABLE, COUNTS_DISAGREE
+    if len(hits_per_frame) != analysed:
+        return UNAVAILABLE, COUNTS_DISAGREE
     if analysed <= 0:
         return UNAVAILABLE, DETECTOR_FAILED
     if analysed < SAMPLES_MIN:
@@ -120,6 +147,11 @@ def classify(hits_per_frame: Sequence[int], analysed: int) -> tuple[str, str | N
     if frames >= FRAMES_MIN:
         return DETECTED, None
     return NOT_DETECTED, None
+
+
+#: How far past the frame a box may sit before it is the model failing rather
+#: than a read touching the edge. The same slack `source_captions` allows.
+_BOX_SLACK_PX = 2.0
 
 
 def _reader():
@@ -147,6 +179,8 @@ def _frame_hits(frame: Any, reader) -> list[dict] | None:
     ATOMIC, like `source_captions._frame_bands` and for the same reason: a
     partial frame is a measurement of the model's failure, not of the picture.
     """
+    import math
+
     try:
         height, width = int(frame.shape[0]), int(frame.shape[1])
         if height < 1 or width < 1:
@@ -154,11 +188,26 @@ def _frame_hits(frame: Any, reader) -> list[dict] | None:
         found = []
         for box, text, conf in reader.readtext(frame, text_threshold=0.7,
                                                low_text=0.4):
+            # AN IMPOSSIBLE READ FAILS THE WHOLE FRAME, and the frame is atomic,
+            # so it contributes nothing rather than contributing the rest. A
+            # confidence of NaN passed `value < CONF_MIN` — every comparison
+            # against a NaN is false — and manufactured a `detected` out of a
+            # model that had failed; a NaN coordinate reached the report and the
+            # JSON; and a box outside the frame was kept as if it had been read.
             value = float(conf)
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                return None
+            ys = [float(p[1]) for p in box]
+            xs = [float(p[0]) for p in box]
+            if not all(math.isfinite(v) for v in ys + xs):
+                return None
+            if not (0.0 <= min(ys) and max(ys) <= height + _BOX_SLACK_PX):
+                return None
+            if not (0.0 <= min(xs) and max(xs) <= width + _BOX_SLACK_PX):
+                return None
             label = str(text).strip()
             if value < CONF_MIN or not CONTROLS.match(label):
                 continue
-            ys = [float(p[1]) for p in box]
             found.append({"text": label, "conf": round(value, 2),
                           "y": round(min(ys) / height, 3)})
         return found
@@ -166,7 +215,7 @@ def _frame_hits(frame: Any, reader) -> list[dict] | None:
         return None
 
 
-def detect(video: str, *, every_s: float = 1.0, reader=None) -> dict:
+def detect(video: str, *, every_s: float = EVERY_S, reader=None) -> dict:
     """`source_chrome_v1` for one rendered export. A warning, not a verdict."""
     out: dict[str, Any] = {
         "schema": "source_chrome_v1",
@@ -179,6 +228,10 @@ def detect(video: str, *, every_s: float = 1.0, reader=None) -> dict:
         "hits": [],
         "frames_min": FRAMES_MIN,
         "conf_min": CONF_MIN,
+        # THE CADENCE TRAVELS WITH THE VERDICT, because `FRAMES_MIN` counts
+        # frames and a frame is a different amount of video at every cadence.
+        "every_s": every_s,
+        "measured_at_every_s": EVERY_S,
         # Chosen with the answer visible, on 14 positives from one source and 27
         # negatives from ten. More than `source_captions` had; still not a
         # calibration.
@@ -187,6 +240,14 @@ def detect(video: str, *, every_s: float = 1.0, reader=None) -> dict:
         # consumes this decides, and `not_detected` gives it no grounds.
         "applied": False,
     }
+    # A DIFFERENT CADENCE IS REFUSED, not rescaled. Two frames is 0.1 seconds of
+    # video at one cadence and 60 at another, and the separation behind the
+    # threshold was measured at exactly one frame per second.
+    if not isinstance(every_s, (int, float)) or isinstance(every_s, bool) \
+            or abs(float(every_s) - EVERY_S) > 1e-9:
+        out["why_unavailable"] = WRONG_CADENCE
+        return out
+
     engine = reader if reader is not None else _reader()
     if engine is None:
         out["why_unavailable"] = NO_DETECTOR

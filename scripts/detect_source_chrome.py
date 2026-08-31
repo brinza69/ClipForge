@@ -59,8 +59,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("projects", nargs="*")
     ap.add_argument("--all", action="store_true")
-    ap.add_argument("--every", type=float, default=1.0,
-                    help="seconds between sampled frames")
+    ap.add_argument("--every", type=float, default=sc.EVERY_S,
+                    help=("seconds between sampled frames; the threshold was "
+                          f"measured at {sc.EVERY_S} and any other cadence is "
+                          "refused rather than rescaled"))
     ap.add_argument("--expect", choices=sc.STATES)
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -77,7 +79,15 @@ def main() -> int:
         paths = [p for p in paths if p.parent.parent.name in set(wanted)]
 
     reader = sc._reader()
-    rows = [_measure(p, args.every, reader) for p in paths]
+    # PRINTED AS THEY ARE MEASURED. The first version collected every row and
+    # printed at the end, so an interruption threw away hours of OCR — which is
+    # how this measurement was nearly lost twice.
+    rows = []
+    for path in paths:
+        row = _measure(path, args.every, reader)
+        rows.append(row)
+        if not args.json:
+            _print(row)
 
     states = {s: len([r for r in rows if r["state"] == s]) for s in sc.STATES}
     out = {
@@ -108,8 +118,6 @@ def main() -> int:
     if args.json:
         print(json.dumps(out, indent=1))
     else:
-        for row in rows:
-            _print(row)
         print()
         print(f"exports {len(rows)}   "
               + "   ".join(f"{s} {states[s]}" for s in sc.STATES))

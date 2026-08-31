@@ -174,3 +174,75 @@ def test_it_never_claims_to_be_calibrated_or_applied(monkeypatch):
     got = _run(monkeypatch, [[] for _ in range(10)])
     assert got["calibrated"] is False
     assert got["applied"] is False
+
+
+# --- the denominator cannot be handed in -------------------------------------
+
+
+def test_the_counts_and_the_denominator_have_to_agree():
+    """`classify([1, 1], analysed=6)` answered `detected`, honouring a
+    `SAMPLES_MIN` of 6 over a list of two: the denominator was whatever the
+    caller said it was."""
+    assert sc.classify([1, 1], analysed=6) == (sc.UNAVAILABLE,
+                                               sc.COUNTS_DISAGREE)
+    assert sc.classify([1, 1, 0, 0, 0, 0], analysed=6)[0] == sc.DETECTED
+    for bad in ("11", None, 7):
+        assert sc.classify(bad, analysed=6)[0] == sc.UNAVAILABLE, repr(bad)
+    for bad in ([1, -1, 0, 0, 0, 0], [1, True, 0, 0, 0, 0],
+                [1, 1.0, 0, 0, 0, 0], [1, None, 0, 0, 0, 0]):
+        assert sc.classify(bad, analysed=6) == (sc.UNAVAILABLE,
+                                                sc.COUNTS_DISAGREE), repr(bad)
+    assert sc.classify([0] * 6, analysed=True)[0] == sc.UNAVAILABLE
+
+
+# --- an impossible read fails the whole frame --------------------------------
+
+
+def test_a_confidence_that_is_not_a_confidence_fails_the_frame():
+    """A NaN passed `value < CONF_MIN` — every comparison against a NaN is
+    false — and manufactured a `detected` out of a model that had failed."""
+    for bad in (float("nan"), float("inf"), -0.1, 1.5):
+        reader = _Reader([[(_box(), "SHARE", bad)]])
+        assert sc._frame_hits(object_frame(), reader) is None, repr(bad)
+
+
+def test_a_coordinate_that_is_not_a_coordinate_fails_the_frame():
+    """A NaN reached the report, and from there the JSON."""
+    nan = float("nan")
+    for box in ([[0, nan], [100, nan], [100, 20], [0, 20]],
+                [[nan, 0], [100, 0], [100, 20], [nan, 20]]):
+        reader = _Reader([[(box, "SHARE", 0.9)]])
+        assert sc._frame_hits(object_frame(), reader) is None
+
+
+def test_a_box_outside_the_frame_fails_the_frame():
+    """It was kept as if it had been read. Two pixels of slack for a box that
+    touches the edge, the same `source_captions` allows."""
+    for box in ([[0, 3000], [100, 3000], [100, 3020], [0, 3020]],
+                [[0, -5], [100, -5], [100, 20], [0, 20]],
+                [[2000, 0], [2100, 0], [2100, 20], [2000, 20]]):
+        reader = _Reader([[(box, "SHARE", 0.9)]])
+        assert sc._frame_hits(object_frame(), reader) is None
+
+    edge = [[0, 1900], [100, 1900], [100, 1922], [0, 1922]]
+    got = sc._frame_hits(object_frame(), _Reader([[(edge, "SHARE", 0.9)]]))
+    assert got is not None and len(got) == 1, "two pixels past is ordinary"
+
+
+# --- the cadence the threshold was measured at -------------------------------
+
+
+def test_a_different_cadence_is_refused_rather_than_rescaled(monkeypatch):
+    """`FRAMES_MIN` counts frames, so two frames is 0.1 seconds of video at one
+    cadence and 60 at another. The separation was measured at exactly one frame
+    per second."""
+    monkeypatch.setattr(sc, "_sample",
+                        lambda video, every_s: [(0.0, object_frame())] * 10)
+    for bad in (2.0, 0.5, 0, None, "1.0"):
+        got = sc.detect("x.mp4", every_s=bad, reader=_Reader([[]] * 10))
+        assert got["state"] == sc.UNAVAILABLE, repr(bad)
+        assert got["why_unavailable"] == sc.WRONG_CADENCE, repr(bad)
+
+    ok = sc.detect("x.mp4", reader=_Reader([[]] * 10))
+    assert ok["state"] == sc.NOT_DETECTED
+    assert ok["every_s"] == sc.EVERY_S == ok["measured_at_every_s"]
