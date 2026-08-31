@@ -257,6 +257,7 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_caption_placement.py` (R6: what the caption lands on) ·
 `test_clipper_caption_placement_refusals.py` (R6: what it refuses to say) ·
 `test_clipper_caption_choice.py` (R6: why it sits there, and what it beat) ·
+`test_clipper_caption_choice_census.py` (R6: what it refuses, and the keep-out census) ·
 `test_clipper_caption_audit.py` (R6: what reaches the placement gate's exit code) ·
 `test_clipper_contrast_audit.py` (R6: what reaches the contrast gate's exit code) ·
 `test_clipper_delta_gate.py` (R5a's delta tool, through `main()`) ·
