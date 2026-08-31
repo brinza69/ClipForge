@@ -312,15 +312,33 @@ def test_overlapping_boxes_are_not_counted_twice():
     assert view["shots"][0]["share"] == 1.0
 
 
-def test_the_letterbox_is_not_an_occlusion():
-    """A caption on the black bars is perfectly readable. `share` answers "how
-    much of the caption can nobody read", and the old `max(evidence.values())`
-    let "sits low on the padding" outrank it."""
+def test_the_letterbox_has_its_own_field_and_not_a_slot_in_the_evidence():
+    """`evidence` and `share` are the same thing at two granularities — per
+    signal and unioned — so putting a NON-occlusion in the same dict produced a
+    shot reading `evidence: {on_letterbox_band: 1.0}` beside `share: 0.0`. Both
+    were right and the pair was unreadable."""
     view = cp.placement_view(y_pct=0.9, out_h=OUT_H, **SRC,
                              shots=[_shot(0, "fit")], evidence=[_seen()])
-    assert cp.ON_LETTERBOX in view["lands_on"]
-    assert view["shots"][0]["evidence"][cp.ON_LETTERBOX] > 0
-    assert view["shots"][0]["share"] == 0.0
+    shot = view["shots"][0]
+    assert cp.ON_LETTERBOX in view["lands_on"], "still reported"
+    assert cp.ON_LETTERBOX not in shot["evidence"], "but not as an occlusion"
+    assert shot["off_source"] > 0
+    assert shot["share"] == 0.0
+    # And `evidence` now holds exactly the signals `share` is a union of.
+    assert set(shot["evidence"]) <= set(cp.OCCLUSIONS)
+
+
+def test_off_source_is_none_where_there_is_no_letterbox_to_measure():
+    """None, never 0.0, which would say the caption is entirely over the
+    picture."""
+    crop = cp.placement_view(y_pct=0.9, out_h=OUT_H, **SRC,
+                             shots=[_shot(0, "crop")], evidence=[_seen()])
+    assert crop["shots"][0]["off_source"] is None, "a crop has no letterbox"
+
+    blind = cp.placement_view(y_pct=0.9, out_h=OUT_H, src_w=0, src_h=0,
+                              shots=[_shot(0, "fit")], evidence=[_seen()])
+    assert blind["shots"][0]["off_source"] is None, "nobody said the size"
+    assert cp.NO_GEOMETRY in blind["shots"][0]["unavailable"]
 
 
 def test_missing_geometry_is_not_an_upright_source():

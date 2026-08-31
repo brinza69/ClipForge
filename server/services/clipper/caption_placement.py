@@ -91,6 +91,7 @@ from services.clipper.caption_placement_vocab import (  # noqa: F401
     BAD_RECTS,
     BAD_SHOT,
     BAD_SHOTS,
+    MORE_EVIDENCE_THAN_SHOTS,
     BAD_SOURCE_SIZE,
     COMPOSITIONS,
     LANDS_ON,
@@ -158,6 +159,7 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
     refused_here: list[str] = []
 
     boxes: list[tuple[float, float] | None] = []
+    off_source: float | None = None
     if evidence_for is not None and not isinstance(evidence_for, dict):
         # REFUSED, not unmeasured. `(evidence_for or {}).get(key)` turned a
         # string or a number into "every signal missing" and then let a `worst`
@@ -165,7 +167,7 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
         return {"index": shot.get("index"), "composition": composition,
                 "lands_on": [], "evidence": {}, "unavailable": [],
                 "refused": [BAD_EVIDENCE], "share": None,
-                "share_complete": False}
+                "share_complete": False, "off_source": None}
 
     for name, key, missing in ((ON_FACE, "faces", NO_FACES),
                                (ON_UI, "panels", NO_PANELS),
@@ -205,7 +207,7 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
         return {"index": shot.get("index"), "composition": composition,
                 "lands_on": [], "evidence": {}, "unavailable": [],
                 "refused": [BAD_COMPOSITION], "share": None,
-                "share_complete": False}
+                "share_complete": False, "off_source": None}
 
     if composition == "fit":
         if not frame_known:
@@ -213,10 +215,14 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
             # said to have a letterbox or to lack one.
             unavailable.append(NO_GEOMETRY)
         elif frame is not None:
-            outside = 1.0 - overlaps(band, frame)
-            if outside > 0:
+            # ITS OWN FIELD, not an entry in `evidence`. `evidence` and `share`
+            # are the same thing at two granularities — per signal and unioned —
+            # and putting a NON-occlusion in the same dict produced a shot
+            # reading `evidence: {on_letterbox_band: 1.0}` beside `share: 0.0`.
+            # Both were right and the pair was unreadable.
+            off_source = round(1.0 - overlaps(band, frame), 3)
+            if off_source > 0:
                 found.append(ON_LETTERBOX)
-                measured[ON_LETTERBOX] = round(outside, 3)
 
     return {"index": shot.get("index"), "composition": composition,
             "lands_on": found, "evidence": measured,
@@ -251,7 +257,12 @@ def _shot_view(shot: dict, band: tuple[float, float], *, out_h: int,
             # on the padding" outrank "nobody can read it". That is not a claim
             # that the text is legible there — the strip is a blurred copy of
             # the frame and nothing here measures contrast against it.
-            "share": (round(covered(band, boxes), 3) if measured else None)}
+            "share": (round(covered(band, boxes), 3) if measured else None),
+            # HOW MUCH OF THE CAPTION IS OFF THE SOURCE FRAME, on a `fit` shot.
+            # None on a `crop`, which has no letterbox, and None when the source
+            # dimensions are unknown — never 0.0, which would say the caption is
+            # entirely over the picture.
+            "off_source": off_source}
 
 
 def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
@@ -314,6 +325,14 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
         refused.append(BAD_CAPTION_Y)
     elif y_pct is None:
         unavailable.append(NO_CAPTION)
+    # MORE EVIDENCE THAN SHOTS IS A DISAGREEMENT, not a longer list. The extra
+    # entries were sliced off in silence, so a caller whose idea of the edit had
+    # more frames than the edit got a clean report about the frames they agreed
+    # on. The one direction that IS legitimate is a SHORTER list — the shots it
+    # does not cover come back unavailable, which the docstring has always said.
+    if (isinstance(evidence, Sequence) and isinstance(shots, Sequence)
+            and len(evidence) > len(shots)):
+        refused.append(MORE_EVIDENCE_THAN_SHOTS)
     if not shots and not shots_refused:
         unavailable.append(NO_SHOTS)
     if evidence is None and not evidence_refused:
@@ -355,7 +374,7 @@ def placement_view(*, y_pct: float | None, shots: Sequence[dict] | None,
             views.append({"index": i, "composition": None, "lands_on": [],
                           "evidence": {}, "unavailable": [],
                           "refused": [BAD_SHOT], "share": None,
-                          "share_complete": False})
+                          "share_complete": False, "off_source": None})
             continue
         views.append(_shot_view(
             shot, band, out_h=out_h,

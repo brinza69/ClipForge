@@ -77,6 +77,10 @@ UNAVAILABLE: tuple[str, ...] = (NO_FACES, NO_PANELS, NO_TEXT, NO_SHOTS,
 BAD_CAPTION_Y = "caption_y_not_a_fraction"
 #: One shot's evidence entry is not a record.
 BAD_EVIDENCE = "evidence_entry_not_a_record"
+#: More evidence entries than there are shots. The caller mapped rectangles for
+#: frames this clip does not have, which means its idea of the edit and the
+#: edit disagree — and the extra entries used to be sliced off in silence.
+MORE_EVIDENCE_THAN_SHOTS = "more_evidence_entries_than_shots"
 #: An entry in the shot list that is not a shot.
 BAD_SHOT = "shot_entry_not_a_record"
 #: A composition outside the closed list. Not a `crop`, which is what silently
@@ -91,6 +95,7 @@ BAD_RECTS = "rectangle_list_not_a_sequence"
 BAD_OUT_H = "output_height_not_a_positive_number"
 BAD_SOURCE_SIZE = "source_dimensions_not_numbers"
 REFUSALS: tuple[str, ...] = (BAD_CAPTION_Y, BAD_EVIDENCE, BAD_SHOT,
+                             MORE_EVIDENCE_THAN_SHOTS,
                              BAD_COMPOSITION, BAD_SHOTS, BAD_EVIDENCE_LIST,
                              BAD_RECTS, BAD_OUT_H, BAD_SOURCE_SIZE)
 
@@ -110,5 +115,6 @@ __all__ = ["LANDS_ON", "OCCLUSIONS", "UNAVAILABLE", "REFUSALS", "COMPOSITIONS",
            "NO_FACES", "NO_PANELS", "NO_TEXT", "NO_SHOTS", "NO_CAPTION",
            "NO_EVIDENCE", "NO_GEOMETRY", "NO_COMPOSITION",
            "BAD_CAPTION_Y", "BAD_EVIDENCE", "BAD_SHOT", "BAD_COMPOSITION",
+           "MORE_EVIDENCE_THAN_SHOTS",
            "BAD_SHOTS", "BAD_EVIDENCE_LIST", "BAD_RECTS", "BAD_OUT_H",
            "BAD_SOURCE_SIZE"]

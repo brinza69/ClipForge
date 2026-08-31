@@ -285,3 +285,22 @@ def test_with_every_share_measured_the_worst_case_is_established():
         y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0), _shot(1)],
         evidence=[_seen(faces=[_rect(864, 96)]), _seen(text=[_rect(864, 76)])])
     assert view["worst_share_complete"] is True
+
+
+def test_more_evidence_than_shots_is_a_disagreement_not_a_longer_list():
+    """The extra entries were sliced off in silence, so a caller whose idea of
+    the edit had more frames than the edit got a clean report about the frames
+    they happened to agree on."""
+    view = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC, shots=[_shot(0)],
+                             evidence=[_seen(), _seen(), _seen()])
+    assert cp.MORE_EVIDENCE_THAN_SHOTS in view["refused"]
+
+
+def test_a_shorter_evidence_list_is_still_legitimate():
+    """The shots it does not cover come back unavailable, which is what the
+    docstring has always said — that direction is a gap, not a disagreement."""
+    view = cp.placement_view(y_pct=0.5, out_h=OUT_H, **SRC,
+                             shots=[_shot(0), _shot(1)], evidence=[_seen()])
+    assert view["refused"] == []
+    assert view["shots"][1]["share"] is None
+    assert cp.NO_FACES in view["shots"][1]["unavailable"]
