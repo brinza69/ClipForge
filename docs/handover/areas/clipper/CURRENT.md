@@ -523,9 +523,11 @@ starea fiecărui export letterboxat, nu un caz-limită. Și 8 din 99 de poziții
 regula de azi — exporturi anterioare scanării de bandă; unul singur stă peste un keep-out de față.
 
 **Contrastul e aritmetic** (`caption_contrast.py`): un glif cu contur se separă de orice fundal prin
-una dintre cele două culori ale lui, deci există o podea — alb în negru 4,61:1, cel mai rău la gri
-117 — și niciun cadru nu poate fi sub ea. **Descoperirea e în paletă, nu pe letterbox:** toate
-umpluturile trec, dar highlight-ul lui `Neon Pop` (2,34) și al lui `Viral Gradient` (2,73) nu ating
+una dintre cele două culori ale lui, deci există o podea, cu formă închisă: rădăcina pătrată a
+contrastului dintre cele două culori proprii ale glifului, `sqrt(21) = 4,58` pentru alb în negru. Un
+sweep pe 256 de griuri o supraestima cu 0,025, fiindcă un pixel colorat are luminanța între nivelele
+de gri. **Descoperirea e în paletă, nu pe letterbox:** toate
+umpluturile trec, dar highlight-ul lui `Neon Pop` (2,33) și al lui `Viral Gradient` (2,72) nu ating
 3,0:1 împotriva niciunui fundal. Ambele sunt presete livrabile azi, iar reparația schimbă o culoare
 livrată — decizie pentru om, nu pentru un batch în umbră.
 
@@ -546,7 +548,7 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    Jensen (diagramă lizibilă), vlog (obiectele în `fit`), go ghost (fără comutări false).
 2. **Gate-ul R5** — „≥95% începuturi și finaluri acceptate la review uman".
 3. **Gate-ul R6** — „zero captions duble pe cele 15 go ghost", care cere și re-randare, și un om.
-4. **Culorile de highlight ale lui `Neon Pop` și `Viral Gradient`** — 2,34 și 2,73, sub pragul de
+4. **Culorile de highlight ale lui `Neon Pop` și `Viral Gradient`** — 2,33 și 2,72, sub pragul de
    3,0:1 împotriva oricărui fundal. Măsurat, nu presupus. Reparația schimbă o culoare livrată, deci
    nu aparține unui batch în umbră; `scripts/audit_caption_contrast.py` pică până se decide.
 

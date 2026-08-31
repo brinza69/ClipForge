@@ -711,19 +711,29 @@ keep-out de față, pe care regula actuală îl evită.
 **CONTRASTUL E ARITMETIC, nu un eșantion de cadre** (`caption_contrast.py`,
 `scripts/audit_caption_contrast.py`). Un glif cu contur se separă de ORICE fundal prin una dintre
 cele două culori ale lui — conturul pe fundal deschis, umplutura pe fundal întunecat — deci există o
-podea, iar niciun cadru nu poate fi sub ea. Alb în negru: 4,61:1, cel mai rău la gri 117.
+podea, iar niciun cadru nu poate fi sub ea. Și podeaua are FORMĂ ÎNCHISĂ: e rădăcina pătrată a
+contrastului dintre cele două culori proprii ale glifului, `sqrt(21) = 4,58` pentru alb în negru, la
+luminanță 0,179. Prima versiune mătura 256 de griuri, cu un comentariu care susținea că forma închisă
+ține doar când culorile sunt extremele; ține pentru orice pereche, iar măturarea era aproximarea — și
+greșea în direcția care flatează, fiindcă un pixel de fundal e 8 biți pe CANAL, dar luminanța unui
+pixel colorat e o sumă ponderată a trei canale și cade oriunde între.
 
-**Și descoperirea nu e pe letterbox, e în paletă.** Toate umpluturile trec (4,42–4,61). Culoarea de
+**Și descoperirea nu e pe letterbox, e în paletă.** Toate umpluturile trec (4,39–4,58). Culoarea de
 HIGHLIGHT, singurul cuvânt pe care îl pictează animația karaoke, nu:
 
 ```
-Classic White / Boxed White  4,61     Karaoke Yellow  4,08
-Bold Impact                  3,88     Clean Minimal   3,45
-Viral Gradient               2,73     Neon Pop        2,34
+Classic White / Boxed White  4,58     Karaoke Yellow  4,07
+Bold Impact                  3,87     Clean Minimal   3,44
+Viral Gradient               2,72     Neon Pop        2,33
 ```
 
 `Neon Pop` și `Viral Gradient` nu pot atinge 3,0:1 pentru cuvântul evidențiat împotriva niciunui
-fundal uniform. **Ambele sunt presete livrabile azi.** Repararea înseamnă schimbarea unei culori,
+fundal uniform. **Ambele sunt presete livrabile azi.**
+
+Și fiecare număr de acolo presupune că sunt DOUĂ culori pe ecran: un `outline_width` zero lasă o
+umplutură goală, al cărei cel mai rău fundal e propria ei culoare, la 1,0. Lipsa sau grosimea zero
+sunt refuzuri. La fel o culoare cu canal alfa — ASS scrie `00` pentru opac, CSS scrie `FF`, iar
+codebase-ul le are pe amândouă — deci se refuză, nu se presupune. Repararea înseamnă schimbarea unei culori,
 adică schimbarea a ce se livrează, deci nu aparține unui batch în umbră — e o decizie pentru om.
 
 Ce NU e: o podea de LUMINANȚĂ, nu o dovadă de lizibilitate (WCAG ignoră nuanța); presupune fundal
