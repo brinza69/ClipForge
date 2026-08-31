@@ -192,3 +192,34 @@ def test_a_sidecar_that_is_not_a_record_is_refused(tmp_path, monkeypatch):
     assert any("sidecar_not_a_record" in line
                for line in out["sidecars_refused"])
     assert code == 1
+
+
+def test_two_styles_with_the_same_colours_and_different_outlines_are_two_rows(
+        tmp_path, monkeypatch):
+    """The floor depends on the outline being DRAWN, so two styles with
+    identical colours and widths of 5 and 0 get different answers. Keying the
+    dedupe on colours alone collapsed them into one row and reported whichever
+    came first."""
+    _sidecar(tmp_path, "a", GOOD)
+    _sidecar(tmp_path, "b", {**GOOD, "outline_width": 0})
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    rows = out["distinct_palettes_on_disk"]
+    assert len(rows) == 2, rows
+    assert any(r["refused"] == ["outline_width_is_zero"] for r in rows)
+    assert code == 1
+
+
+def test_the_counts_are_per_distinct_verdict_and_still_sum(tmp_path,
+                                                           monkeypatch):
+    """One row per palette is only honest if the row says how many exports it
+    stands for."""
+    for clip in ("a", "b", "c"):
+        _sidecar(tmp_path, clip, GOOD)
+    _sidecar(tmp_path, "d", {**GOOD, "outline_width": 2})
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    counts = sorted(int(r["name"].rsplit("(x", 1)[1].rstrip(")"))
+                    for r in out["distinct_palettes_on_disk"])
+    assert counts == [1, 3]
+    assert sum(counts) == out["sidecars_read"] == 4

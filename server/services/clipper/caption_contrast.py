@@ -68,6 +68,7 @@ honesty `source_captions` prints beside its own thresholds.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 __all__ = ["LARGE_TEXT_MIN", "NORMAL_TEXT_MIN", "REFUSALS", "luminance",
@@ -183,8 +184,6 @@ def floor(fill: Any, outline: Any) -> tuple[float, float] | None:
     4.6075 against a true 4.5826. The crossing always lies between the two
     luminances, so it is always a backdrop that can exist.
     """
-    import math
-
     lf, lo_ = luminance(fill), luminance(outline)
     if lf is None or lo_ is None:
         return None
@@ -237,6 +236,12 @@ def verdict(style: Any) -> dict:
     if width is None:
         refused.append(NO_OUTLINE_WIDTH)
     elif isinstance(width, bool) or not isinstance(width, (int, float)):
+        refused.append(NO_OUTLINE_WIDTH)
+    elif not math.isfinite(width):
+        # `width <= 0` is False for NaN, so a NaN width was clearing the check
+        # and taking the outline's benefit with it — the same shape as the NaN
+        # keep-out rectangle that clears `_norm_rect`. An infinite width is not
+        # a width either.
         refused.append(NO_OUTLINE_WIDTH)
     elif width <= 0:
         refused.append(NO_OUTLINE_DRAWN)

@@ -173,17 +173,29 @@ def main() -> int:
     on_disk, refused = _styles_on_disk()
     # ONE ROW PER DISTINCT PALETTE, not one per export. 99 identical rows would
     # bury the two that differ, and the question is about palettes.
-    seen: dict[tuple, str] = {}
+    def _key(style: Any) -> tuple:
+        """What makes two styles the same VERDICT, not the same colours.
+
+        `outline_width` is in it because the floor depends on the outline being
+        drawn: two styles with identical colours and widths of 5 and 0 get
+        different answers, and keying on colours alone collapsed them into one
+        row and reported whichever came first.
+        """
+        got = style if isinstance(style, dict) else {}
+        return (str(got.get("text_color")), str(got.get("highlight_color")),
+                str(got.get("outline_color")), str(got.get("outline_width")))
+
+    seen: set[tuple] = set()
     unique: list[tuple[str, Any]] = []
+    counts: dict[tuple, int] = {}
+    for _name, style in on_disk:
+        counts[_key(style)] = counts.get(_key(style), 0) + 1
     for name, style in on_disk:
-        key = (str((style or {}).get("text_color")),
-               str((style or {}).get("highlight_color")),
-               str((style or {}).get("outline_color")))
+        key = _key(style)
         if key in seen:
             continue
-        seen[key] = name
-        unique.append((f"{name} (x{sum(1 for n, s in on_disk if (str((s or {}).get('text_color')), str((s or {}).get('highlight_color')), str((s or {}).get('outline_color'))) == key)})",
-                       style))
+        seen.add(key)
+        unique.append((f"{name} (x{counts[key]})", style))
     disk = _rows(unique)
 
     bad = _failures(presets, disk, refused)

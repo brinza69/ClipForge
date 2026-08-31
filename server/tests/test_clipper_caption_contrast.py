@@ -131,10 +131,13 @@ def test_an_outline_that_is_not_drawn_is_not_an_outline():
                        "outline_width": 0})["refused"] == [cc.NO_OUTLINE_DRAWN]
     assert cc.verdict({"text_color": WHITE, "outline_color": BLACK,
                        "outline_width": -2})["refused"] == [cc.NO_OUTLINE_DRAWN]
-    for bad in (None, "5", True, [5]):
+    for bad in (None, "5", True, [5], float("nan"), float("inf")):
         told = cc.verdict({"text_color": WHITE, "outline_color": BLACK,
                            "outline_width": bad})
         assert told["refused"] == [cc.NO_OUTLINE_WIDTH], repr(bad)
+    # `width <= 0` is False for NaN, so a NaN width was clearing the check and
+    # taking the outline's benefit with it — the same shape as the NaN keep-out
+    # rectangle that clears `captions._norm_rect`.
 
 
 def test_the_alpha_convention_is_read_from_the_codebase_not_guessed():
