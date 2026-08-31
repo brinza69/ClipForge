@@ -20,6 +20,23 @@ a clean answer:
                                         fact as unreadable analysis files,
                                         which void everyone's
 
+THE CAPTION POSITION COMES FROM THE `.ass`, NOT FROM `caption_plan.y_pct`, and
+the first version of this file had it wrong on 46 of 99 clips.
+
+`y_pct` is the PRESET the plan asked for. The `.ass` carries the position
+`resolve_position` settled on after avoiding the keep-outs, and it is what
+libass burns. On 53 clips the two agree, because nothing was in the way; on 46
+they do not, by as much as 933 pixels — `39c89ae2e16e/9fc63c77e3c1` stores 0.75
+and burns 1141, and `pilot2c8a/003a5c53c51d` burns 507 against a stored 1440.
+
+A plan is not the delivered artefact, the same way a `move: push` label is not
+motion. Every figure this file produces about where the caption LANDS has to
+come from the file that put it there.
+
+The fallback to `y_pct` is kept for a clip with no `.ass`, and it is DECLARED:
+`caption_y_source` says `ass` or `caption_plan`, so a number that rests on the
+plan cannot be read as one that rests on the render.
+
 AND THE SAMPLING IS SPARSER THAN THE SHOTS. The face detector runs about every
 two seconds and a shot is typically one to four, so a shot with no sample inside
 it has no face evidence: `None`, which is `unavailable`, never an empty list.
@@ -46,6 +63,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +148,36 @@ def _moving_crops(plan: dict) -> int:
     return moving
 
 
+#: `{\\pos(x, y)}` in an ASS override block. The y is the caption's baseline
+#: anchor under `\\an5`, in `PlayResY` units, which the clipper writes as 1920.
+_ASS_POS = re.compile(r"\\pos\((\d+)\s*,\s*(\d+)\)")
+
+
+def _burned_y_pct(ass: Path, out_h: int) -> tuple[float | None, str]:
+    """`(the position libass burned, where the number came from)`.
+
+    ONE POSITION PER FILE, checked rather than assumed: across the corpus every
+    `.ass` uses a single `\\pos` y for all its events, so a clip has one
+    delivered caption position. A file that used more would be refused here
+    rather than averaged, because "the caption is at 1141" would then be a
+    sentence about no particular moment.
+    """
+    if not ass.exists() or out_h <= 0:
+        return None, "no_ass"
+    try:
+        text = ass.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None, "ass_unreadable"
+    ys = {int(m.group(2)) for line in text.splitlines()
+          if line.startswith("Dialogue")
+          for m in [_ASS_POS.search(line)] if m}
+    if not ys:
+        return None, "no_position_in_the_ass"
+    if len(ys) > 1:
+        return None, "more_than_one_position_in_the_ass"
+    return ys.pop() / float(out_h), "ass"
+
+
 def _requested_position(caption: dict) -> str | None:
     """The position name the clip's own style asked for, if it recorded one."""
     style = caption.get("style")
@@ -142,6 +190,20 @@ def _requested_position(caption: dict) -> str | None:
         return None
     name = style.get("position")
     return name if isinstance(name, str) and name else None
+
+
+#: Why the delivered caption position cannot be checked against today's rule.
+#: `clipper_captions` re-places the caption at RENDER time with
+#: `layout_plan.safe_zones.keep_out` PLUS `panels_to_keep_out(panels, shots)`,
+#: and `panels` is not stored on the sidecar. So the keep-out set the position
+#: was resolved against no longer exists, and running `resolve_position` on the
+#: smaller stored set answers a different question.
+#:
+#: THE FIRST TWO ANSWERS WERE BOTH ARTEFACTS OF THAT. Comparing the stored
+#: `y_pct` — which is the PRESET, not the burned position — gave "8 of 99 today's
+#: rule would not produce". Comparing the position actually burned, against the
+#: same incomplete keep-outs, gave 54. Neither was a fact about the rule.
+NOT_REPRODUCIBLE = "the_keep_out_set_the_caption_was_placed_against_is_not_stored"
 
 
 def _explained_by(y_pct: float, layout: dict, out_h: int,
@@ -294,7 +356,14 @@ def measure(path: Path) -> dict:
             return row
     plan, caption, layout = (parts["dynamic_plan"], parts["caption_plan"],
                              parts["layout_plan"])
-    y_pct = caption.get("y_pct")
+    # THE DELIVERED POSITION, from the file that burned it. `y_pct` is the
+    # preset the plan asked for and differs from the `.ass` on 46 of 99 clips.
+    planned = caption.get("y_pct")
+    burned, source = _burned_y_pct(path.with_suffix(".ass"), 1920)
+    y_pct = burned if burned is not None else planned
+    row["caption_y_source"] = source if burned is not None else "caption_plan"
+    row["caption_y_planned"] = planned
+    row["caption_y_why_not_ass"] = None if burned is not None else source
 
     # THE RENDERED HEIGHT, READ RATHER THAN ASSUMED. 1920 was hardcoded, which
     # is a second source of truth about output geometry. When the file is not
@@ -349,10 +418,22 @@ def measure(path: Path) -> dict:
         # move — but a mixed corpus is exactly where the weaker check would
         # start passing things.
         "asked_for": _requested_position(caption),
-        "explained_by": (_explained_by(float(y_pct), layout, out_h,
-                                       _requested_position(caption))
-                         if isinstance(y_pct, (int, float))
-                         and not isinstance(y_pct, bool) else None),
+        # UNANSWERABLE FROM A SIDECAR, and named rather than guessed at. See
+        # `NOT_REPRODUCIBLE`.
+        "position_reproducible": False,
+        "why_not_reproducible": NOT_REPRODUCIBLE,
+        "caption_y_moved_from_the_preset": (
+            None if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                            for v in (burned, planned))
+            else abs(float(burned) - float(planned)) > 5e-4),
+        # Kept as evidence, NOT as a verdict: it is what today's rule gives on
+        # the keep-outs that survived, which is not the set the caption was
+        # placed against.
+        "explained_by_the_stored_keep_outs": (
+            _explained_by(float(y_pct), layout, out_h,
+                          _requested_position(caption))
+            if isinstance(y_pct, (int, float))
+            and not isinstance(y_pct, bool) else None),
         # AND WHETHER THE STORED POSITION SITS ON SOMETHING. For a clip today's
         # rule would not produce, this is the whole question: was the old rule
         # merely different, or was it wrong?

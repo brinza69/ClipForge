@@ -271,23 +271,27 @@ def test_a_non_finite_keep_out_fails_the_run(tmp_path, monkeypatch):
 # --- the position it asked for -----------------------------------------------
 
 
-def test_the_position_checked_is_the_one_the_style_asked_for(tmp_path,
-                                                             monkeypatch):
-    """Trying all four presets and accepting any match let a position produced
-    by accident from a preset nobody chose count as an explanation. Six clips in
-    `2d3375ee3420` sit at 0.51 — the `center` preset — with a style that says
-    `bottom`, and the lax check called all six explained."""
+def test_no_position_can_be_checked_against_todays_rule(tmp_path, monkeypatch):
+    """`clipper_captions` re-places the caption at RENDER time with the stored
+    keep-outs PLUS `panels_to_keep_out(panels, shots)`, and `panels` is not on
+    the sidecar. So the set the position was resolved against no longer exists,
+    and running the rule on the smaller stored set answers a different question.
+
+    Two earlier versions answered it anyway: comparing the stored `y_pct` —
+    which is the PRESET, not the burned position — gave "8 of 99 today's rule
+    would not produce", and comparing the burned position against the same
+    incomplete keep-outs gave 54. Neither was a fact about the rule.
+
+    NOT A FAILURE, because it is a property of the stored format rather than of
+    any clip, and a permanently red gate would bury the findings that are about
+    clips."""
     _sidecar(tmp_path, "p", "a", _ok(
         caption_plan={"y_pct": 0.51, "style": {"position": "bottom"}}))
     module = _audit(monkeypatch, tmp_path)
     code, out = _run(module, [])
-    assert out["position_no_preset_reproduces"] == 1
-    assert code == 1
-
-    _sidecar(tmp_path, "q", "a", _ok(
-        caption_plan={"y_pct": 0.51, "style": {"position": "center"}}))
-    code, out = _run(module, ["--project", "q"])
-    assert out["position_no_preset_reproduces"] == 0 and code == 0
+    assert out["position_not_reproducible"] == 1
+    assert "keep_out" in out["why_not_reproducible"]
+    assert code == 0, "printed, not failed"
 
 
 def test_a_moving_crop_is_counted_and_does_not_fail_the_run(tmp_path,
@@ -412,3 +416,43 @@ def test_a_shot_with_two_samples_answers_at_any_point(tmp_path, monkeypatch):
     code, out = _run(module, [])
     assert out["shots_with_more_than_one_sample"] == 1
     assert out["caption_on_a_face"] == 1, "the low box counts, at some point"
+
+
+def test_the_delivered_position_is_read_from_the_ass_not_the_plan(tmp_path,
+                                                                  monkeypatch):
+    """`caption_plan.y_pct` is the preset the plan asked for; the `.ass` carries
+    what `resolve_position` settled on and what libass burned. They differ on 46
+    of the 99 stored clips, by as much as 933 pixels."""
+    from services.clipper.caption_corpus import _burned_y_pct
+
+    path = _sidecar(tmp_path, "p", "a", _ok())
+    ass = path.with_suffix(".ass")
+    assert _burned_y_pct(ass, 1920) == (None, "no_ass")
+
+    head = "[Events]\n"
+    line = ("Dialogue: 0,0:00:0{a}.00,0:00:0{b}.00,ovl0,,0,0,0,,"
+            "{{\\an5\\pos(540,{y})}}TEXT\n")
+    ass.write_text(head + line.format(a=0, b=1, y=960), encoding="utf-8")
+    assert _burned_y_pct(ass, 1920) == (0.5, "ass")
+
+    # Two positions in one file is refused rather than averaged: "the caption is
+    # at 1141" would then be a sentence about no particular moment.
+    ass.write_text(head + line.format(a=0, b=1, y=960)
+                   + line.format(a=1, b=2, y=500), encoding="utf-8")
+    got, source = _burned_y_pct(ass, 1920)
+    assert got is None and source == "more_than_one_position_in_the_ass"
+
+    # And an `.ass` with no position at all is its own answer, not a fallback
+    # that quietly borrows the plan's number.
+    ass.write_text(head, encoding="utf-8")
+    assert _burned_y_pct(ass, 1920) == (None, "no_position_in_the_ass")
+
+
+def test_a_position_that_came_from_the_plan_says_so(tmp_path, monkeypatch):
+    """A number resting on the plan must not be readable as one resting on the
+    render — 46 of 99 clips have them disagree."""
+    _sidecar(tmp_path, "p", "a", _ok())
+    module = _audit(monkeypatch, tmp_path)
+    _code, out = _run(module, [])
+    assert out["with_a_caption_position"] == 1
+    assert out["position_not_reproducible"] == 1

@@ -193,6 +193,20 @@ clipforge/
 #           style. Reading the label gives "95% of shots move" — the opposite of the
 #           truth, and an argument for a much larger piece of work. Run the function that
 #           produces the thing (`_size_timeline`), never the field that describes it.
+# CRITICAL: and a PLAN is not the DELIVERED ARTEFACT. `caption_plan.y_pct` is the
+#           preset the plan asked for; the `.ass` carries what `resolve_position`
+#           settled on and what libass burned, and they differ on 46 of 99 stored
+#           clips by up to 933px. Every figure about where the caption LANDS has
+#           to come from the file that put it there. Same family as the `move`
+#           label: read the artefact, not the intention.
+# CRITICAL: and do not compare a function's output against a run of that function
+#           on inputs it did not have. `clipper_captions` re-places the caption
+#           with the stored keep-outs PLUS `panels_to_keep_out(panels, shots)`,
+#           and `panels` is not on the sidecar — so "would today's rule produce
+#           this position" is UNANSWERABLE from what is stored. Answering it
+#           anyway gave 8 with the wrong y and 54 with the right one; neither was
+#           a fact about the rule. When the input is gone, the answer is
+#           `unavailable`, not a smaller comparison.
 # CRITICAL: and a CONSTANT is not an IDENTITY. A single-point size timeline proves the
 #           crop does not change size; it does not prove the crop is `shot["rect"]`. The
 #           delivered window comes from the anchor, and 837 of 1,965 crops differ from

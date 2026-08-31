@@ -39,9 +39,10 @@ rather than merely be a bad result:
     a keep-out rectangle nobody could read  it was dropped by the placement rule
                                             itself, which is the same hole as a
                                             non-finite one
-    a stored y_pct no position reproduces   the export was made by a DIFFERENT
-                                            placement rule, so nothing about
-                                            it is evidence about today's
+    (a position that cannot be checked is NOT one of these: the keep-out set it
+     was resolved against is not on the sidecar, so no run will ever answer it.
+     A permanently red gate for a property of the format buries the findings
+     that are about clips. It is printed, loudly, and left out of the verdict.)
     a keep-out rectangle that is not finite it moves the delivered caption and
                                             nothing says so
     an assumed output height                the letterbox column rests on it
@@ -83,7 +84,12 @@ def _report(rows: list[dict]) -> dict:
                  if cp.NO_GEOMETRY not in r["placement_unavailable"]
                  and r.get("fit_shots")]
 
-    unexplained = [r for r in placed if not r["explained_by"]]
+    # NOT A COUNT OF ANYTHING. The keep-out set the caption was placed against
+    # is not stored, so no sidecar can answer whether today's rule would produce
+    # its position. Two earlier versions of this line answered it anyway and
+    # gave 8 and then 54, neither a fact about the rule.
+    unreproducible = [r for r in placed if r.get("position_reproducible") is False]
+    disagrees = [r for r in placed if not r["explained_by_the_stored_keep_outs"]]
     not_finite = [r for r in read if (r.get("keep_out") or {}).get("not_finite")]
     unreadable_rects = [r for r in read
                         if (r.get("keep_out") or {}).get("unreadable")]
@@ -104,12 +110,12 @@ def _report(rows: list[dict]) -> dict:
         "without_a_caption_position": len(read) - len(placed),
         "with_a_fit_shot_and_known_geometry": len(geometric),
         "caption_on_the_letterbox": len(on_letterbox),
-        "position_no_preset_reproduces": len(unexplained),
-        "unexplained": [f"{r['project']}/{r['clip']} y={r['y_pct']} "
-                        f"covers {r['stored_covers']} of the keep-out"
-                        for r in unexplained],
-        "unexplained_and_covered": len(
-            [r for r in unexplained if (r["stored_covers"] or 0) > 0]),
+        "position_not_reproducible": len(unreproducible),
+        "why_not_reproducible": (unreproducible[0]["why_not_reproducible"]
+                                 if unreproducible else None),
+        # Evidence, not a verdict: what today's rule gives on the keep-outs that
+        # survived into the sidecar.
+        "differs_from_todays_rule_on_the_stored_keep_outs": len(disagrees),
         "with_a_non_finite_keep_out": len(not_finite),
         "with_an_unreadable_keep_out": len(unreadable_rects),
         # COMPUTED AND WIRED, both of them. A shot the report refused was not
@@ -163,12 +169,14 @@ def _print(out: dict) -> None:
     print(f"of those, with a caption position     {out['with_a_caption_position']}")
     print(f"  without one (unavailable, not a fail) "
           f"{out['without_a_caption_position']}")
-    print(f"  today's rule would not produce it   "
-          f"{out['position_no_preset_reproduces']}")
-    print(f"    ...and it sits on a keep-out      "
-          f"{out['unexplained_and_covered']}")
-    for line in out["unexplained"][:20]:
-        print(f"    {line}")
+    print(f"  whose position can be checked against")
+    print(f"    today's rule                      "
+          f"{out['with_a_caption_position'] - out['position_not_reproducible']}")
+    if out["why_not_reproducible"]:
+        print(f"    the rest cannot: {out['why_not_reproducible']}")
+    print(f"    (on the stored keep-outs alone, "
+          f"{out['differs_from_todays_rule_on_the_stored_keep_outs']} differ —")
+    print(f"     evidence about an incomplete input, not about the rule)")
     print(f"of those, `fit` + known geometry      "
           f"{out['with_a_fit_shot_and_known_geometry']}")
     print(f"  caption lands on the letterbox      "
@@ -234,10 +242,12 @@ def _failures(out: dict) -> list[str]:
         bad.append("no sidecars found — a pass over nothing is not a pass")
     if out["refused"]:
         bad.append(f"{out['refused']} sidecar(s) could not be read")
-    if out["position_no_preset_reproduces"]:
-        bad.append(f"{out['position_no_preset_reproduces']} caption position(s) "
-                   "today's rule would not produce — those exports were burned "
-                   "by a different rule and are evidence about neither")
+    # NOT A FAILURE, and the distinction is the same one the missing caption
+    # plan gets: this is a property of the stored FORMAT, not of any clip. The
+    # sidecar does not record the keep-out set the caption was placed against,
+    # so no run of this script will ever answer the question — and failing 99
+    # clips for it every time would bury the clip-level findings under a
+    # permanently red gate. It is printed at the top instead.
     if out["with_a_non_finite_keep_out"]:
         bad.append(f"{out['with_a_non_finite_keep_out']} clip(s) have a "
                    "non-finite keep-out rectangle, which moves the delivered "
