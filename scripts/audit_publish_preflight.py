@@ -104,21 +104,17 @@ def _identity(mp4: Path) -> dict:
 
 
 def _config() -> dict:
-    """Every constant the cached verdict depends on.
+    """Every constant the cached verdict depends on — from the DETECTOR.
 
-    ENUMERATED FROM THE MODULE rather than listed by hand, because a hand-kept
-    list is a list that goes stale exactly once and silently: `SAMPLES_MIN`
-    moving from 6 to 7 left every cached verdict valid while the classifier had
-    started refusing the same six frames. Anything upper-case, numeric and
-    public in `source_chrome` is part of the configuration by construction, so a
-    constant added later joins the key without anybody remembering to add it.
+    The consumer used to keep this list, and it was already short one:
+    `SAMPLES_MIN` is read by `classify` and was not in the key, so moving it
+    from 6 to 7 would leave every cached verdict valid while the classifier had
+    started refusing the same six frames. The producer is the only party that
+    knows what its answer depended on, so it says.
     """
     from services.clipper import source_chrome as sc
 
-    return {name: getattr(sc, name) for name in dir(sc)
-            if name.isupper() and not name.startswith("_")
-            and isinstance(getattr(sc, name), (int, float))
-            and not isinstance(getattr(sc, name), bool)}
+    return sc.config()
 
 
 def _usable(got: Any, mp4: Path) -> bool:
@@ -185,7 +181,6 @@ def _chrome(path: Path, reader) -> dict | None:
             # version, so it is not returned and not cached.
             return None
         got["measured_on"] = before
-        got["measured_with"] = _config()
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(got), encoding="utf-8")
     except Exception:

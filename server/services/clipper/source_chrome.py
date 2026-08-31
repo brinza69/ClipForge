@@ -59,6 +59,7 @@ import re
 from typing import Any, Sequence
 
 __all__ = ["DETECTED", "NOT_DETECTED", "UNAVAILABLE", "STATES", "REASONS",
+           "config",
            "CONTROLS", "FRAMES_MIN", "CONF_MIN", "is_a_warning", "classify",
            "detect"]
 
@@ -116,6 +117,26 @@ SAMPLES_MIN = 6
 #: different at one per minute — the measurement was made at 1.0 and the verdict
 #: is refused at anything else rather than quietly rescaled.
 EVERY_S = 1.0
+
+
+def config() -> dict:
+    """Every constant a verdict from this module depends on.
+
+    IT TRAVELS WITH THE VERDICT so that anything caching one can tell whether it
+    still describes the current detector. The audit built this list by hand and
+    it was already short one: `SAMPLES_MIN` is read by `classify` and was not in
+    the key, so moving it from 6 to 7 left every cached verdict valid while the
+    classifier had started refusing the same six frames. A hand-kept list goes
+    stale exactly once, and silently.
+
+    Enumerated from the module rather than written out, so a constant added
+    later joins the key without anybody remembering to add it — and produced
+    HERE rather than by the consumer, because the producer is the only party
+    that knows what it depended on.
+    """
+    return {name: value for name, value in sorted(globals().items())
+            if name.isupper() and not name.startswith("_")
+            and isinstance(value, (int, float)) and not isinstance(value, bool)}
 
 
 def classify(hits_per_frame: Sequence[int], analysed: int) -> tuple[str, str | None]:
@@ -249,6 +270,10 @@ def detect(video: str, *, every_s: float = EVERY_S, reader=None) -> dict:
         # negatives from ten. More than `source_captions` had; still not a
         # calibration.
         "calibrated": False,
+        # WHAT PRODUCED THIS VERDICT, beside the verdict. Anything that caches
+        # one can then tell whether it still describes the current detector,
+        # without keeping its own list of the constants that matter.
+        "measured_with": config(),
         # It never disables anything and never blocks a publish. Whatever
         # consumes this decides, and `not_detected` gives it no grounds.
         "applied": False,
