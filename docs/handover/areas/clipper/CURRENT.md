@@ -543,9 +543,16 @@ ratează cropul, și **26 din cele 99 de clipuri plasate au caption-ul peste o f
 un PLAFON INFERIOR: cele 964 de shot-uri neeșantionate plus semnalele de UI și text-sursă, care nu au
 detecție per shot, fac ca **zero clipuri să aibă cazul cel mai rău stabilit**.
 
-**Ce a mai rămas din R6:** warning-urile de browser chrome (blocate pe rata de fals-pozitiv, în curs
-de măsurare), detecția per-shot pentru UI și pentru textul sursei, și cablarea în sidecar.
-`panels_to_keep_out` nu e mapper generic — sare peste shot-urile de față.
+**`source_chrome.py` detectează chrome-ul de player în exporturile randate.** 14 din 14 exporturi
+Moist îl au (5–32 de cadre cu hit fiecare), față de UN singur hit în 27 de exporturi din alte zece
+proiecte — deci pragul de 2 cadre separă complet, cu marjă de 5 la 1. Ipoteza cu URL-uri a picat:
+39 de potriviri pe pozitive, toate la confidence 0,00–0,01, zero URL-uri reale. `not_detected` nu
+înseamnă curat, și `is_a_warning()` o spune în cod.
+
+**Ce a mai rămas din R6:** detecția per-shot pentru UI și pentru textul sursei — lipsește un DETECTOR
+nu un mapper, fiindcă `regions.hud` are 8 dreptunghiuri în tot corpusul și toate sunt cutii fixe de
+colț — și cablarea în sidecar. `panels_to_keep_out` nu e mapper generic: sare peste shot-urile de
+față.
 
 ## Punctul exact de reluare
 
@@ -580,10 +587,10 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
 
 **Cod, în ordinea planului:**
 
-7. **R6, restul**, strict în shadow. Poziționarea, motivul, contrastul și maparea dovezilor sunt
-   livrate (`caption_placement`, `caption_choice`, `caption_contrast`, `evidence_map`); au rămas
-   warning-urile de browser chrome, detecția per-shot pentru UI și textul sursei — fără ele două din
-   trei semnale rămân `unavailable` — și cablarea în sidecar. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
+7. **R6, restul**, strict în shadow. Poziționarea, motivul, contrastul, maparea dovezilor și
+   warning-ul de browser chrome sunt livrate (`caption_placement`, `caption_choice`,
+   `caption_contrast`, `evidence_map`, `source_chrome`). A rămas detecția per-shot pentru UI și
+   textul sursei — fără ele două din trei semnale rămân `unavailable` — și cablarea în sidecar. Pentru cablare, ține minte că `panels_to_keep_out` NU e un mapper generic:
    sare deliberat peste shot-urile de față, deci fețele și textul sursei au nevoie de mapper propriu.
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 8. **R7** — preflight de publicare și corecția bounded (maximum una).

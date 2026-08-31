@@ -672,11 +672,35 @@ pozitivul EXISTĂ; opt instantanee uniforme dintr-o sursă de ore nu l-au atins.
 lucrul căutat nu e o dovadă că lucrul lipsește — exact confuzia pe care restul acestui plan o combate,
 făcută de mine, în paragraful care o enunță.
 
-**Ce se măsoară în locul ei:** aceleași detectoare peste EXPORTURILE randate, un cadru pe secundă, nu
-peste proxy la opt momente arbitrare. Acolo a văzut omul defectul, deci acolo se pune întrebarea. Se
-numără două familii separat — un URL sau un domeniu, care e dovadă în sine, și o etichetă de control
-(`search`, `share`, `save`, `subscribe`), care e un cuvânt obișnuit și e dovadă doar alături de
-altele.
+**Măsurat pe EXPORTURILE randate, un cadru pe secundă**, unde a văzut omul defectul:
+
+```
+pozitive   14 din 14 exporturi Moist, între 5 și 32 de cadre cu hit fiecare
+negative   27 de exporturi din alte zece proiecte, 1.222 de cadre,
+           4.468 de tokeni citiți, și UN singur hit între ele
+
+prag >= 1 cadru    14/14 pozitive, 1/27 negative
+prag >= 2 cadre    14/14 pozitive, 0/27 negative
+prag >= 3 cadre    14/14 pozitive, 0/27 negative
+```
+
+Două cadre, cu marjă de 5 față de 1. `source_chrome.py` + `scripts/detect_source_chrome.py`.
+
+**Și ipoteza pe care am adus-o era greșită.** Planul era „un URL e un URL, precizie mare prin
+construcție". Familia URL a dat 39 de potriviri pe pozitive și 0 pe negative — iar toate cele 39 la
+confidence 0,00–0,01, gunoi de tipul `NOU:L Do.com catchvechackndt`. Zero URL-uri reale. Nu e în
+modul deloc. Discriminatorul care funcționează e cel pe care îl credeam slab: o etichetă de control
+dintr-un vocabular închis, citită cu încredere, în mai mult de un cadru.
+
+**`not_detected` NU înseamnă curat**, și `is_a_warning()` spune asta în cod, nu în proză: doar
+`detected` e o afirmație. Numitorul e ce s-a ANALIZAT, nu ce s-a eșantionat. Pragurile sunt alese cu
+răspunsul la vedere pe 14 pozitive dintr-o singură sursă și 27 de negative din zece — mai mult decât
+avea `source_captions`, tot nu o calibrare.
+
+**Un lucru NEFOLOSIT deliberat:** singurul fals pozitiv stă la y=0,551, în timp ce fiecare hit real e
+la y≤0,083 sau y≥0,911 — sus și jos într-un player. O regulă de poziție ar separa perfect cele două
+populații și ar fi un prag ales pe UN singur eșantion negativ. E scris ca următorul agent să-l TESTEZE
+pe un corpus real, nu să-l adopte de aici.
 
 **Ce rămâne adevărat din prima măsurătoare, și e o avertizare:** recognizer-ul citește prost exact
 conținutul care contează. Două surse au dat 0 tokeni, iar patru au dat tokeni fără niciunul peste
@@ -792,9 +816,10 @@ stabilit. Raportul tipărește asta lângă cifră, fiindcă altfel „26 de cli
 
 Câteva dintre cele 26 au `worst = 1,0`: banda de caption complet acoperită de o față.
 
-**Ce a mai rămas din listă:** warning-urile de browser chrome (blocate pe rata de fals-pozitiv, care
-se măsoară acum), detecția per-shot pentru UI și pentru textul sursei — fără ele două din trei
-semnale rămân `unavailable` și niciun caz nu poate fi stabilit — și cablarea propriu-zisă în sidecar.
+**Ce a mai rămas din listă:** detecția per-shot pentru UI și pentru textul sursei — fără ele două
+din trei semnale rămân `unavailable` și niciun caz nu poate fi stabilit; `regions.hud` are 8
+dreptunghiuri în tot corpusul și toate sunt cutii fixe de colț de 60×44, nu extinderi măsurate, deci
+lipsește un DETECTOR, nu un mapper — și cablarea propriu-zisă în sidecar.
 `panels_to_keep_out` NU e un mapper generic: sare deliberat peste shot-urile de față.
 
 ### Batch R6 — lista originală
