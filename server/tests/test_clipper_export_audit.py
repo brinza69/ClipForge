@@ -341,3 +341,27 @@ def test_an_impossible_duration_fails_the_gate(tmp_path, monkeypatch):
             "dynamic_plan": {"shots": [
                 {"t0": 0.0, "t1": 3.0, "composition": "fit"}]}}), encoding="utf-8")
         assert audit.main() == 2, value
+
+
+def test_a_valid_trim_is_measured_and_declares_its_source_jump(
+        tmp_path, monkeypatch, capsys):
+    """R8 is not complete if the unit helper works but the corpus gate still
+    refuses the sidecar or drops the new boundary from its aggregate."""
+    import json
+    import sys
+
+    audit = _audit_module()
+    exports = tmp_path / "p1" / "exports"
+    exports.mkdir(parents=True)
+    (exports / "a.mp4").write_bytes(b"x")
+    _write(exports, "a", _sidecar([
+        {"t0": 0.0, "t1": 10.0, "composition": "fit"}],
+        duration=10.0, drop_spans=[(4.0, 6.0)]))
+    monkeypatch.setattr(audit, "DATA", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["audit", "p1", "--json"])
+
+    assert audit.main() == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["integrity_ok"] is True
+    assert report["macro"]["shots"] == 2
+    assert report["macro"]["trim_jumps"] == 1

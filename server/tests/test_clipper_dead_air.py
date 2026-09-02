@@ -95,6 +95,47 @@ def test_remapping_never_reorders_captions():
     assert out == sorted(out), out
 
 
+def test_reconstructing_a_trim_splits_a_shot_and_names_the_jump():
+    """The two surviving pieces meet on the delivered clock, but source time
+    jumps across the removed span. That is not a normal planner cut."""
+    shots = [{"t0": 0.0, "t1": 10.0, "composition": "fit"}]
+    pieces, jumps = dead_air.delivered_shots(shots, [(4.0, 6.0)])
+
+    assert [(p["t0"], p["t1"]) for p in pieces] == [(0.0, 4.0), (4.0, 8.0)]
+    assert jumps == {1}
+    assert shots == [{"t0": 0.0, "t1": 10.0, "composition": "fit"}], (
+        "an audit must not rewrite the persisted plan it is measuring")
+
+
+def test_a_shot_wholly_inside_removed_time_disappears():
+    shots = [
+        {"t0": 0.0, "t1": 2.0, "composition": "crop"},
+        {"t0": 2.0, "t1": 4.0, "composition": "fit"},
+        {"t0": 4.0, "t1": 8.0, "composition": "crop"},
+    ]
+    pieces, jumps = dead_air.delivered_shots(shots, [(2.0, 4.0)])
+
+    assert [(p["t0"], p["t1"], p["composition"]) for p in pieces] == [
+        (0.0, 2.0, "crop"), (2.0, 6.0, "crop")]
+    assert jumps == {1}
+
+
+def test_a_trim_that_does_not_intersect_a_shot_leaves_it_unchanged():
+    shots = [{"t0": 0.0, "t1": 4.0, "composition": "crop"}]
+    pieces, jumps = dead_air.delivered_shots(shots, [(6.0, 8.0)])
+    assert pieces == shots
+    assert jumps == set()
+
+
+def test_multiple_removed_spans_produce_one_jump_each():
+    pieces, jumps = dead_air.delivered_shots(
+        [{"t0": 0.0, "t1": 12.0, "composition": "crop"}],
+        [(2.0, 4.0), (6.0, 8.0)])
+    assert [(p["t0"], p["t1"]) for p in pieces] == [
+        (0.0, 2.0), (2.0, 4.0), (4.0, 8.0)]
+    assert jumps == {1, 2}
+
+
 # These three used `start`/`end` until 2026-08-17 and passed for months while
 # the feature they cover removed every caption from the clip. The captioner
 # emits `start_t`/`end_t` and `remap_overlays` read `start`/`end`, so every

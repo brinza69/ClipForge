@@ -113,6 +113,70 @@ def remap_time(t: float, spans: Sequence[tuple[float, float]]) -> float:
     return round(max(0.0, t - shift), 3)
 
 
+def _kept_ranges(start: float, end: float,
+                 spans: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Parts of one source interval left after sorted, disjoint removals."""
+    cursor = start
+    out: list[tuple[float, float]] = []
+    for lo, hi in spans:
+        if hi <= cursor:
+            continue
+        if lo >= end:
+            break
+        if lo > cursor:
+            out.append((cursor, min(lo, end)))
+        cursor = max(cursor, hi)
+        if cursor >= end:
+            break
+    if cursor < end:
+        out.append((cursor, end))
+    return out
+
+
+def _interval_was_removed(start: float, end: float,
+                          spans: Sequence[tuple[float, float]]) -> bool:
+    """Whether every source instant between two surviving pieces was cut."""
+    if end <= start:
+        return False
+    covered = sum(max(0.0, min(end, hi) - max(start, lo)) for lo, hi in spans)
+    return abs(covered - (end - start)) <= 0.001
+
+
+def delivered_shots(shots: Sequence[dict], spans: Sequence[tuple[float, float]]
+                    ) -> tuple[list[dict], set[int]]:
+    """Reconstruct the shot pieces the trimmed file actually contains.
+
+    The returned indices name boundaries whose two sides are separated by
+    removed source time. They are trim jumps, not ordinary planner cuts: even
+    two `fit` pieces from the same original shot do not deliver one continuous
+    image after the source skips forward.
+
+    Inputs are already validated by the sidecar reader. The persisted shot
+    dicts are copied, never changed by an audit.
+    """
+    if not spans:
+        return [dict(shot) for shot in shots], set()
+
+    pieces: list[dict] = []
+    source_ranges: list[tuple[float, float]] = []
+    for shot in shots:
+        start, end = float(shot["t0"]), float(shot["t1"])
+        for kept_start, kept_end in _kept_ranges(start, end, spans):
+            mapped_start = remap_time(kept_start, spans)
+            mapped_end = remap_time(kept_end, spans)
+            if mapped_end <= mapped_start:
+                continue
+            pieces.append({**shot, "t0": mapped_start, "t1": mapped_end})
+            source_ranges.append((kept_start, kept_end))
+
+    jumps = {
+        index for index in range(1, len(source_ranges))
+        if _interval_was_removed(source_ranges[index - 1][1],
+                                 source_ranges[index][0], spans)
+    }
+    return pieces, jumps
+
+
 def remap_overlays(overlays: Sequence[dict],
                    spans: Sequence[tuple[float, float]]) -> list[dict]:
     """Caption overlays on the trimmed timeline.

@@ -1,6 +1,8 @@
 """Structural quality metrics for rendered clipper exports.
 
-Batch R0 of `docs/plans/ai-stream-clipper-production-engine-v1.md`. The audit
+Batch R0 of `docs/plans/ai-stream-clipper-production-engine-v1.md`. Batch R8
+adds reconstruction of the delivered sequence when the renderer removed
+`drop_spans`; those source-time jumps are not planner cuts. The audit
 that produced the v3 baseline — 1.341 shots, 29,3/min, 116 invisible cuts — was
 done by hand once. This module is that audit written down, so any agent can
 rerun it and get the same numbers instead of re-deriving them.
@@ -102,7 +104,8 @@ def _num(value: Any) -> float | None:
     return out
 
 
-def _drop_spans(sidecar: dict) -> tuple[list[tuple[float, float]] | None, str | None]:
+def _drop_spans(sidecar: dict, window: float | None = None
+                ) -> tuple[list[tuple[float, float]] | None, str | None]:
     """The seconds this render removed, plus what is wrong with the claim.
 
     Three states, and the first version collapsed two of them:
@@ -115,6 +118,10 @@ def _drop_spans(sidecar: dict) -> tuple[list[tuple[float, float]] | None, str | 
       cannot be read. Returning None for this said "never declared", which is
       the one answer that is certainly wrong: the export did declare something.
       The rule that shots and words already follow, arriving late.
+
+    Reconstruction and `remap_time` require the producer's real contract:
+    positive spans, sorted, disjoint and inside the declared window. An audit
+    must refuse a different sequence rather than silently sort or merge it.
     """
     if "drop_spans" not in sidecar or sidecar.get("drop_spans") is None:
         return None, None
@@ -126,9 +133,13 @@ def _drop_spans(sidecar: dict) -> tuple[list[tuple[float, float]] | None, str | 
         if not isinstance(span, (list, tuple)) or len(span) != 2:
             return None, "malformed_drop_spans"
         a, b = _num(span[0]), _num(span[1])
-        if a is None or b is None or b < a:
+        if (a is None or b is None or a < 0 or b <= a
+                or (out and a < out[-1][1])
+                or (window is not None and b > window + CONTIGUITY_EPS)):
             return None, "malformed_drop_spans"
         out.append((a, b))
+    if window is not None and dead_air.removed_seconds(out) >= window:
+        return None, "malformed_drop_spans"
     return out, None
 
 
@@ -302,8 +313,6 @@ def clip_report(sidecar: dict) -> dict:
         raise TypeError("clip_report needs the parsed sidecar dict")
 
     shots, defect = _shots(sidecar)
-    spans, span_defect = _drop_spans(sidecar)
-    removed = dead_air.removed_seconds(spans) if spans is not None else None
 
     # ABSENT is unknown; PRESENT and unusable is a defect. A zero-length export
     # is not a clip with no shots per minute, and `inf` is not a duration — both
@@ -316,6 +325,8 @@ def clip_report(sidecar: dict) -> dict:
             duration_defect = "invalid_duration"
     if window is not None and window <= 0:
         window = None
+    spans, span_defect = _drop_spans(sidecar, window)
+    removed = dead_air.removed_seconds(spans) if spans is not None else None
     delivered = None if window is None or removed is None else window - removed
     if delivered is not None and delivered <= 0:
         delivered = None
@@ -345,6 +356,9 @@ def clip_report(sidecar: dict) -> dict:
         # a metric that appears later cannot be compared against a baseline.
         "regime": UNAVAILABLE,
         "equivalent_cuts": UNAVAILABLE,
+        # Source-time discontinuities made by `drop_spans`. Kept separate from
+        # planner cuts: a `fit` shot split by trim is not one continuous image.
+        "trim_jumps": UNAVAILABLE,
         "non_contiguous_boundaries": UNAVAILABLE,
         "undecidable_boundaries": UNAVAILABLE,
         "lead_in_s": UNAVAILABLE,
@@ -362,58 +376,53 @@ def clip_report(sidecar: dict) -> dict:
         "defects": [d for d in (defect, span_defect, duration_defect) if d],
     }
 
-    if shots and spans:
-        # A trim does not just move the clock, it changes the EDIT: a shot that
-        # falls entirely inside a removed span is not in the delivered video at
-        # all, and one with a span through its middle becomes two pieces with a
-        # jump between them. Counting the planned shots against the delivered
-        # duration mixes two different videos — a plan of three shots whose
-        # middle one was cut whole still reported `shots=3`.
-        #
-        # Reconstructing the delivered sequence is R1's job and needs a rule for
-        # what a mid-shot trim IS. Until there is one, the shot-based half of
-        # this report is refused rather than guessed. The clock-based half —
-        # duration, lead-in, tail — stays exact, because remapping times is
-        # arithmetic and needs no such rule.
-        report["defects"].append("trimmed_edit_not_reconstructed")
-    elif shots and any(not _times_are_sane(_num(s.get("t0")), _num(s.get("t1")), window)
-                       for s in shots):
+    # Validate the persisted claim, not only the pieces that survive a trim.
+    # Otherwise a shot with an impossible composition becomes "clean" merely
+    # because the renderer removed every frame on which it would have applied.
+    if shots and any(_composition_label(s).startswith("unknown:") for s in shots):
+        report["defects"].append("invalid_composition")
+
+    if shots and any(not _times_are_sane(_num(s.get("t0")), _num(s.get("t1")), window)
+                     for s in shots):
         # A shot whose times cannot be read is not a shot that happens to be
         # missing from `min_shot_s`. Skipping it left the plan looking like a
         # clean edit: the count still included it, its length vanished from the
         # minimum, and its two boundaries became `gap`s — jump cuts that nothing
         # in the plan actually asked for.
         report["defects"].append("malformed_shot_times")
-    elif shots:
+    elif shots and span_defect is None:
+        measured_shots, trim_jumps = dead_air.delivered_shots(shots, spans or [])
+        if not measured_shots:
+            report["shots"] = 0
+            report["trim_jumps"] = 0
+            report["defects"].append("empty_delivered_plan")
+            measured_shots = []
         lengths = []
         composition: dict[str, int] = {}
         regime: dict[str, int] = {}
-        kinds = {"equivalent": 0, "real": 0, "gap": 0, "undecidable": 0}
-        invalid_compositions: set[str] = set()
-        for i, shot in enumerate(shots):
+        kinds = {"equivalent": 0, "real": 0, "trim": 0, "gap": 0, "undecidable": 0}
+        for i, shot in enumerate(measured_shots):
             t0, t1 = _num(shot.get("t0")), _num(shot.get("t1"))
             lengths.append(t1 - t0)
             label = _composition_label(shot)
-            if label.startswith("unknown:"):
-                # An old plan has no `composition` and is undecidable — age is
-                # not corruption, and the corpus is full of them. A plan that
-                # names a composition nobody ever wrote is the other thing, and
-                # treating the two the same let an explicitly invalid plan pass
-                # the gate. The value stays visible in the distribution: it is
-                # the evidence for the finding.
-                invalid_compositions.add(label)
             composition[label] = composition.get(label, 0) + 1
             mode = shot.get("regime")
             mode = mode if isinstance(mode, str) and mode else UNAVAILABLE
             regime[mode] = regime.get(mode, 0) + 1
             if i:
-                kinds[_boundary(shots[i - 1], shot)] += 1
+                if i in trim_jumps:
+                    kinds["trim"] += 1
+                else:
+                    kinds[_boundary(measured_shots[i - 1], shot)] += 1
 
-        if invalid_compositions:
-            report["defects"].append("invalid_composition")
-        report["shots"] = len(shots)
+        report["shots"] = len(measured_shots)
         report["composition"] = composition
         report["regime"] = regime
+        # Legacy sidecars predate `drop_spans`; they prove the planned
+        # boundaries, but not that the delivered file contains no source-time
+        # jumps. Only an explicit trim declaration — including `[]` — can
+        # establish this count.
+        report["trim_jumps"] = kinds["trim"] if spans is not None else UNAVAILABLE
         report["non_contiguous_boundaries"] = kinds["gap"]
         report["undecidable_boundaries"] = kinds["undecidable"]
         # One boundary nobody can judge makes the count of invisible cuts a
@@ -424,8 +433,8 @@ def clip_report(sidecar: dict) -> dict:
         if lengths:
             report["min_shot_s"] = min(lengths)
         if clock is not None:
-            report["shots_per_minute"] = len(shots) / (clock / 60.0)
-    elif defect is None and shots is not None:
+            report["shots_per_minute"] = len(measured_shots) / (clock / 60.0)
+    elif defect is None and shots == []:
         # A dynamic plan that rendered nothing. Counts stay unavailable, but the
         # empty list is itself the finding.
         report["shots"] = 0
@@ -442,10 +451,14 @@ def clip_report(sidecar: dict) -> dict:
         # presented them as the clip's.
         report["defects"].append("malformed_word_times")
         words = None
-    starts = [s for s in (_remap(_num(w.get("start")), spans) for w in (words or []))
-              if s is not None]
-    ends = [e for e in (_remap(_num(w.get("end")), spans) for w in (words or []))
-            if e is not None]
+    # A corrupt trim declaration makes the delivered word clock unknowable.
+    # Falling back to the window would produce precise lead/tail figures for a
+    # file whose removed seconds the audit explicitly failed to read.
+    measured_words = words if span_defect is None else []
+    starts = [s for s in (_remap(_num(w.get("start")), spans)
+                          for w in (measured_words or [])) if s is not None]
+    ends = [e for e in (_remap(_num(w.get("end")), spans)
+                        for w in (measured_words or [])) if e is not None]
     if starts:
         report["lead_in_s"] = min(starts)
     if ends and clock is not None:

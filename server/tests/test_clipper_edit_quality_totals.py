@@ -15,6 +15,21 @@ from tests.test_clipper_edit_quality import _crop_fit_fit_crop, _shot, _sidecar
 # --- aggregation -------------------------------------------------------------
 
 
+def test_trim_jumps_are_totalled_only_with_full_coverage():
+    trimmed = eq.clip_report(_sidecar(
+        [_shot(0.0, 10.0, "fit")], duration=10.0,
+        drop_spans=[(4.0, 6.0)]))
+    plain = eq.clip_report(_sidecar(
+        [_shot(0.0, 10.0, "crop")], duration=10.0, drop_spans=[]))
+    complete = totals.project_report("p1", [trimmed, plain])
+    assert complete["trim_jumps"] == 1
+    assert complete["coverage"]["trim_jumps"] == 2
+
+    incomplete = totals.project_report("p1", [trimmed, eq.clip_report(_sidecar(None))])
+    assert incomplete["trim_jumps"] == eq.UNAVAILABLE
+    assert incomplete["trim_jumps_known_lower_bound"] == 1
+
+
 def test_a_clip_with_no_shots_adds_nothing_to_a_tally_counted_in_shots():
     """The composition totals came out twelve above the shot count, because a
     static export contributed one `unavailable` to a tally whose unit is shots."""

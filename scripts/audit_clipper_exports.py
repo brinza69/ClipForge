@@ -170,6 +170,7 @@ def _print_totals(label: str, t: dict) -> None:
     row("composition", _fmt(t["composition"]))
     row("regime", _fmt(t["regime"]))
     row("equivalent fit->fit cuts", _fmt(t["equivalent_cuts"]))
+    row("trim-induced source jumps", _fmt(t["trim_jumps"]))
     row("undecidable boundaries", _fmt(t["undecidable_boundaries"]))
     row("non-contiguous boundaries", _fmt(t["non_contiguous_boundaries"]))
     row("start on first word",

@@ -87,6 +87,7 @@ def _totals(rows: Sequence[dict]) -> dict:
     shots = _available(rows, "shots")
     minimums = _available(rows, "min_shot_s")
     equivalent = _available(rows, "equivalent_cuts")
+    trim_jumps = _available(rows, "trim_jumps")
     broken = _available(rows, "non_contiguous_boundaries")
     undecidable = _available(rows, "undecidable_boundaries")
     lead_ins = _available(rows, "lead_in_s")
@@ -122,6 +123,11 @@ def _totals(rows: Sequence[dict]) -> dict:
                             else UNAVAILABLE),
         "equivalent_cuts_known_lower_bound": (int(sum(equivalent)) if equivalent
                                               else UNAVAILABLE),
+        "trim_jumps": (int(sum(trim_jumps))
+                       if trim_jumps and len(trim_jumps) == len(rows)
+                       else UNAVAILABLE),
+        "trim_jumps_known_lower_bound": (int(sum(trim_jumps)) if trim_jumps
+                                         else UNAVAILABLE),
         "non_contiguous_boundaries": int(sum(broken)) if broken else UNAVAILABLE,
         "undecidable_boundaries": int(sum(undecidable)) if undecidable else UNAVAILABLE,
         # Counted, not averaged. "Half the clips start on the first word" is the
@@ -148,6 +154,7 @@ def _totals(rows: Sequence[dict]) -> dict:
             "shots": len(shots),
             "min_shot_s": len(minimums),
             "equivalent_cuts": len(equivalent),
+            "trim_jumps": len(trim_jumps),
             "non_contiguous_boundaries": len(broken),
             "lead_in_s": len(lead_ins),
             "tail_s": len(tails),

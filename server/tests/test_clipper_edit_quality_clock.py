@@ -25,18 +25,54 @@ def test_the_seconds_the_render_removed_come_off_the_clock():
     assert report["duration_clock"] == "delivered"
 
 
-def test_a_trim_refuses_the_shot_metrics_instead_of_guessing_them():
-    """A trim changes the EDIT, not just the clock. The middle shot here is not
-    in the delivered video at all, and remapping times alone still reported
-    `shots=3` — three shots counted against a duration that holds two."""
+def test_a_trim_reconstructs_the_delivered_shot_sequence():
+    """The middle shot is absent from the delivered video. The two surviving
+    pieces meet because of a source-time jump, not a normal planner cut."""
     report = eq.clip_report(_sidecar(
         [_shot(0.0, 2.0, "crop"), _shot(2.0, 4.0, "fit"), _shot(4.0, 8.0, "crop")],
         duration=8.0, drop_spans=[(2.0, 4.0)]))
-    assert "trimmed_edit_not_reconstructed" in report["defects"]
+    assert report["defects"] == []
     assert report["duration_s"] == 6.0
+    assert report["shots"] == 2
+    assert report["shots_per_minute"] == 20.0
+    assert report["min_shot_s"] == 2.0
+    assert report["composition"] == {"crop": 2}
+    assert report["equivalent_cuts"] == 0
+    assert report["trim_jumps"] == 1
+    assert report["non_contiguous_boundaries"] == 0
+
+
+def test_a_mid_shot_trim_is_not_counted_as_an_equivalent_cut():
+    """Both pieces retain `fit`, but the image jumps forward in source time.
+    Calling that boundary `equivalent` would hide the edit R8 exists to name."""
+    report = eq.clip_report(_sidecar(
+        [_shot(0.0, 10.0, "fit")], duration=10.0,
+        drop_spans=[(4.0, 6.0)]))
+    assert report["shots"] == 2
+    assert report["composition"] == {"fit": 2}
+    assert report["equivalent_cuts"] == 0
+    assert report["trim_jumps"] == 1
+
+
+def test_normal_boundaries_survive_beside_a_trim_jump():
+    report = eq.clip_report(_sidecar(
+        [_shot(0.0, 2.0, "crop"), _shot(2.0, 8.0, "fit")],
+        duration=8.0, drop_spans=[(5.0, 6.0)]))
+    assert report["shots"] == 3
+    assert report["trim_jumps"] == 1
+    assert report["equivalent_cuts"] == 0
+    assert report["non_contiguous_boundaries"] == 0
+
+
+def test_an_explicit_empty_trim_preserves_every_shot_metric():
+    shots = [_shot(0.0, 3.0, "crop"), _shot(3.0, 10.0, "fit")]
+    plain = eq.clip_report(_sidecar(shots, duration=10.0))
+    declared = eq.clip_report(_sidecar(shots, duration=10.0, drop_spans=[]))
     for key in ("shots", "shots_per_minute", "min_shot_s", "composition",
                 "equivalent_cuts", "non_contiguous_boundaries"):
-        assert report[key] == eq.UNAVAILABLE, key
+        assert declared[key] == plain[key], key
+    assert plain["trim_jumps"] == eq.UNAVAILABLE
+    assert declared["trim_jumps"] == 0
 
 
 def test_word_times_are_remapped_before_the_tail_is_measured():
@@ -57,6 +93,7 @@ def test_an_export_that_never_declared_its_trim_is_measured_on_the_window():
     assert report["removed_s"] == eq.UNAVAILABLE
     assert report["duration_clock"] == "window"
     assert report["duration_s"] == 10.0
+    assert report["trim_jumps"] == eq.UNAVAILABLE
 
 
 def test_a_corrupt_trim_claim_is_a_finding_not_a_missing_one():
@@ -68,11 +105,45 @@ def test_a_corrupt_trim_claim_is_a_finding_not_a_missing_one():
     assert "malformed_drop_spans" in report["defects"]
     assert report["removed_s"] == eq.UNAVAILABLE
     assert report["duration_clock"] == "window"
+    assert "empty_dynamic_plan" not in report["defects"]
+    for key in ("shots", "shots_per_minute", "min_shot_s", "composition",
+                "equivalent_cuts", "trim_jumps", "non_contiguous_boundaries",
+                "lead_in_s", "tail_s"):
+        assert report[key] == eq.UNAVAILABLE, key
 
 
 def test_a_backwards_trim_span_is_corrupt_too():
     report = eq.clip_report(_sidecar([_shot(0.0, 10.0)], drop_spans=[[4.0, 1.0]]))
     assert "malformed_drop_spans" in report["defects"]
+
+
+def test_overlapping_or_unsorted_trim_spans_are_corrupt():
+    for spans in ([(2.0, 5.0), (4.0, 6.0)], [(5.0, 6.0), (2.0, 3.0)]):
+        report = eq.clip_report(_sidecar(
+            [_shot(0.0, 10.0)], duration=10.0, drop_spans=spans))
+        assert "malformed_drop_spans" in report["defects"], spans
+
+
+def test_a_trim_span_outside_the_window_is_corrupt():
+    report = eq.clip_report(_sidecar(
+        [_shot(0.0, 10.0)], duration=10.0, drop_spans=[(8.0, 12.0)]))
+    assert "malformed_drop_spans" in report["defects"]
+
+
+def test_a_trim_cannot_remove_the_entire_declared_window():
+    report = eq.clip_report(_sidecar(
+        [_shot(0.0, 10.0)], duration=10.0, drop_spans=[(0.0, 10.0)]))
+    assert "malformed_drop_spans" in report["defects"]
+    assert report["duration_clock"] == "window"
+
+
+def test_trim_does_not_hide_an_invalid_composition_it_removed():
+    report = eq.clip_report(_sidecar(
+        [_shot(0.0, 2.0, "crop"), _shot(2.0, 4.0, "banana"),
+         _shot(4.0, 8.0, "crop")],
+        duration=8.0, drop_spans=[(2.0, 4.0)]))
+    assert "invalid_composition" in report["defects"]
+    assert report["composition"] == {"crop": 2}
 
 
 def test_an_absent_trim_claim_is_not_a_defect():

@@ -98,11 +98,12 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 4. Clipper R7: preflight de publicare. **Livrat 31 august 2026.** Pe corpus: 0 APPROVE, 33 REVISE,
    37 REJECT, 31 UNDECIDED — cele 37 de respingeri sunt captions-urile duble din sursă, defectul cu
    care s-a deschis R0. Nu e cablat la randare.
-5. Clipper R8: reconstrucția montajului după trim — NEÎNCEPUT.
-5. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
-6. Consistență între DB și filesystem și idempotency pentru job-urile de export.
-7. Upload streaming și limite reale de memorie/disk.
-8. Readiness checks și teste de reziliență pentru aplicația întreagă.
+5. Clipper R8: reconstrucția montajului după trim — ÎNCHIS 2 septembrie 2026; salturile create de
+   `drop_spans` sunt măsurate separat de tăieturile plannerului.
+6. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
+7. Consistență între DB și filesystem și idempotency pentru job-urile de export.
+8. Upload streaming și limite reale de memorie/disk.
+9. Readiness checks și teste de reziliență pentru aplicația întreagă.
 
 ## Handover pe module
 

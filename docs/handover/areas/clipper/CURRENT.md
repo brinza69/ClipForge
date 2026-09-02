@@ -160,10 +160,9 @@ Ce trebuie știut înainte să te bazezi pe el:
 - **`captions_duplicate_declared` iese `unavailable` pe tot corpusul, și e corect.** Nimic din
   sidecar nu declară că sursa avea deja subtitrări arse; cei 15/15 pe go ghost au fost o observație
   umană. R6 trebuie să producă semnalul.
-- **Un trim refuză jumătatea bazată pe shot-uri.** `drop_spans` schimbă montajul, nu doar ceasul, iar
-  evaluatorul marchează `trimmed_edit_not_reconstructed` în loc să ghicească. Reconstrucția secvenței
-  livrate este **Batch R8**, un batch propriu — nu a lui R1, care este despre echivalență. Ceasul,
-  lead-in-ul și tail-ul rămân exacte.
+- **Un trim este reconstruit pe ceasul livrat din R8.** Un shot eliminat complet dispare, unul tăiat
+  prin mijloc devine două bucăți, iar saltul peste timpul eliminat intră în `trim_jumps`, nu în
+  tăieturile planificate sau echivalente. Ceasul, lead-in-ul și tail-ul rămân exacte.
 - Sidecar-ul poartă acum `render_version` (care renderer a rulat, static sau dinamic),
   `input_fingerprint`, `drop_spans`, `caption_y` și dimensiunea sursei. Nimic nu este ștampilat
   retroactiv.
@@ -836,6 +835,20 @@ invizibile** — 20 de shot-uri devin 3 prin `merge_equivalent_shots`. Pe tot co
 n-a ajuns niciodată într-un export**, fiindcă re-randarea din 31 august a rejucat planurile stocate
 în loc să re-planifice. Cel puțin 6 din cele 11 clipuri marcate `bad` poartă și tăieturi invizibile.
 
+## Batch R8 — ÎNCHIS, 2 septembrie 2026
+
+`dead_air.delivered_shots` reconstruiește secvența pe care a livrat-o FFmpeg prin intersecția
+shot-urilor planificate cu intervalele păstrate. Un shot fără nicio durată rămasă dispare; unul
+secționat produce două bucăți, iar joncțiunea care sare peste timp eliminat este declarată separat
+ca `trim_jumps`, niciodată drept tăietură normală sau echivalentă. Agregarea păstrează aceeași regulă
+ca echivalența: total complet sau `unavailable`, cu limita inferioară numită separat.
+
+Span-urile declarate sunt acceptate numai dacă sunt pozitive, sortate, fără suprapunere și, când
+fereastra este declarată, în interiorul ei. Auditul R0 trece neschimbat pe piloturi: **58 clipuri,
+1.341 shot-uri și 116 tăieturi echivalente**. `trim_jumps` este `unavailable`, nu zero: cele 58 de
+sidecar-uri precedă cheia `drop_spans`, deci nu demonstrează că n-a existat trim. Gate-ul R8 este
+acoperit prin cazurile sintetice și prin intrarea reală a auditului.
+
 ## Batch S7 — primul item livrat, 31 august 2026
 
 `quote_resolver.py` + `scripts/measure_quote_drift.py`. Vezi
@@ -911,17 +924,17 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    sare deliberat peste shot-urile de față, deci fețele și textul sursei au nevoie de mapper propriu.
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 8. **R7** — preflight de publicare și corecția bounded (maximum una).
-9. **R8** — reconstrucția secvenței livrate după trim; până atunci `edit_quality` refuză jumătatea
-   bazată pe shot-uri pe exporturile cu `drop_spans`.
-10. **S7** — închiderea infrastructurii reasoning v2.
+9. ~~**R8** — reconstrucția secvenței livrate după trim.~~ **ÎNCHIS 2 septembrie 2026.**
+10. **S7** — închiderea infrastructurii reasoning v2; resolverul determinist este livrat, au rămas
+    envelope/fingerprint, recovery per chunk, `anchor_id`, scara dedupe și identitatea comună de run.
 11. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
 12. **P** — activarea graduală.
 
 **În afara planului:** pipeline-ul TikTok nu e construit — router-ul nu e montat, sidebar-ul duce la o
 pagină inexistentă, iar cele două teste care pică în suită sunt ale lui, de dinaintea acestor sesiuni.
 
-Nu porni Batch R7–R8 în paralel și nu activa `story_v2`. Planul separă gate-ul de selecție de gate-ul
-de randare tocmai fiindcă review-ul existent le-a amestecat.
+Nu activa `story_v2`. Planul separă gate-ul de selecție de gate-ul de randare tocmai fiindcă
+review-ul existent le-a amestecat.
 
 ## Starea artefactului curent
 

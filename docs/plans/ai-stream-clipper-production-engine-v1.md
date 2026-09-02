@@ -886,7 +886,7 @@ ridica un warning sau propune singura corecție permisă, nu poate declara singu
 **Gate:** maximum o corecție; rerun-ul produce rezultat stabil; un eșec al modelului nu blochează
 jobul, dar nici nu șterge warning-ul.
 
-### Batch R8 — reconstrucția secvenței livrate după trim
+### Batch R8 — ÎNCHIS, 2 septembrie 2026 — reconstrucția secvenței livrate după trim
 
 **Scop:** un montaj din care s-au tăiat secunde să poată fi măsurat, nu doar refuzat.
 
@@ -897,7 +897,8 @@ mijlocul unui shot, evaluatorul refuză jumătatea bazată pe shot-uri și march
 `trimmed_edit_not_reconstructed`. Handover-ul a atribuit o vreme această reconstrucție lui R1; nu îi
 aparține — R1 este despre echivalență, nu despre trim.
 
-**Fișiere:** `edit_quality.py`, `dead_air.py`, testele lor.
+**Fișiere:** `edit_quality.py`, `dead_air.py`, `edit_quality_totals.py`,
+`audit_clipper_exports.py`, testele lor.
 
 **Modificări:**
 
@@ -908,6 +909,18 @@ aparține — R1 este despre echivalență, nu despre trim.
 
 **Gate:** un export cu `trim_silence` produce aceleași metrici ca varianta netăiată acolo unde trimul
 nu atinge nimic, iar acolo unde atinge, cifrele se explică prin intervalele eliminate.
+
+**Implementat:** `dead_air.delivered_shots` intersectează fiecare shot cu intervalele păstrate și
+întoarce atât bucățile pe ceasul livrat, cât și indicii joncțiunilor care sar peste timp eliminat.
+Evaluatorul numără acele joncțiuni în `trim_jumps`, separat de tăieturile planificate și de
+echivalență. Un shot eliminat complet dispare; unul tăiat prin mijloc devine două bucăți. Span-urile
+de trim declarate trebuie să fie pozitive, sortate, fără suprapunere și în interiorul ferestrei;
+altfel artefactul este refuzat, nu normalizat.
+
+Gate-ul automat trece inclusiv prin `audit_clipper_exports.main()`. Baseline-ul celor 58 de
+piloturi rămâne exact 1.341 shot-uri și 116 tăieturi echivalente. `trim_jumps` rămâne `unavailable`:
+sidecar-urile precedă cheia `drop_spans`, iar absența declarației nu demonstrează zero. Reconstrucția
+este demonstrată de cazurile sintetice, nu prezentată fals drept măsurătoare pe corpusul pilot.
 
 ### Batch S7 — închiderea infrastructurii reasoning v2
 
