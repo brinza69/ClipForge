@@ -957,10 +957,34 @@ media, separat de aprobările de produs. Rezultatele vechi se pot citi; sesiunil
 snapshot nu mai pot primi răspunsuri noi. Nu s-au modificat fișierele media sau creat review-uri reale.
 
 **Limită explicită:** hash-ul leagă bytes, nu certifică imaginea, durata, vizionarea de către om
-sau asocierea istorică sidecar/encode. S8a nu închide S8. Urmează protecția dezvăluirii rezultatelor,
+sau asocierea istorică sidecar/encode. S8a nu închide S8. Urmează
 randarea neutră, payoff/diversitate în rubrică, review tehnic separat, minimum 10 SURSE distincte
 (nu 10 proiecte/clonări) și 150 de momente, macro-agregare și intervale de încredere. Teste:
 **1.739 passed, 2 failed**, aceleași 404 TikTok; typecheck curat.
+
+## Batch S8b — dezvăluire numai după completare, 3 septembrie 2026
+
+Ruta `/result` și butonul nu mai arată nici board-urile, nici tally-ul parțial înaintea ultimului
+răspuns valid. Completitudinea compară id-urile planificate cu cele judecate, nu doar numărul.
+Răspunsurile salvate nu mai pot fi rescrise; o retrimitere identică este acceptată fără feedback
+dublat. Lock-ul OS din `review_lock.py` acoperă citirea/scrierea și copia feedback în ambele procese
+de backend, nu numai într-un event loop. Concurența primește 409 retryabil; lock-ul se eliberează
+la ieșirea procesului. Fișierul mic `.lock` rămâne intenționat pe disc pentru a nu crea doi inodes
+independenți sub același nume. Nu este un job persistent care trebuie deblocat manual.
+
+Sesiunea JSON rămâne sursa de adevăr. Dacă salvarea răspunsului reușește și DB-ul pică, retrimiterea
+aceluiași răspuns completează feedback-ul lipsă; nu rescrie judecata. Sesiunile vechi (schema 1/2)
+pot fi consultate ca istorice, dar nu pot continua: rezultatul lor putea fi dezvăluit pe parcurs.
+Schema nouă este 3, politica `sealed_until_complete_v1`; rubrica rămâne `blind_eval_v1`.
+UI-ul permite consultarea istoricului sau pornirea unei alte sesiuni când reluarea este refuzată.
+
+**Următorul pas implementabil:** randare neutră separată pentru evaluare și rubrica S8 completă,
+nu activarea motorului. Trebuie păstrate cohorta de surse distincte, review-ul tehnic separat și
+gate-urile umane; protecția API-ului nu demonstrează superioritate semantică. Nu s-a rulat vreun
+model și nu s-au creat sesiuni reale în S8a/S8b.
+
+Verificare după S8b: **1.752 passed, 2 failed**, numai cele două 404 TikTok preexistente;
+66 teste de review trec, inclusiv API și două procese; typecheck curat.
 
 ## Punctul exact de reluare
 
@@ -1019,8 +1043,9 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
 9. ~~**R8** — reconstrucția secvenței livrate după trim.~~ **ÎNCHIS 2 septembrie 2026.**
 10. ~~**S7** — resolverul determinist, envelope/fingerprint, recovery per chunk și per rundă,
     `anchor_id`, scara dedupe și identitatea comună selection/render.~~ **ÎNCHIS 3 septembrie 2026.**
-11. **S8** — S8a leagă sesiunea de media exactă; continuă protecția dezvăluirii, randarea neutră
-    și evaluarea selecției, minimum 10 surse distincte și 150 de momente. Gate-ul rămâne deschis.
+11. **S8** — S8a leagă sesiunea de media exactă, S8b protejează dezvăluirea și răspunsurile;
+    continuă randarea neutră și evaluarea selecției, minimum 10 surse distincte și 150 de momente.
+    Gate-ul rămâne deschis.
 12. **P** — activarea graduală.
 
 **În afara planului:** pipeline-ul TikTok nu e construit — router-ul nu e montat, sidebar-ul duce la o
@@ -1095,8 +1120,8 @@ Reparat, dar artefactul existent păstrează cifra veche: la o comparație, ia `
   tehnice. `story_v2` rămâne refuzat până la review-ul separat din Batch S8.
 - **Batch 8 e blocat pe date.** `training_rows()` întoarce 0 de la 2a încoace, corect: un set cu o
   singură clasă e mai periculos decât niciunul. Ranker-ul rămâne dormant.
-- **Reasoning Batch 7, 9 și 10 nu sunt închise.** Noul plan le continuă ca S7/S8 după stabilizarea
-  randării; nu se șterg și nu se consideră înlocuite.
+- **Reasoning Batch 7 este închis prin S7a–S7f; 9 și 10 nu sunt închise.** S8a/S8b protejează
+  review-ul, dar nu înlocuiesc gate-urile de randare și evaluarea umană din plan.
 - **Rendererul v3 nu este aprobat pentru publicare automată.** Geometria trece, dar auditul a găsit
   116 tăieturi invizibile, ritm de 29,3/min, boundaries fără padding, captions duble și browser UI.
   Din lista aia, captions-urile duble sunt acum DETECTATE (R7 respinge 37 de clipuri pentru ele) și

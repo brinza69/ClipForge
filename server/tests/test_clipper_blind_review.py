@@ -223,6 +223,10 @@ def test_a_board_nobody_reviewed_has_no_precision_rather_than_zero():
 
 def test_reveal_is_the_only_way_to_learn_membership():
     session = review.create("s1", _rows(), seed=7)
+    with pytest.raises(review.ReviewConflict, match="not_complete"):
+        review.reveal(session)
+    for handle in session["order"]:
+        review.record(session, handle, _answer())
     rows = review.reveal(session)
     assert {r["membership"] for r in rows} == {review.LEGACY, review.SHADOW,
                                               review.BOTH}

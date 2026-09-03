@@ -1027,8 +1027,19 @@ Gate automat: **1.739 teste backend trec, 2 pică** (404 TikTok preexistente); t
 
 **S8 rămâne deschis.** S8a nu dovedește că un sidecar istoric a fost scris de encode-ul alăturat,
 că video-ul este tehnic valid sau că omul l-a urmărit. Urmează randarea neutră, rubrica completă
-cu payoff/diversitate și separarea review-ului tehnic, protecția dezvăluirii rezultatelor, cohorta
-de surse distincte și agregarea de mai jos. Nu s-au creat sesiuni reale și nu s-a activat niciun mod.
+cu payoff/diversitate și separarea review-ului tehnic, cohorta de surse distincte și agregarea de
+mai jos. Nu s-au creat sesiuni reale și nu s-a activat niciun mod.
+
+**S8b livrat, 3 septembrie 2026 — review-ul nu se dezvăluie pe parcurs.** API-ul și butonul
+refuză rezultatul înainte ca FIECARE item planificat să aibă răspuns valid; aceeași numărătoare
+de răspunsuri pentru alte id-uri nu trece. Nici tally-ul parțial nu este expus. Un răspuns salvat
+nu poate fi modificat, iar retrimiterea lui identică nu dublează feedback-ul. Un lock de proces
+protejează citirea/scrierea sesiunii în ambele backend-uri; o cerere concurentă este refuzată
+explicit și poate fi retrimisă. Dacă scrierea feedback-ului a picat după salvarea sesiunii,
+retrimiterea completează copia DB din același răspuns. Sesiunile de schema 1/2 rămân rezultate
+istorice read-only; nu pot primi retrospectiv promisiunea nouă de blinding. Rubrica rămâne v1,
+iar cele două evaluări umane ale S8 nu au fost rulate. Gate automat după S8b: **1.752 teste
+backend trec, 2 pică** (404 TikTok preexistente); cele 66 teste de review trec, typecheck curat.
 
 **Metodă:**
 

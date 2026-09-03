@@ -945,8 +945,10 @@ Aici se plătește costul de etichetare umană, o singură dată, când tot rest
 **Progres parțial, 3 septembrie 2026:** Batch S8a din planul de producție leagă sesiunile noi de
 amprentele complete ale exportului și sidecarului, de versiunea observată și de rularea selecției.
 Schimbarea media refuză continuarea; datele curente din DB nu înlocuiesc prezentarea înghețată.
-Este infrastructură de evaluare, nu închiderea golden gate-ului: randarea neutră, rubrica completă,
-protecția dezvăluirii și cohortele/review-ul uman rămân de făcut. `story_v2` rămâne indisponibil.
+S8b refuză dezvăluirea până la completarea tuturor itemilor, păstrează răspunsurile imuabile și
+protejează salvarea față de cereri concurente sau retrimise. Este infrastructură de evaluare,
+nu închiderea golden gate-ului: randarea neutră, rubrica completă și cohortele/review-ul uman
+rămân de făcut. `story_v2` rămâne indisponibil.
 
 **Modificări:**
 

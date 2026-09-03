@@ -11,9 +11,9 @@ answers that. A person has to watch the clips.
 
 WHY IT HAS TO BE BLIND. With that much disagreement an unblinded review measures
 what the reviewer believes about v2, not what the clips are worth. So membership
-never leaves this module: the client is handed an opaque `review_item_id` and
-the clip's own neutral data, and which board asked for a clip is resolved only
-when an answer comes back.
+never reaches the reviewer while the session is running: the client is handed
+an opaque `review_item_id` and the clip's own neutral data. Board membership is
+revealed only after every item has a saved answer; saved answers cannot change.
 
 WHY THE ORDER IS PERSISTED RATHER THAN DERIVED. Recomputing a shuffle from a
 seed on every load is reproducible only while the item list, the sort and the
@@ -45,7 +45,12 @@ from typing import Any, Iterable, Sequence
 RUBRIC_VERSION = "blind_eval_v1"
 
 #: Bumped when the stored SHAPE changes, independently of the questions.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+BLINDING_POLICY = "sealed_until_complete_v1"
+
+
+class ReviewConflict(ValueError):
+    """A request would break the session's blinding or immutable answers."""
 
 LEGACY = "legacy"
 SHADOW = "shadow"
@@ -146,6 +151,7 @@ def create(session_id: str, rows: Iterable[dict], *, seed: int | None = None) ->
     return {
         "schema_version": SCHEMA_VERSION,
         "rubric_version": RUBRIC_VERSION,
+        "blinding_policy": BLINDING_POLICY,
         # One label only when EVERY observed sidecar declares that version.
         # Installed renderer code cannot identify already-rendered bytes.
         "render_version": versions[0] if version_complete and len(versions) == 1 else None,
@@ -177,6 +183,32 @@ def progress(session: dict) -> dict:
     done = len(session.get("answers") or {})
     return {"answered": done, "total": total,
             "remaining": max(0, total - done)}
+
+
+def sealed_review(session: dict) -> bool:
+    return (session.get("schema_version") == SCHEMA_VERSION
+            and session.get("blinding_policy") == BLINDING_POLICY)
+
+
+def historical_review(session: dict) -> bool:
+    return (type(session.get("schema_version")) is int
+            and session["schema_version"] in (1, 2)
+            and session.get("blinding_policy") is None)
+
+
+def complete(session: dict) -> bool:
+    """Every planned item has a valid answer, not merely N answers for N slots."""
+    order, items, answers = session.get("order"), session.get("items"), session.get("answers")
+    if (not isinstance(order, list) or not order or not isinstance(items, list)
+            or not isinstance(answers, dict)):
+        return False
+    try:
+        handles = {item["review_item_id"] for item in items}
+        return (len(set(order)) == len(order) == len(items)
+                and set(order) == handles == set(answers)
+                and all(not validate(answer) for answer in answers.values()))
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def validate(answer: dict) -> str:
@@ -213,6 +245,8 @@ def record(session: dict, review_item_id: str, answer: dict) -> dict:
     the first — and a position recovered later from `order` is only correct
     while the order has never been rebuilt.
     """
+    if not sealed_review(session):
+        raise ReviewConflict("historical_review_read_only")
     item = _item_of(session, review_item_id)
     if item is None:
         raise KeyError(f"no such review item: {review_item_id}")
@@ -221,7 +255,7 @@ def record(session: dict, review_item_id: str, answer: dict) -> dict:
         raise ValueError(problem)
 
     order = list(session.get("order") or ())
-    session.setdefault("answers", {})[review_item_id] = {
+    normalised = {
         **{k: answer[k] for k in _ANSWERABLE},
         "reject_reasons": list(answer.get("reject_reasons") or []),
         "note": str(answer.get("note") or "")[:2000],
@@ -230,6 +264,13 @@ def record(session: dict, review_item_id: str, answer: dict) -> dict:
                      if review_item_id in order else None),
         "rubric_version": session.get("rubric_version") or RUBRIC_VERSION,
     }
+    answers = session.setdefault("answers", {})
+    if review_item_id in answers:
+        existing = answers[review_item_id]
+        if all(existing.get(k) == v for k, v in normalised.items()):
+            return existing  # Identical network retry, including after completion.
+        raise ReviewConflict("answer_already_recorded")
+    answers[review_item_id] = normalised
     return session["answers"][review_item_id]
 
 
@@ -317,6 +358,11 @@ def public_item(session: dict, review_item_id: str, clip: dict) -> dict:
 
 def reveal(session: dict, review_item_ids: Sequence[str] | None = None) -> list[dict]:
     """Membership, for reading the results — never for rendering the review."""
+    if not historical_review(session):
+        if not sealed_review(session):
+            raise ReviewConflict("unsupported_review_contract")
+        if not complete(session):
+            raise ReviewConflict("review_not_complete")
     wanted = set(review_item_ids or ())
     return [
         {"review_item_id": i["review_item_id"], "clip_id": i["clip_id"],

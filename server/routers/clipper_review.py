@@ -31,6 +31,7 @@ from models import ClipModel, ClipperEvent
 from services.clipper import feedback as feedback_mod
 from services.clipper import blind_review as review_mod
 from services.clipper import review_media
+from services.clipper import review_lock
 from services.clipper import storage
 
 logger = logging.getLogger("clipforge.clipper.review")
@@ -159,8 +160,12 @@ async def start_session(body: NewSession,
 @router.get("/{session_id}/next")
 async def get_next(session_id: str) -> dict:
     state = _load(session_id)
+    if not review_mod.sealed_review(state):
+        raise HTTPException(status_code=409, detail="historical_review_read_only")
     handle = review_mod.next_item(state)
     if handle is None:
+        if not review_mod.complete(state):
+            raise HTTPException(status_code=409, detail="review_state_incomplete")
         return {"done": True, **review_mod.progress(state)}
 
     item = next(i for i in state["items"] if i["review_item_id"] == handle)
@@ -174,7 +179,21 @@ async def get_next(session_id: str) -> dict:
 @router.post("/{session_id}/answer")
 async def post_answer(session_id: str, body: Answer,
                       session: AsyncSession = Depends(get_session)) -> dict:
+    # Covers the awaits too: both backend processes serve this same directory.
+    path = _session_path(session_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="no such review session")
+    try:
+        with review_lock.answer_lock(path):
+            return await _store_answer(session_id, body, session)
+    except review_lock.ReviewBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+async def _store_answer(session_id: str, body: Answer, session: AsyncSession) -> dict:
     state = _load(session_id)
+    if not review_mod.sealed_review(state):
+        raise HTTPException(status_code=409, detail="historical_review_read_only")
     payload = body.model_dump()
     handle = payload.pop("review_item_id")
     item = next((i for i in state.get("items", [])
@@ -184,6 +203,8 @@ async def post_answer(session_id: str, body: Answer,
     await _verified_media(item)
     try:
         stored = review_mod.record(state, handle, payload)
+    except review_mod.ReviewConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -205,17 +226,24 @@ async def post_answer(session_id: str, body: Answer,
     # `origin` stays `manual` because origin describes the ACTOR, and a human
     # answered. The CONTEXT goes in the payload; folding "why they were asked"
     # into "who answered" would rebuild the same ambiguity somewhere new.
-    await feedback_mod.record(
-        session, item["clip_id"], item["project_id"],
-        ClipperEvent.reviewed.value,
-        payload={"context": "blind_eval",
-                 "schema_version": review_mod.SCHEMA_VERSION,
-                 "rubric_version": state.get("rubric_version"),
-                 "review_session_id": session_id,
-                 "review_item_id": handle,
-                 **stored},
-        origin=feedback_mod.ORIGIN_MANUAL)
-    await session.commit()
+    # The session is the source of truth. A retry after a DB write failure can
+    # mirror the same saved answer without appending it twice after a lost HTTP
+    # response. The per-session process lock covers this check and write.
+    events = await feedback_mod.events_for_clip(session, item["clip_id"])
+    matches = [e for e in events if e["event_type"] == ClipperEvent.reviewed.value
+               and e["payload"].get("review_session_id") == session_id
+               and e["payload"].get("review_item_id") == handle]
+    if not matches:
+        await feedback_mod.record(
+            session, item["clip_id"], item["project_id"],
+            ClipperEvent.reviewed.value,
+            payload={"context": "blind_eval",
+                     "schema_version": state["schema_version"],
+                     "rubric_version": state.get("rubric_version"),
+                     "review_session_id": session_id,
+                     "review_item_id": handle,
+                     **stored},
+            origin=feedback_mod.ORIGIN_MANUAL)
 
     return {"ok": True, **review_mod.progress(state)}
 
@@ -265,14 +293,20 @@ async def _verified_media(item: dict):
 async def get_result(session_id: str) -> dict:
     """The comparison, and the membership that was hidden until now.
 
-    Available whenever it is asked for, including mid-session. Withholding it
-    would only push the reviewer to reconstruct it from the board, and a partial
-    tally is honestly labelled by `reviewed` counts.
+    No partial tally: even without clip ids it can reveal which board selected
+    the last answered item. Historical results stay readable, explicitly not
+    covered by the new policy, and their sessions cannot accept more answers.
     """
     state = _load(session_id)
+    try:
+        items = review_mod.reveal(state)
+    except review_mod.ReviewConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"session_id": session_id,
+            "historical": review_mod.historical_review(state),
+            "blinding_policy": state.get("blinding_policy"),
             "rubric_version": state.get("rubric_version"),
             "seed": state.get("seed"),
             **review_mod.progress(state),
             "tally": review_mod.tally(state),
-            "items": review_mod.reveal(state)}
+            "items": items}

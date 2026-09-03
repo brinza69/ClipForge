@@ -270,6 +270,7 @@ async def test_old_results_stay_readable_but_cannot_accept_new_unbound_answers(
     state = blind_review.create("historical", [{"clip_id": "old", "project_id": "old",
                                                 "rank_position": 1}], seed=1)
     state["schema_version"] = 1
+    state.pop("blinding_policy")
     clipper_review._save(state)
     handle = state["order"][0]
     assert (await client.get("/api/clipper/review/historical/result")).status_code == 200

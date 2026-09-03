@@ -37,6 +37,8 @@ export default function ClipperReviewPage() {
   const [next, setNext] = useState<ReviewNext | null>(null);
   const [result, setResult] = useState<ReviewResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sessionIssue, setSessionIssue] = useState<string | null>(null);
+  const [historical, setHistorical] = useState(false);
 
   useEffect(() => {
     // The session id is the only thing kept on the client, and only so a reload
@@ -61,12 +63,22 @@ export default function ClipperReviewPage() {
     try {
       const r = await fetch(`${REVIEW_API}/${id}/next`);
       if (!r.ok) {
+        const body = await r.clone().json().catch(() => null);
+        const old = body?.detail === "historical_review_read_only";
+        setHistorical(old);
+        setNext(null);
         const e = await readApiError(r, "Nu am putut încărca următorul clip");
+        setSessionIssue(old
+          ? "Sesiunea veche poate fi consultată, dar nu mai poate primi răspunsuri. Pornește una nouă pentru un review protejat."
+          : "Sesiunea nu poate continua. Fișierul sau datele lui nu mai corespund verificării; vezi detaliile erorii.");
         toast.error(e.message, { description: errorDescription(e) });
         return;
       }
+      setSessionIssue(null);
+      setHistorical(false);
       setNext((await r.json()) as ReviewNext);
     } catch {
+      setSessionIssue("Nu am putut contacta serverul. Poți reîncerca fără să pierzi răspunsurile salvate.");
       toast.error("Nu am putut încărca următorul clip.");
     }
   }, []);
@@ -150,6 +162,8 @@ export default function ClipperReviewPage() {
     setSessionId(null);
     setNext(null);
     setResult(null);
+    setSessionIssue(null);
+    setHistorical(false);
   }
 
   return (
@@ -160,7 +174,8 @@ export default function ClipperReviewPage() {
           <h1 className="text-2xl font-semibold">Review orb</h1>
           <p className="text-sm text-muted-foreground">
             Clipuri amestecate din ambele board-uri. Care motor le-a ales nu
-            ajunge la această pagină — se află abia la rezultat.
+            ajunge la această pagină până nu termini toate clipurile.
+            Răspunsurile salvate nu mai pot fi schimbate.
           </p>
         </div>
       </header>
@@ -194,6 +209,21 @@ export default function ClipperReviewPage() {
         </section>
       )}
 
+      {sessionId && sessionIssue && (
+        <section className="space-y-3 rounded-lg border p-4">
+          <p role="alert" className="text-sm">{sessionIssue}</p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => void loadNext(sessionId)}>
+              Reîncearcă
+            </Button>
+            {historical && (
+              <Button size="sm" variant="outline" onClick={showResult}>Rezultat istoric</Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={reset}>Sesiune nouă</Button>
+          </div>
+        </section>
+      )}
+
       {sessionId && next && rubric && (
         <section className="space-y-4 rounded-lg border p-4">
           <div className="flex items-center justify-between">
@@ -201,8 +231,8 @@ export default function ClipperReviewPage() {
               {next.answered} din {next.total} răspunse
             </span>
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={showResult}>
-                Rezultat
+              <Button size="sm" variant="outline" onClick={showResult} disabled={!next.done}>
+                {next.done ? "Rezultat" : "Rezultat după ultimul clip"}
               </Button>
               <Button size="sm" variant="ghost" onClick={reset}>
                 Sesiune nouă
@@ -230,6 +260,11 @@ export default function ClipperReviewPage() {
       {result && (
         <section className="space-y-3 rounded-lg border p-4">
           <h2 className="font-medium">Rezultat</h2>
+          {result.historical && (
+            <p className="text-sm text-muted-foreground">
+              Sesiune istorică: protecția actuală a review-ului orb nu poate fi confirmată.
+            </p>
+          )}
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-muted-foreground">

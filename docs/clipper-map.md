@@ -106,8 +106,9 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `ranker.py` | the learned ranker. Complete, dormant, needs 40 labelled clips |
 | `feedback.py` | recording what the user did with a clip, and — since the `origin` column — WHO did it. Only `manual` events label for training; `auto` (auto_export) and `system` are neutral, and so is the NULL origin of any row written before the column. The measurement that forced this is in the module docstring |
 | `review.py` | Pass D (§21–22): what the CLIP looks like, checked before the encode |
-| `blind_review.py` | the human evaluation rubric, frozen item order, private board membership and separate `reviewed` feedback; S8a records observed render versions and selection identities without borrowing the installed renderer's label |
+| `blind_review.py` | the human evaluation rubric, frozen item order, private board membership and separate `reviewed` feedback; S8a records observed render versions and selection identities, S8b reveals boards only after every planned item has a valid immutable answer. Identical retries are idempotent; old sessions remain read-only historical results |
 | `review_media.py` | S8a binds a review item to the full export and sidecar hashes plus the sidecar's source window and transcript. The review router checks those bytes before presentation and answer, refuses changed media, and never substitutes a preview. This is identity, not video quality or proof that historical sidecar/video bytes were produced together |
+| `review_lock.py` | S8b's nonblocking OS lock for answer writes across the two backend processes. Atomic JSON replacement alone prevents torn reads, not lost updates. A competing writer gets an explicit retryable refusal; process exit releases the lock |
 | `review_vision.py` | Pass D's second half: a vision model on the RENDERED clip. Off by default, needs an OpenAI key |
 
 ### Models
@@ -261,6 +262,7 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_review.py` ·
 `test_clipper_blind_review.py` (rubric, shuffle, membership and separate evaluation feedback) ·
 `test_clipper_review_media.py` (S8a: full-file identity, frozen presentation, incomplete/mixed-run boards and real review API refusal) ·
+`test_clipper_review_seal.py` (S8b: no partial disclosure, immutable/idempotent answers, actual concurrent requests, cross-process locking and retry after feedback write failure) ·
 `test_clipper_content_features.py` · `test_clipper_dynamic.py` ·
 `test_clipper_dynamic_export.py` · `test_clipper_llm_select.py` ·
 `test_clipper_ranker.py` · `test_clipper_render.py` · `test_clipper_signals.py` ·

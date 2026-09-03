@@ -48,6 +48,8 @@ export type BoardTally = {
 
 export type ReviewResult = ReviewProgress & {
   session_id: string;
+  historical: boolean;
+  blinding_policy: string | null;
   rubric_version: string;
   seed: number;
   tally: { legacy: BoardTally; shadow: BoardTally };
