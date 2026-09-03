@@ -840,6 +840,15 @@ checkpoint nested malformat se refuză integral, nu se filtrează peste numitor.
 `anchor_id`, scara dedupe și identitatea comună selection/render rămân deschise, deci Batch 7 nu
 este declarat închis.
 
+**Status parțial, S7c livrat 3 septembrie 2026.** Judge-ul păstrează verdictul brut al fiecărei
+runde în envelope-ul comun, legat de promptul exact și de contractul provider/model. Numai o rundă
+utilizabilă și aplicabilă pool-ului curent este refolosită; una neparsabilă, goală sau fără niciun
+id aplicabil este reapelată. Proveniența declară lipsa seedului și nondeterminismul, iar rerun-ul
+reaplică local același răspuns fără apel extern. Starea malformată este refuzată integral, scrierea
+checkpointului nu poate anula un verdict valid, iar un fallback de parsare recuperat este raportat
+ca fallback. După S7c rămân deschise `anchor_id`, scara dedupe și identitatea comună
+selection/render.
+
 ### Batch 8 — ranker v2
 
 **Fișiere:** `ranker.py`, routerele de clips.

@@ -95,7 +95,9 @@ def _judge_pool(refined: list[dict], duration: float, trace: Any,
 
 
 async def _judge_rounds(refined: list[dict], duration: float, want: int,
-                        cfg: dict, trace: Any, queue, job_id: str) -> bool:
+                        cfg: dict, trace: Any, queue, job_id: str, *,
+                        project_id: str | None = None,
+                        cache_base: dict | None = None) -> bool:
     """Judge pools until enough moments are chosen, or the cap is reached.
 
     Returns whether any verdict exists at all. A second round asks about
@@ -107,9 +109,40 @@ async def _judge_rounds(refined: list[dict], duration: float, want: int,
     295-moment source is walking the whole field eighty at a time.
     """
     from services.clipper import candidate_groups as groups_mod
+    from services.clipper import judge_cache
     from services.clipper import llm_select
+    from workers import clipper_cache
 
     weight = float(settings.clipper_llm_weight)
+    model = (cfg.get("llm_judge_model")
+             or settings.clipper_llm_judge_model or None)
+    judge_state = None
+    judge_stamp = None
+    if project_id is not None and cache_base is not None:
+        judge_stamp = clipper_cache._judge_stamp(cache_base, model=model)
+        prepared = judge_cache.prepare(
+            clipper_cache._cached(project_id, "judge", judge_stamp))
+        judge_state = prepared.state
+        if trace is not None:
+            trace.note_stage("judge_cache", prepared.reason,
+                             f"{len(judge_state['rounds'])} stored round(s)")
+
+    def save_judge(updated: dict) -> None:
+        nonlocal judge_state
+        judge_state = updated
+        if project_id is not None and judge_stamp is not None:
+            try:
+                clipper_cache._cache(project_id, "judge", judge_stamp, updated)
+            except Exception as exc:  # noqa: BLE001 — cache is not the verdict
+                # A checkpoint is an optimisation.  Losing it may cost a later
+                # call, but it must not turn a valid verdict into an apparent
+                # judge failure after `apply_ranking` already changed the
+                # field.  That would violate this function's atomic fallback.
+                logger.warning("judge checkpoint failed; verdict still applies",
+                               exc_info=True)
+                if trace is not None:
+                    trace.note_error("judge_cache", exc)
+
     # The legacy score, frozen before a single verdict exists. Everything the
     # judge writes goes to its own fields; this is what the legacy board reads
     # and what shadow promises not to move.
@@ -132,9 +165,9 @@ async def _judge_rounds(refined: list[dict], duration: float, want: int,
         try:
             hit = await llm_select.judge(
                 refined, weight=weight, want=want,
-                model=(cfg.get("llm_judge_model")
-                       or settings.clipper_llm_judge_model or None),
-                trace=trace, shortlist=chosen["pool"])
+                model=model, trace=trace, shortlist=chosen["pool"],
+                cache_state=judge_state, round_index=round_index,
+                checkpoint=save_judge if judge_state is not None else None)
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM judging failed; keeping the heuristic ranking",
                            exc_info=True)

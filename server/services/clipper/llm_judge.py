@@ -16,13 +16,13 @@ where llm_select proposes them in the first place. The engine plumbing —
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 # From llm_engine, NOT llm_select: llm_select re-exports this module at its own
 # bottom, so importing it here made the two mutually dependent and the package
 # order-dependent — `import llm_judge` first raised ImportError.
 from services.clipper.llm_engine import (
-    JUDGE_ENGINES, MAX_CLIP_CHARS, MAX_JUDGE_CLIPS, _ask, _num, parse_json,
+    JUDGE_ENGINES, MAX_CLIP_CHARS, MAX_JUDGE_CLIPS, _ask_json_result, _num,
 )
 
 logger = logging.getLogger("clipforge.clipper.llm_judge")
@@ -30,9 +30,9 @@ logger = logging.getLogger("clipforge.clipper.llm_judge")
 
 JUDGE_PROMPT_VERSION = "judge_v2_comparative"
 
-# One judging call per run, but it still needs a request id: the trace groups
-# attempts by it, and a bare stage name would not join up with the parse result
-# recorded after the answer comes back.
+# A stable request prefix; the round index is appended at the call site. The
+# trace groups attempts by the full id, and a bare stage name would not join up
+# with the parse result recorded after the answer comes back.
 JUDGE_REQUEST = "judge#0"
 
 # Reject reasons the judge may name. A closed list so they can be counted and
@@ -260,7 +260,9 @@ def apply_ranking(cands: list[dict], verdicts: Any, *,
 async def judge(cands: list[dict], *, weight: float = 0.5,
                 engines: Sequence[str] = JUDGE_ENGINES,
                 model: str | None = None, want: int = 8,
-                trace: Any = None, shortlist: list[dict] | None = None) -> int:
+                trace: Any = None, shortlist: list[dict] | None = None,
+                cache_state: dict | None = None, round_index: int = 0,
+                checkpoint: Callable[[dict], None] | None = None) -> int:
     """Rank candidates against each other and blend it in. 0 when unavailable."""
     if not cands:
         return 0
@@ -277,17 +279,22 @@ async def judge(cands: list[dict], *, weight: float = 0.5,
     # score and won on it.
     subset = shortlist if shortlist is not None else sorted(
         cands, key=lambda c: -_num(c.get("overall")))[:MAX_JUDGE_CLIPS]
-    # The request id must match the one `_note_result` uses below, or the
-    # attempt and its parse outcome are filed under two different calls and
-    # `unusable` can never line up with `exhausted`.
-    answer = await _ask(engines, judge_prompt(subset, want), model=model,
-                        trace=trace, stage="judge", request=JUDGE_REQUEST)
-    if answer is None:
-        return 0
-    verdicts = parse_json(answer)
-    if trace is not None:
-        from services.clipper.llm_engine import _note_result
-        _note_result(trace, "judge", JUDGE_REQUEST, verdicts is not None)
+    from services.clipper import judge_cache
+
+    prompt = judge_prompt(subset, want)
+    verdicts = (judge_cache.reusable(
+                    cache_state, round_index, prompt,
+                    candidate_count=len(subset))
+                if cache_state is not None else None)
+    reused = verdicts is not None
+    answer = None
+    if not reused:
+        # The request id must match the one `_ask_json_result` records, or the
+        # attempts and parse outcome are filed under different calls.
+        answer = await _ask_json_result(
+            engines, prompt, model=model, trace=trace, stage="judge",
+            request=f"{JUDGE_REQUEST}:round{round_index}", keys=("id",))
+        verdicts = answer.parsed if answer.usable else None
     # A model that ignored "rank all of them" and scored them instead is still
     # useful, but the two answers are told apart by SHAPE, not by whether the
     # first parse succeeded: a scored answer carries ids too, so ranking it by
@@ -304,6 +311,14 @@ async def judge(cands: list[dict], *, weight: float = 0.5,
         hit = apply_scores(subset, verdicts, weight=weight)
     else:
         hit = apply_ranking(subset, verdicts, weight=weight)
+    if cache_state is not None and not reused:
+        provenance = answer.provenance() if answer is not None else {}
+        provenance["applied_items"] = hit
+        updated = judge_cache.record(
+            cache_state, round_index, prompt, usable=hit > 0,
+            verdicts=verdicts or [], provenance=provenance)
+        if checkpoint is not None:
+            checkpoint(updated)
     logger.info("llm_select: judged %d of %d candidates (%s)",
                 hit, len(subset), JUDGE_PROMPT_VERSION)
     if trace is not None:
@@ -314,4 +329,14 @@ async def judge(cands: list[dict], *, weight: float = 0.5,
         trace.note_count("judge_pool", len(subset))
         trace.note_count("judge_field", len(cands))
         trace.note_count("judge_hits", hit)
+        if reused:
+            trace.note_count(
+                "judge_rounds_reused",
+                trace.counts.get("judge_rounds_reused", 0) + 1)
+            trace.note_stage(f"judge_cache_round_{round_index}", "hit",
+                             f"{hit} verdicts reapplied")
+        elif not hit:
+            trace.note_count(
+                "judge_rounds_unusable",
+                trace.counts.get("judge_rounds_unusable", 0) + 1)
     return hit

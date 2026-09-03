@@ -219,13 +219,42 @@ class RunTrace:
 
     @property
     def unusable(self) -> list[dict]:
-        """Calls that were answered and whose answer could not be parsed."""
-        return [r for r in self.results if not r["parsed"]]
+        """Requests for which no provider returned a parseable answer.
+
+        A parse failure is an ATTEMPT, not necessarily the request's outcome:
+        `_ask_json_result` continues to the next provider.  Keeping the first
+        false row after a later true one made a recovered fallback report the
+        whole run as partial even though the answer was used and checkpointed.
+        """
+        recovered = {(r["stage"], r["request"]) for r in self.results
+                     if r["parsed"]}
+        return [r for r in self.results if not r["parsed"]
+                and (r["stage"], r["request"]) not in recovered]
+
+    @property
+    def parse_fallbacks(self) -> list[dict]:
+        """Requests recovered after an earlier provider returned unusable JSON."""
+        order: list[tuple[str, str]] = []
+        grouped: dict[tuple[str, str], list[bool]] = {}
+        for row in self.results:
+            key = (row["stage"], row["request"])
+            if key not in grouped:
+                order.append(key)
+                grouped[key] = []
+            grouped[key].append(bool(row["parsed"]))
+        return [
+            {"stage": stage, "request": request,
+             "unusable_answers": values.index(True)}
+            for stage, request in order
+            if True in (values := grouped[(stage, request)])
+            and values.index(True) > 0
+        ]
 
     @property
     def incomplete_chunks(self) -> dict[str, int]:
         """Pending or unusable resumable rows that keep a run incomplete."""
-        suffixes = ("_chunks_pending", "_chunks_unusable")
+        suffixes = ("_chunks_pending", "_chunks_unusable",
+                    "_rounds_unusable")
         return {name: value for name, value in self.counts.items()
                 if name.endswith(suffixes) and value > 0}
 
@@ -241,7 +270,7 @@ class RunTrace:
         produced = bool(self.counts.get("anchors") or self.counts.get("nominated"))
         if broken:
             return "partial" if produced else "failed_non_blocking"
-        if self.fallbacks:
+        if self.fallbacks or self.parse_fallbacks:
             return "fallback"
         return "complete"
 
@@ -271,6 +300,7 @@ class RunTrace:
                 if self.chunks else None),
             "attempts": list(self.attempts),
             "fallbacks": self.fallbacks,
+            "parse_fallbacks": self.parse_fallbacks,
             "exhausted": self.exhausted,
             "results": list(self.results),
             "unusable": self.unusable,

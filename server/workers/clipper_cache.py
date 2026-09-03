@@ -176,6 +176,20 @@ def _anchor_stamp(cfg: dict, duration: float, *, base: dict | None = None,
     )
 
 
+def _judge_stamp(base: dict, *, model=None) -> dict:
+    """Identity of the provider contract; each round binds its exact prompt."""
+    from services.clipper import judge_cache, llm_engine, llm_judge
+
+    llm = _model_inputs(llm_engine.JUDGE_ENGINES, model, None)
+    return reasoning_cache.artifact_inputs(
+        base, service_version=judge_cache.JUDGE_CACHE_VERSION,
+        prompt_version=llm_judge.JUDGE_PROMPT_VERSION, model=llm["model"],
+        temperature=llm["temperature"], engines=llm_engine.JUDGE_ENGINES,
+        parameters={"judge_cache_version": judge_cache.JUDGE_CACHE_VERSION,
+                    **llm},
+    )
+
+
 def _cached(project_id: str, name: str, stamp: dict) -> Any | None:
     """A previous run's model output, or None when it cannot be trusted."""
     blob = storage.read_artifact(project_id, name)

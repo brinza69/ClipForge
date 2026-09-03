@@ -48,7 +48,7 @@ def test_paths_exposes_the_contract_keys(clipper):
         "frames_dir", "thumbs_dir", "analysis_dir", "previews_dir", "exports_dir",
         "signals", "faces", "regions", "segments", "candidates", "meta",
         "promises", "atoms", "threads", "episodes", "graph",
-        "anchors",
+        "anchors", "judge",
         "segment_types",
         "regions_by_segment",
         "reasoning_run",

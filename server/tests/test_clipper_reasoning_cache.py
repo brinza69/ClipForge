@@ -238,6 +238,19 @@ def test_an_empty_model_name_resolves_like_the_provider_client():
     }
 
 
+def test_judge_identity_changes_with_the_resolved_model(monkeypatch):
+    from services import descriptions
+    from workers import clipper_cache as worker_cache
+
+    base = cache.base_inputs({"filesize": 10}, {"segments": []})
+    before = worker_cache._judge_stamp(base)
+    monkeypatch.setattr(descriptions, "DEFAULT_OPENAI_MODEL", "judge-new")
+    after = worker_cache._judge_stamp(base)
+
+    assert before != after
+    assert after["model"]["resolved_by_engine"]["openai"] == "judge-new"
+
+
 def test_execution_settings_that_can_change_provider_output_are_in_identity(
         monkeypatch):
     from services.clipper import llm_engine

@@ -30,12 +30,13 @@ regula că o clasificare slabă cumpără un montaj mai sigur, niciodată unul m
 [`plans/ai-stream-clipper-production-engine-v1.md`](../plans/ai-stream-clipper-production-engine-v1.md).
 Detaliile și cifrele sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURRENT.md).
 
-R3–R7 sunt livrate ca instrumentare/shadow, R8 este închis, S7a a livrat envelope-ul comun și
-invalidarea țintită, iar S7b recuperează promises și anchors per chunk fără să repay-eze răspunsurile
-utilizabile. Judge cache, `anchor_id`, scara dedupe și identitatea comună a rulării rămân deschise.
+R3–R7 sunt livrate ca instrumentare/shadow, R8 este închis, S7a a livrat envelope-ul comun,
+S7b recuperează promises și anchors per chunk, iar S7c recuperează verdictul judge per rundă și
+întrebare exactă fără să repay-eze răspunsurile utilizabile. `anchor_id`, scara dedupe și identitatea
+comună a rulării rămân deschise.
 
-Verificare pe working tree-ul local, 3 septembrie: **1.669 teste backend trec, 2 pică** — ambele din
-`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. S7a/S7b nu ating
+Verificare pe working tree-ul local, 3 septembrie: **1.678 teste backend trec, 2 pică** — ambele din
+`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. S7a–S7c nu ating
 frontendul.
 
 ## Cum folosești acest document
@@ -105,8 +106,8 @@ source → ingest → transcribe → analyze → score → candidate clips → p
    care s-a deschis R0. Nu e cablat la randare.
 5. Clipper R8: reconstrucția montajului după trim — ÎNCHIS 2 septembrie 2026; salturile create de
    `drop_spans` sunt măsurate separat de tăieturile plannerului.
-6. Clipper S7–S8: S7a (envelope și invalidare țintită) și S7b (recovery per chunk pentru promises și
-   anchors) sunt închise; continuă judge cache, identitățile stabile și reproducibilitatea comună,
+6. Clipper S7–S8: S7a (envelope și invalidare țintită), S7b (recovery per chunk pentru promises și
+   anchors) și S7c (recovery per rundă pentru judge) sunt închise; continuă identitățile stabile și reproducibilitatea comună,
    apoi review-ul golden înainte de activarea `story_v2`.
 7. Consistență între DB și filesystem și idempotency pentru job-urile de export.
 8. Upload streaming și limite reale de memorie/disk.

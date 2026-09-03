@@ -965,9 +965,20 @@ nu filtrat și deplasat peste chunkul următor. Versiunea setului de chunkuri in
 dată payloadurile-listă S7a. Gate automat după S7b: **1.669 teste backend trec; rămân numai cele
 două 404 TikTok cunoscute.**
 
-**S7 nu este închis.** `judge` este rezervat în vocabularul comun, dar cache-ul lui nu este încă
-materializat. Mai rămân `anchor_id`, scara dedupe, identitatea comună dintre selection și render
-trace și reproducibilitatea/declararea nondeterminismului pentru verdictul judge.
+**S7c livrat, 3 septembrie 2026 — recovery per rundă pentru judge.** Verdictul brut al fiecărei
+runde este păstrat în envelope-ul comun și legat de promptul exact, nu doar de numărul rundei sau
+de mărimea pool-ului. Un răspuns utilizabil este reaplicat determinist; unul gol, neaplicabil sau
+neparsabil rămâne `unusable` și este reapelat. Proveniența persistă providerul, modelul rezolvat,
+amprentele promptului/răspunsului, toate încercările, lipsa seedului și caracterul nondeterminist.
+Un state malformat sau cu indici de rundă duplicați este refuzat integral. Testul prin worker
+demonstrează scrierea la prima rulare și zero apeluri la provider la a doua; un eșec al scrierii
+checkpointului este raportat, dar nu poate transforma verdictul deja aplicat într-un fals eșec al
+judge-ului. Un provider cu JSON neutilizabil urmat de unul valid este raportat `fallback`, nu
+`partial`. Gate automat după S7c: **1.678 teste backend trec; rămân numai cele două 404 TikTok
+cunoscute.**
+
+**S7 nu este închis.** Mai rămân `anchor_id`, scara dedupe și identitatea comună dintre selection
+și render trace.
 
 ### Batch S8 — evaluarea selecției, separată de randare
 

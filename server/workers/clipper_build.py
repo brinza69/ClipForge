@@ -308,7 +308,8 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     if reasoning_mode.uses_llm(_reasoning_mode(cfg)):
         await queue.update_progress(job_id, 0.48, "Judging candidates")
         judged = await _judge_rounds(refined, duration, target_count, cfg,
-                                     trace, queue, job_id)
+                                     trace, queue, job_id,
+                                     project_id=project_id, cache_base=cache_base)
         _guard(queue, job_id)
 
     # Stamp the verdict status on the WHOLE field before anything is written or

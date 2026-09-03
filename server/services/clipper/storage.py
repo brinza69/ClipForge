@@ -40,16 +40,16 @@ ARTIFACT_NAMES: frozenset[str] = frozenset(
     # "promises" is the story path's checkpoint: one sweep over the whole
     # transcript for setups that could pay off later. It is written before
     # anchor detection reads it, so a re-run does not pay for it twice.
-    # "anchors" is the story path's MODEL output. Everything else here is cheap
-    # to rebuild; that one is not. It is stored with the fingerprint of what
-    # produced it, so a re-run after a settings change recomputes instead of
-    # silently reusing an answer the new configuration would never have given.
+    # "anchors" and "judge" are the story path's MODEL outputs. They are stored
+    # with the fingerprints of what produced them, so a re-run after a settings
+    # change recomputes instead of silently reusing an answer the new
+    # configuration would never have given.
     # "reasoning_run" and "selection_trace" are the observability pair: how the
     # run was configured and what the models did, and why each candidate ended
     # where it did. Neither is an input to anything — they exist so a later
     # change can be shown to be an improvement rather than asserted to be one.
     {"signals", "faces", "regions", "segments", "candidates", "meta",
-     "promises", "atoms", "threads", "episodes", "graph", "anchors",
+     "promises", "atoms", "threads", "episodes", "graph", "anchors", "judge",
      "segment_types",
      "regions_by_segment", "reasoning_run", "selection_trace"}
 )
@@ -151,6 +151,7 @@ def paths(project_id: str) -> dict[str, Path]:
         "episodes": analysis / "episodes.json",
         "graph": analysis / "graph.json",
         "anchors": analysis / "anchors.json",
+        "judge": analysis / "judge.json",
         "segment_types": analysis / "segment_types.json",
         "regions_by_segment": analysis / "regions_by_segment.json",
         "reasoning_run": analysis / "reasoning_run.json",
