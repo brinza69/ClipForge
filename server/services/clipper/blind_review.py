@@ -45,7 +45,7 @@ from typing import Any, Iterable, Sequence
 RUBRIC_VERSION = "blind_eval_v1"
 
 #: Bumped when the stored SHAPE changes, independently of the questions.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 LEGACY = "legacy"
 SHADOW = "shadow"
@@ -121,13 +121,14 @@ def build_items(rows: Iterable[dict]) -> list[dict]:
             "membership": _membership(legacy_rank, shadow_rank),
             "legacy_rank": legacy_rank,
             "shadow_rank": shadow_rank,
-            "run_id": row.get("shadow_run_id") or None,
+            "run_id": row.get("selection_run_id"),
+            "shadow_run_id": row.get("shadow_run_id"),
+            "media": row.get("media"),
         })
     return items
 
 
-def create(session_id: str, rows: Iterable[dict], *, seed: int | None = None,
-           render_version: str = "") -> dict:
+def create(session_id: str, rows: Iterable[dict], *, seed: int | None = None) -> dict:
     """A session, with its order fixed at the moment it is created."""
     items = build_items(rows)
     seed = int(seed) if seed is not None else random.randrange(2 ** 31)
@@ -137,10 +138,20 @@ def create(session_id: str, rows: Iterable[dict], *, seed: int | None = None,
     for item in items:
         item["review_item_id"] = item_id(session_id, item["clip_id"])
 
+    media_complete = bool(items) and all(isinstance(i.get("media"), dict) for i in items)
+    versions = sorted({i["media"]["render_version"] for i in items
+                       if isinstance(i.get("media"), dict)
+                       and i["media"].get("render_version")})
+    version_complete = media_complete and all(i["media"].get("render_version") for i in items)
     return {
         "schema_version": SCHEMA_VERSION,
         "rubric_version": RUBRIC_VERSION,
-        "render_version": str(render_version),
+        # One label only when EVERY observed sidecar declares that version.
+        # Installed renderer code cannot identify already-rendered bytes.
+        "render_version": versions[0] if version_complete and len(versions) == 1 else None,
+        "render_versions": versions,
+        "media_snapshot_complete": media_complete,
+        "selection_identity_complete": bool(items) and all(i.get("run_id") for i in items),
         "session_id": session_id,
         "seed": seed,
         "items": items,

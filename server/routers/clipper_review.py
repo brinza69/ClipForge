@@ -14,6 +14,7 @@ shape that is still being learned.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -29,6 +30,7 @@ from database import get_session
 from models import ClipModel, ClipperEvent
 from services.clipper import feedback as feedback_mod
 from services.clipper import blind_review as review_mod
+from services.clipper import review_media
 from services.clipper import storage
 
 logger = logging.getLogger("clipforge.clipper.review")
@@ -107,26 +109,45 @@ async def start_session(body: NewSession,
         raise HTTPException(status_code=400, detail="pick at least one project")
 
     rows = await session.execute(
-        select(ClipModel.id, ClipModel.project_id, ClipModel.rank_position,
-               ClipModel.shadow_rank, ClipModel.shadow_run_id)
+        select(ClipModel)
         .where(ClipModel.project_id.in_(body.project_ids))
         .where(ClipModel.rank_position.is_not(None)
                | ClipModel.shadow_rank.is_not(None))
     )
-    picked = [{"clip_id": r[0], "project_id": r[1], "rank_position": r[2],
-               "shadow_rank": r[3], "shadow_run_id": r[4]}
-              for r in rows.all()]
-    if not picked:
+    clips = rows.scalars().all()
+    if not clips:
         raise HTTPException(
             status_code=409,
             detail="no board to review: score a project in a shadow mode first")
 
-    # Stamped AT CREATION. The pilot's sessions were stamped afterwards, from
-    # memory, and the label was factually wrong until a review caught it.
-    from services.clipper.dynamic_render import RENDER_VERSION
-
-    out = review_mod.create(uuid.uuid4().hex[:16], picked, seed=body.seed,
-                            render_version=RENDER_VERSION)
+    missing = sorted(set(body.project_ids) - {c.project_id for c in clips})
+    if missing:
+        raise HTTPException(status_code=409, detail={"projects_without_board": missing})
+    # A preserved export can carry an older rank. Do not compare boards that
+    # never coexisted; all-unknown historical runs stay explicitly unknown.
+    for project_id in set(body.project_ids):
+        group = [c for c in clips if c.project_id == project_id]
+        runs = {c.selection_run_id for c in group}
+        shadows = {c.shadow_run_id for c in group if c.shadow_run_id is not None}
+        if (len(runs) > 1 or len(shadows) > 1
+                or (None not in runs and shadows and runs != shadows)
+                or any(c.shadow_rank is not None and c.selection_run_id is not None
+                       and c.shadow_run_id != c.selection_run_id for c in group)):
+            raise HTTPException(status_code=409, detail="board_contains_different_selection_runs")
+    picked = []
+    for clip in clips:
+        row = {"clip_id": clip.id, "project_id": clip.project_id,
+               "rank_position": clip.rank_position, "shadow_rank": clip.shadow_rank,
+               "shadow_run_id": clip.shadow_run_id, "selection_run_id": clip.selection_run_id,
+               "export_path": clip.export_path, "start_time": clip.start_time,
+               "end_time": clip.end_time, "duration": clip.duration,
+               "transcript_text": clip.transcript_text}
+        try:
+            row["media"] = await asyncio.to_thread(review_media.capture, row)
+        except review_media.MediaChanged as exc:
+            raise HTTPException(status_code=409, detail=f"review_not_ready: {exc}") from exc
+        picked.append(row)
+    out = review_mod.create(uuid.uuid4().hex[:16], picked, seed=body.seed)
     _save(out)
     logger.info("clipper review %s: %d items over %d projects",
                 out["session_id"], len(out["order"]), len(body.project_ids))
@@ -136,24 +157,17 @@ async def start_session(body: NewSession,
 
 
 @router.get("/{session_id}/next")
-async def get_next(session_id: str,
-                   session: AsyncSession = Depends(get_session)) -> dict:
+async def get_next(session_id: str) -> dict:
     state = _load(session_id)
     handle = review_mod.next_item(state)
     if handle is None:
         return {"done": True, **review_mod.progress(state)}
 
     item = next(i for i in state["items"] if i["review_item_id"] == handle)
-    clip = await session.get(ClipModel, item["clip_id"])
-    if clip is None:
-        raise HTTPException(status_code=410,
-                            detail="the clip this item points at is gone")
+    await _verified_media(item)
 
     return {"done": False,
-            "item": review_mod.public_item(state, handle, {
-                "start_time": clip.start_time, "end_time": clip.end_time,
-                "duration": clip.duration, "export_path": clip.export_path,
-                "transcript_text": clip.transcript_text}),
+            "item": review_mod.public_item(state, handle, item["media"]["presentation"]),
             **review_mod.progress(state)}
 
 
@@ -163,15 +177,26 @@ async def post_answer(session_id: str, body: Answer,
     state = _load(session_id)
     payload = body.model_dump()
     handle = payload.pop("review_item_id")
+    item = next((i for i in state.get("items", [])
+                 if i.get("review_item_id") == handle), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="no such review item")
+    await _verified_media(item)
     try:
         stored = review_mod.record(state, handle, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # These bytes, not whichever export the same DB row may point at later.
+    media = item["media"]
+    stored["presented_media"] = {
+        "sha256": media["sha256"], "sidecar_sha256": media["sidecar_sha256"],
+        "render_version": media["render_version"], "selection_run_id": media["selection_run_id"],
+        "start": media["presentation"]["start_time"], "end": media["presentation"]["end_time"],
+    }
     _save(state)
 
-    item = next(i for i in state["items"] if i["review_item_id"] == handle)
     # `reviewed`, deliberately outside `feedback._DECISIVE`. A person answering
     # an evaluation question about a clip they did not ask for has not decided
     # to publish it, and the ranker must not read it as approval — that is the
@@ -196,11 +221,10 @@ async def post_answer(session_id: str, body: Answer,
 
 
 @router.get("/{session_id}/item/{review_item_id}/video")
-async def item_video(session_id: str, review_item_id: str,
-                     session: AsyncSession = Depends(get_session)):
-    """The clip's preview, addressed by the session handle.
+async def item_video(session_id: str, review_item_id: str):
+    """The snapshotted full export, addressed by the session handle.
 
-    Not `/clips/{clip_id}/preview-file`, which is the same bytes: that URL puts
+    Not `/clips/{clip_id}/export-file`, which is the same bytes: that URL puts
     the clip id in the page's DOM and in the browser's network log, and the clip
     id is what the reviewer's own board is addressed by. One glance at the board
     for that id tells them whether the clip is ranked, which is the whole blind
@@ -214,7 +238,6 @@ async def item_video(session_id: str, review_item_id: str,
     if item is None:
         raise HTTPException(status_code=404, detail="no such review item")
 
-    clip = await session.get(ClipModel, item["clip_id"])
     # THE EXPORT, never the preview. `render_preview` caps at 12 seconds by
     # design — it is a proxy for the editor — and a review session run on it
     # asks "is this clip worth exporting" about the first twelve seconds of a
@@ -224,16 +247,18 @@ async def item_video(session_id: str, review_item_id: str,
     #
     # So there is no fallback. A missing export is an answerable 409; a silent
     # downgrade to a truncated proxy is what invalidated a whole session.
-    path = clip.export_path if clip else None
-    if not path or not storage.is_usable_output(path):
-        raise HTTPException(
-            status_code=409,
-            detail="this clip has no full render yet — a preview is capped at "
-                   "12s and cannot be reviewed")
+    path = await _verified_media(item)
     # Named after the HANDLE, not the clip: a download or a saved file that
     # carries the clip id walks the leak out of the browser.
     return FileResponse(path, media_type="video/mp4",
                         filename=f"{review_item_id}.mp4")
+
+
+async def _verified_media(item: dict):
+    try:
+        return await asyncio.to_thread(review_media.verify, item.get("media"))
+    except review_media.MediaChanged as exc:
+        raise HTTPException(status_code=409, detail=f"review_media_unavailable: {exc}") from exc
 
 
 @router.get("/{session_id}/result")

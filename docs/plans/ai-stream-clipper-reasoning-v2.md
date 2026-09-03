@@ -942,6 +942,12 @@ avertisment explicit.
 
 Aici se plătește costul de etichetare umană, o singură dată, când tot restul e stabil.
 
+**Progres parțial, 3 septembrie 2026:** Batch S8a din planul de producție leagă sesiunile noi de
+amprentele complete ale exportului și sidecarului, de versiunea observată și de rularea selecției.
+Schimbarea media refuză continuarea; datele curente din DB nu înlocuiesc prezentarea înghețată.
+Este infrastructură de evaluare, nu închiderea golden gate-ului: randarea neutră, rubrica completă,
+protecția dezvăluirii și cohortele/review-ul uman rămân de făcut. `story_v2` rămâne indisponibil.
+
 **Modificări:**
 
 - definirea setului golden din proiectele existente din `data/clipper/MANIFEST.md`;

@@ -1015,6 +1015,21 @@ trec; rămân numai cele două 404 TikTok cunoscute.**
 
 **Scop:** demonstrează că `story_v2` alege mai bine decât legacy.
 
+**S8a livrat, 3 septembrie 2026 — identitatea fișierului evaluat.** Sesiunea nouă înregistrează
+SHA-256 pe întregul export și pe sidecar, versiunea declarată de acel sidecar, `selection_run_id`
+și fereastra/transcriptul randării. Nu mai ștampilează fișiere vechi cu rendererul instalat azi și
+nu mai prezintă textul sau timpii modificați ulterior în DB. Un fișier înlocuit oprește prezentarea
+și salvarea răspunsului; un proiect cerut fără board, un membru nerandat sau un amestec de rulări
+în același proiect refuză crearea întregii sesiuni. Nu se copiază și nu se re-randează media.
+Rezultatele istorice rămân accesibile, dar sesiunile fără această legătură nu pot primi răspunsuri
+noi. Versiunile/identitățile istorice lipsă rămân necunoscute, iar versiunile mixte sunt enumerate.
+Gate automat: **1.739 teste backend trec, 2 pică** (404 TikTok preexistente); typecheck curat.
+
+**S8 rămâne deschis.** S8a nu dovedește că un sidecar istoric a fost scris de encode-ul alăturat,
+că video-ul este tehnic valid sau că omul l-a urmărit. Urmează randarea neutră, rubrica completă
+cu payoff/diversitate și separarea review-ului tehnic, protecția dezvăluirii rezultatelor, cohorta
+de surse distincte și agregarea de mai jos. Nu s-au creat sesiuni reale și nu s-a activat niciun mod.
+
 **Metodă:**
 
 - minimum 10 surse și 150 de momente distincte, multi-gen și multi-limbă;

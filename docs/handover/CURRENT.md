@@ -34,11 +34,13 @@ R3–R7 sunt livrate ca instrumentare/shadow, R8 este închis, S7a a livrat enve
 S7b recuperează promises și anchors per chunk, S7c recuperează verdictul judge per rundă și
 întrebare exactă, S7d propagă identitatea canonică a ancorei la toate variantele, S7e separă
 gruparea euristică de alegerea liderului pe `selection_score`, iar S7f leagă fiecare clip și sidecar
-de rularea care l-a selectat. **S7 este închis.**
+de rularea care l-a selectat. **S7 este închis.** S8a leagă sesiunile noi de review de amprentele
+întregului export și sidecar, folosind versiunea reală declarată, nu cea instalată. Schimbarea
+fișierului oprește continuarea. Este protecția evaluării, nu dovada calității; S8 rămâne deschis.
 
-Verificare pe working tree-ul local, 3 septembrie: **1.712 teste backend trec, 2 pică** — ambele din
-`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. S7f adaugă numai
-câmpul de proveniență în contractul frontend; nu schimbă nicio alegere sau randare.
+Verificare pe working tree-ul local, 3 septembrie: **1.739 teste backend trec, 2 pică** — ambele din
+`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. Typecheck curat.
+S8a nu schimbă nicio alegere sau randare și nu creează sesiuni reale.
 
 ## Cum folosești acest document
 
@@ -108,7 +110,7 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 5. Clipper R8: reconstrucția montajului după trim — ÎNCHIS 2 septembrie 2026; salturile create de
    `drop_spans` sunt măsurate separat de tăieturile plannerului.
 6. Clipper S7–S8: S7a–S7f sunt închise, inclusiv identitatea comună selection/render; continuă
-   review-ul golden S8 înainte de activarea `story_v2`.
+   S8a protejează identitatea media; continuă review-ul golden S8 înainte de activarea `story_v2`.
 7. Consistență între DB și filesystem și idempotency pentru job-urile de export.
 8. Upload streaming și limite reale de memorie/disk.
 9. Readiness checks și teste de reziliență pentru aplicația întreagă.

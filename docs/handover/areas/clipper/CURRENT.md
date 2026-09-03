@@ -942,6 +942,26 @@ după S7f: **1.712 passed, 2 failed**, aceleași 404 TikTok.
 
 **S7 este închis.**
 
+## Batch S8a — fișierul review-ului este legat de sesiune, 3 septembrie 2026
+
+`review_media.py` și ruta de review captează SHA-256 pe TOT exportul și pe sidecar, nu doar pe
+primii 8 MB. Versiunea vine din sidecarul observat, nu din rendererul instalat; `selection_run_id`,
+fereastra și transcriptul sunt păstrate cu sesiunea. Lipsa istorică rămâne lipsă, iar o sesiune cu
+versiuni mixte le enumeră fără să pretindă una comună. Pozițiile/rank-urile sunt fixate la creare.
+
+Înainte de prezentare, video și răspuns, ambele amprente se verifică. Fișierul schimbat dă 409,
+nu primește verdict pentru versiunea nouă. Un proiect cerut fără board, un membru fără export sau
+un amestec de selection runs în același proiect refuză sesiunea întreagă. Modificările ulterioare
+în DB nu schimbă timpii/textul arătat. Răspunsul și evenimentul `reviewed` păstrează amprentele
+media, separat de aprobările de produs. Rezultatele vechi se pot citi; sesiunile vechi fără
+snapshot nu mai pot primi răspunsuri noi. Nu s-au modificat fișierele media sau creat review-uri reale.
+
+**Limită explicită:** hash-ul leagă bytes, nu certifică imaginea, durata, vizionarea de către om
+sau asocierea istorică sidecar/encode. S8a nu închide S8. Urmează protecția dezvăluirii rezultatelor,
+randarea neutră, payoff/diversitate în rubrică, review tehnic separat, minimum 10 SURSE distincte
+(nu 10 proiecte/clonări) și 150 de momente, macro-agregare și intervale de încredere. Teste:
+**1.739 passed, 2 failed**, aceleași 404 TikTok; typecheck curat.
+
 ## Punctul exact de reluare
 
 **Nimic din motor nu e activ.** R2, R3a, R3b, R4, R5 și R6 sunt instrumentare în umbră: calculează,
@@ -999,7 +1019,8 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
 9. ~~**R8** — reconstrucția secvenței livrate după trim.~~ **ÎNCHIS 2 septembrie 2026.**
 10. ~~**S7** — resolverul determinist, envelope/fingerprint, recovery per chunk și per rundă,
     `anchor_id`, scara dedupe și identitatea comună selection/render.~~ **ÎNCHIS 3 septembrie 2026.**
-11. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
+11. **S8** — S8a leagă sesiunea de media exactă; continuă protecția dezvăluirii, randarea neutră
+    și evaluarea selecției, minimum 10 surse distincte și 150 de momente. Gate-ul rămâne deschis.
 12. **P** — activarea graduală.
 
 **În afara planului:** pipeline-ul TikTok nu e construit — router-ul nu e montat, sidebar-ul duce la o
