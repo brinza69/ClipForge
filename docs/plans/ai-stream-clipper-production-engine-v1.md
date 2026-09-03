@@ -999,7 +999,17 @@ opt rămân identice. Noile grupări reproduc trace-ul pre-verdict: 23/49/78/278
 `gateslice4h`, față de regruparea veche 31/48/74/273/304. Gate automat după S7e: **1.696 teste
 backend trec; rămân numai cele două 404 TikTok cunoscute.**
 
-**S7 nu este închis.** Mai rămâne identitatea comună dintre selection și render trace.
+**S7f livrat, 3 septembrie 2026 — identitatea comună selection/render.** `RunTrace.run_id`, deja
+comun lui `reasoning_run.json` și `selection_trace.json`, este acum persistat ca
+`selection_run_id` pe fiecare clip proaspăt și copiat în sidecar la export. Rândurile păstrate ca
+exporturi peste un re-score își păstrează rularea veche; artefactele pre-S7f rămân `null`, fără
+backfill din trace-ul curent. Un rank shadow fără ID sau cu `shadow_run_id` diferit este refuzat înainte ca board-ul anterior
+să fie șters. ID-ul este proveniență, nu rețetă video, deci nu intră în `input_fingerprint`.
+Important: leagă și face o nepotrivire detectabilă, dar nu arhivează un trace vechi după ce
+artefactul curent al proiectului este suprascris. Gate automat după S7f: **1.712 teste backend
+trec; rămân numai cele două 404 TikTok cunoscute.**
+
+**S7 este închis.** Următorul batch de reasoning este S8, evaluarea oarbă pe corpus.
 
 ### Batch S8 — evaluarea selecției, separată de randare
 

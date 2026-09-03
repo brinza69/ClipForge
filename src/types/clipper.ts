@@ -280,6 +280,7 @@ export interface ClipperClip {
   dedupe_group: string | null;
   is_alternative: boolean;
   rank_position: number | null;
+  selection_run_id: string | null;
   ranker_version: string | null;
   reasoning: ClipReasoning | null;
   review: ClipReview | null;

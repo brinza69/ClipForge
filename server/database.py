@@ -64,7 +64,7 @@ def _sqlite_pragmas(dbapi_connection, _record) -> None:
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-SCHEMA_VERSION = "2026-08-21-2"
+SCHEMA_VERSION = "2026-09-03-1"
 
 _REQUIRED_MIGRATED_COLUMNS = {
     "jobs": {
@@ -98,6 +98,7 @@ _REQUIRED_MIGRATED_COLUMNS = {
         "caption_plan", "headline_text", "content_type", "warnings",
         "dedupe_group", "is_alternative", "rank_position", "feature_vector",
         "reasoning", "review", "ranker_version", "preview_path",
+        "selection_run_id",
     },
 }
 
@@ -196,6 +197,7 @@ async def init_db() -> None:
             ("hook_align", "VARCHAR(10)"),
             ("shadow_rank", "INTEGER"),
             ("shadow_run_id", "VARCHAR(64)"),
+            ("selection_run_id", "VARCHAR(64)"),
         ]
         for col_name, col_type in _clip_migrations:
             try:

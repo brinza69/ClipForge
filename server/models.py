@@ -374,6 +374,11 @@ class ClipModel(Base):
     # blind review can be shown v2's choices without shipping them.
     shadow_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     shadow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The scoring/selection run that created this row. Unlike shadow_run_id it
+    # exists for every fresh candidate, including the legacy board, and is the
+    # identity copied into an eventual render sidecar. NULL means the row
+    # predates S7f; old provenance is not reconstructed from today's trace.
+    selection_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Frozen at scoring time so the ranker trains on what the model actually
     # saw, not on features recomputed by newer code.
     feature_vector: Mapped[dict | None] = mapped_column(JSON, nullable=True)

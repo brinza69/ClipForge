@@ -459,7 +459,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
 
     # ── Persist ─────────────────────────────────────────────────────────────
     await queue.update_progress(job_id, 0.90, "Generating previews")
-    await _write_clips(project_id, ranked, winners, profile)
+    await _write_clips(project_id, ranked, winners, profile, trace.run_id)
     _write_traces(project_id, trace, field, mode, eliminated)
 
     async with async_session() as session:

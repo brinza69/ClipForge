@@ -300,6 +300,10 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     body = {
         "clip_id": clip.id,
         "project_id": project_id,
+        # The selection trace that produced this clip. This labels provenance;
+        # it is not part of the image recipe and therefore stays outside the
+        # render fingerprint. NULL is honest for clips created before S7f.
+        "selection_run_id": clip.selection_run_id,
         # WHICH renderer made this file. The two paths produce different videos
         # from the same plan, so one constant for both would file a static
         # export under a grammar of shots it never had.

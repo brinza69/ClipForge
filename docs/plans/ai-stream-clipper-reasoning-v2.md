@@ -867,6 +867,15 @@ loc de 31/48/74/273/304 obținute prin regruparea veche pe câmpul amestecat. Op
 artefacte, cele fără amestec de scară, rămân identice. După S7e rămâne deschisă numai identitatea
 comună selection/render.
 
+**Status final, S7f livrat 3 septembrie 2026.** Același `run_id` care leagă `reasoning_run.json`
+de `selection_trace.json` este persistat pe toate rândurile noi din `clips` și copiat în sidecar-ul
+unui export ca `selection_run_id`. Un rank shadow nu poate numi alt run, iar validarea se întâmplă
+înainte de înlocuirea board-ului. Exporturile păstrate la re-score își păstrează identitatea veche,
+iar rândurile istorice rămân `null`; nu li se atribuie retroactiv trace-ul curent. Câmpul etichetează
+proveniența și nu schimbă amprenta rețetei de randare. Legătura nu este o arhivă: dacă trace-ul
+vechi a fost suprascris, ID-ul poate demonstra nepotrivirea, nu poate reconstrui conținutul lui.
+**Batch 7 este închis; 1.712 teste backend trec, cu numai cele două 404 TikTok cunoscute rămase.**
+
 ### Batch 8 — ranker v2
 
 **Fișiere:** `ranker.py`, routerele de clips.

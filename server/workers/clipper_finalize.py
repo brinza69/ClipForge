@@ -200,7 +200,7 @@ def _reasoning_of(cand: dict) -> dict | None:
                 # Also columns, deliberately. The column is what a query filters
                 # on to build a review session; this copy is what survives in
                 # the explanation a person reads next to the clip.
-                "shadow_rank", "shadow_run_id"):
+                "shadow_rank", "shadow_run_id", "selection_run_id"):
         value = cand.get(key)
         if value not in (None, "", [], {}):
             out[key] = value
@@ -208,7 +208,8 @@ def _reasoning_of(cand: dict) -> dict | None:
 
 
 async def _write_clips(
-    project_id: str, ranked: list[dict], winners: list[dict], profile: str
+    project_id: str, ranked: list[dict], winners: list[dict], profile: str,
+    selection_run_id: str,
 ) -> None:
     """Replace this project's candidates with the new set.
 
@@ -221,6 +222,24 @@ async def _write_clips(
     a new winner. Observed after three exports and a re-score — 11 winners for
     a requested 8, with one moment on the board three times.
     """
+    # Validate the identity before opening a transaction. A malformed id or a
+    # shadow rank from another run must not delete the previous board and fail
+    # only while writing its replacement.
+    if (not isinstance(selection_run_id, str) or not selection_run_id
+            or selection_run_id != selection_run_id.strip()
+            or len(selection_run_id) > 64):
+        raise ValueError("selection_run_id must be a non-empty string of at most 64 characters")
+    for cand in ranked:
+        if not isinstance(cand, dict):
+            raise ValueError("ranked candidates must be records")
+        shadow_run_id = cand.get("shadow_run_id")
+        if cand.get("shadow_rank") is not None and shadow_run_id is None:
+            raise ValueError("a shadow rank must name its selection run")
+        if shadow_run_id is not None and shadow_run_id != selection_run_id:
+            raise ValueError("shadow_run_id belongs to a different selection run")
+    for cand in ranked:
+        cand["selection_run_id"] = selection_run_id
+
     winner_ids = {id(c) for c in winners}
 
     async with async_session() as session:
@@ -282,6 +301,7 @@ async def _write_clips(
                     rank_position=cand.get("rank_position"),
                     shadow_rank=cand.get("shadow_rank"),
                     shadow_run_id=cand.get("shadow_run_id") or None,
+                    selection_run_id=selection_run_id,
                     feature_vector=cand.get("features"),
                     ranker_version=cand.get("ranker_version"),
                     status=ClipStatus.candidate.value,

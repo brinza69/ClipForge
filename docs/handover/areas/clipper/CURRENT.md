@@ -849,7 +849,7 @@ fereastra este declarată, în interiorul ei. Auditul R0 trece neschimbat pe pil
 sidecar-uri precedă cheia `drop_spans`, deci nu demonstrează că n-a existat trim. Gate-ul R8 este
 acoperit prin cazurile sintetice și prin intrarea reală a auditului.
 
-## Batch S7 — resolverul și S7a–S7e livrate, 3 septembrie 2026
+## Batch S7 — resolverul și S7a–S7f livrate, 3 septembrie 2026
 
 `quote_resolver.py` + `scripts/measure_quote_drift.py`. Vezi
 [`docs/refs/grounding-2026-08-31.md`](../../../refs/grounding-2026-08-31.md).
@@ -932,7 +932,15 @@ discrepanță care fusese reconstruită manual restaurând `heuristic_score`; ac
 Artefactele stocate nu au fost re-score-uite, deci `selection_trace` vechi păstrează deliberat
 grupurile vechi. Suita completă după S7e: **1.696 passed, 2 failed**, aceleași 404 TikTok.
 
-S7 rămâne deschis numai pentru identitatea comună selection/render.
+**S7f — identitatea comună selection/render — este livrată.** `RunTrace.run_id` era deja comun
+celor două artefacte ale score-ului; acum devine `selection_run_id` pe fiecare clip nou și în
+sidecar-ul randării lui. Orice `shadow_run_id` trebuie să coincidă înainte ca DB-ul să înlocuiască
+board-ul. Exporturile păstrate peste re-score rămân legate de rularea care le-a creat, iar cele
+istorice rămân `null`, nu sunt atribuite trace-ului curent. ID-ul nu intră în fingerprint-ul imaginii.
+Legătura face o nepotrivire observabilă, dar nu arhivează automat un trace vechi suprascris. Suita
+după S7f: **1.712 passed, 2 failed**, aceleași 404 TikTok.
+
+**S7 este închis.**
 
 ## Punctul exact de reluare
 
@@ -989,9 +997,8 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 8. **R7** — preflight de publicare și corecția bounded (maximum una).
 9. ~~**R8** — reconstrucția secvenței livrate după trim.~~ **ÎNCHIS 2 septembrie 2026.**
-10. **S7** — resolverul determinist, S7a envelope/fingerprint, S7b recovery per chunk, S7c
-    recovery per rundă pentru judge, S7d `anchor_id` și S7e scara dedupe sunt livrate; a rămas
-    identitatea comună de run.
+10. ~~**S7** — resolverul determinist, envelope/fingerprint, recovery per chunk și per rundă,
+    `anchor_id`, scara dedupe și identitatea comună selection/render.~~ **ÎNCHIS 3 septembrie 2026.**
 11. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
 12. **P** — activarea graduală.
 

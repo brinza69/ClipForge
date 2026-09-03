@@ -109,6 +109,7 @@ def clip_to_dict(clip: ClipModel) -> dict[str, Any]:
         "dedupe_group": clip.dedupe_group,
         "is_alternative": _as_bool(clip.is_alternative),
         "rank_position": clip.rank_position,
+        "selection_run_id": clip.selection_run_id,
         # Why this clip exists — anchor, payoff, required context, archetype,
         # which edit variant, what the judge said. The UI can stay unaware of
         # it, but a bad pick has to be explainable without a debugger.
