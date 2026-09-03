@@ -85,6 +85,7 @@ def _record_completeness(refined: list[dict], transcript: dict, *,
 
 async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     from services.clipper import candidates as cand_mod
+    from services.clipper import anchor_identity
     from services.clipper import captions as cap_mod
     from services.clipper import dedupe as dedupe_mod
     from services.clipper import layout as layout_mod
@@ -127,6 +128,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     )
     trace.note_versions(
         analysis=ANALYSIS_VERSION,
+        anchor_identity=anchor_identity.ANCHOR_ID_VERSION,
         anchor_prompt=llm_select.ANCHOR_PROMPT_VERSION,
         judge_prompt=llm_select.JUDGE_PROMPT_VERSION,
         content_profile=profile,

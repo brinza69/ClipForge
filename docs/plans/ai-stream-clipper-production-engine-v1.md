@@ -977,8 +977,21 @@ judge-ului. Un provider cu JSON neutilizabil urmat de unul valid este raportat `
 `partial`. Gate automat după S7c: **1.678 teste backend trec; rămân numai cele două 404 TikTok
 cunoscute.**
 
-**S7 nu este închis.** Mai rămân `anchor_id`, scara dedupe și identitatea comună dintre selection
-și render trace.
+**S7d livrat, 3 septembrie 2026 — identitatea canonică a ancorei.** Detectorul atribuie un
+`anchor_id` determinist după dedupe-ul de overlap și înainte să existe variante de boundary.
+Identitatea este namespaced de dovezile exacte ale sursei și derivată din câmpurile semantice ale
+ancorei, nu din confidence, provider sau poziția variantei. Toate variantele o păstrează la nivelul
+candidatului și în `StoryEvidence`; `selection_trace` expune separat `anchor_id` și `moment_id`.
+Recensământul numără ancorele canonice pe run-urile noi și folosește bucketul payoff numai pentru
+artefacte vechi. Important: dacă dedupe unește două ancore, grupul păstrează reuniunea tuturor
+identităților și grounding-ul fiecăreia — liderul nu poate șterge o descoperire din numitor. ID-ul
+este stabil pentru aceeași sursă și același răspuns cached; nu pretinde că două apeluri
+nondeterministe cu răspunsuri semantic diferite au găsit același lucru. Schimbarea este de
+identitate și observabilitate, nu mută shortlist-ul sau board-ul. Gate automat după S7d:
+**1.684 teste backend trec; rămân numai cele două 404 TikTok cunoscute.**
+
+**S7 nu este închis.** Mai rămân scara dedupe și identitatea comună dintre selection și render
+trace.
 
 ### Batch S8 — evaluarea selecției, separată de randare
 

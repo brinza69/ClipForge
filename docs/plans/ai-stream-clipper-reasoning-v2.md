@@ -849,6 +849,15 @@ checkpointului nu poate anula un verdict valid, iar un fallback de parsare recup
 ca fallback. După S7c rămân deschise `anchor_id`, scara dedupe și identitatea comună
 selection/render.
 
+**Status parțial, S7d livrat 3 septembrie 2026.** Fiecare ancoră primește un `anchor_id`
+source-scoped după dedupe-ul dintre chunkuri și înainte de generarea variantelor; candidatul,
+`StoryEvidence` și `selection_trace` îl păstrează separat de `moment_id`. Identitatea exclude
+confidence și proveniența, dar include sursa exactă și răspunsul semantic, deci este stabilă pentru
+un rerun cached fără să fabrice egalitate între două răspunsuri nondeterministe diferite. Censusul
+folosește id-ul canonic și păstrează reuniunea identităților când dedupe unește două ancore într-un
+grup; bucketul temporal rămâne numai fallback explicit pentru artefactele vechi. După S7d rămân
+deschise scara dedupe și identitatea comună selection/render.
+
 ### Batch 8 — ranker v2
 
 **Fișiere:** `ranker.py`, routerele de clips.
@@ -1134,11 +1143,12 @@ ancorele de dedesubt: pe interviu **7 payoff-uri distincte au devenit 11 grupuri
 patru ore 28 au devenit 25. O densitate comparată pe grupuri compară comportamentul dedupe-ului la
 fel de mult ca al conținutului.
 
-**Și „descoperiri" este tot un proxy.** Identitatea canonică este **ancora**, iar niciun `anchor_id`
-nu este propagat astăzi la variante — `payoff_t`, cuantizat ca în `moment_id`, este cel mai apropiat
-număr onest. Două ancore care cad în aceeași cuantă se contopesc aici; una a cărei ancoră traversează
-o margine de cuantă între variante se sparge. **Un `anchor_id` stabil este condiția ca oricare din
-aceste cifre să fie definitivă.**
+**În pilot, „descoperiri" era încă un proxy.** La commitul măsurat aici nu exista `anchor_id`, deci
+`payoff_t`, cuantizat ca în `moment_id`, era cel mai apropiat număr onest: două ancore din aceeași
+cuantă se puteau contopi, iar una mutată peste marginea cuantei se putea sparge. S7d propagă acum
+identitatea canonică a ancorei la variante și censusul run-urilor noi o folosește direct; cifrele
+istorice din tabel rămân deliberat cele măsurate atunci și nu sunt redenumite retroactiv drept
+numărători canonice.
 
 **Motorul nu este Minecraft-shaped, și concluzia nu depinde de care metrică se alege.** Comparația
 cea mai apropiată de un experiment controlat este ultimul rând contra penultimului — două stream-uri

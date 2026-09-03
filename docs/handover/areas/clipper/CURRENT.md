@@ -849,7 +849,7 @@ fereastra este declarată, în interiorul ei. Auditul R0 trece neschimbat pe pil
 sidecar-uri precedă cheia `drop_spans`, deci nu demonstrează că n-a existat trim. Gate-ul R8 este
 acoperit prin cazurile sintetice și prin intrarea reală a auditului.
 
-## Batch S7 — resolverul și S7a–S7c livrate, 3 septembrie 2026
+## Batch S7 — resolverul și S7a–S7d livrate, 3 septembrie 2026
 
 `quote_resolver.py` + `scripts/measure_quote_drift.py`. Vezi
 [`docs/refs/grounding-2026-08-31.md`](../../../refs/grounding-2026-08-31.md).
@@ -905,7 +905,16 @@ checkpointului este vizibil în trace, dar nu anulează verdictul deja aplicat; 
 răspuns JSON inutilizabil este raportat ca fallback. Suita completă după S7c: **1.678 passed,
 2 failed**, aceleași 404 TikTok preexistente.
 
-S7 rămâne deschis pentru `anchor_id`, scara dedupe și identitatea comună selection/render.
+**S7d — `anchor_id` canonic — este livrat.** Identitatea este atribuită după dedupe-ul de overlap,
+înainte de variante, și este namespaced de dovezile exacte ale sursei. Confidence-ul și proveniența
+nu o schimbă; un răspuns semantic diferit de la un apel nondeterminist primește deliberat alt id.
+Variantele o păstrează atât top-level, cât și în `StoryEvidence`, iar `selection_trace` o arată
+separat de `moment_id`. Censusul folosește ancora pe run-urile noi și payoff bucket numai pe
+artefactele vechi. Un grup în care dedupe a unit mai multe ancore păstrează reuniunea tuturor
+id-urilor și grounding-ul fiecăreia, deci liderul nu micșorează numitorul. Nu schimbă selecția.
+Suita completă după S7d: **1.684 passed, 2 failed**, aceleași 404 TikTok preexistente.
+
+S7 rămâne deschis pentru scara dedupe și identitatea comună selection/render.
 
 ## Punctul exact de reluare
 
@@ -962,9 +971,9 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 8. **R7** — preflight de publicare și corecția bounded (maximum una).
 9. ~~**R8** — reconstrucția secvenței livrate după trim.~~ **ÎNCHIS 2 septembrie 2026.**
-10. **S7** — resolverul determinist, S7a envelope/fingerprint, S7b recovery per chunk și S7c
-    recovery per rundă pentru judge sunt livrate; au rămas `anchor_id`, scara dedupe și identitatea
-    comună de run.
+10. **S7** — resolverul determinist, S7a envelope/fingerprint, S7b recovery per chunk, S7c
+    recovery per rundă pentru judge și S7d `anchor_id` sunt livrate; au rămas scara dedupe și
+    identitatea comună de run.
 11. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
 12. **P** — activarea graduală.
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Sequence
 
+from services.clipper import anchor_identity
 from services.clipper.dedupe import (
     _group as _group_indexes,
     _score_of,
@@ -148,6 +149,12 @@ def build_groups(cands: Sequence[dict], *, overlap_threshold: float = 0.4,
         leader = cands[ranked[0]]
         story = _story_of(speaker)
         grounding = story.get("grounding") or {}
+        anchor_ids = sorted({value for i in members
+                             if (value := anchor_identity.of_candidate(cands[i]))})
+        grounded_anchor_ids = sorted({
+            value for i in members
+            if (value := anchor_identity.of_candidate(cands[i]))
+            and (_story_of(cands[i]).get("grounding") or {}).get("payoff")})
 
         base = moment_id(speaker)
         # Two groups CAN quantise onto the same id — different moments six
@@ -159,6 +166,9 @@ def build_groups(cands: Sequence[dict], *, overlap_threshold: float = 0.4,
 
         groups.append({
             "moment_id": mid,
+            "anchor_id": anchor_ids[0] if len(anchor_ids) == 1 else None,
+            "anchor_ids": anchor_ids,
+            "grounded_anchor_ids": grounded_anchor_ids,
             "members": list(ranked),
             "representatives": ranked[:REPRESENTATIVES],
             # The score stays the group's BEST, whichever cut earned it: the
@@ -456,26 +466,15 @@ def story_census(groups: Sequence[dict], *, duration: float,
         "story_uncertain": _validity("uncertain"),
         "story_invalid": _validity("invalid"),
         "story_quarters": spread,
-        # WHAT THE ENGINE FOUND, as closely as this data allows. Distinct
-        # payoffs, quantised the same way `moment_id` quantises them so model
-        # jitter of a second does not become a second discovery.
-        #
-        # A PROXY, and the plan should say so: the canonical identity is the
-        # ANCHOR, and no `anchor_id` is propagated to the variants today. Two
-        # anchors whose payoffs land in one bucket collapse here, and one anchor
-        # whose payoff moved across a bucket edge between variants splits. Until
-        # the anchor carries an id, this is the closest honest count.
+        # WHAT THE ENGINE FOUND. New runs count the canonical anchor id; old
+        # candidates without one retain the explicitly weaker payoff bucket.
         **_discoveries(story),
     }
 
 
 def _discoveries(story: Sequence[dict]) -> dict:
-    buckets = {int(_num(g.get("payoff_t"), -1.0) // _QUANTUM_S)
-               for g in story if _num(g.get("payoff_t"), -1.0) >= 0}
-    grounded = {int(_num(g.get("payoff_t"), -1.0) // _QUANTUM_S)
-                for g in story
-                if _num(g.get("payoff_t"), -1.0) >= 0 and g.get("grounded")}
-    return {"story_payoffs": len(buckets),
+    keys, grounded = anchor_identity.discovery_keys(story, _QUANTUM_S)
+    return {"story_payoffs": len(keys),
             "story_payoffs_grounded": len(grounded)}
 
 

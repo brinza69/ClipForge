@@ -429,6 +429,8 @@ def build_selection_trace(candidates: list[dict], *, mode: str,
             "reject_reasons": list(
                 (cand.get("llm_verdict") or {}).get("reject_reasons") or []),
             "is_story": bool(story),
+            "anchor_id": story.get("anchor_id") or cand.get("anchor_id"),
+            "moment_id": cand.get("moment_id"),
             "archetypes": list(story.get("archetypes") or []),
             "thread_id": story.get("thread_id"),
             "dedupe_group": cand.get("dedupe_group"),

@@ -182,6 +182,8 @@ def _reasoning_of(cand: dict) -> dict | None:
     # freeze a second, stale copy of evidence that `remeasure` keeps current.
     if cand.get("moment_id"):
         out["moment_id"] = cand["moment_id"]
+    if cand.get("anchor_id"):
+        out["anchor_id"] = cand["anchor_id"]
     if cand.get("reasons"):
         out["reasons"] = [str(r) for r in cand["reasons"]][:12]
     # Every scale under its own name. `overall` alone could not say whether it

@@ -339,6 +339,7 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
     ~64k tokens at the measured rate and up to 285k on a talkative source,
     past the context of the models this would otherwise use.
     """
+    from services.clipper import anchor_identity
     from services.clipper.story import normalise_anchor
 
     # Atom lines carry the evidence for their own moment — that the room got
@@ -431,7 +432,8 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
         trace.note_stage("anchors_cache", prepared.reason,
                          f"{reused} reused, {tally[reasoning_chunks.UNUSABLE]} unusable, "
                          f"{tally[reasoning_chunks.PENDING]} pending")
-    found = _dedupe_anchors(found)
+    found = anchor_identity.assign(
+        _dedupe_anchors(found), anchor_identity.source_namespace(items, duration))
     found.sort(key=lambda a: a["payoff_t"])
     logger.info("llm_select: %d anchors from %d chunks (%s)", len(found),
                 len(chunks), ANCHOR_PROMPT_VERSION)
