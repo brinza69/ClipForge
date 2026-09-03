@@ -42,12 +42,11 @@ from services.clipper.serialize import effective_content_type
 from workers import clipper_scoring
 from workers.clipper_judging import _judge_pool, _judge_rounds  # noqa: F401
 from workers.clipper_cache import (  # noqa: F401
-    _anchor_stamp, _cache, _cached, _reasoning_mode, _segment_types,
+    _anchor_stamp, _atoms_stamp, _base_stamp, _cache, _cached,
+    _episodes_stamp, _promises_stamp, _reasoning_mode, _segment_types,
+    _threads_stamp,
 )
-
-
 logger = logging.getLogger("clipforge.clipper.build")
-
 
 async def _fetch_transcript(project_id: str) -> dict[str, Any]:
     async with async_session() as session:
@@ -90,6 +89,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     from services.clipper import dedupe as dedupe_mod
     from services.clipper import layout as layout_mod
     from services.clipper import atoms as atoms_mod
+    from services.clipper import episodes as episodes_mod
     from services.clipper import llm_select
     from services.clipper import promises as promises_mod
     from services.clipper import segmentation
@@ -134,6 +134,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     )
 
     transcript = await _fetch_transcript(project_id)
+    cache_base = _base_stamp(project_id, transcript)
     sig = storage.read_artifact(project_id, "signals") or {}
     regions = storage.read_artifact(project_id, "regions") or {}
     faces_blob = storage.read_artifact(project_id, "faces") or {}
@@ -147,7 +148,8 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     # short to classify, and the override still wins over everything.
     seg_types: list[dict] = []
     if not project.content_type_override:
-        seg_types = _segment_types(project_id, duration, transcript)
+        seg_types = _segment_types(project_id, duration, transcript,
+                                   base=cache_base)
 
     # ── Pass B ──────────────────────────────────────────────────────────────
     await queue.update_progress(job_id, 0.05, "Building semantic segments")
@@ -197,35 +199,42 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 # Pass A series with no model involved — a 12-hour stream is
                 # ~8,600 atoms and the cost rule forbids a call per two
                 # seconds of video.
-                atoms = storage.read_artifact(project_id, "atoms")
+                atoms_stamp = _atoms_stamp(cache_base, sig)
+                atoms = _cached(project_id, "atoms", atoms_stamp)
                 if not isinstance(atoms, list):  # noqa: SIM108
                     atoms = atoms_mod.build(transcript, sig)
-                    storage.write_artifact(project_id, "atoms", atoms)
+                    _cache(project_id, "atoms", atoms_stamp, atoms)
                 # Setups that could pay off later, swept once over the whole
                 # transcript and checkpointed. Anchor detection runs per chunk
                 # with no memory across chunks, so without this a payoff that
                 # lands on a prediction from an hour earlier is invisible.
-                known = storage.read_artifact(project_id, "promises")
+                promises_stamp = _promises_stamp(
+                    cache_base, duration, timeout=llm_timeout)
+                known = _cached(project_id, "promises", promises_stamp)
                 if not isinstance(known, list):
                     known = await promises_mod.detect(
                         segments, duration, trace=trace,
                         timeout=llm_timeout, is_cancelled=cancelled)
-                    storage.write_artifact(project_id, "promises", known)
+                    _cache(project_id, "promises", promises_stamp, known)
                 # Payoff first: each anchor carries what a viewer must already
                 # know, so the window can open on the earliest required fact
                 # rather than on the first audio spike.
-                # Narrative arcs, by lexical chaining over the atoms — no
-                # model. Diversity reads them so a stream that spends an hour
-                # on one boss cannot hand back a board that is all that boss.
-                arcs = storage.read_artifact(project_id, "threads")
+                # Narrative arcs, by lexical chaining over the atoms — no model.
+                threads_stamp = _threads_stamp(cache_base, atoms)
+                arcs = _cached(project_id, "threads", threads_stamp)
                 if not isinstance(arcs, list):
                     arcs = threads_mod.build(atoms)
-                    storage.write_artifact(project_id, "threads", arcs)
-                # `arcs` also becomes the rolling summary (§2): a chunk at hour
-                # seven is told what the stream has been about before it, which
-                # is the one thing a per-chunk pass otherwise cannot know.
-                anchors = _cached(project_id, "anchors",
-                                  _anchor_stamp(cfg, duration))
+                    _cache(project_id, "threads", threads_stamp, arcs)
+                # `arcs` also becomes the rolling summary handed to later chunks.
+                episodes_stamp = _episodes_stamp(cache_base, atoms, arcs)
+                episodes = _cached(project_id, "episodes", episodes_stamp)
+                if not isinstance(episodes, list):
+                    episodes = episodes_mod.build(arcs, atoms)
+                    _cache(project_id, "episodes", episodes_stamp, episodes)
+                anchors_stamp = _anchor_stamp(
+                    cfg, duration, base=cache_base, promises=known, atoms=atoms,
+                    threads=arcs, episodes=episodes, timeout=llm_timeout)
+                anchors = _cached(project_id, "anchors", anchors_stamp)
                 if anchors is not None:
                     # Says WHY there are no chunks this run. Without it a cached
                     # run and a run whose chunking produced nothing look the
@@ -235,10 +244,10 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 if anchors is None:
                     anchors = await llm_select.detect_anchors(
                         segments, duration, promises=known, atoms=atoms,
-                        threads=arcs, trace=trace, timeout=llm_timeout,
+                        threads=arcs, episodes=episodes, trace=trace,
+                        timeout=llm_timeout,
                         is_cancelled=cancelled)
-                    _cache(project_id, "anchors",
-                           _anchor_stamp(cfg, duration), anchors)
+                    _cache(project_id, "anchors", anchors_stamp, anchors)
                 storage.write_artifact(project_id, "graph",
                                        threads_mod.edges(arcs, known, anchors))
                 # Check each claim against the atoms it says it came from,

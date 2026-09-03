@@ -40,6 +40,10 @@ def store(monkeypatch):
 def test_a_cached_answer_comes_back(store):
     build._cache("p1", "anchors", _stamp(), [{"payoff_t": 12.0}])
     assert build._cached("p1", "anchors", _stamp()) == [{"payoff_t": 12.0}]
+    assert store["anchors"]["envelope_version"] == "reasoning_artifact_v1"
+    assert store["anchors"]["artifact"] == "anchors"
+    assert store["anchors"]["input_fingerprint"]
+    assert store["anchors"]["data_fingerprint"]
 
 
 def test_nothing_cached_reads_as_nothing(store):
@@ -72,10 +76,24 @@ def test_an_artifact_written_by_an_older_build_is_ignored(store):
     assert build._cached("p1", "anchors", _stamp()) is None
 
 
+def test_the_private_pre_s7_stamp_is_also_ignored(store):
+    """The old wrapper named some inputs but omitted transcript and upstream
+    artifacts.  Looking wrapped is not the same as satisfying the envelope."""
+    store["anchors"] = {"stamp": _stamp(), "data": [{"payoff_t": 12.0}]}
+    assert build._cached("p1", "anchors", _stamp()) is None
+
+
 def test_the_stamp_covers_what_changes_the_answer():
-    keys = set(_stamp())
-    assert {"prompt", "reasoning", "engines", "duration"} <= keys, (
-        "the stamp has to name everything that changes what the model is asked")
+    stamp = _stamp()
+    assert stamp["prompt_version"]
+    assert stamp["engines"]
+    assert stamp["chunk_config"]
+    assert stamp["temperature"] == 0.2
+    assert stamp["parameters"]["duration"] == 1000.0
+    assert stamp["parameters"]["reasoning"] == "story_v1"
+    assert set(stamp["upstream"]) == {
+        "promises", "atoms", "threads", "episodes",
+    }, "every value rendered into the anchor prompts is an upstream input"
 
 
 # ── cached artifacts have to have been made by this code, for this file ──────

@@ -245,4 +245,5 @@ def test_the_anchor_cache_is_not_invalidated_by_the_rename():
     from workers.clipper_build import _anchor_stamp
 
     old_shape = {"llm_select": True, "reasoning_version": "story_v1"}
-    assert _anchor_stamp(old_shape, 100.0)["reasoning"] == "story_v1"
+    assert (_anchor_stamp(old_shape, 100.0)["parameters"]["reasoning"]
+            == "story_v1")

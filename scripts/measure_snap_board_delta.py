@@ -62,7 +62,9 @@ from models import ProjectModel, TranscriptModel  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from services.clipper import boundary_completion as bc  # noqa: E402
-from services.clipper import candidate_groups, storage, story_evidence  # noqa: E402
+from services.clipper import (  # noqa: E402
+    candidate_groups, reasoning_cache, storage, story_evidence,
+)
 from services.clipper.candidate_boundaries import _fit  # noqa: E402
 from services.clipper.candidate_terms import (  # noqa: E402
     _neighbourhood, _num, _text_of, _words_for,
@@ -253,9 +255,12 @@ def _measure(project_id: str, top_n: int = TOP_N) -> dict:
     # where the story block does not exist either — but a corpus that HAS story
     # candidates and no atoms would be remeasured against nothing, on both
     # sides, and the null result would be an artefact of the missing file.
-    atoms = storage.read_artifact(project_id, "atoms")
+    atoms_read = reasoning_cache.inspect(
+        storage.read_artifact(project_id, "atoms"), "atoms")
+    atoms = atoms_read.data if atoms_read.hit else None
     if any(isinstance(c.get("story"), dict) for c in rows) and not atoms:
-        return {"project": project_id, "refused": "story_candidates_without_atoms"}
+        return {"project": project_id,
+                "refused": "story_candidates_without_enveloped_atoms"}
 
     # BOTH SIDES REMEASURED, for the reason both sides are re-scored: the story
     # numbers stored in the artefact are whatever `story_evidence` computed when

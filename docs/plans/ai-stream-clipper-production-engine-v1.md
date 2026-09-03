@@ -936,6 +936,26 @@ Acest batch continuă Batch 7 din planul reasoning, nu îl rescrie:
 **Gate:** o cerere de chunk neparsabilă nu șterge tăcut 57% dintr-un interviu; rerun-ul declară
 partea nondeterministă; niciun cache incompatibil nu este reutilizat.
 
+**S7a livrat, 3 septembrie 2026 — envelope și invalidare țintită.** `reasoning_cache.py` definește
+un singur envelope versionat pentru `atoms`, `promises`, `threads`, `episodes`, `anchors` și
+`segment_types`. `episodes.json` este acum persistat și chiar este intrarea predată promptului de
+ancore; o listă goală este un rezultat cacheabil, nu motiv pentru o recalculare privată. Identitatea
+ține separat sursa înregistrată la ingest și transcriptul exact, apoi adaugă numai intrările pe care
+artefactul respectiv le citește: upstream-uri, versiunea serviciului/promptului, modelele rezolvate
+per provider, temperatura, contextul, timeout-ul, ordinea motoarelor, chunk config și parametrii
+locali. Schimbarea semnalelor invalidează atoms, dar nu promises; schimbarea transcriptului
+invalidează toate identitățile reasoning dependente. Fingerprintul este SHA-256 peste JSON strict,
+canonic: ordinea cheilor și round-trip-ul tuple→list nu îl schimbă, iar NaN, infinitul și obiectele
+nepersistabile sunt refuzate.
+
+Fișierele bare istorice și vechiul wrapper privat `{stamp, data}` sunt intenționat cache miss și se
+refac la primul score. `measure_snap_board_delta.py` refuză atoms vechi în loc să compare o generație
+necunoscută. Gate automat: **1.654 teste backend trec; rămân numai cele două 404 TikTok cunoscute.**
+
+**S7 nu este închis.** `judge` este rezervat în vocabularul comun, dar cache-ul lui nu este încă
+materializat. Mai rămân recovery per chunk cu proveniența răspunsului, declararea
+nedeterminismului, `anchor_id`, scara dedupe și identitatea comună dintre selection și render trace.
+
 ### Batch S8 — evaluarea selecției, separată de randare
 
 **Scop:** demonstrează că `story_v2` alege mai bine decât legacy.

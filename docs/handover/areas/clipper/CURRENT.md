@@ -849,7 +849,7 @@ fereastra este declarată, în interiorul ei. Auditul R0 trece neschimbat pe pil
 sidecar-uri precedă cheia `drop_spans`, deci nu demonstrează că n-a existat trim. Gate-ul R8 este
 acoperit prin cazurile sintetice și prin intrarea reală a auditului.
 
-## Batch S7 — primul item livrat, 31 august 2026
+## Batch S7 — resolverul și S7a livrate, 3 septembrie 2026
 
 `quote_resolver.py` + `scripts/measure_quote_drift.py`. Vezi
 [`docs/refs/grounding-2026-08-31.md`](../../../refs/grounding-2026-08-31.md).
@@ -869,6 +869,21 @@ subsecvență fiind o parafrază, nu o potrivire slabă.
 **Pasul doi se schimbă pe baza datelor:** nu remăsurare după lărgire, ci **A/B de prompt cu
 `atom_ids`** — `matched_by` e `timestamp` pe toate cele 164, deci modelul nu numește niciodată un
 atom.
+
+**S7a — envelope și invalidare țintită — este livrat.** `reasoning_cache.py` este contractul comun,
+iar `clipper_cache.py` descrie intrările fiecărui artefact. Atoms, promises, threads, episodes,
+anchors și `segment_types` poartă acum versiune de envelope, identitatea intrărilor și hash-ul
+payloadului. `episodes.json` există pe disc și detectorul de ancore primește exact lista validată;
+un rezultat gol nu declanșează o reconstrucție ascunsă. Fingerprintul include JSON strict și
+canonic, modelele implicite rezolvate pe fiecare provider, temperatura, contextul, timeout-ul,
+chunking-ul și upstream-urile relevante. Schimbarea unui semnal nu invalidează promises, iar
+schimbarea transcriptului invalidează tot reasoning-ul dependent.
+
+**Migrare intenționat incompatibilă:** fișierele reasoning bare și vechiul `{stamp, data}` sunt
+refuzate o singură dată și se refac la primul score. `measure_snap_board_delta.py` refuză atoms vechi
+în loc să le citească drept generația curentă. Suita completă: **1.654 passed, 2 failed**, exact cele
+două 404 TikTok preexistente. S7 rămâne deschis pentru cache/recovery per chunk și judge,
+nedeterminism declarat, `anchor_id`, scara dedupe și identitatea comună selection/render.
 
 ## Punctul exact de reluare
 
@@ -925,8 +940,8 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 8. **R7** — preflight de publicare și corecția bounded (maximum una).
 9. ~~**R8** — reconstrucția secvenței livrate după trim.~~ **ÎNCHIS 2 septembrie 2026.**
-10. **S7** — închiderea infrastructurii reasoning v2; resolverul determinist este livrat, au rămas
-    envelope/fingerprint, recovery per chunk, `anchor_id`, scara dedupe și identitatea comună de run.
+10. **S7** — resolverul determinist și S7a envelope/fingerprint sunt livrate; au rămas judge cache și
+    recovery per chunk, nedeterminism declarat, `anchor_id`, scara dedupe și identitatea comună de run.
 11. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
 12. **P** — activarea graduală.
 

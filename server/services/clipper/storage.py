@@ -49,7 +49,8 @@ ARTIFACT_NAMES: frozenset[str] = frozenset(
     # where it did. Neither is an input to anything — they exist so a later
     # change can be shown to be an improvement rather than asserted to be one.
     {"signals", "faces", "regions", "segments", "candidates", "meta",
-     "promises", "atoms", "threads", "graph", "anchors", "segment_types",
+     "promises", "atoms", "threads", "episodes", "graph", "anchors",
+     "segment_types",
      "regions_by_segment", "reasoning_run", "selection_trace"}
 )
 
@@ -147,6 +148,7 @@ def paths(project_id: str) -> dict[str, Path]:
         "promises": analysis / "promises.json",
         "atoms": analysis / "atoms.json",
         "threads": analysis / "threads.json",
+        "episodes": analysis / "episodes.json",
         "graph": analysis / "graph.json",
         "anchors": analysis / "anchors.json",
         "segment_types": analysis / "segment_types.json",

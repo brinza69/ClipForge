@@ -184,3 +184,18 @@ async def test_a_stretch_the_chunk_is_still_inside_is_not_called_background(monk
         [{"start": 100.0, "text": "in the middle of it"}], 4000.0,
         threads=[_thread("t1", 0.0, 2400.0, "warden")])
     assert "WHAT THE STREAM HAS BEEN ABOUT SO FAR" not in seen.get("prompt", "")
+
+
+async def test_a_cached_empty_episode_set_is_not_rebuilt_privately(monkeypatch):
+    """Empty is a real cache answer.  Treating it as false would recompute an
+    upstream artifact inside anchor detection, outside the identity stamped on
+    the anchor envelope."""
+    async def fake(_engine, _prompt, **_kw):
+        return "[]"
+
+    monkeypatch.setattr("services.descriptions._call_llm", fake)
+    monkeypatch.setattr(episodes, "build", lambda *_a, **_k: 1 / 0)
+
+    assert await llm_select.detect_anchors(
+        [{"start": 0.0, "end": 1.0, "text": "hello"}], 10.0,
+        episodes=[]) == []

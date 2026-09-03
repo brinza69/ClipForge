@@ -323,6 +323,7 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
                          promises: Sequence[dict] | None = None,
                          atoms: Sequence[dict] | None = None,
                          threads: Sequence[dict] | None = None,
+                         episodes: Sequence[dict] | None = None,
                          trace: Any = None, timeout: float | None = None,
                          is_cancelled=None) -> list[dict]:
     """Anchors: a payoff, what a viewer must know for it to land, an archetype.
@@ -353,7 +354,11 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
 
     # Built once for the whole stream, sliced per chunk. Free — no model call.
     # Threads give the stretches; the atoms give the words that label them.
-    stream_episodes = episode_mod.build(threads or [], atoms or [])
+    # `None` means nobody supplied the persisted upstream artifact.  An empty
+    # list is a real, cacheable answer for a short source and must not trigger a
+    # private recomputation that the envelope cannot account for.
+    stream_episodes = (episode_mod.build(threads or [], atoms or [])
+                       if episodes is None else list(episodes))
 
     found: list[dict] = []
     chunks = chunking.plan_chunks(items)

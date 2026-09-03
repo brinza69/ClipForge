@@ -1,7 +1,7 @@
 # ClipForge — Current Application Handover
 
 **Scope:** aplicația întreagă, nu doar AI Stream Clipper.  
-**Data hărții:** 29 august 2026.
+**Data hărții:** 3 septembrie 2026.
 **TikTok:** exclus din această hartă, conform cerinței proiectului.
 
 ## Stare, 29 august 2026
@@ -26,12 +26,16 @@ există acum numai dacă imaginea livrată se schimbă, iar pe cele 58 de planur
 fiindcă auditul citește sidecar-urile, iar R1 a schimbat plannerul. **Batch R2 este închis:** fiecare clip își rezolvă gramatica de montaj din tipul lui de conținut, cu
 regula că o clasificare slabă cumpără un montaj mai sigur, niciodată unul mai agresiv — profilul este
 înregistrat lângă fiecare export și aplicat pe niciunul. Punctul de reluare este
-**Batch R3** din
+**restul Batch S7** din
 [`plans/ai-stream-clipper-production-engine-v1.md`](../plans/ai-stream-clipper-production-engine-v1.md).
 Detaliile și cifrele sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURRENT.md).
 
-Verificare pe working tree-ul local, 29 august: **1.039 teste backend trec, 2 pică** — ambele din
-`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. TypeScript curat.
+R3–R7 sunt livrate ca instrumentare/shadow, R8 este închis, iar S7a a livrat envelope-ul comun și
+invalidarea țintită pentru atoms, promises, threads, episodes, anchors și `segment_types`. Judge
+cache, recovery per chunk, `anchor_id`, scara dedupe și identitatea comună a rulării rămân deschise.
+
+Verificare pe working tree-ul local, 3 septembrie: **1.654 teste backend trec, 2 pică** — ambele din
+`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. S7a nu atinge frontendul.
 
 ## Cum folosești acest document
 
@@ -100,7 +104,8 @@ source → ingest → transcribe → analyze → score → candidate clips → p
    care s-a deschis R0. Nu e cablat la randare.
 5. Clipper R8: reconstrucția montajului după trim — ÎNCHIS 2 septembrie 2026; salturile create de
    `drop_spans` sunt măsurate separat de tăieturile plannerului.
-6. Clipper S7–S8: reproducibilitate reasoning și review golden înainte de activarea `story_v2`.
+6. Clipper S7–S8: S7a (envelope și invalidare țintită) este închis; continuă judge/per-chunk
+   reproducibility, apoi review-ul golden înainte de activarea `story_v2`.
 7. Consistență între DB și filesystem și idempotency pentru job-urile de export.
 8. Upload streaming și limite reale de memorie/disk.
 9. Readiness checks și teste de reziliență pentru aplicația întreagă.

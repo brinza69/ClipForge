@@ -822,6 +822,15 @@ scorat clipul.
 **Gate:** două rulări cu aceeași identitate produc același selection trace sau declară explicit
 partea nondeterministă; nicio reutilizare cu fingerprint incompatibil.
 
+**Status parțial, S7a livrat 3 septembrie 2026.** Envelope-ul comun și matricea de invalidare sunt
+implementate pentru atoms, promises, threads, episodes, anchors și `segment_types`; episodes au
+devenit artefact persistent în loc să fie reconstruite în interiorul detectorului. Identitatea
+include sursa înregistrată la ingest, transcriptul exact, upstream-urile efectiv citite, versiunile,
+promptul, modelele rezolvate per engine, temperatura, contextul, timeout-ul și chunk config. JSON-ul
+este strict și canonic, iar artefactele pre-S7 sunt miss deliberat. `judge` este numai rezervat în
+schema comună: cache-ul judge, recovery per chunk și partea de rerun/nondeterminism din gate rămân
+deschise, deci Batch 7 nu este declarat închis.
+
 ### Batch 8 — ranker v2
 
 **Fișiere:** `ranker.py`, routerele de clips.

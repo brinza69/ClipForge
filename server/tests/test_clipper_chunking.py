@@ -330,5 +330,8 @@ def test_the_anchor_cache_notices_a_new_chunk_plan():
     from workers.clipper_build import _anchor_stamp
 
     stamp = _anchor_stamp({}, 100.0)
-    assert "chunking" in stamp
-    assert stamp["chunking"][0] == round(chunking.MAX_CHUNK_SECONDS, 1)
+    assert stamp["chunk_config"] == {
+        "max_seconds": chunking.MAX_CHUNK_SECONDS,
+        "max_chars": chunking.MAX_CHUNK_CHARS,
+        "overlap_seconds": chunking.OVERLAP_SECONDS,
+    }

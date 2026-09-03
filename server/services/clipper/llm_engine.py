@@ -28,6 +28,14 @@ _SYSTEM = (
     "Answer only with the JSON asked for — no preface, no code fence, no prose."
 )
 
+# Part of every model-backed reasoning artifact's identity.  These used to be
+# anonymous literals inside `_ask`, so a cache could not say which sampling
+# contract produced its answer.  No provider seed is exposed by the shared LLM
+# client today; S7 records that absence rather than inventing one.
+SYSTEM_PROMPT_VERSION = "clipper_picker_system_v1"
+TEMPERATURE = 0.2
+NUM_CTX = 32768
+
 _JSON_BLOCK = re.compile(r"\{.*\}|\[.*\]", re.DOTALL)
 
 # Engines tried in order, and the two limits on what the judge is shown. They
@@ -75,7 +83,7 @@ def parse_json(raw: str) -> Any:
 
 
 async def _ask(engines: Sequence[str], prompt: str, *, model: str | None = None,
-               num_ctx: int = 32768, trace: Any = None,
+               num_ctx: int | None = None, trace: Any = None,
                stage: str = "ask", request: str = "",
                timeout: float | None = None) -> str | None:
     """First engine that answers. None when they all fail — never raises.
@@ -95,8 +103,10 @@ async def _ask(engines: Sequence[str], prompt: str, *, model: str | None = None,
 
     for engine in engines:
         try:
-            call = _call_llm(engine, prompt, model=model, system=_SYSTEM,
-                             temperature=0.2, num_ctx=num_ctx)
+            call = _call_llm(
+                engine, prompt, model=model, system=_SYSTEM,
+                temperature=TEMPERATURE,
+                num_ctx=NUM_CTX if num_ctx is None else num_ctx)
             # A provider that never answers is the one failure mode the retry
             # list cannot route around: without a deadline the whole run waits
             # on it and the fallback engines are never reached.
@@ -148,7 +158,7 @@ def _note_chunk(trace: Any, kind: str, index: int, chunk: str,
 
 
 
-async def _ask_json(engines, prompt, *, model=None, num_ctx: int = 32768,
+async def _ask_json(engines, prompt, *, model=None, num_ctx: int | None = None,
                     trace=None, stage: str = "ask", request: str = "",
                     want: type = list, timeout: float | None = None,
                     is_cancelled=None, keys: Sequence[str] = ()):
