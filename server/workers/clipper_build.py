@@ -130,6 +130,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         analysis=ANALYSIS_VERSION,
         anchor_identity=anchor_identity.ANCHOR_ID_VERSION,
         anchor_prompt=llm_select.ANCHOR_PROMPT_VERSION,
+        dedupe_score=dedupe_mod.DEDUPE_SCORE_VERSION,
         judge_prompt=llm_select.JUDGE_PROMPT_VERSION,
         content_profile=profile,
         duration=round(duration, 1),
@@ -357,6 +358,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
         overlap_threshold=float(settings.clipper_overlap_threshold),
         text_threshold=float(settings.clipper_text_similarity_threshold),
         target_count=target_count,
+        winner_scale=dedupe_mod.SELECTION_SCORE,
     )
     # `deduplicate` returns EVERY input — it marks `is_alternative` rather than
     # dropping, so this loop is expected to find nothing today. It is not dead

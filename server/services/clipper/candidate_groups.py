@@ -36,9 +36,11 @@ from typing import Any, Sequence
 
 from services.clipper import anchor_identity
 from services.clipper.dedupe import (
+    HEURISTIC_SCORE,
     _group as _group_indexes,
-    _score_of,
     _text_of,
+    candidate_records,
+    score_of,
 )
 
 GROUP_VERSION = "moment_v1"
@@ -122,16 +124,20 @@ def build_groups(cands: Sequence[dict], *, overlap_threshold: float = 0.4,
     to spend a budget: is this moment story-backed, is its evidence grounded,
     which thread and archetypes it belongs to, and where it sits on the clock.
     """
-    cands = [c for c in (cands or []) if isinstance(c, dict)]
+    cands = candidate_records(cands)
     if not cands:
         return []
 
-    order = sorted(range(len(cands)), key=lambda i: -_score_of(cands[i]))
+    order = sorted(
+        range(len(cands)),
+        key=lambda i: -score_of(cands[i], scale=HEURISTIC_SCORE))
     groups: list[dict] = []
     seen: dict[str, int] = {}
 
     for members in _group_indexes(cands, order, overlap_threshold, text_threshold):
-        ranked = sorted(members, key=lambda i: -_score_of(cands[i]))
+        ranked = sorted(
+            members,
+            key=lambda i: -score_of(cands[i], scale=HEURISTIC_SCORE))
         # The group's STORY facts come from its best story member, not from
         # whichever cut scored highest. A moment can hold a legacy window and a
         # story window — they overlap, so the grouping puts them together — and
@@ -174,7 +180,10 @@ def build_groups(cands: Sequence[dict], *, overlap_threshold: float = 0.4,
             # The score stays the group's BEST, whichever cut earned it: the
             # heuristic share is spending on how good the moment looks, not on
             # how good its story cut looks.
-            "best_score": round(max(_score_of(cands[i]) for i in members), 3),
+            "best_score": round(max(
+                score_of(cands[i], scale=HEURISTIC_SCORE)
+                for i in members), 3),
+            "score_scale": HEURISTIC_SCORE,
             "start": _num(leader.get("start")),
             "end": _num(leader.get("end")),
             "payoff_t": story.get("payoff_t"),
@@ -365,12 +374,10 @@ def build_pool(refined: Sequence[dict], *, duration: float, budget: int,
 
     `groups` lets a second round reuse the FIRST round's grouping instead of
     recomputing it. That is not an optimisation, it is a correctness fix:
-    `dedupe._group` walks the field in descending `overall` order and elects
-    each group's leader by score, and `apply_ranking` has by then rewritten
-    `overall` for everything in the first pool. Regrouping afterwards can hand a
-    moment a different leader — and for a legacy candidate the moment id comes
-    from the leader's own span, so the same moment can come back under a
-    different id halfway through its own run.
+    New runs group on the frozen heuristic scale, so a judge verdict cannot
+    change the leader. Reusing the first grouping still matters: it gives every
+    round one identity graph, and protects old inputs that predate the named
+    score from changing leaders halfway through their own run.
 
     Returns `{"pool", "groups", "categories", "story"}`. `pool` holds the
     representative CANDIDATES — the same dicts, not copies — because that is

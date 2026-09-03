@@ -32,11 +32,12 @@ Detaliile și cifrele sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURREN
 
 R3–R7 sunt livrate ca instrumentare/shadow, R8 este închis, S7a a livrat envelope-ul comun,
 S7b recuperează promises și anchors per chunk, S7c recuperează verdictul judge per rundă și
-întrebare exactă, iar S7d propagă identitatea canonică a ancorei la toate variantele. Scara dedupe
-și identitatea comună a rulării rămân deschise.
+întrebare exactă, S7d propagă identitatea canonică a ancorei la toate variantele, iar S7e separă
+gruparea euristică de alegerea liderului pe `selection_score`. Identitatea comună a rulării rămâne
+deschisă.
 
-Verificare pe working tree-ul local, 3 septembrie: **1.684 teste backend trec, 2 pică** — ambele din
-`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. S7a–S7c nu ating
+Verificare pe working tree-ul local, 3 septembrie: **1.696 teste backend trec, 2 pică** — ambele din
+`test_tiktok_transform.py`, cu 404, pentru că routerul TikTok nu este montat. S7a–S7e nu ating
 frontendul.
 
 ## Cum folosești acest document
@@ -107,8 +108,8 @@ source → ingest → transcribe → analyze → score → candidate clips → p
 5. Clipper R8: reconstrucția montajului după trim — ÎNCHIS 2 septembrie 2026; salturile create de
    `drop_spans` sunt măsurate separat de tăieturile plannerului.
 6. Clipper S7–S8: S7a (envelope și invalidare țintită), S7b (recovery per chunk pentru promises și
-   anchors), S7c (recovery per rundă pentru judge) și S7d (`anchor_id`) sunt închise; continuă scara
-   dedupe și reproducibilitatea comună,
+   anchors), S7c (recovery per rundă pentru judge), S7d (`anchor_id`) și S7e (scara dedupe) sunt
+   închise; continuă reproducibilitatea comună,
    apoi review-ul golden înainte de activarea `story_v2`.
 7. Consistență între DB și filesystem și idempotency pentru job-urile de export.
 8. Upload streaming și limite reale de memorie/disk.

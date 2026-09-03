@@ -35,6 +35,17 @@ logger = logging.getLogger("clipforge.clipper.dedupe")
 # quality cost stays small. Past this many points the better clip wins outright.
 MAX_DIVERSITY_SACRIFICE = 15.0
 
+# Which named score answers each phase's question. Moment discovery and the
+# topology of dedupe use HEURISTIC: a verdict must not redefine which windows
+# are one moment. Final leader choice and diversity use SELECTION: every cut of
+# a judged moment has that verdict propagated to it, while an unjudged moment
+# falls back to its frozen heuristic. Reading `overall` for both mixed scales
+# within a group; using selection for both changed the groups themselves.
+HEURISTIC_SCORE = "heuristic"
+SELECTION_SCORE = "selection"
+SCORE_SCALES: tuple[str, ...] = (HEURISTIC_SCORE, SELECTION_SCORE)
+DEDUPE_SCORE_VERSION = "dedupe_heuristic_groups_selection_leaders_v1"
+
 _PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
 _SPACE = re.compile(r"\s+")
 
@@ -148,16 +159,56 @@ def overlap_ratio(a: dict, b: dict) -> float:
 # grouping + diversity
 
 
-def _score_of(cand: dict) -> float:
+def _declared_score(cand: dict, key: str) -> tuple[bool, float]:
+    """Whether a score was declared, and its finite value.
+
+    Present-but-invalid is zero, not absent. Falling through from a corrupt
+    `selection_score` to an older blended `overall` would silently reintroduce
+    the scale this contract exists to remove.
+    """
+    if not isinstance(cand, dict) or key not in cand:
+        return False, 0.0
+    value = cand.get(key)
+    if isinstance(value, bool):
+        return True, 0.0
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return True, 0.0
+    return True, out if math.isfinite(out) else 0.0
+
+
+def score_of(cand: dict, *, scale: str) -> float:
+    """Read one explicit scale, with a legacy-only compatibility fallback."""
+    if scale not in SCORE_SCALES:
+        raise ValueError(f"unknown dedupe score scale: {scale}")
+
+    keys = (("selection_score", "heuristic_score")
+            if scale == SELECTION_SCORE else ("heuristic_score",))
+    for key in keys:
+        present, value = _declared_score(cand, key)
+        if present:
+            return value
+
+    # Old callers may carry only `overall`. Its history cannot be recovered,
+    # so this compatibility path is explicit rather than pretending the field
+    # is one of the named scales.
     for key in ("overall", "overall_score"):
-        value = (cand or {}).get(key)
-        try:
-            out = float(value)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(out):
-            return out
+        present, value = _declared_score(cand, key)
+        if present:
+            return value
     return 0.0
+
+
+def candidate_records(cands: Any) -> list[dict]:
+    """Materialise a candidate field without dropping unreadable rows."""
+    try:
+        rows = list(cands or [])
+    except TypeError as exc:
+        raise ValueError("dedupe candidates must be a sequence") from exc
+    if any(not isinstance(cand, dict) for cand in rows):
+        raise ValueError("dedupe candidates contain a non-record")
+    return rows
 
 
 def _text_of(cand: dict) -> str:
@@ -252,7 +303,7 @@ def same_story(a: Any, b: Any) -> bool:
 
 
 def _diversify(winners: list[dict], source_duration: float,
-               target_count: int) -> list[dict]:
+               target_count: int, *, score_scale: str) -> list[dict]:
     """Order winners so the first `target_count` spread across the source.
 
     Three axes, tried in this order because that is how clearly each one means
@@ -267,7 +318,8 @@ def _diversify(winners: list[dict], source_duration: float,
     rescue a weak clip; it exists to stop redundancy.
     """
     buckets = max(1, target_count)
-    remaining = sorted(winners, key=lambda c: -_score_of(c))
+    remaining = sorted(
+        winners, key=lambda c: -score_of(c, scale=score_scale))
     used_time: set[int] = set()
     used_kind: set[str] = set()
     used_thread: set[str] = set()
@@ -293,8 +345,11 @@ def _diversify(winners: list[dict], source_duration: float,
         # Once every bucket and every archetype has a winner `fresh` is None
         # and this degenerates to plain score order, which is what "one per
         # bucket first" means.
-        if fresh is not None and _score_of(best) - _score_of(fresh) <= MAX_DIVERSITY_SACRIFICE:
-            pick = fresh
+        if fresh is not None:
+            sacrifice = (score_of(best, scale=score_scale)
+                         - score_of(fresh, scale=score_scale))
+            if sacrifice <= MAX_DIVERSITY_SACRIFICE:
+                pick = fresh
         ordered.append(pick)
         remaining.remove(pick)
         used_time.add(_bucket_of(pick, source_duration, buckets))
@@ -306,7 +361,8 @@ def _diversify(winners: list[dict], source_duration: float,
 
 
 def deduplicate(cands: list[dict], *, overlap_threshold: float,
-                text_threshold: float, target_count: int) -> list[dict]:
+                text_threshold: float, target_count: int,
+                winner_scale: str = SELECTION_SCORE) -> list[dict]:
     """Collapse near-duplicates, then rank the survivors for timeline spread.
 
     Mutates each candidate in place with `dedupe_group`, `is_alternative` and
@@ -314,7 +370,9 @@ def deduplicate(cands: list[dict], *, overlap_threshold: float,
     the ranked list). Returns every input candidate: winners in rank order
     first, then the alternatives grouped behind them.
     """
-    cands = [c for c in (cands or []) if isinstance(c, dict)]
+    if winner_scale not in SCORE_SCALES:
+        raise ValueError(f"unknown dedupe score scale: {winner_scale}")
+    cands = candidate_records(cands)
     if not cands:
         return []
 
@@ -332,14 +390,22 @@ def deduplicate(cands: list[dict], *, overlap_threshold: float,
     except (TypeError, ValueError):
         target_count = 1
 
-    order = sorted(range(len(cands)), key=lambda i: -_score_of(cands[i]))
-    groups = _group(cands, order, overlap_threshold, text_threshold)
+    # Group membership is a pre-verdict fact. `_group` is greedy and compares
+    # every candidate to its leader, so changing this order changes not only
+    # the winner but the topology (A~B, B~C, A!~C). Keep it heuristic.
+    group_order = sorted(
+        range(len(cands)),
+        key=lambda i: -score_of(cands[i], scale=HEURISTIC_SCORE))
+    groups = _group(cands, group_order, overlap_threshold, text_threshold)
 
     winners: list[dict] = []
     alternatives: list[dict] = []
     for members in groups:
+        ranked_members = sorted(
+            members,
+            key=lambda i: -score_of(cands[i], scale=winner_scale))
         group_id = uuid.uuid4().hex[:12]
-        for position, index in enumerate(members):
+        for position, index in enumerate(ranked_members):
             cand = cands[index]
             cand["dedupe_group"] = group_id
             cand["is_alternative"] = position > 0
@@ -349,7 +415,8 @@ def deduplicate(cands: list[dict], *, overlap_threshold: float,
     # No project duration is passed in, so the last candidate's end is the best
     # available proxy for how far the timeline runs.
     source_duration = max((_span(c)[1] for c in cands), default=0.0)
-    ranked = _diversify(winners, source_duration, target_count)
+    ranked = _diversify(
+        winners, source_duration, target_count, score_scale=winner_scale)
     for position, cand in enumerate(ranked, start=1):
         cand["rank_position"] = position
 

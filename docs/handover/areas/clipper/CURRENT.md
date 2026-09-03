@@ -849,7 +849,7 @@ fereastra este declarată, în interiorul ei. Auditul R0 trece neschimbat pe pil
 sidecar-uri precedă cheia `drop_spans`, deci nu demonstrează că n-a existat trim. Gate-ul R8 este
 acoperit prin cazurile sintetice și prin intrarea reală a auditului.
 
-## Batch S7 — resolverul și S7a–S7d livrate, 3 septembrie 2026
+## Batch S7 — resolverul și S7a–S7e livrate, 3 septembrie 2026
 
 `quote_resolver.py` + `scripts/measure_quote_drift.py`. Vezi
 [`docs/refs/grounding-2026-08-31.md`](../../../refs/grounding-2026-08-31.md).
@@ -914,7 +914,25 @@ artefactele vechi. Un grup în care dedupe a unit mai multe ancore păstrează r
 id-urilor și grounding-ul fiecăreia, deci liderul nu micșorează numitorul. Nu schimbă selecția.
 Suita completă după S7d: **1.684 passed, 2 failed**, aceleași 404 TikTok preexistente.
 
-S7 rămâne deschis pentru scara dedupe și identitatea comună selection/render.
+**S7e — scara dedupe — este livrată.** Definiția grupului și alegerea tăieturii din grup sunt acum
+două întrebări diferite. Topologia greedy se construiește numai din `heuristic_score`, înghețat
+înainte de judge, fiindcă un verdict nu are voie să transforme A~B și B~C într-un singur moment când
+A nu seamănă cu C. După ce grupul este stabil, liderul și diversity citesc `selection_score`, care
+este propagat la toate variantele momentului; un moment nejudecat cade explicit pe euristică.
+`overall` mai este citit numai pentru artefacte fără niciuna dintre scalele numite. O scară
+necunoscută, un scor declarat dar invalid sau un candidat non-record nu sunt transformate în altă
+măsurătoare.
+
+Măsurat fără rescriere pe toate cele **13** artefacte `candidates.json`: cele opt proiecte fără
+amestec de scară rămân identice la grupuri și top-8; numai cele cinci cu verdict judge stocat se
+schimbă. Noile numere reproduc exact gruparea făcută înainte de verdict și înregistrată în trace:
+`pilotf81b` 23, `pilotee0e` 49, `pilot6b38` 78, `pilot2c8a` 278 și `gateslice4h` 294. Regruparea veche
+pe `overall` dădea 31/48/74/273/304. Perechea 23 contra 31 și, mai ales, 294 contra 304 este aceeași
+discrepanță care fusese reconstruită manual restaurând `heuristic_score`; acum codul o împiedică.
+Artefactele stocate nu au fost re-score-uite, deci `selection_trace` vechi păstrează deliberat
+grupurile vechi. Suita completă după S7e: **1.696 passed, 2 failed**, aceleași 404 TikTok.
+
+S7 rămâne deschis numai pentru identitatea comună selection/render.
 
 ## Punctul exact de reluare
 
@@ -972,7 +990,7 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
 8. **R7** — preflight de publicare și corecția bounded (maximum una).
 9. ~~**R8** — reconstrucția secvenței livrate după trim.~~ **ÎNCHIS 2 septembrie 2026.**
 10. **S7** — resolverul determinist, S7a envelope/fingerprint, S7b recovery per chunk, S7c
-    recovery per rundă pentru judge și S7d `anchor_id` sunt livrate; au rămas scara dedupe și
+    recovery per rundă pentru judge, S7d `anchor_id` și S7e scara dedupe sunt livrate; a rămas
     identitatea comună de run.
 11. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
 12. **P** — activarea graduală.
@@ -992,6 +1010,11 @@ comparat cu o rulare nouă**, nu cele din tabelul de mai sus:
 `selection_trace.json` grupează **tot câmpul**; `judge_pool_moments` din `reasoning_run.json` este
 shortlist-ul **plafonat** trimis la judge. De aceea 304 > 80 — plafon, nu propagare. Propagarea
 explică altceva: de ce 109 grupuri conțin un verdict deși numai 80 au mers la judge.
+
+Acesta este artefactul pre-S7e: finalul s-a regrupat pe `overall` și a produs 304, în timp ce
+gruparea euristică înghețată din aceeași rulare produsese 294. S7e face noile run-uri să păstreze
+topologia de 294 și să folosească verdictul numai pentru liderul din fiecare grup; cifra istorică
+de mai jos nu este rescrisă retroactiv.
 
 | metrică | valoare | sursă |
 |---|---|---|

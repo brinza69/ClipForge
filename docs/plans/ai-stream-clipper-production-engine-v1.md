@@ -990,8 +990,16 @@ nondeterministe cu răspunsuri semantic diferite au găsit același lucru. Schim
 identitate și observabilitate, nu mută shortlist-ul sau board-ul. Gate automat după S7d:
 **1.684 teste backend trec; rămân numai cele două 404 TikTok cunoscute.**
 
-**S7 nu este închis.** Mai rămân scara dedupe și identitatea comună dintre selection și render
-trace.
+**S7e livrat, 3 septembrie 2026 — scara dedupe.** Gruparea greedy este stabilită numai pe
+`heuristic_score`, înainte ca verdictul să poată schimba liderul și, prin el, topologia. În interiorul
+grupului stabil, liderul și diversity folosesc `selection_score`, propagat la toate variantele, cu
+fallback euristic pentru momente nejudecate. `overall` este numai compatibilitatea artefactelor care
+nu au scale numite. Pe cele 13 artefacte de pe disc, numai cele cinci cu judge se schimbă; celelalte
+opt rămân identice. Noile grupări reproduc trace-ul pre-verdict: 23/49/78/278 pe piloturi și 294 pe
+`gateslice4h`, față de regruparea veche 31/48/74/273/304. Gate automat după S7e: **1.696 teste
+backend trec; rămân numai cele două 404 TikTok cunoscute.**
+
+**S7 nu este închis.** Mai rămâne identitatea comună dintre selection și render trace.
 
 ### Batch S8 — evaluarea selecției, separată de randare
 

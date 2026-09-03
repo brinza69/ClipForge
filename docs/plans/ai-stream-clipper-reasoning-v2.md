@@ -858,6 +858,15 @@ folosește id-ul canonic și păstrează reuniunea identităților când dedupe 
 grup; bucketul temporal rămâne numai fallback explicit pentru artefactele vechi. După S7d rămân
 deschise scara dedupe și identitatea comună selection/render.
 
+**Status parțial, S7e livrat 3 septembrie 2026.** Dedupe nu mai folosește `overall` ca răspuns la
+două întrebări diferite. Topologia grupurilor este construită pe `heuristic_score`, înghețat înainte
+de verdict; apoi liderul fiecărui grup și diversity citesc `selection_score`, deja propagat la toate
+variantele momentului, cu fallback euristic pentru cele nejudecate. Alegerea aceasta reproduce
+grupurile din trace-ul pre-verdict: 23/49/78/278 pe cele patru piloturi și 294 pe `gateslice4h`, în
+loc de 31/48/74/273/304 obținute prin regruparea veche pe câmpul amestecat. Opt din cele 13
+artefacte, cele fără amestec de scară, rămân identice. După S7e rămâne deschisă numai identitatea
+comună selection/render.
+
 ### Batch 8 — ranker v2
 
 **Fișiere:** `ranker.py`, routerele de clips.
