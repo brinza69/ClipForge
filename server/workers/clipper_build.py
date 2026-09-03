@@ -210,12 +210,12 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 # lands on a prediction from an hour earlier is invisible.
                 promises_stamp = _promises_stamp(
                     cache_base, duration, timeout=llm_timeout)
-                known = _cached(project_id, "promises", promises_stamp)
-                if not isinstance(known, list):
-                    known = await promises_mod.detect(
-                        segments, duration, trace=trace,
-                        timeout=llm_timeout, is_cancelled=cancelled)
-                    _cache(project_id, "promises", promises_stamp, known)
+                promises_cache = _cached(project_id, "promises", promises_stamp)
+                known = await promises_mod.detect(
+                    segments, duration, trace=trace, timeout=llm_timeout,
+                    is_cancelled=cancelled, chunk_cache=promises_cache,
+                    checkpoint=lambda state: _cache(
+                        project_id, "promises", promises_stamp, state))
                 # Payoff first: each anchor carries what a viewer must already
                 # know, so the window can open on the earliest required fact
                 # rather than on the first audio spike.
@@ -234,20 +234,14 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 anchors_stamp = _anchor_stamp(
                     cfg, duration, base=cache_base, promises=known, atoms=atoms,
                     threads=arcs, episodes=episodes, timeout=llm_timeout)
-                anchors = _cached(project_id, "anchors", anchors_stamp)
-                if anchors is not None:
-                    # Says WHY there are no chunks this run. Without it a cached
-                    # run and a run whose chunking produced nothing look the
-                    # same on disk.
-                    trace.note_stage("anchors", "cached",
-                                     f"{len(anchors)} reused")
-                if anchors is None:
-                    anchors = await llm_select.detect_anchors(
-                        segments, duration, promises=known, atoms=atoms,
-                        threads=arcs, episodes=episodes, trace=trace,
-                        timeout=llm_timeout,
-                        is_cancelled=cancelled)
-                    _cache(project_id, "anchors", anchors_stamp, anchors)
+                anchors_cache = _cached(project_id, "anchors", anchors_stamp)
+                anchors = await llm_select.detect_anchors(
+                    segments, duration, promises=known, atoms=atoms,
+                    threads=arcs, episodes=episodes, trace=trace,
+                    timeout=llm_timeout, is_cancelled=cancelled,
+                    chunk_cache=anchors_cache,
+                    checkpoint=lambda state: _cache(
+                        project_id, "anchors", anchors_stamp, state))
                 storage.write_artifact(project_id, "graph",
                                        threads_mod.edges(arcs, known, anchors))
                 # Check each claim against the atoms it says it came from,

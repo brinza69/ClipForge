@@ -226,6 +226,18 @@ def test_a_provider_default_model_is_part_of_the_llm_identity(monkeypatch):
     assert after["model"]["resolved_by_engine"]["openai"] == "new-model"
 
 
+def test_an_empty_model_name_resolves_like_the_provider_client():
+    from services import descriptions
+    from workers import clipper_cache as worker_cache
+
+    identity = worker_cache._model_inputs(("openai",), model="")
+
+    assert identity["model"] == {
+        "requested": None,
+        "resolved_by_engine": {"openai": descriptions.DEFAULT_OPENAI_MODEL},
+    }
+
+
 def test_execution_settings_that_can_change_provider_output_are_in_identity(
         monkeypatch):
     from services.clipper import llm_engine

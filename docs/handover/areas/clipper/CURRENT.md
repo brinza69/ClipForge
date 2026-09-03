@@ -849,7 +849,7 @@ fereastra este declarată, în interiorul ei. Auditul R0 trece neschimbat pe pil
 sidecar-uri precedă cheia `drop_spans`, deci nu demonstrează că n-a existat trim. Gate-ul R8 este
 acoperit prin cazurile sintetice și prin intrarea reală a auditului.
 
-## Batch S7 — resolverul și S7a livrate, 3 septembrie 2026
+## Batch S7 — resolverul, S7a și S7b livrate, 3 septembrie 2026
 
 `quote_resolver.py` + `scripts/measure_quote_drift.py`. Vezi
 [`docs/refs/grounding-2026-08-31.md`](../../../refs/grounding-2026-08-31.md).
@@ -882,8 +882,20 @@ schimbarea transcriptului invalidează tot reasoning-ul dependent.
 **Migrare intenționat incompatibilă:** fișierele reasoning bare și vechiul `{stamp, data}` sunt
 refuzate o singură dată și se refac la primul score. `measure_snap_board_delta.py` refuză atoms vechi
 în loc să le citească drept generația curentă. Suita completă: **1.654 passed, 2 failed**, exact cele
-două 404 TikTok preexistente. S7 rămâne deschis pentru cache/recovery per chunk și judge,
-nedeterminism declarat, `anchor_id`, scara dedupe și identitatea comună selection/render.
+două 404 TikTok preexistente.
+
+**S7b — recovery per chunk pentru promises și anchors — este livrat.** `reasoning_chunks.py`
+păstrează în envelope câte un rând pentru fiecare interval și text exact, cu `pending`, `usable` și
+`unusable` distincte. După fiecare cerere se scrie checkpointul; rerun-ul reutilizează numai
+chunkurile `usable` și reapelează numai vecinii neutilizabili. O listă goală este un rezultat real,
+dar un JSON non-gol din care normalizarea nu poate produce niciun promise/anchor rămâne retryable.
+Proveniența numește providerul, modelul rezolvat, amprentele promptului/răspunsului, toate
+încercările, numărul de obiecte normalizate și lipsa seedului (`nondeterministic: true`). Un state
+nested malformat este refuzat integral, ca un rând corupt să nu se deplaseze peste chunkul următor.
+Suita completă după S7b: **1.669 passed, 2 failed**, aceleași 404 TikTok preexistente.
+
+S7 rămâne deschis pentru cache-ul judge și reproducibilitatea lui, `anchor_id`, scara dedupe și
+identitatea comună selection/render.
 
 ## Punctul exact de reluare
 
@@ -940,8 +952,8 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
    **Nu materializa dezactivarea captions cât timp detectorul rămâne `calibrated: false`.**
 8. **R7** — preflight de publicare și corecția bounded (maximum una).
 9. ~~**R8** — reconstrucția secvenței livrate după trim.~~ **ÎNCHIS 2 septembrie 2026.**
-10. **S7** — resolverul determinist și S7a envelope/fingerprint sunt livrate; au rămas judge cache și
-    recovery per chunk, nedeterminism declarat, `anchor_id`, scara dedupe și identitatea comună de run.
+10. **S7** — resolverul determinist, S7a envelope/fingerprint și S7b recovery per chunk sunt
+    livrate; au rămas judge cache/reproducibility, `anchor_id`, scara dedupe și identitatea comună de run.
 11. **S8** — evaluarea selecției, review orb, minimum 10 surse și 150 de momente.
 12. **P** — activarea graduală.
 

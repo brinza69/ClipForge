@@ -15,6 +15,7 @@ swallowed, an unrecorded attempt is an attempt nobody can ever prove happened.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import logging
 import re
@@ -46,6 +47,31 @@ _JSON_BLOCK = re.compile(r"\{.*\}|\[.*\]", re.DOTALL)
 JUDGE_ENGINES = ("openai", "anthropic", "ollama")
 MAX_JUDGE_CLIPS = 80
 MAX_CLIP_CHARS = 900
+
+
+@dataclass(frozen=True)
+class JsonAnswer:
+    """A parsed response plus enough provenance to reproduce the question."""
+
+    parsed: Any
+    usable: bool
+    provider: str | None
+    prompt_fingerprint: str
+    response_fingerprint: str | None
+    attempts: tuple[dict, ...]
+    cancelled: bool = False
+
+    def provenance(self) -> dict:
+        return {
+            "provider": self.provider,
+            "prompt_fingerprint": self.prompt_fingerprint,
+            "response_fingerprint": self.response_fingerprint,
+            "attempts": [dict(row) for row in self.attempts],
+            # The shared provider client exposes no seed. A reused response is
+            # stable because its hash is stored, not because the call was.
+            "seed": None,
+            "nondeterministic": True,
+        }
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -82,6 +108,19 @@ def parse_json(raw: str) -> Any:
         return None
 
 
+def _resolved_model(engine: str, requested: str | None) -> str | None:
+    """The model `_call_llm` will actually put on the wire."""
+    if requested:
+        return requested
+    from services import descriptions
+
+    return {
+        "ollama": descriptions.DEFAULT_OLLAMA_MODEL,
+        "openai": descriptions.DEFAULT_OPENAI_MODEL,
+        "anthropic": descriptions.DEFAULT_ANTHROPIC_MODEL,
+    }.get(str(engine))
+
+
 async def _ask(engines: Sequence[str], prompt: str, *, model: str | None = None,
                num_ctx: int | None = None, trace: Any = None,
                stage: str = "ask", request: str = "",
@@ -116,11 +155,14 @@ async def _ask(engines: Sequence[str], prompt: str, *, model: str | None = None,
             logger.info("llm_select: %s unavailable (%s)", engine, exc)
             _note(trace, stage, engine, ok=False, error=exc, request=request)
             continue
-        if answer and answer.strip():
+        if isinstance(answer, str) and answer.strip():
             _note(trace, stage, engine, ok=True, request=request)
             return answer
-        logger.info("llm_select: %s returned nothing", engine)
-        _note(trace, stage, engine, ok=False, error="empty response",
+        failure = ("empty response"
+                   if answer is None or isinstance(answer, str)
+                   else "non-string response")
+        logger.info("llm_select: %s returned %s", engine, failure)
+        _note(trace, stage, engine, ok=False, error=failure,
               request=request)
     return None
 
@@ -158,11 +200,13 @@ def _note_chunk(trace: Any, kind: str, index: int, chunk: str,
 
 
 
-async def _ask_json(engines, prompt, *, model=None, num_ctx: int | None = None,
-                    trace=None, stage: str = "ask", request: str = "",
-                    want: type = list, timeout: float | None = None,
-                    is_cancelled=None, keys: Sequence[str] = ()):
-    """The first engine that returns a USABLE answer, parsed. None when none do.
+async def _ask_json_result(
+    engines, prompt, *, model=None, num_ctx: int | None = None,
+    trace=None, stage: str = "ask", request: str = "", want: type = list,
+    timeout: float | None = None, is_cancelled=None,
+    keys: Sequence[str] = (),
+) -> JsonAnswer:
+    """The first usable answer and the fingerprints of every attempt.
 
     `_ask` accepted the first non-empty string, and a string is not an answer:
     models return prose, apologies and half-fenced blocks. The whole pass was
@@ -180,12 +224,27 @@ async def _ask_json(engines, prompt, *, model=None, num_ctx: int | None = None,
     provider is being tried should stop at the next decision point rather than
     walk the whole engine list first.
     """
+    from services.clipper import reasoning_cache
+
+    prompt_fp = reasoning_cache.fingerprint(prompt)
+    attempts: list[dict] = []
     for engine in engines:
         if is_cancelled is not None and is_cancelled():
-            return None
+            return JsonAnswer(None, False, None, prompt_fp, None,
+                              tuple(attempts), cancelled=True)
         answer = await _ask([engine], prompt, model=model, num_ctx=num_ctx,
                             trace=trace, stage=stage, request=request,
                             timeout=timeout)
+        response_fp = (reasoning_cache.fingerprint(answer)
+                       if answer is not None else None)
+        attempt = {
+            "engine": str(engine),
+            "model": _resolved_model(str(engine), model),
+            "answered": answer is not None,
+            "parsed": False,
+            "response_fingerprint": response_fp,
+        }
+        attempts.append(attempt)
         if answer is None:
             continue
         parsed = parse_json(answer)
@@ -197,11 +256,25 @@ async def _ask_json(engines, prompt, *, model=None, num_ctx: int | None = None,
             ok = not parsed or any(isinstance(item, dict)
                                    and any(k in item for k in keys)
                                    for item in parsed)
+        attempt["parsed"] = bool(ok)
         _note_result(trace, stage, request or stage, ok)
         if ok:
-            return parsed
+            return JsonAnswer(parsed, True, str(engine), prompt_fp,
+                              response_fp, tuple(attempts))
         logger.info("llm_select: %s answered but not as %s", engine, want.__name__)
-    return None
+    return JsonAnswer(None, False, None, prompt_fp, None, tuple(attempts))
+
+
+async def _ask_json(engines, prompt, *, model=None, num_ctx: int | None = None,
+                    trace=None, stage: str = "ask", request: str = "",
+                    want: type = list, timeout: float | None = None,
+                    is_cancelled=None, keys: Sequence[str] = ()):
+    """Compatibility surface: the parsed value, or ``None`` when unusable."""
+    result = await _ask_json_result(
+        engines, prompt, model=model, num_ctx=num_ctx, trace=trace,
+        stage=stage, request=request, want=want, timeout=timeout,
+        is_cancelled=is_cancelled, keys=keys)
+    return result.parsed if result.usable else None
 
 
 def _note_result(trace: Any, stage: str, request: str, parsed: bool) -> None:

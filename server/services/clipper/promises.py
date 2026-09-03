@@ -28,7 +28,7 @@ interest of a moment and costs it something.
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from services.clipper.candidate_terms import _clamp01, _num
 from services.clipper.segmentation import norm_token
@@ -174,7 +174,9 @@ async def detect(segments: Sequence[dict], duration: float, *,
                  per_chunk: int = 6,
                  engines: Sequence[str] | None = None,
                  model: str | None = None, trace: Any = None,
-                 timeout: float | None = None, is_cancelled=None) -> list[dict]:
+                 timeout: float | None = None, is_cancelled=None,
+                 chunk_cache: Any = None,
+                 checkpoint: Callable[[dict], None] | None = None) -> list[dict]:
     """Every setup in the stream that could pay off later. [] when no engine.
 
     This pass is a MODEL call like the other two, and it used to be the one the
@@ -182,8 +184,8 @@ async def detect(segments: Sequence[dict], duration: float, *,
     whose promises pass failed over to a second engine looked untouched.
     """
     from services.clipper import llm_select
-
     from services.clipper import chunking
+    from services.clipper import reasoning_chunks
 
     items = llm_select.transcript_line_items(segments)
     if not items:
@@ -191,22 +193,52 @@ async def detect(segments: Sequence[dict], duration: float, *,
     engines = engines or llm_select.NOMINATE_ENGINES
     found: list[dict] = []
     chunks = chunking.plan_chunks(items)
+    prepared = reasoning_chunks.prepare("promises", chunks, chunk_cache)
+    state = prepared.state
+    reused = 0
     for chunk in chunks:
         if is_cancelled is not None and is_cancelled():
             break
+        saved = reasoning_chunks.reusable(state, chunk)
+        if saved is not None:
+            found.extend(saved)
+            reused += 1
+            llm_select._note_chunk_span(trace, "promises", chunk, len(saved))
+            continue
         request = f"promises#{chunk['index']}"
         want = chunking.quota_for(chunk, per_chunk=per_chunk)
-        parsed = await llm_select._ask_json(
+        answer = await llm_select._ask_json_result(
             engines, prompt(chunk["lines"], want), model=model, trace=trace,
             stage="promises", request=request, timeout=timeout,
             is_cancelled=is_cancelled, keys=("t", "time", "text"))
+        if answer.cancelled:
+            break
         before = len(found)
-        for raw in (parsed or []):
+        produced = []
+        for raw in (answer.parsed or []):
             item = normalise_promise(raw, duration)
             if item is not None:
-                found.append(item)
+                produced.append(item)
+        usable = answer.usable and (not answer.parsed or bool(produced))
+        found.extend(produced)
+        provenance = answer.provenance()
+        provenance["normalised_items"] = len(produced)
+        state = reasoning_chunks.record(
+            state, chunk, usable=usable, items=produced,
+            provenance=provenance)
+        if checkpoint is not None:
+            checkpoint(state)
         llm_select._note_chunk_span(trace, "promises", chunk, len(found) - before)
     llm_select._note_coverage(trace, "promises", chunks, duration)
+    if trace is not None:
+        tally = reasoning_chunks.counts(state)
+        trace.note_count("promises_chunks_reused", reused)
+        trace.note_count("promises_chunks_usable", tally[reasoning_chunks.USABLE])
+        trace.note_count("promises_chunks_unusable", tally[reasoning_chunks.UNUSABLE])
+        trace.note_count("promises_chunks_pending", tally[reasoning_chunks.PENDING])
+        trace.note_stage("promises_cache", prepared.reason,
+                         f"{reused} reused, {tally[reasoning_chunks.UNUSABLE]} unusable, "
+                         f"{tally[reasoning_chunks.PENDING]} pending")
     found.sort(key=lambda p: p["t"])
     logger.info("promises: %d setups found (%s)", len(found),
                 PROMISE_PROMPT_VERSION)

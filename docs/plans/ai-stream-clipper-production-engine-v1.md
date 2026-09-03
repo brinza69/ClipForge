@@ -952,9 +952,22 @@ Fișierele bare istorice și vechiul wrapper privat `{stamp, data}` sunt intenț
 refac la primul score. `measure_snap_board_delta.py` refuză atoms vechi în loc să compare o generație
 necunoscută. Gate automat: **1.654 teste backend trec; rămân numai cele două 404 TikTok cunoscute.**
 
+**S7b livrat, 3 septembrie 2026 — recovery per chunk pentru promises și anchors.** Fiecare cerere
+este un rând legat de intervalul și textul exact pe care le-a citit, cu stări distincte `pending`,
+`usable` și `unusable`. Un rerun reutilizează numai rândurile `usable` și reapelează numai partea
+care n-a produs un răspuns folosibil; o listă JSON goală rămâne un răspuns cacheabil. Checkpointul
+se scrie după fiecare cerere, deci un proces întrerupt păstrează munca terminată. Proveniența
+persistă providerul, modelul rezolvat, amprentele promptului și răspunsului, toate încercările,
+numărul de obiecte normalizate și faptul că providerul nu expune seed, deci apelul este declarat
+nondeterminist. Un răspuns JSON structural valid din care nu supraviețuiește niciun anchor/promise
+este `unusable`, nu o listă goală inventată. Un checkpoint intern malformat este refuzat integral,
+nu filtrat și deplasat peste chunkul următor. Versiunea setului de chunkuri invalidează o singură
+dată payloadurile-listă S7a. Gate automat după S7b: **1.669 teste backend trec; rămân numai cele
+două 404 TikTok cunoscute.**
+
 **S7 nu este închis.** `judge` este rezervat în vocabularul comun, dar cache-ul lui nu este încă
-materializat. Mai rămân recovery per chunk cu proveniența răspunsului, declararea
-nedeterminismului, `anchor_id`, scara dedupe și identitatea comună dintre selection și render trace.
+materializat. Mai rămân `anchor_id`, scara dedupe, identitatea comună dintre selection și render
+trace și reproducibilitatea/declararea nondeterminismului pentru verdictul judge.
 
 ### Batch S8 — evaluarea selecției, separată de randare
 

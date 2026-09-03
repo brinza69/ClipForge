@@ -78,10 +78,11 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `atoms.py` | the stream as utterances that carry their own signals (§1), plus `search` (§25) |
 | `threads.py` | narrative arcs by lexical chaining, and the two graph edges anything reads (§3, §5) |
 | `episodes.py` | what the stream has been about, per stretch (§2). Read by the anchor prompt |
-| `promises.py` | setups that could pay off later, and what a callback costs (§4) |
+| `promises.py` | setups that could pay off later, and what a callback costs (§4). S7b checkpoints each transcript chunk separately, so one unusable answer is retried without repaying its usable neighbours |
 | `story.py` | the payoff-first reasoning: anchors, context debt, hook latency, archetypes, edit variants |
 | `story_evidence.py` | the ONE representation of the narrative evidence. Deterministic grounding of a model claim against the atoms it names, `remeasure` after every boundary change, and `semantic_payoff` — the payoff features read now instead of the audio detector's. Marks a failed match, never drops it |
-| `reasoning_cache.py` | Batch S7a's common envelope for reusable reasoning artifacts. It fingerprints strict JSON inputs and payloads, keeps source and transcript identities separate, names every miss, and refuses legacy bare files or the old private `{stamp, data}` wrapper. The closed vocabulary already reserves `judge`, but S7a materialises atoms, promises, threads, episodes, anchors and segment types only; judge caching and per-chunk recovery remain S7 work |
+| `reasoning_cache.py` | Batch S7a's common envelope for reusable reasoning artifacts. It fingerprints strict JSON inputs and payloads, keeps source and transcript identities separate, names every miss, and refuses legacy bare files or the old private `{stamp, data}` wrapper. The closed vocabulary already reserves `judge`, but atoms, promises, threads, episodes, anchors and segment types are the materialised artifacts today; judge caching remains S7 work |
+| `reasoning_chunks.py` | Batch S7b's nested checkpoint for the model passes that produce promises and anchors. It binds every row to the exact time/text slice, keeps `pending`, `usable` and `unusable` distinct, persists provider/model and prompt/response fingerprints, and reuses only usable rows. A malformed nested checkpoint is discarded as a whole rather than filtered and shifted onto later chunks |
 | `quote_resolver.py` | Batch S7: where a quote actually IS in the transcript. `story_evidence.ground_claim` asks a yes/no — is the quote inside the claimed atom plus one neighbour, about 9.3s — and **measured over six sources and 164 claims it binds 64.0%**. This turns the question round: where does the quote occur, over the whole transcript, using the SAME normalisation and the same whole-token rule (a test asserts the two agree on every quote, because a second tokeniser here would drift and the comparison would stop meaning anything). Three states, and **`ambiguous` is the guard that makes the others safe**: a phrase like "you know what I mean" occurs dozens of times in a three-hour stream, and binding it to the nearest occurrence would MANUFACTURE a grounding the evidence does not support. **WHY IT CAME BEFORE WIDENING THE WINDOW,** which was the obvious cheaper move: `_NEIGHBOURS = 1` is a constant nobody derived, and raising it until the numbers improve is choosing a threshold to fit an answer. The drift distribution is what a window should be derived FROM — and it says the window is not the answer: median 0.9s but p90 18.1s and max 78.1s, with 99 of 128 located claims already inside the shipped reach and 29 outside it. Widening to catch those 29 needs 20s+, which raises the 9.1% ambiguity directly. Applied to nothing |
 
 ### Choosing clips
@@ -113,9 +114,9 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `reasoning_mode.py` | WHICH engine a project runs, as one setting. Also the compatibility mapping for the `llm_select` + `reasoning_version` pair it replaced — both of which `_normalise_settings` used to drop in silence, which is why the story engine could not be turned on from the API at all |
 | `reasoning_trace.py` | what a scoring run DID: `reasoning_run.json` (versions, chunk plan, every provider attempt and fallback, the settings actually in force) and `selection_trace.json` (why each candidate ended where it did, including the ones the judge never saw). Pure; the worker feeds it and `storage.py` writes it |
 | `chunking.py` | how a long stream is handed to a model: chunks bounded by the CLOCK as well as the byte budget, an overlap so a moment on a seam is whole somewhere, coverage accounting that names the gaps, and a quota that follows the span. Replaces the character-only split that turned four hours into 3h21m + 38m |
-| `llm_engine.py` | reaching a model and recording every attempt: `_ask`, `parse_json`, and the trace notes. Split out when Batch 0's tracing took `llm_select` past 500 lines; re-exported from there so nothing else had to change |
+| `llm_engine.py` | reaching a model and recording every attempt: `_ask`, `parse_json`, and the trace notes. S7b also returns the provider, resolved model and prompt/response fingerprints of a JSON request; persisted provenance names the absent seed and nondeterministic call instead of implying reproducibility |
 | `llm_prompts.py` | what we ASK a model: the nomination and anchor prompts, versioned because the cached anchor artifact is only valid for the prompt that produced it |
-| `llm_select.py` | anchor detection and the nomination pass, chunked and versioned |
+| `llm_select.py` | anchor detection and the nomination pass, chunked and versioned. Anchor detection is resumable per chunk in S7b; legacy nomination is not a cached reasoning artifact |
 | `llm_judge.py` | comparative ranking from three perspectives (§18, §19) |
 | `headline.py` | the clip's headline text |
 
@@ -274,6 +275,7 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_publish_audit.py` (R7: what reaches the exit code, and where the OCR cache may not live) ·
 `test_clipper_quote_resolver.py` (S7: where a quote is, and what the resolver refuses to guess) ·
 `test_clipper_reasoning_cache.py` (S7a: strict envelopes, targeted invalidation and JSON round trips) ·
+`test_clipper_reasoning_chunks.py` (S7b: per-chunk recovery, provenance and malformed-state refusal) ·
 `test_clipper_caption_contrast.py` (R6: what the palette guarantees) ·
 `test_clipper_caption_placement.py` (R6: what the caption lands on) ·
 `test_clipper_evidence_map.py` (R6: where a detected box lands in the output) ·

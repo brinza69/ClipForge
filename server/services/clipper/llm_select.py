@@ -51,7 +51,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from services.clipper import chunking
 
@@ -69,7 +69,8 @@ CHUNK_CHARS = 120_000             # ~30k tokens per nomination chunk
 # here and the split is not meant to be visible to them.
 from services.clipper.llm_engine import (  # noqa: E402,F401
     JUDGE_ENGINES, MAX_CLIP_CHARS, MAX_JUDGE_CLIPS,
-    _ask, _ask_json, _note, _note_chunk, _note_result, _num, parse_json,
+    _ask, _ask_json, _ask_json_result, _note, _note_chunk, _note_result,
+    _num, parse_json,
 )
 
 
@@ -325,7 +326,9 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
                          threads: Sequence[dict] | None = None,
                          episodes: Sequence[dict] | None = None,
                          trace: Any = None, timeout: float | None = None,
-                         is_cancelled=None) -> list[dict]:
+                         is_cancelled=None, chunk_cache: Any = None,
+                         checkpoint: Callable[[dict], None] | None = None,
+                         ) -> list[dict]:
     """Anchors: a payoff, what a viewer must know for it to land, an archetype.
 
     The richer sibling of `nominate`, and the input to the story engine. Same
@@ -351,6 +354,7 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
         return []
     from services.clipper import episodes as episode_mod
     from services.clipper import promises as promise_mod
+    from services.clipper import reasoning_chunks
 
     # Built once for the whole stream, sliced per chunk. Free — no model call.
     # Threads give the stretches; the atoms give the words that label them.
@@ -362,9 +366,18 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
 
     found: list[dict] = []
     chunks = chunking.plan_chunks(items)
+    prepared = reasoning_chunks.prepare("anchors", chunks, chunk_cache)
+    state = prepared.state
+    reused = 0
     for chunk in chunks:
         if is_cancelled is not None and is_cancelled():
             break
+        saved = reasoning_chunks.reusable(state, chunk)
+        if saved is not None:
+            found.extend(saved)
+            reused += 1
+            _note_chunk_span(trace, "anchors", chunk, len(saved))
+            continue
         index, lines = chunk["index"], chunk["lines"]
         # Setups still open anywhere up to the END of this chunk, which
         # includes ones inside it. Filtering to "before the chunk" was wrong
@@ -383,21 +396,41 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
         so_far = episode_mod.before(stream_episodes, first_t)
         request = f"anchors#{index}"
         want = chunking.quota_for(chunk, per_chunk=per_chunk)
-        parsed = await _ask_json(engines, anchor_prompt(lines, want, live, so_far),
-                                 model=model, trace=trace, stage="anchors",
-                                 request=request, timeout=timeout,
-                                 is_cancelled=is_cancelled,
-                                 keys=("payoff_t", "t", "payoff"))
+        answer = await _ask_json_result(
+            engines, anchor_prompt(lines, want, live, so_far), model=model,
+            trace=trace, stage="anchors", request=request, timeout=timeout,
+            is_cancelled=is_cancelled, keys=("payoff_t", "t", "payoff"))
+        if answer.cancelled:
+            break
         before = len(found)
-        for raw in (parsed or []):
+        produced = []
+        for raw in (answer.parsed or []):
             anchor = normalise_anchor(raw, duration)
             if anchor is not None:
                 anchor["prompt_version"] = ANCHOR_PROMPT_VERSION
                 anchor["chunk_index"] = index
                 _attach_callback(anchor, raw, promises or [])
-                found.append(anchor)
+                produced.append(anchor)
+        usable = answer.usable and (not answer.parsed or bool(produced))
+        found.extend(produced)
+        provenance = answer.provenance()
+        provenance["normalised_items"] = len(produced)
+        state = reasoning_chunks.record(
+            state, chunk, usable=usable, items=produced,
+            provenance=provenance)
+        if checkpoint is not None:
+            checkpoint(state)
         _note_chunk_span(trace, "anchors", chunk, len(found) - before)
     _note_coverage(trace, "anchors", chunks, duration)
+    if trace is not None:
+        tally = reasoning_chunks.counts(state)
+        trace.note_count("anchors_chunks_reused", reused)
+        trace.note_count("anchors_chunks_usable", tally[reasoning_chunks.USABLE])
+        trace.note_count("anchors_chunks_unusable", tally[reasoning_chunks.UNUSABLE])
+        trace.note_count("anchors_chunks_pending", tally[reasoning_chunks.PENDING])
+        trace.note_stage("anchors_cache", prepared.reason,
+                         f"{reused} reused, {tally[reasoning_chunks.UNUSABLE]} unusable, "
+                         f"{tally[reasoning_chunks.PENDING]} pending")
     found = _dedupe_anchors(found)
     found.sort(key=lambda a: a["payoff_t"])
     logger.info("llm_select: %d anchors from %d chunks (%s)", len(found),

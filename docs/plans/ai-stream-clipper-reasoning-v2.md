@@ -828,8 +828,17 @@ devenit artefact persistent în loc să fie reconstruite în interiorul detector
 include sursa înregistrată la ingest, transcriptul exact, upstream-urile efectiv citite, versiunile,
 promptul, modelele rezolvate per engine, temperatura, contextul, timeout-ul și chunk config. JSON-ul
 este strict și canonic, iar artefactele pre-S7 sunt miss deliberat. `judge` este numai rezervat în
-schema comună: cache-ul judge, recovery per chunk și partea de rerun/nondeterminism din gate rămân
-deschise, deci Batch 7 nu este declarat închis.
+schema comună.
+
+**Status parțial, S7b livrat 3 septembrie 2026.** Promises și anchors păstrează acum un checkpoint
+per chunk în interiorul envelope-ului comun. Un chunk `usable` este refolosit, unul `unusable` sau
+`pending` este singurul reapelat, iar starea se scrie după fiecare cerere. Rândul persistă
+providerul și modelul rezolvat, amprentele promptului și răspunsului, istoricul încercărilor,
+numărul de obiecte normalizate și `seed: null` plus `nondeterministic: true`. O listă goală este
+cacheabilă; un răspuns structural valid care nu produce niciun obiect valid rămâne retryable. Un
+checkpoint nested malformat se refuză integral, nu se filtrează peste numitor. Cache-ul judge,
+`anchor_id`, scara dedupe și identitatea comună selection/render rămân deschise, deci Batch 7 nu
+este declarat închis.
 
 ### Batch 8 — ranker v2
 
@@ -1144,7 +1153,7 @@ propoziția care dă titlul videoclipului, alături de `REVEAL`, `CLUTCH`, `CALL
 rulare cenzurată; 15,5/oră în regiunea efectiv procesată, pur descriptiv; densitatea întregii surse
 **necunoscută**. Nu se numește „plafon inferior": asta ar presupune că recuperarea adaugă rezultate
 fără să schimbe chunk-ul reușit, iar o rerulare completă nu garantează asta. Nu se rerulează ad-hoc
-pentru o cifră mai frumoasă — se repară recuperarea per chunk, apoi se validează pe o clonă nouă.
+pentru o cifră mai frumoasă — S7b a reparat recuperarea per chunk; validarea cere încă o clonă nouă.
 
 **Rata de eșec operațional este ea însăși un rezultat.** Pe cele trei surse terminate înainte de
 moistcr1tikal: **1 din 5 cereri de chunk `anchors` a venit neutilizabilă, 20%**; socotind și

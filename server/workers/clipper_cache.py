@@ -72,11 +72,12 @@ def _model_inputs(engines, model=None, timeout=None) -> dict:
         "anthropic": descriptions.DEFAULT_ANTHROPIC_MODEL,
     }
     resolved = ({str(engine): model for engine in engines}
-                if model is not None else
+                if model else
                 {str(engine): defaults.get(str(engine)) for engine in engines})
 
     return {
-        "model": {"requested": model, "resolved_by_engine": resolved},
+        "model": {"requested": model or None,
+                  "resolved_by_engine": resolved},
         "temperature": llm_engine.TEMPERATURE,
         "system_prompt": llm_engine.SYSTEM_PROMPT_VERSION,
         "num_ctx": llm_engine.NUM_CTX,
@@ -101,7 +102,7 @@ def _atoms_stamp(base: dict, signals: dict) -> dict:
 
 def _promises_stamp(base: dict, duration: float, *, model=None,
                     timeout=None) -> dict:
-    from services.clipper import llm_select, promises
+    from services.clipper import llm_select, promises, reasoning_chunks
 
     llm = _model_inputs(llm_select.NOMINATE_ENGINES, model, timeout)
     return reasoning_cache.artifact_inputs(
@@ -110,7 +111,9 @@ def _promises_stamp(base: dict, duration: float, *, model=None,
         temperature=llm["temperature"], engines=llm_select.NOMINATE_ENGINES,
         chunk_config=_chunk_config(),
         parameters={"duration": round(float(duration or 0.0), 3),
-                    "per_chunk": 6, **llm},
+                    "per_chunk": 6,
+                    "chunk_set_version": reasoning_chunks.CHUNK_SET_VERSION,
+                    **llm},
     )
 
 
@@ -150,7 +153,7 @@ def _anchor_stamp(cfg: dict, duration: float, *, base: dict | None = None,
     answers the new configuration would never have produced. Everything here
     changes what the model is asked or which model is asked.
     """
-    from services.clipper import llm_select, story
+    from services.clipper import llm_select, reasoning_chunks, story
 
     llm = _model_inputs(llm_select.NOMINATE_ENGINES, model, timeout)
     # The optional base keeps the old helper callable in isolated tests, but
@@ -168,6 +171,7 @@ def _anchor_stamp(cfg: dict, duration: float, *, base: dict | None = None,
                   "threads": threads or [], "episodes": episodes or []},
         parameters={"duration": round(float(duration or 0.0), 3),
                     "per_chunk": 10, "reasoning": _reasoning_mode(cfg),
+                    "chunk_set_version": reasoning_chunks.CHUNK_SET_VERSION,
                     **llm},
     )
 

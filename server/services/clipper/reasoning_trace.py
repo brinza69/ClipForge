@@ -222,6 +222,13 @@ class RunTrace:
         """Calls that were answered and whose answer could not be parsed."""
         return [r for r in self.results if not r["parsed"]]
 
+    @property
+    def incomplete_chunks(self) -> dict[str, int]:
+        """Pending or unusable resumable rows that keep a run incomplete."""
+        suffixes = ("_chunks_pending", "_chunks_unusable")
+        return {name: value for name, value in self.counts.items()
+                if name.endswith(suffixes) and value > 0}
+
     def outcome(self) -> str:
         """`complete`, `partial`, `fallback` or `failed_non_blocking`.
 
@@ -229,7 +236,8 @@ class RunTrace:
         produced a board, by the legacy path. The distinction the UI needs is
         between "this is what the engine chose" and "the engine never ran".
         """
-        broken = self.errors or self.exhausted or self.unusable
+        broken = (self.errors or self.exhausted or self.unusable
+                  or self.incomplete_chunks)
         produced = bool(self.counts.get("anchors") or self.counts.get("nominated"))
         if broken:
             return "partial" if produced else "failed_non_blocking"
@@ -266,6 +274,7 @@ class RunTrace:
             "exhausted": self.exhausted,
             "results": list(self.results),
             "unusable": self.unusable,
+            "incomplete_chunks": self.incomplete_chunks,
             "counts": dict(self.counts),
             "stages": list(self.stages),
             "errors": list(self.errors),
