@@ -22,7 +22,8 @@ from typing import Any, Sequence
 from config import settings
 from database import async_session
 from models import ClipModel, ProjectModel
-from services.clipper import dynamic_rhythm, edit_profiles, storage
+from services.clipper import (caption_policy, dynamic_rhythm, edit_profiles,
+                              storage)
 # THE canonical numeric guard, not a local copy: it rejects the infinities too,
 # and a second implementation is how R2's validation hole reopened.
 from services.clipper.candidate_terms import _num
@@ -394,6 +395,15 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     views = clipper_shadow_views.shadow_views(
         clip, dyn, mode=edit_mode, profile=profile["profile"])
 
+    # The detector's verdict is NOT consulted here, and that is the point: the
+    # project's own three-valued setting is the only thing that suppresses the
+    # layer. `source_captions` is `calibrated: false` on four sources, and an
+    # uncalibrated detector removing somebody's captions fails invisibly — a
+    # clip ships with no text at all and nothing reports it. When it is
+    # calibrated, this call gains its second argument and nothing else moves.
+    caption_policy_decision = caption_policy.decide(
+        cfg.get(caption_policy.SETTING))
+
     return {
         "cfg": cfg,
         "drop": drop,
@@ -406,6 +416,14 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
         "dyn": dyn,
         "fps": fps,
         "caption_y": caption_y,
-        "ass_path": _write_ass(clip, out_dir, drop, caption_y),
+        # WHETHER TO BURN A LAYER AT ALL, decided before it is written. A
+        # project whose source already carries burned subtitles gets none from
+        # us — that is the defect 37 of 101 stored clips are rejected for and a
+        # human confirmed on 4 of 4 watched. The switch is a person's; the
+        # detector's verdict rides along and applies to nothing.
+        "caption_policy": caption_policy_decision,
+        "ass_path": (_write_ass(clip, out_dir, drop, caption_y)
+                     if caption_policy_decision["action"] == caption_policy.BURN
+                     else None),
         "watermark": str(cfg.get("watermark_text") or ""),
     }

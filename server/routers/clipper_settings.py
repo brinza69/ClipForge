@@ -110,6 +110,15 @@ def _default_settings() -> dict[str, Any]:
         "caption_preset_id": "bold_impact",
         "caption_position": "bottom",
         "caption_highlight": True,
+        # THREE-VALUED, and `None` is the default for a reason: `True` and
+        # `False` are answers a person gave, and absent is not one of them.
+        # When it is `True` the render burns no caption layer of its own,
+        # because the source already carries one — the defect 37 of 101
+        # stored clips are rejected for. `source_captions` can detect it and
+        # is not allowed to set it: its thresholds were chosen on four
+        # sources with the answer visible, and an uncalibrated detector that
+        # silently removed somebody's captions would fail invisibly.
+        "source_has_burned_captions": None,
         "headline_enabled": True,
         "headline_auto": True,
         "emoji_enabled": False,
@@ -173,6 +182,12 @@ def _normalise_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         out["platform"] = "tiktok"
     if out.get("caption_position") not in {"bottom", "center", "top"}:
         out["caption_position"] = "bottom"
+    # Anything that is not a real answer becomes "nobody has said". A string
+    # "false" from a form would otherwise be truthy and suppress the captions of
+    # a project whose source has none.
+    if out.get("source_has_burned_captions") is not None and not isinstance(
+            out.get("source_has_burned_captions"), bool):
+        out["source_has_burned_captions"] = None
     if out.get("fps") not in {"source", 30, 60}:
         out["fps"] = settings.clipper_export_fps
     out["watermark_text"] = str(out.get("watermark_text") or "")[:80]

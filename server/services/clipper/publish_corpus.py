@@ -120,7 +120,7 @@ def _style(sidecar: dict) -> tuple[Any, dict | None]:
     return style, None
 
 
-def _own_caption_layer(placement: Any) -> bool | None:
+def _own_caption_layer(placement: Any, sidecar: Any = None) -> bool | None:
     """Did THIS export burn a ClipForge caption layer — True, False, or unknown.
 
     The second half of the duplicate-caption question, and the half a reject
@@ -128,20 +128,32 @@ def _own_caption_layer(placement: Any) -> bool | None:
     the render, so `caption_y_source == "ass"` means a caption layer was burned
     in with a position of its own.
 
-    THERE IS NO `False` HERE, AND THAT IS THE CORRECTION. A missing `.ass` used
-    to answer "this export has no layer of its own", and it does not: the `.ass`
-    is the instruction, the mp4 is the artefact, and deleting the instruction
-    after the burn removes nothing from the video. A sidecar file that was never
-    written, or cleaned up, or written somewhere else would all have read as a
-    demonstrated absence — and that absence is what lets the duplicate check
-    PASS. Only a declaration tied to the render itself could say `False`, and
-    nothing records one.
+    A MISSING `.ass` IS NOT A `False`. The `.ass` is the instruction, the mp4 is
+    the artefact, and deleting the instruction after the burn removes nothing
+    from the video — a file never written, cleaned up, or written elsewhere all
+    look identical, and reading any of them as a demonstrated absence is what
+    lets the duplicate check PASS on a clip nobody established anything about.
+
+    THE ONE THING THAT CAN SAY `False` IS A DECLARATION TIED TO THE RENDER, and
+    `caption_policy` is now that declaration: a render that suppressed the layer
+    because a person said the source already carries captions recorded the
+    decision and who made it. That is a fact about the encode, not an inference
+    from a missing file.
 
     IT IS THE BURN INSTRUCTION, NOT A FRAME READ, even when present, and the
     difference is not academic: the R6 defect was an `.ass` event libass drew
     into a transparent bar. So this establishes that a layer was ASKED for. The
     residual travels in the check's evidence.
     """
+    policy = sidecar.get("caption_policy") if isinstance(sidecar, dict) else None
+    if isinstance(policy, dict):
+        from services.clipper import caption_policy as cp
+
+        if policy.get("action") == cp.SUPPRESS:
+            return False
+        # A recorded `burn` is NOT a `True` here. It says a layer was asked for;
+        # whether libass drew one is the `.ass` question below, and the R6
+        # defect was exactly an event drawn into nothing.
     if not isinstance(placement, dict):
         return None
     if placement.get("caption_y_source") == "ass":
@@ -240,7 +252,7 @@ def assemble(path: Path, *, source_captions: Any = None,
         sidecar = None
 
     placement = measure(path) if sidecar is not None else None
-    own_layer = _own_caption_layer(placement)
+    own_layer = _own_caption_layer(placement, sidecar)
     if isinstance(placement, dict) and placement.get("refused"):
         # `measure` refuses only shapes somebody supplied wrongly — an
         # unreadable sidecar, a sub-record that is not a record, a caption

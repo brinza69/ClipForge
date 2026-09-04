@@ -359,6 +359,12 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         "rhythm_view": decision["rhythm_view"],
         "analysis_version": project.analysis_version,
         "ranker_version": clip.ranker_version,
+        # WHETHER A CAPTION LAYER WAS BURNED AT ALL, and who decided. A sidecar
+        # that simply has no `.ass` beside it cannot distinguish "the source
+        # already carries captions so we added none" from "the file was cleaned
+        # up" — and that ambiguity is exactly what `own_caption_layer` had to
+        # stop answering `False` to.
+        "caption_policy": decision["caption_policy"],
         # The dead seconds this render removed. Without them the sidecar
         # describes a longer clip than the file: every downstream time —
         # captions, shot boundaries — is on a clock the mp4 does not keep.

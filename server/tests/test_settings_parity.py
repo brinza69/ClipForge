@@ -63,6 +63,14 @@ def _typescript_defaults() -> dict[str, object]:
         value = raw.strip()
         if value in ("true", "false"):
             out[key] = value == "true"
+        elif value == "null":
+            # `null` is a VALUE, not a string called "null". Until
+            # `source_has_burned_captions` there was no nullable default here,
+            # so this fell through to the string branch and compared `'null'`
+            # against `None` — an unhandled case reading as a different kind of
+            # answer, which is the shape of defect this suite exists for. It
+            # failed loudly rather than quietly, which is the good direction.
+            out[key] = None
         elif re.fullmatch(r"-?\d+(\.\d+)?", value):
             out[key] = float(value)
         else:

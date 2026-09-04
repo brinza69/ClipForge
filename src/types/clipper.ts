@@ -129,6 +129,16 @@ export interface ClipperSettings {
   caption_preset_id: string;
   caption_position: "bottom" | "center" | "top";
   caption_highlight: boolean;
+  /**
+   * Three-valued, and `null` is not `false`. `true` means a person
+   * declared that the source already carries burned-in subtitles, so
+   * this export burns no layer of its own — the defect 37 of 101 stored
+   * clips are rejected for. `source_captions` can detect it and is not
+   * allowed to set it: its thresholds were chosen on four sources with
+   * the answer visible, and an uncalibrated detector removing captions
+   * fails invisibly.
+   */
+  source_has_burned_captions: boolean | null;
   headline_enabled: boolean;
   headline_auto: boolean;
   emoji_enabled: boolean;
@@ -404,6 +414,7 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   caption_preset_id: "bold_impact",
   caption_position: "bottom",
   caption_highlight: true,
+  source_has_burned_captions: null,
   headline_enabled: true,
   headline_auto: true,
   emoji_enabled: false,
