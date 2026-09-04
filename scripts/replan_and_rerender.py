@@ -57,9 +57,14 @@ def _preserve(project_id: str) -> str | None:
     if not exports.is_dir():
         return "no exports directory"
     if backup.exists():
-        # A second run would back the NEW files up over the only record of the
-        # old ones, and every figure in this batch would lose its evidence.
-        return f"{BACKUP}/ already exists — refusing to overwrite the record"
+        # ALREADY PRESERVED, so the run continues. The guard's purpose is that
+        # the originals are never lost, and they are not: `copytree` refuses an
+        # existing destination, so a second pass cannot back the NEW files up
+        # over them. Refusing the whole run instead would make a smoke render on
+        # a few clips block the full one on the same project, which is the
+        # opposite of what a micro-gate is for.
+        print(f"  ({BACKUP}/ already holds the pre-replan record)", flush=True)
+        return None
     shutil.copytree(exports, backup)
     return None
 
@@ -118,7 +123,8 @@ async def _render_one(project_id: str, clip_id: str) -> dict:
             "bytes": body["output_identity"].get("bytes")}
 
 
-async def _project(project_id: str, *, dry_run: bool) -> list[dict]:
+async def _project(project_id: str, *, dry_run: bool,
+                   only: set[str] | None = None) -> list[dict]:
     from sqlalchemy import select
 
     from database import async_session, init_db
@@ -130,7 +136,8 @@ async def _project(project_id: str, *, dry_run: bool) -> list[dict]:
             select(ClipModel.id).where(ClipModel.project_id == project_id)
         )).scalars().all()
     have = [c for c in clips
-            if (DATA / project_id / "exports" / f"{c}.mp4").exists()]
+            if (DATA / project_id / "exports" / f"{c}.mp4").exists()
+            and (only is None or c in only)]
     if dry_run:
         return [{"clip": c, "refused": None, "dry_run": True} for c in have]
 
@@ -157,14 +164,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("projects", nargs="+")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only", default="",
+                    help="comma-separated clip ids — the micro-gate Codex asks "
+                         "for before the full corpus")
     args = ap.parse_args()
+    only = {c.strip() for c in args.only.split(",") if c.strip()} or None
 
     rows: list[dict] = []
     for project in args.projects:
         print(f"\n=== {project}", flush=True)
         rows.extend({"project": project, **row}
                     for row in asyncio.run(_project(project,
-                                                    dry_run=args.dry_run)))
+                                                    dry_run=args.dry_run,
+                                                    only=only)))
 
     refused = [r for r in rows if r["refused"]]
     print(f"\n{len(rows) - len(refused)} rendered, {len(refused)} refused")
