@@ -374,8 +374,8 @@ def render_dynamic_preview(src: str, plan: dict, out: str, *, start: float,
 def render_dynamic_clip(src: str, plan: dict, out: str, *, start: float,
                         work_dir: str | Path, ass_path: str | None = None,
                         src_w: int = 1920, src_h: int = 1080,
-                        is_cancelled: Any = None, **kwargs: Any
-                        ) -> dict[str, Any]:
+                        is_cancelled: Any = None, ease_s: float = 0.0,
+                        **kwargs: Any) -> dict[str, Any]:
     """Write the sendcmd script, run the one encode, verify it produced bytes.
 
     `is_cancelled` is checked once, before the encode starts, which is exactly
@@ -396,7 +396,12 @@ def render_dynamic_clip(src: str, plan: dict, out: str, *, start: float,
     final = Path(out)
     temp = storage.temporary_output_path(final)
     work = Path(work_dir)
-    cmd_path = write_sendcmd(plan, src_w, src_h, work / f"{Path(out).stem}.cmd.txt")
+    # `ease_s` ramps a composition change instead of cutting it. 0.0 for every
+    # caller: what to do about the long junctions a human objected to has not
+    # been decided, and this exists to be demonstrated on those windows.
+    cmd_path = write_sendcmd(plan, src_w, src_h,
+                             work / f"{Path(out).stem}.cmd.txt",
+                             ease_s=ease_s)
 
     cmd = build_dynamic_cmd(
         src, plan, cmd_path, ass_path, str(temp),

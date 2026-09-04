@@ -387,43 +387,71 @@ def _joins(previous: dict, shot: dict, style: dict, src_w: int, src_h: int) -> b
 JUNCTION_EASE_S = 0.3
 
 
+def _centre_of(shot: dict, biggest: tuple[int, int],
+               src_w: int, src_h: int) -> tuple[float, float]:
+    """Where this shot's crop window is centred, in CANVAS coordinates.
+
+    `_position_exprs` writes `anchor - out_w/2`, so the anchor IS the centre and
+    a size command alone re-centres — that is what makes a push zoom toward the
+    subject. A `fit` shot writes `0, 0` instead, because at the full canvas size
+    the origin and the centred position are the same point. They stop being the
+    same point the moment the window is smaller than the canvas, which is
+    exactly what a ramp does.
+    """
+    canvas_w, canvas_h, off_y = canvas_size(src_w, src_h)
+    if composition_of(shot) == "fit":
+        return canvas_w / 2.0, canvas_h / 2.0
+    shake = float(shot.get("shake") or 0.0)
+    anchor = shot.get("anchor") or [src_w / 2.0, src_h / 2.0]
+    return (_anchor(float(anchor[0]), src_w, biggest[0], shake + 2.0),
+            _anchor(float(anchor[1]), src_h, biggest[1], shake + 2.0) + off_y)
+
+
 def _ease_points(prev_h: int, next_w: int, next_h: int, at: float,
-                 ease_s: float, src_w: int, src_h: int
-                 ) -> list[tuple[float, int, int]]:
-    """A short ramp from the previous height to the next, in 9:16 steps.
+                 ease_s: float, src_w: int, src_h: int,
+                 prev_centre: tuple[float, float],
+                 next_centre: tuple[float, float]
+                 ) -> list[tuple[float, int, int, float, float]]:
+    """A short ramp from the previous window to the next: size AND centre.
 
-    THIS IS ONLY A ZOOM, and that is why it costs no filtergraph change. Every
-    crop the graph ever takes is 9:16 of the padded canvas — `canvas_size` says
-    so in as many words, and it is why the pad comes first — so the `crop` and
-    the `fit` window differ in SIZE and nothing else. Stepping between them is
-    the same mechanism `push` and `pull` already use.
+    THIS IS ONLY A ZOOM AND A PAN, and that is why it costs no filtergraph
+    change. Every crop the graph ever takes is 9:16 of the padded canvas —
+    `canvas_size` says so in as many words, and it is why the pad comes first —
+    so the `crop` and the `fit` windows differ in size and position and nothing
+    else.
 
-    IT SIZES AGAINST THE CANVAS, NOT THE SOURCE, and the first version did not.
-    `_size` clamps its height to `src_h`, because a crop window lives inside the
-    frame — but the `fit` window is the PADDED canvas and is taller than the
-    source by construction: 3412 against 1080 on a 16:9 input. Every step of the
-    ramp therefore came back clamped to 1080, the whole ramp collapsed to one
-    repeated size, and the junction cut exactly as hard as before while the
-    script looked longer. Found by printing the two scripts side by side rather
-    than by reading this function.
+    IT SIZES AGAINST THE CANVAS, NOT THE SOURCE. `_size` clamps its height to
+    `src_h`, because a crop window lives inside the frame — but the `fit` window
+    is the PADDED canvas and is taller than the source by construction: 3412
+    against 1080 on a 16:9 input. Every step of the first version came back
+    clamped to 1080, the whole ramp collapsed to one repeated size, and the
+    junction cut exactly as hard as before while the script looked longer.
+
+    AND IT MOVES THE CENTRE, which the second version did not. Pinned at the
+    `fit` shot's own `0, 0`, a mid-ramp window sits in the TOP-LEFT of the
+    canvas — which is transparent padding, so the composite showed the blurred
+    background and nothing else. A frame pulled from the middle of the ramp is
+    what found it; the sendcmd script looked perfectly reasonable.
     """
     canvas_w, canvas_h, _ = canvas_size(src_w, src_h)
-    out: list[tuple[float, int, int]] = []
+    out: list[tuple[float, int, int, float, float]] = []
     if prev_h <= 0 or next_h <= 0:
         return out
     steps = max(2, int(ease_s * 20))
     seen: set[tuple[int, int]] = {(next_w, next_h)}
     for i in range(steps):
         frac = (i + 1) / (steps + 1)
-        # Geometric rather than linear: apparent size is what the eye reads,
-        # and the jump this exists for is 3.16x, a ratio rather than a distance.
+        # Geometric on size, linear on position: apparent size is a ratio and
+        # the jump this exists for is 3.16x, while a pan is a distance.
         height = prev_h * (next_h / prev_h) ** frac
         h = even(min(canvas_h, max(160, height)))
         w = even(min(canvas_w, max(90, h * ASPECT)))
         if (w, h) in seen:
             continue
         seen.add((w, h))
-        out.append((round(at + ease_s * frac, 3), w, h))
+        cx = prev_centre[0] + (next_centre[0] - prev_centre[0]) * frac
+        cy = prev_centre[1] + (next_centre[1] - prev_centre[1]) * frac
+        out.append((round(at + ease_s * frac, 3), w, h, cx, cy))
     return out
 
 
@@ -446,6 +474,7 @@ def build_sendcmd(plan: dict, src_w: int, src_h: int, *,
     lines: list[str] = []
     previous: tuple[int, int] | None = None
     previous_comp: str | None = None
+    previous_centre: tuple[float, float] | None = None
 
     for shot in (plan or {}).get("shots") or []:
         timeline = _size_timeline(shot, style, src_w, src_h)
@@ -455,19 +484,23 @@ def build_sendcmd(plan: dict, src_w: int, src_h: int, *,
         x_expr, y_expr = _position_exprs(shot, biggest, src_w, src_h)
 
         first_t, first_w, first_h = timeline[0]
+        centre = _centre_of(shot, biggest, src_w, src_h)
         if (ease_s > 0 and previous is not None
+                and previous_centre is not None
                 and previous_comp is not None
                 and composition_of(shot) != previous_comp):
-            # The position expression belongs to the NEW shot, so it is set
-            # first and the ramp only resizes. Setting it mid-ramp would move
-            # the window and rescale it at the same time, which is two changes
-            # where the question is about one.
-            lines.append(f"{first_t:.3f} crop x '{x_expr}', crop y '{y_expr}';")
-            for t, w, h in _ease_points(previous[1], first_w, first_h,
-                                        first_t, ease_s, src_w, src_h):
-                lines.append(f"{t:.3f} crop w {w}, crop h {h};")
+            # Size AND position on every step, w/h before x/y because crop
+            # re-clamps the position against the current size each time it
+            # reconfigures. The shot's own expression takes over at the end.
+            for t, w, h, cx, cy in _ease_points(
+                    previous[1], first_w, first_h, first_t, ease_s,
+                    src_w, src_h, previous_centre, centre):
+                lines.append(f"{t:.3f} crop w {w}, crop h {h}, "
+                             f"crop x '{cx:.1f}-out_w/2', "
+                             f"crop y '{cy:.1f}-out_h/2';")
             lines.append(f"{first_t + ease_s:.3f} crop w {first_w}, "
-                         f"crop h {first_h};")
+                         f"crop h {first_h}, crop x '{x_expr}', "
+                         f"crop y '{y_expr}';")
         else:
             lines.append(
                 f"{first_t:.3f} crop w {first_w}, crop h {first_h}, "
@@ -477,13 +510,16 @@ def build_sendcmd(plan: dict, src_w: int, src_h: int, *,
             lines.append(f"{t:.3f} crop w {w}, crop h {h};")
         previous = (timeline[-1][1], timeline[-1][2])
         previous_comp = composition_of(shot)
+        previous_centre = centre
 
     return "\n".join(lines) + "\n"
 
 
-def write_sendcmd(plan: dict, src_w: int, src_h: int, path: str | Path) -> str:
+def write_sendcmd(plan: dict, src_w: int, src_h: int, path: str | Path, *,
+                  ease_s: float = 0.0) -> str:
     """Write the sendcmd script next to the render and return its path."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(build_sendcmd(plan, src_w, src_h), encoding="utf-8")
+    target.write_text(build_sendcmd(plan, src_w, src_h, ease_s=ease_s),
+                      encoding="utf-8")
     return str(target)

@@ -155,14 +155,31 @@ def test_the_ramp_ends_exactly_on_the_shots_own_size():
     """An eased junction that stopped short would leave the shot framed at
     something the planner never chose."""
     script = dg.build_sendcmd(_junction_plan(), 1920, 1080, ease_s=0.3)
-    assert "5.300 crop w 1920, crop h 3412;" in script
+    assert "5.300 crop w 1920, crop h 3412," in script
 
 
-def test_the_position_is_set_once_before_the_ramp():
-    """Moving the window and rescaling it at the same time is two changes where
-    the question is about one."""
+def test_the_ramp_moves_the_centre_as_well_as_the_size():
+    """MEASURED FROM A FRAME, and the sendcmd script looked fine without it.
+
+    `_position_exprs` returns a fixed `0, 0` for a `fit` shot, which is correct
+    only when the window IS the whole canvas. Pinned there, a mid-ramp window
+    sits in the canvas's top-left — transparent padding — so the composite
+    showed the blurred background and nothing else. Every step carries its own
+    centre now, interpolated from the shot it came from.
+    """
     script = dg.build_sendcmd(_junction_plan(), 1920, 1080, ease_s=0.3)
-    assert script.count("crop x") == 2, "one per shot, not one per ramp step"
+    ramp = [l for l in script.splitlines() if l.startswith("5.") and "crop x" in l]
+    assert len(ramp) > 3, "every ramp entry positions itself"
+    centres = [float(l.split("crop x '")[1].split("-out_w")[0])
+               for l in ramp if "-out_w" in l]
+    assert centres == sorted(centres), "and travels one way"
+
+
+def test_the_ramp_lands_on_the_shots_own_expression():
+    """The last entry hands back to `_position_exprs`, so nothing downstream
+    has to know a ramp happened."""
+    script = dg.build_sendcmd(_junction_plan(), 1920, 1080, ease_s=0.3)
+    assert "5.300 crop w 1920, crop h 3412, crop x '0', crop y '0';" in script
 
 
 def test_an_ease_between_two_shots_of_the_same_composition_does_not_happen():
