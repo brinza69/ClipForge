@@ -235,6 +235,57 @@ a respins-o; era o supra-interpretare.
 Ce rămâne adevărat fără interpretare: minimul de 3,16x e o identitate a geometriei 16:9, deci „mai
 măsoară pe alte surse" nu putea schimba concluzia.
 
+## Tranzițiile de joncțiune — VERDICT, 4 septembrie 2026: hard cut, 4 din 4
+
+Cele patru joncțiuni cronometrate au fost randate în trei tratamente — hard cut (ce se livrează),
+rampă de 0,30s și rampă de 0,60s — prin `render_dynamic_clip` însuși, nu printr-un filtergraph
+construit alături. Verdictul omului, unanim:
+
+```
+ 8.82|hard-cut = best
+22.65|hard-cut = best
+38.40|hard-cut = best
+52.97|hard-cut = best
+```
+
+Motivul lui, verbatim: **„în momentul în care se focusează/defocusează pe om, hard cut oferă o
+imagine mai bună din punct de vedere al fluidizării."**
+
+**Deci rampa NU se aplică.** `ease_s` rămâne 0,0 pentru fiecare apelant, mecanismul rămâne în cod
+nefolosit, iar comportamentul livrat nu se schimbă. Costul întregii investigații a fost plătit ÎNAINTE
+de a fi aplicată pe corpus, ceea ce era chiar scopul.
+
+### Ce NU stabilește acest verdict, și e ușor de citit greșit
+
+**Nu stabilește că joncțiunea e în regulă.** Omul a comparat trei prezentări și a ales-o pe cea mai
+bună dintre ele; comparația nu conținea nicio variantă pe care el să o fi numit *bună*. Plângerea
+originală — „în momentul în care intră 16:9 cam 2 secunde nu e tranziția bună" — rămâne exact acolo
+unde era, pe aceleași 57 de joncțiuni lungi.
+
+Ce s-a închis e o singură întrebare: **animarea nu e răspunsul.** Iar cealaltă pârghie, o fereastră
+`fit` mai îngustă, a fost măsurată și respinsă separat (48 din 50 de cadre folosesc toată lățimea).
+Deci ambele idei pe care le aveam sunt moarte, iar problema rămâne deschisă **fără o soluție
+propusă** — ceea ce e o stare mai onestă decât una cu o reparație pe care nimeni n-a validat-o.
+
+Prima versiune a acestui document scrisese despre o decizie anterioară că omul „a respins" o opțiune
+pe care eu o marcasem ne-recomandată. Nota asta există ca să nu se repete: verdictul de aici e
+„dintre astea trei, asta", nu „asta e bună".
+
+### Un defect al rampei, găsit printr-un cadru și nu prin cod
+
+Merită păstrat fiindcă e a doua oară în același batch. `_position_exprs` întoarce `0, 0` fix pentru
+un shot `fit` — corect doar când fereastra E tot canvasul, fiindcă atunci originea și poziția
+centrată sunt același punct. Încetează să fie același punct în clipa în care fereastra e mai mică,
+adică exact ce face o rampă: **fixată la `0, 0`, o fereastră de la mijlocul rampei stă în colțul
+stânga-sus al canvasului, care e padding transparent**, deci compozitul arăta fundalul blurat și
+nimic altceva.
+
+Scriptul `sendcmd` arăta perfect rezonabil. Un cadru extras de la mijlocul rampei e ce a găsit-o.
+
+Prima oară fusese rampa care se prăbușea fiindcă `_size` limitează înălțimea la SURSĂ (1080) în loc de
+canvas (3412) — găsită tipărind cele două scripturi unul lângă altul. În ambele cazuri, citirea
+funcției nu ar fi prins nimic.
+
 ## Ce NU demonstrează
 
 - Nimic despre selecție. Astea sunt verdicte de RANDARE, pe clipuri alese pentru că poartă un
