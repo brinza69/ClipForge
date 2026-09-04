@@ -399,8 +399,8 @@ def boundary(view: Any) -> dict:
     return pf.check(pf.PASS, evidence=evidence)
 
 
-def provenance(sidecar: Any) -> dict:
-    """The stored digest, RECOMPUTED — and what a matching digest does not prove.
+def provenance(sidecar: Any, *, export_path: Any = None) -> dict:
+    """Both halves: the recipe was not edited, AND this is the file it produced.
 
     Recomputing is what makes it a check at all: copying the stored value would
     let a plan edited after the render carry a stale fingerprint and pass. A
@@ -417,9 +417,17 @@ def provenance(sidecar: Any) -> dict:
     valid digest says the recipe was not edited after the render, and says
     nothing about whether this mp4 is what the recipe produced.
 
-    Both facts stay in the evidence. Neither buys a pass, so `provenance` is
-    `unavailable` for every clip on disk today — which is what it already was,
-    for a reason that was one layer off.
+    SO THE SECOND HALF IS A SECOND MEASUREMENT. `output_identity` probes the
+    delivered file at render time and records its digest, bytes and dimensions,
+    and this compares that record against the file now. The old comment said the
+    output size had "no shared authority to read it from"; the delivered file is
+    that authority, and reading the artefact rather than agreeing a constant is
+    the same move that settled the caption position and the composition count.
+
+    A pass therefore needs all three: a digest that recomputes, a recipe with
+    something in it, and a file that still matches what the render measured.
+    Every stored clip predates the second half, so they stay `unavailable` — but
+    the reason is now a missing field rather than a missing idea.
     """
     from services.clipper.edit_quality import (FINGERPRINT_MISMATCH,
                                                FINGERPRINT_VALID,
@@ -446,14 +454,40 @@ def provenance(sidecar: Any) -> dict:
     if not present:
         return pf.check(pf.UNAVAILABLE, evidence=evidence,
                         why="the_digest_is_valid_over_an_empty_recipe")
-    return pf.check(pf.UNAVAILABLE, evidence=evidence,
-                    why="a_valid_digest_covers_the_recipe_not_the_delivered_file")
+
+    from services.clipper import output_identity as oid
+
+    recorded = sidecar.get("output_identity")
+    evidence["output_identity"] = (
+        recorded.get("refused") or "recorded"
+        if isinstance(recorded, dict) else None)
+    if not isinstance(recorded, dict):
+        return pf.check(pf.UNAVAILABLE, evidence=evidence,
+                        why="the_sidecar_does_not_describe_the_delivered_file")
+    if export_path is None:
+        # The record exists and nobody offered the file to check it against.
+        # That is a caller that did not ask, not a clip that passed.
+        return pf.check(pf.UNAVAILABLE, evidence=evidence,
+                        why="the_delivered_file_was_not_offered_for_comparison")
+
+    same, why_not = oid.matches(recorded, export_path)
+    evidence["file_matches"] = same
+    if same is False:
+        # The mp4 beside this plan is not the one the render measured. Nothing a
+        # correction can move.
+        return pf.check(pf.FAIL, why=str(why_not), severity=pf.REJECTABLE,
+                        evidence=evidence)
+    if same is None:
+        return pf.check(pf.UNAVAILABLE, why=str(why_not or "unavailable"),
+                        evidence=evidence)
+    return pf.check(pf.PASS, evidence=evidence)
 
 
 def checks_for(sidecar: Any, *, chrome: Any = None, placement: Any = None,
                contrast: Any = None, source_captions: Any = None,
                boundary_view: Any = None,
-               own_caption_layer: bool | None = None) -> dict[str, dict]:
+               own_caption_layer: bool | None = None,
+               export_path: Any = None) -> dict[str, dict]:
     """All seven, from whatever is available. Missing inputs stay unavailable."""
     return {
         pf.GEOMETRY: geometry(sidecar),
@@ -463,5 +497,5 @@ def checks_for(sidecar: Any, *, chrome: Any = None, placement: Any = None,
         pf.CAPTIONS: captions(placement, contrast, source_captions,
                               own_layer=own_caption_layer),
         pf.BOUNDARY: boundary(boundary_view),
-        pf.PROVENANCE: provenance(sidecar),
+        pf.PROVENANCE: provenance(sidecar, export_path=export_path),
     }

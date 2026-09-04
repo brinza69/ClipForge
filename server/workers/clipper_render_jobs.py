@@ -289,7 +289,8 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # Imported here, not at module scope, for the reason the dynamic branch
     # above already does it: this module is imported to register job handlers
     # long before any render runs.
-    from services.clipper import dynamic_render, edit_quality, render as static_render
+    from services.clipper import (dynamic_render, edit_quality,
+                                  output_identity, render as static_render)
 
     render = {"fps": fps, "crf": settings.clipper_export_crf,
               "preset": settings.clipper_export_preset,
@@ -370,6 +371,17 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # stops meaning anything: the two definitions drift, and the check passes
     # for a file whose plan has changed underneath it.
     body["input_fingerprint"] = edit_quality.input_fingerprint(body)
+    # AND THE OTHER HALF, which the recipe cannot reach. `input_fingerprint`
+    # proves the plan was not edited after the render; it never touches the mp4,
+    # so `provenance_complete` had no route to a pass at all. This measures what
+    # came out — digest, bytes, and the width/height `FINGERPRINT_KEYS` records
+    # as having "no shared authority to read from". The delivered file is that
+    # authority: two renderers can disagree about what they meant to produce and
+    # cannot disagree about what exists.
+    #
+    # AFTER the fingerprint, deliberately: the recipe digest must not depend on
+    # the output, or a re-render of the same plan would change its own recipe.
+    body["output_identity"] = output_identity.probe(out)
 
     storage.atomic_write_json(
         sidecar, body, indent=2, ensure_ascii=False, default=str)

@@ -332,7 +332,11 @@ def preflight_for(path: Path, *, source_captions: Any = None,
         placement=inputs["placement"], contrast=inputs["contrast"],
         source_captions=inputs["source_captions"],
         boundary_view=inputs["boundary_view"],
-        own_caption_layer=got["own_caption_layer"])
+        own_caption_layer=got["own_caption_layer"],
+        # The mp4 beside the sidecar. Provenance needs both halves — the recipe
+        # digest AND the file the render measured — and only the assembler
+        # knows where the file is.
+        export_path=path.with_suffix(".mp4"))
     report = pf.preflight(checks, corrections=corrections)
     report["project"] = got["project"]
     report["clip"] = got["clip"]
