@@ -110,3 +110,64 @@ def test_the_absorbed_shot_keeps_the_rect_it_will_now_be_cropped_to():
     got = dg.absorb_brief_fit_islands(
         _shots(("crop", 0.0, 10.0), ("fit", 10.0, 12.0), ("crop", 12.0, 20.0)))
     assert got[1]["rect"] == {"x": 0, "y": 0, "w": 608, "h": 1080}
+
+
+# --- and the junctions the absorption cannot touch ---------------------------
+#
+# A human timestamped four of them on one clip and every one belongs to a `fit`
+# run of 7.5s or more. What to do there has not been decided; this exists to be
+# DEMONSTRATED on those windows and compared against the hard cut.
+
+
+def _junction_plan() -> dict:
+    return {"shots": [
+        {"index": 0, "composition": "crop", "t0": 0.0, "t1": 5.0, "move": "hold",
+         "rect": {"x": 0, "y": 0, "w": 608, "h": 1080}, "anchor": [304, 540]},
+        {"index": 1, "composition": "fit", "t0": 5.0, "t1": 10.0, "move": "hold",
+         "rect": {"x": 0, "y": 0, "w": 1920, "h": 1080}, "anchor": [960, 540]}],
+        "style": {}}
+
+
+def test_the_ease_is_off_for_every_caller_today():
+    """Nothing has been decided about the long junctions, so the default has to
+    deliver exactly what shipped."""
+    plan = _junction_plan()
+    assert dg.build_sendcmd(plan, 1920, 1080) == dg.build_sendcmd(
+        plan, 1920, 1080, ease_s=0.0)
+    assert dg.build_sendcmd(plan, 1920, 1080).count("crop w") == 2
+
+
+def test_the_ease_sizes_against_the_canvas_and_not_the_source():
+    """`_size` clamps to `src_h` because a crop window lives inside the frame —
+    but the `fit` window is the PADDED canvas, 3412 against 1080 on a 16:9
+    input. Sized against the source, every step came back clamped to 1080, the
+    ramp collapsed to one repeated size, and the junction cut exactly as hard as
+    before while the script looked longer."""
+    script = dg.build_sendcmd(_junction_plan(), 1920, 1080, ease_s=0.3)
+    heights = [int(line.split("crop h ")[1].rstrip(";").split(",")[0])
+               for line in script.splitlines() if "crop h " in line]
+    assert len(set(heights)) > 3, "the ramp has to actually ramp"
+    assert max(heights) == 3412, "and reach the canvas"
+    assert heights == sorted(heights), "monotonically, without a step back"
+
+
+def test_the_ramp_ends_exactly_on_the_shots_own_size():
+    """An eased junction that stopped short would leave the shot framed at
+    something the planner never chose."""
+    script = dg.build_sendcmd(_junction_plan(), 1920, 1080, ease_s=0.3)
+    assert "5.300 crop w 1920, crop h 3412;" in script
+
+
+def test_the_position_is_set_once_before_the_ramp():
+    """Moving the window and rescaling it at the same time is two changes where
+    the question is about one."""
+    script = dg.build_sendcmd(_junction_plan(), 1920, 1080, ease_s=0.3)
+    assert script.count("crop x") == 2, "one per shot, not one per ramp step"
+
+
+def test_an_ease_between_two_shots_of_the_same_composition_does_not_happen():
+    plan = _junction_plan()
+    plan["shots"][1]["composition"] = "crop"
+    plan["shots"][1]["rect"] = {"x": 0, "y": 0, "w": 608, "h": 1080}
+    assert dg.build_sendcmd(plan, 1920, 1080, ease_s=0.3) == dg.build_sendcmd(
+        plan, 1920, 1080)

@@ -53,9 +53,18 @@ sys.path.insert(0, str(_ROOT / "server"))
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 
 #: What the corpus measurement predicted the absorption would remove, from
-#: `docs/refs/human-gate-2026-08-31.md`. Compared, not assumed: a different
-#: number is a finding either way.
-EXPECTED_JUNCTIONS_REMOVED = 30
+#: `docs/refs/human-gate-2026-08-31.md`.
+#:
+#: REPORTED, AND NOT ASSERTED, and the first version of this script did assert
+#: it. The 30 was counted over the STORED plans: 15 interior `fit` islands under
+#: the dwell, two edges each. A re-plan is a different generation — 1,341 shots
+#: become 1,231 once R1's merge and the absorption both run — so its run
+#: boundaries are not the same boundaries, and 24 rather than 30 is what a
+#: different plan gives, not a fault. Comparing a function's output against a
+#: count taken from inputs it did not have is the error this whole batch keeps
+#: finding; the number stays as context and the invariant below is what is
+#: checked.
+PREDICTED_FROM_STORED_PLANS = 30
 #: And the baseline it has to drive to zero, from R0.
 BASELINE_EQUIVALENT_CUTS = 116
 
@@ -79,15 +88,10 @@ def _junctions(plan: dict) -> int:
     return sum(1 for a, b in zip(comps, comps[1:]) if a != b)
 
 
-def _long_junctions(plan: dict, *, min_dwell_s: float) -> int:
-    """Junctions the absorption cannot touch — the ones a human objected to.
-
-    A run longer than the dwell is an EARNED `fit`, and both its edges cost the
-    3.16x jump. Counting them is the whole of proof 4.
-    """
+def _runs(plan: dict) -> list[list[dict]] | None:
     shots = [s for s in (plan.get("shots") or []) if isinstance(s, dict)]
     if not shots or any(s.get("composition") is None for s in shots):
-        return 0
+        return None
     runs, cur = [], [shots[0]]
     for shot in shots[1:]:
         if shot.get("composition") == cur[0].get("composition"):
@@ -96,6 +100,44 @@ def _long_junctions(plan: dict, *, min_dwell_s: float) -> int:
             runs.append(cur)
             cur = [shot]
     runs.append(cur)
+    return runs
+
+
+def _surviving_short_islands(plan: dict, *, min_dwell_s: float) -> int:
+    """Interior `fit` runs under the dwell that the absorption left behind.
+
+    THE INVARIANT THE RULE ACTUALLY PROMISES, and the one thing about the
+    absorption that can be checked on the new plan alone. Zero is the only
+    acceptable answer; anything else means the pass did not run or did not
+    reach. Leading and trailing runs are excluded because the rule excludes
+    them on purpose — the claim it makes is "the subject was there on both
+    sides", and an opening or an ending has evidence on only one.
+    """
+    runs = _runs(plan)
+    if runs is None:
+        return 0
+    left = 0
+    for i, run in enumerate(runs):
+        if not (0 < i < len(runs) - 1) or run[0].get("composition") != "fit":
+            continue
+        try:
+            span = float(run[-1]["t1"]) - float(run[0]["t0"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if span == span and span < min_dwell_s:
+            left += 1
+    return left
+
+
+def _long_junctions(plan: dict, *, min_dwell_s: float) -> int:
+    """Junctions the absorption cannot touch — the ones a human objected to.
+
+    A run longer than the dwell is an EARNED `fit`, and both its edges cost the
+    3.16x jump. Counting them is the whole of proof 4.
+    """
+    runs = _runs(plan)
+    if runs is None:
+        return 0
     long_edges = 0
     for i, run in enumerate(runs):
         try:
@@ -161,6 +203,8 @@ async def _replan(project_id: str) -> list[dict]:
             "old_junctions": _junctions(old_plan),
             "new_junctions": _junctions(new_plan),
             "long_junctions": _long_junctions(new_plan, min_dwell_s=_dwell()),
+            "short_islands_left": _surviving_short_islands(
+                new_plan, min_dwell_s=_dwell()),
             "has_regime_view": isinstance(decision.get("regime_view"), dict),
             "has_caption_policy": isinstance(decision.get("caption_policy"), dict),
         })
@@ -191,7 +235,8 @@ def main() -> int:
     refused = [r for r in rows if r["refused"]]
     total = {key: sum(r[key] for r in ok) for key in
              ("old_shots", "new_shots", "old_equivalent", "new_equivalent",
-              "old_junctions", "new_junctions", "long_junctions")}
+              "old_junctions", "new_junctions", "long_junctions",
+              "short_islands_left")}
     views = sum(1 for r in ok if r["has_regime_view"])
     policies = sum(1 for r in ok if r["has_caption_policy"])
 
@@ -206,13 +251,13 @@ def main() -> int:
         failures.append(
             f"proof 1: {total['new_equivalent']} equivalent cuts survive the "
             f"re-plan (baseline was {total['old_equivalent']})")
-    # 2 — the absorption, compared against what the corpus predicted
+    # 2 — the absorption, against the invariant the rule promises rather than
+    # against a count taken from a different generation of plan
     removed = total["old_junctions"] - total["new_junctions"]
-    if removed != EXPECTED_JUNCTIONS_REMOVED and len(args.projects) == 4:
+    if total["short_islands_left"]:
         failures.append(
-            f"proof 2: the absorption removed {removed} junctions, and the "
-            f"corpus measurement predicted {EXPECTED_JUNCTIONS_REMOVED} — "
-            f"a different number is a finding either way")
+            f"proof 2: {total['short_islands_left']} interior `fit` runs under "
+            f"{_dwell():.1f}s survive the re-plan; the absorption promises none")
     # 3 — the shadow views a fresh plan is supposed to carry
     if views != len(ok) or policies != len(ok):
         failures.append(
@@ -230,7 +275,8 @@ def main() -> int:
               "totals": total, "regime_views": views,
               "caption_policies": policies,
               "junctions_removed": removed,
-              "junctions_expected": EXPECTED_JUNCTIONS_REMOVED,
+              "junctions_predicted_from_stored_plans": PREDICTED_FROM_STORED_PLANS,
+              "short_islands_left": total["short_islands_left"],
               "accepted_junctions": args.accept_junctions or None,
               "failures": failures, "ready_to_render": not failures}
 
@@ -246,6 +292,8 @@ def main() -> int:
               f"{total['new_junctions']:5}   ({removed} removed)")
         print(f"  of those, long   {total['long_junctions']:5}   "
               f"(runs >= {_dwell():.1f}s, untouched by the absorption)")
+        print(f"  short islands    {total['short_islands_left']:5}   "
+              f"(interior `fit` under the dwell; the rule promises none)")
         print(f"  regime views     {views}/{len(ok)}")
         print(f"  caption policies {policies}/{len(ok)}")
         print()

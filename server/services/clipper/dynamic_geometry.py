@@ -33,7 +33,7 @@ from services.clipper.ffmpeg_tools import even
 
 __all__ = ["COMPOSITIONS", "canvas_size", "composition_of", "visual_key",
            "merge_equivalent_shots", "build_sendcmd", "write_sendcmd",
-           "MIN_FIT_DWELL_S", "absorb_brief_fit_islands"]
+           "MIN_FIT_DWELL_S", "absorb_brief_fit_islands", "JUNCTION_EASE_S"]
 
 # Two shots are contiguous when the second starts where the first ended. Float
 # noise from json, not an editorial judgement — the same tolerance the audit
@@ -382,14 +382,70 @@ def _joins(previous: dict, shot: dict, style: dict, src_w: int, src_h: int) -> b
 # the sendcmd script
 # ---------------------------------------------------------------------------
 
-def build_sendcmd(plan: dict, src_w: int, src_h: int) -> str:
+#: How long a composition change may take when somebody asks for it to be eased
+#: rather than cut. OFF BY DEFAULT and applied to nothing: see `ease_s` below.
+JUNCTION_EASE_S = 0.3
+
+
+def _ease_points(prev_h: int, next_w: int, next_h: int, at: float,
+                 ease_s: float, src_w: int, src_h: int
+                 ) -> list[tuple[float, int, int]]:
+    """A short ramp from the previous height to the next, in 9:16 steps.
+
+    THIS IS ONLY A ZOOM, and that is why it costs no filtergraph change. Every
+    crop the graph ever takes is 9:16 of the padded canvas — `canvas_size` says
+    so in as many words, and it is why the pad comes first — so the `crop` and
+    the `fit` window differ in SIZE and nothing else. Stepping between them is
+    the same mechanism `push` and `pull` already use.
+
+    IT SIZES AGAINST THE CANVAS, NOT THE SOURCE, and the first version did not.
+    `_size` clamps its height to `src_h`, because a crop window lives inside the
+    frame — but the `fit` window is the PADDED canvas and is taller than the
+    source by construction: 3412 against 1080 on a 16:9 input. Every step of the
+    ramp therefore came back clamped to 1080, the whole ramp collapsed to one
+    repeated size, and the junction cut exactly as hard as before while the
+    script looked longer. Found by printing the two scripts side by side rather
+    than by reading this function.
+    """
+    canvas_w, canvas_h, _ = canvas_size(src_w, src_h)
+    out: list[tuple[float, int, int]] = []
+    if prev_h <= 0 or next_h <= 0:
+        return out
+    steps = max(2, int(ease_s * 20))
+    seen: set[tuple[int, int]] = {(next_w, next_h)}
+    for i in range(steps):
+        frac = (i + 1) / (steps + 1)
+        # Geometric rather than linear: apparent size is what the eye reads,
+        # and the jump this exists for is 3.16x, a ratio rather than a distance.
+        height = prev_h * (next_h / prev_h) ** frac
+        h = even(min(canvas_h, max(160, height)))
+        w = even(min(canvas_w, max(90, h * ASPECT)))
+        if (w, h) in seen:
+            continue
+        seen.add((w, h))
+        out.append((round(at + ease_s * frac, 3), w, h))
+    return out
+
+
+def build_sendcmd(plan: dict, src_w: int, src_h: int, *,
+                  ease_s: float = 0.0) -> str:
     """The whole edit as a sendcmd script. Pure — returns text, writes nothing.
 
     Order within an entry matters: w and h go before x and y, because crop
     re-clamps the position against the CURRENT size every time it reconfigures.
+
+    `ease_s` RAMPS A COMPOSITION CHANGE instead of cutting it, and is 0.0 —
+    off — for every caller today. A human timestamped four junctions on one clip
+    and every one was a `crop`<->`fit` change; the jump is at least 3.16x by the
+    geometry of 16:9, and `absorb_brief_fit_islands` removes only the ones short
+    enough not to have earned their place. What to do about the rest has not
+    been decided, so this exists to be DEMONSTRATED on those four windows and
+    compared against the hard cut, not switched on.
     """
     style = (plan or {}).get("style") or {}
     lines: list[str] = []
+    previous: tuple[int, int] | None = None
+    previous_comp: str | None = None
 
     for shot in (plan or {}).get("shots") or []:
         timeline = _size_timeline(shot, style, src_w, src_h)
@@ -399,12 +455,28 @@ def build_sendcmd(plan: dict, src_w: int, src_h: int) -> str:
         x_expr, y_expr = _position_exprs(shot, biggest, src_w, src_h)
 
         first_t, first_w, first_h = timeline[0]
-        lines.append(
-            f"{first_t:.3f} crop w {first_w}, crop h {first_h}, "
-            f"crop x '{x_expr}', crop y '{y_expr}';"
-        )
+        if (ease_s > 0 and previous is not None
+                and previous_comp is not None
+                and composition_of(shot) != previous_comp):
+            # The position expression belongs to the NEW shot, so it is set
+            # first and the ramp only resizes. Setting it mid-ramp would move
+            # the window and rescale it at the same time, which is two changes
+            # where the question is about one.
+            lines.append(f"{first_t:.3f} crop x '{x_expr}', crop y '{y_expr}';")
+            for t, w, h in _ease_points(previous[1], first_w, first_h,
+                                        first_t, ease_s, src_w, src_h):
+                lines.append(f"{t:.3f} crop w {w}, crop h {h};")
+            lines.append(f"{first_t + ease_s:.3f} crop w {first_w}, "
+                         f"crop h {first_h};")
+        else:
+            lines.append(
+                f"{first_t:.3f} crop w {first_w}, crop h {first_h}, "
+                f"crop x '{x_expr}', crop y '{y_expr}';"
+            )
         for t, w, h in timeline[1:]:
             lines.append(f"{t:.3f} crop w {w}, crop h {h};")
+        previous = (timeline[-1][1], timeline[-1][2])
+        previous_comp = composition_of(shot)
 
     return "\n".join(lines) + "\n"
 
