@@ -383,11 +383,22 @@ NOT_A_CORRECTION = "the_correction_is_not_a_record_with_a_time_boxes_and_a_sourc
 def correct(observation, corrections):
     """Fold a person's or an agent's corrections into a detector observation.
 
-    THE MOMENT THIS EXISTS FOR. At 1161.1 s on `6053a598cf06` a caption is
-    plainly on screen and the detector returned no boxes. Left alone, that
-    sample is evidence of an EMPTY frame — `coverage` counts it under
-    `without_text`, a region is built as though nothing needed keeping there,
-    and the mistake is invisible because a miss and a gap look identical.
+    THE FAILURE THIS EXISTS FOR. A frame the detector fails on comes back with
+    no boxes, and left alone that sample is evidence of an EMPTY frame —
+    `coverage` files it under `without_text`, a region is built as though
+    nothing needed keeping there, and the mistake is invisible because a miss
+    and a gap look identical.
+
+    THE INSTANCE FIRST CITED HERE WAS NOT ONE, and the correction belongs
+    beside the function rather than only in a commit. `6053a598cf06` at 1161.1 s
+    was reported as a caption on screen with nothing returned; it is not — the
+    detector returned one box there, and the claim came from misreading a
+    480x270 thumbnail. All 56 sampled frames of that clip were then read on
+    magnified band sheets: exactly four returned nothing and all four are
+    genuine gaps between lines. On that clip the detector missed no line at all.
+    What it does miss is the ENDS of lines, which `apply_line_annotations`
+    measures. So this function is still needed and its documented example was
+    wrong; a caller must not go looking for that frame to see the failure.
 
     A corrected sample carries `provenance: corrected` and the `corrected_by`
     that supplied it, so the record never claims a detector saw what a person

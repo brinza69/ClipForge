@@ -32,9 +32,15 @@ WHAT IS STILL UNMEASURED, and both were seen on the sheets rather than inferred:
 the detector's boxes UNDER-cover the line — this source's captions highlight the
 spoken words and dim the rest, and at the shipping thresholds the union is a
 median 1.04x and up to 1.37x narrower than at a looser setting — and it misses
-whole lines: at 1161.1 s a caption is plainly on screen and no box was returned.
-So "no text was seen" is a weaker statement than it looks, and a region built
-from these boxes is built from an under-estimate.
+whole lines. THE SECOND HALF OF THAT WAS WRONG AND IS WITHDRAWN: it cited
+1161.1 s as a caption on screen with no box returned, which came from misreading
+a 480x270 thumbnail — the detector returned one box there. Read on magnified
+band sheets, exactly four of this clip's 56 sampled frames returned nothing and
+all four are genuine gaps between lines; the detector missed no line at all.
+What it does miss is the ENDS of lines, which `apply_line_annotations` measures:
+confirmed widths run 307-1244 source px against detector boxes that clip them.
+So a region built from these boxes is built from an under-estimate, and "no text
+was seen" is exactly as strong as it looks on this clip.
 """
 
 from __future__ import annotations

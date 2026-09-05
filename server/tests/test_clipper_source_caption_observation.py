@@ -285,10 +285,16 @@ def _line(x0=0.3, x1=0.7):
 
 
 def test_a_frame_the_detector_missed_stops_being_evidence_of_an_empty_one():
-    """At 1161.1 s a caption is plainly on screen and no box came back. Left
-    alone that sample counts under `without_text`, a region is built as though
-    nothing needed keeping there, and the mistake is invisible because a miss
-    and a gap look identical."""
+    """A frame the detector fails on comes back with no boxes; left alone that
+    sample counts under `without_text`, a region is built as though nothing
+    needed keeping there, and the mistake is invisible because a miss and a gap
+    look identical.
+
+    The instance this test originally cited — `6053a598cf06` at 1161.1 s — was
+    not one, and the citation is removed rather than repaired: the detector
+    returned a box there and the claim came from misreading a thumbnail. The
+    rule is what the test is for, and it holds whether or not that particular
+    frame is an example of it."""
     obs = {"samples": [_det(1.0, []), _det(2.0, [_line()])]}
     before = sco.coverage(obs, 0.5, 1.5)
     assert before["without_text"] == 1 and before["with_text"] == 0
