@@ -366,6 +366,11 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         # up" — and that ambiguity is exactly what `own_caption_layer` had to
         # stop answering `False` to.
         "caption_policy": decision["caption_policy"],
+        # AND WHETHER THE SOURCE HAD A SECOND REGION AT ALL. A plan that never
+        # chose the second camera and a source that never had one produce the
+        # same shot list, so without this a later reader cannot tell a clip
+        # framed on one camera by decision from one framed that way by chance.
+        "layout_policy": decision["layout_policy"],
         # The dead seconds this render removed. Without them the sidecar
         # describes a longer clip than the file: every downstream time —
         # captions, shot boundaries — is on a clock the mp4 does not keep.

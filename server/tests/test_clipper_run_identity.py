@@ -148,9 +148,11 @@ async def test_the_export_handler_writes_the_rows_identity_without_backfill(
                 "fps": 30.0, "caption_y": None, "ass_path": None,
                 "watermark": "", "edit_profile": None, "creator_view": None,
                 "regime_view": None, "rhythm_view": None,
-                # Every render decides this, so a stub without it describes a
-                # decision that cannot occur.
-                "caption_policy": {"action": "burn", "decided_by": "default"}}
+                # Every render decides both of these, so a stub without them
+                # describes a decision that cannot occur.
+                "caption_policy": {"action": "burn", "decided_by": "default"},
+                "layout_policy": {"regions": "two_regions",
+                                  "decided_by": "default"}}
 
     async def encode(*_args, **_kwargs):
         output.write_bytes(b"encoded stub")

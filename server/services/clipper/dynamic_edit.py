@@ -216,12 +216,26 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                       game_ui: Sequence[float] | None = None,
                       game_motion_hop: float = 0.25,
                       stable_track: dict | None = None,
+                      one_region: bool = False,
                       style: dict | None = None) -> dict:
     """Plan the shot list for one candidate.
 
     `face_track` is `[{"t": absolute seconds, "boxes": [[x, y, w, h], ...]}]` in
     PROXY pixels — the shape `signals.face_presence` returns, so a dense
     per-clip pass and the coarse whole-VOD track are interchangeable here.
+
+    `one_region` says the SOURCE has nothing but the subject in it — one camera,
+    no gameplay, no second guest. It is a declared fact about the material, from
+    `layout_policy`, never a measurement taken here: the discriminators that
+    looked obvious are thresholds chosen on four sources with the answer
+    visible, and one of them is backwards. When it is set, the second camera is
+    never selected, through the SAME path a dead gameplay region already takes.
+
+    It matters because `camera_rects` builds `game` from geometry alone —
+    "everything to the right of the facecam" — and on a single-camera source
+    that rectangle is the wall behind the speaker. Re-planned today,
+    `30d7c6d4eae5` spends 6.8 s of 18.1 s framed away from the only person in
+    the source while `speech` reads 0.75 to 0.83.
 
     `game_motion` is optional per-hop motion measured INSIDE the gameplay
     region. Without it the planner falls back to the whole-frame motion signal,
@@ -354,8 +368,14 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             energy = min(1.0, energy + 0.18)
 
         # "Alive" means all three: something moved, there is something there,
-        # and what is there is the game rather than its menus.
-        alive = (motions[i] > dead_below
+        # and what is there is the game rather than its menus. NONE of the
+        # three can tell a street from a stream: a road with lights and traffic
+        # moves, has detail, and is not a menu, so it passes every one of them
+        # and is still not a second subject. That is what `one_region` answers,
+        # and it answers it from a declaration rather than from a fourth
+        # threshold nobody calibrated.
+        alive = (not one_region
+                 and motions[i] > dead_below
                  and (not details or details[i] > flat_below)
                  and (not uis or uis[i] < ui_above))
         camera = _pick_camera(ratio >= speech_on, action >= action_on,

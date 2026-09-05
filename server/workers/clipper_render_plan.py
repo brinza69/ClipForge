@@ -23,6 +23,7 @@ from config import settings
 from database import async_session
 from models import ClipModel, ProjectModel
 from services.clipper import (caption_policy, dynamic_rhythm, edit_profiles,
+                              layout_policy,
                               storage)
 # THE canonical numeric guard, not a local copy: it rejects the infinities too,
 # and a second implementation is how R2's validation hole reopened.
@@ -182,7 +183,8 @@ async def _dead_spans(clip: ClipModel, project: ProjectModel
 
 
 async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
-                        src_w: int, src_h: int) -> dict | None:
+                        src_w: int, src_h: int,
+                        one_region: bool = False) -> dict | None:
     """A multi-shot edit for this clip, or None when the window cannot carry one.
 
     Returns None rather than raising: a clip that cannot be cut dynamically is
@@ -237,7 +239,12 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
             # Computed on the WHOLE-source track, not this window's. A fixed
             # webcam overlay is only recognisable against hours of material —
             # inside one 40-second window it looks like any other cluster.
-            stable_track=stable),
+            stable_track=stable,
+            # DECLARED, not detected. `camera_rects` builds the second camera
+            # from geometry alone, so on a source with nothing but the speaker
+            # in it that rectangle is the wall behind him — and none of the
+            # three `alive` guards can tell a street from a stream.
+            one_region=one_region),
     )
     shots = plan.get("shots") or []
     # What the PLANNER decided, not what survived the merge. A clip whose only
@@ -354,13 +361,27 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     # is what says where a detected UI panel lands in the output frame, and the
     # caption has to be placed knowing that — the whole point of detecting the
     # panels. Writing the captions first meant placing them blind.
+    # WHAT THE SOURCE ACTUALLY HAS IN IT, declared rather than detected. The
+    # second camera is built from geometry alone — "everything to the right of
+    # the facecam" — so on a single-camera source it frames the wall. Measured
+    # on the delivered windows: 377 of 2,016 across the corpus exclude the
+    # clip's own subject, 372 of them a `game` camera, and `30d7c6d4eae5`
+    # re-plans to 6.8 s of 18.1 s of that while the speaker is talking. The
+    # discriminators that looked obvious are thresholds chosen on four sources
+    # with the answer visible, and one of them is backwards — so this is a
+    # person's or an agent's answer, the same shape `caption_policy` uses.
+    layout_decision = layout_policy.decide(
+        cfg.get(layout_policy.SETTING), by=cfg.get("layout_decided_by"))
+
     dyn = None
     if bool(cfg.get("dynamic_edit", settings.clipper_dynamic_edit)):
         await stage(0.10, "Planning the shot list")
         try:
-            dyn = await _dynamic_plan(clip, project,
-                                      int(project.width or 1920),
-                                      int(project.height or 1080))
+            dyn = await _dynamic_plan(
+                clip, project,
+                int(project.width or 1920),
+                int(project.height or 1080),
+                one_region=layout_decision["regions"] == layout_policy.ONE_REGION)
         except Exception:
             logger.warning("clip %s: dynamic planning failed, falling back to "
                            "the static layout", clip.id, exc_info=True)
@@ -422,6 +443,11 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
         # human confirmed on 4 of 4 watched. The switch is a person's; the
         # detector's verdict rides along and applies to nothing.
         "caption_policy": caption_policy_decision,
+        # WHAT THE SOURCE HAS IN IT, on the sidecar so a later reader can tell a
+        # clip planned with one camera from one planned with two — the shot
+        # list alone cannot, because a plan that never chose the second camera
+        # and a source that never had one look identical.
+        "layout_policy": layout_decision,
         "ass_path": (_write_ass(clip, out_dir, drop, caption_y)
                      if caption_policy_decision["action"] == caption_policy.BURN
                      else None),
