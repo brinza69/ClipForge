@@ -118,11 +118,18 @@ def test_probe_never_raises(tmp_path):
 
 
 def _recipe(**over) -> dict:
-    from services.clipper.render_input import input_fingerprint
+    """A sidecar as the export path writes one TODAY: schema declared, digest
+    taken under it. Without the declaration these records are read as legacy v1
+    and stop at that gate, which is a different finding from the one each test
+    below is about."""
+    from services.clipper.render_input import (FINGERPRINT_SCHEMA_V2,
+                                               input_fingerprint)
 
     body = {"source": "s.mp4", "source_start": 1.0, "source_end": 21.0,
-            "render_version": "render_v3_letterbox", **over}
-    body["input_fingerprint"] = input_fingerprint(body)
+            "render_version": "render_v3_letterbox",
+            "fingerprint_schema": FINGERPRINT_SCHEMA_V2, **over}
+    body["input_fingerprint"] = input_fingerprint(
+        body, schema=FINGERPRINT_SCHEMA_V2)
     return body
 
 

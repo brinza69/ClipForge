@@ -445,24 +445,46 @@ def provenance(sidecar: Any, *, export_path: Any = None) -> dict:
     the reason is now a missing field rather than a missing idea.
     """
     from services.clipper.edit_quality import (FINGERPRINT_MISMATCH,
+                                               FINGERPRINT_UNKNOWN_SCHEMA,
                                                FINGERPRINT_VALID,
-                                               fingerprint_status)
-    from services.clipper.render_input import FINGERPRINT_KEYS
+                                               FINGERPRINT_VALID_V1,
+                                               fingerprint_verdict)
+    from services.clipper.render_input import FINGERPRINT_KEYS_V1
 
     if not isinstance(sidecar, dict):
         return pf.check(pf.UNAVAILABLE, why="sidecar_unreadable")
     try:
-        status = fingerprint_status(sidecar)
+        verdict = fingerprint_verdict(sidecar)
     except Exception:
         return pf.check(pf.UNAVAILABLE, why="fingerprint_unreadable")
-    present = [k for k in FINGERPRINT_KEYS if sidecar.get(k) is not None]
+    status = verdict["state"]
+    present = [k for k in FINGERPRINT_KEYS_V1 if sidecar.get(k) is not None]
     evidence = {"fingerprint_status": status,
+                "fingerprint_schema": verdict["schema"],
+                "assumed_legacy_v1": verdict["assumed_legacy"],
+                "covers_caption_policy": verdict["covers_caption_policy"],
                 "recipe_keys_present": len(present),
-                "recipe_keys": len(FINGERPRINT_KEYS)}
+                "recipe_keys": len(FINGERPRINT_KEYS_V1)}
     if status == FINGERPRINT_MISMATCH:
         # Nothing a correction can move, which is what makes it rejectable.
         return pf.check(pf.FAIL, why="fingerprint_mismatch",
                         severity=pf.REJECTABLE, evidence=evidence)
+    if status == FINGERPRINT_UNKNOWN_SCHEMA:
+        # The record names a formula this code does not implement. Reading it
+        # with one that IS implemented would answer a question nobody asked.
+        return pf.check(pf.UNAVAILABLE, why=FINGERPRINT_UNKNOWN_SCHEMA,
+                        evidence=evidence)
+    if status == FINGERPRINT_VALID_V1:
+        # THE GAP IS KEPT AS A GAP. The digest recomputes, so the recipe was
+        # not edited after the render — but v1 does not cover the caption
+        # policy, and two renders of this plan, one burning our layer and one
+        # suppressing it, digest identically. Provenance now asks for that link,
+        # so a record that cannot supply it is `unavailable`, not a pass. The
+        # 58 stored sidecars are not rewritten to close it: re-stamping them
+        # would launder exactly what the fingerprint is for.
+        return pf.check(pf.UNAVAILABLE,
+                        why="fingerprint_v1_valid_caption_policy_not_covered",
+                        evidence=evidence)
     if status != FINGERPRINT_VALID:
         return pf.check(pf.UNAVAILABLE, why="no_stored_fingerprint",
                         evidence=evidence)

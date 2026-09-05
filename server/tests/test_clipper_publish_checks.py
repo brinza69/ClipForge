@@ -458,10 +458,12 @@ def test_a_valid_digest_over_an_empty_recipe_is_not_provenance():
     """`render_input` fills every absent key with `None`, so a sidecar carrying
     nothing but the digest of an empty recipe validates perfectly. The check
     was passing on the self-consistency of a projection with nothing in it."""
-    from services.clipper.render_input import input_fingerprint
+    from services.clipper.render_input import (FINGERPRINT_SCHEMA_V2,
+                                               input_fingerprint)
 
-    body = {}
-    body["input_fingerprint"] = input_fingerprint(body)
+    body = {"fingerprint_schema": FINGERPRINT_SCHEMA_V2}
+    body["input_fingerprint"] = input_fingerprint(
+        body, schema=FINGERPRINT_SCHEMA_V2)
     got = pc.provenance(body)
     assert got["state"] == pf.UNAVAILABLE
     assert "empty_recipe" in got["why"]
@@ -472,10 +474,13 @@ def test_a_valid_digest_says_nothing_about_the_delivered_file():
     """The recipe never touches the mp4 — no size, no hash, no duration — so a
     match says the plan was not edited after the render and no more. There is
     no route to a provenance PASS today, and that is the finding."""
-    from services.clipper.render_input import input_fingerprint
+    from services.clipper.render_input import (FINGERPRINT_SCHEMA_V2,
+                                               input_fingerprint)
 
     body = _sidecar()
-    body["input_fingerprint"] = input_fingerprint(body)
+    body["fingerprint_schema"] = FINGERPRINT_SCHEMA_V2
+    body["input_fingerprint"] = input_fingerprint(
+        body, schema=FINGERPRINT_SCHEMA_V2)
     got = pc.provenance(body)
     assert got["state"] == pf.UNAVAILABLE
     assert "delivered_file" in got["why"]

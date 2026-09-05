@@ -400,18 +400,25 @@ def test_the_sidecar_carries_every_key_the_fingerprint_is_taken_over():
     from services.clipper import edit_quality
 
     body = inspect.getsource(jobs.handle_export)
-    body = body[body.index("body = {"):body.index('body["input_fingerprint"]')]
+    body = body[body.index("body = {"):body.index('body["render_record"]')]
     for key in edit_quality.FINGERPRINT_KEYS:
         assert f'"{key}"' in body, f"the sidecar never writes {key}"
 
 
 def test_the_fingerprint_is_computed_through_the_audits_own_projection():
     """Not a payload built by hand here. Two definitions drift, and then the
-    check passes for a file whose plan has changed underneath it."""
+    check passes for a file whose plan has changed underneath it.
+
+    AND IT IS WRITTEN AS v2, with the schema declared beside it. A record with
+    no schema field is read under an assumption; the writing path has no reason
+    to need one, and `render_input`'s contract forbids rescuing a v2 mismatch
+    with the v1 formula, which only works if new exports say what they are."""
     import inspect
 
     src = inspect.getsource(jobs.handle_export)
-    assert 'body["input_fingerprint"] = edit_quality.input_fingerprint(body)' in src
+    assert "edit_quality.input_fingerprint(" in src
+    assert "schema=render_input.FINGERPRINT_SCHEMA_V2" in src
+    assert 'body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V2' in src
 
 
 def test_the_sidecar_records_the_seconds_the_render_removed():

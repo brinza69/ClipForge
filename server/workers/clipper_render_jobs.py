@@ -290,7 +290,8 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # above already does it: this module is imported to register job handlers
     # long before any render runs.
     from services.clipper import (dynamic_render, edit_quality,
-                                  output_identity, render as static_render)
+                                  output_identity, render as static_render,
+                                  render_input)
 
     render = {"fps": fps, "crf": settings.clipper_export_crf,
               "preset": settings.clipper_export_preset,
@@ -376,7 +377,19 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     # uses to recheck it. Building a separate payload here is how a fingerprint
     # stops meaning anything: the two definitions drift, and the check passes
     # for a file whose plan has changed underneath it.
-    body["input_fingerprint"] = edit_quality.input_fingerprint(body)
+    # WHAT THE CALL ACTUALLY CARRIED, before the fingerprint, because v2 covers
+    # the CONTENT of the `.ass` that was burned — an input that changes the
+    # picture. The paths and the argv digest inside it are details of one run
+    # and `render_input.caption_identity` leaves them out; two renders of the
+    # same recipe write the subtitle file to two temporary names and must still
+    # fingerprint the same.
+    body["render_record"] = (result or {}).get("render_record")
+    # AND THE SCHEMA IS DECLARED. A record with no such field is read with the
+    # v1 formula under an assumption that is reported; from here the assumption
+    # is not needed, and a v2 mismatch may never be rescued by v1.
+    body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V2
+    body["input_fingerprint"] = edit_quality.input_fingerprint(
+        body, schema=render_input.FINGERPRINT_SCHEMA_V2)
     # AND THE OTHER HALF, which the recipe cannot reach. `input_fingerprint`
     # proves the plan was not edited after the render; it never touches the mp4,
     # so `provenance_complete` had no route to a pass at all. This measures what

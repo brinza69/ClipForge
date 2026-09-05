@@ -176,7 +176,12 @@ async def test_the_export_handler_writes_the_rows_identity_without_backfill(
     body = json.loads(output.with_suffix(".json").read_text(encoding="utf-8"))
     assert "selection_run_id" in body
     assert body["selection_run_id"] == run_id
-    assert body["input_fingerprint"] == render_input.input_fingerprint(body)
+    # THROUGH THE SCHEMA THE RECORD DECLARES. Recomputing with the default (v1)
+    # against a sidecar the export writes as v2 answers a different question and
+    # would fail here for the right reason and the wrong one.
+    assert body["fingerprint_schema"] == render_input.FINGERPRINT_SCHEMA_V2
+    assert body["input_fingerprint"] == render_input.input_fingerprint(
+        body, schema=body["fingerprint_schema"])
     async with async_session() as session:
         saved = await session.get(ClipModel, clip.id)
         assert saved.status == ClipStatus.exported.value

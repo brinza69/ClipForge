@@ -20,7 +20,10 @@ def test_a_fingerprint_is_recomputed_not_believed():
     edited after the render carries a stale fingerprint and must NOT pass."""
     sidecar = _crop_fit_fit_crop()
     sidecar["input_fingerprint"] = eq.input_fingerprint(sidecar)
-    assert eq.fingerprint_status(sidecar) == eq.FINGERPRINT_VALID
+    # `VALID_V1` and not `VALID`: this record declares no schema, so it is read
+    # with the v1 formula under an assumption, and v1 does not cover the caption
+    # policy. The digest still recomputes, which is what this test is about.
+    assert eq.fingerprint_status(sidecar) == eq.FINGERPRINT_VALID_V1
 
     sidecar["dynamic_plan"]["shots"][0]["composition"] = "fit"
     assert eq.fingerprint_status(sidecar) == eq.FINGERPRINT_MISMATCH
@@ -50,4 +53,4 @@ def test_the_fingerprint_survives_a_json_round_trip():
     sidecar["caption_y"] = 0.62
     sidecar["input_fingerprint"] = eq.input_fingerprint(sidecar)
     reloaded = json.loads(json.dumps(sidecar, default=str))
-    assert eq.fingerprint_status(reloaded) == eq.FINGERPRINT_VALID
+    assert eq.fingerprint_status(reloaded) == eq.FINGERPRINT_VALID_V1
