@@ -119,3 +119,66 @@ def test_a_rectangle_that_is_not_one_is_refused():
     for bad in (None, {}, {"w": 0, "h": 10}, {"w": 10}, {"w": "a", "h": 1}, 7):
         got = cr.delivered_sizes(bad, subject_w=1, band_h=1)
         assert got["scale"] is None and got["why"] == cr.NO_GEOMETRY, repr(bad)
+
+
+# --- the only non-circular test ----------------------------------------------
+
+
+def test_checking_a_region_against_its_own_boxes_is_not_a_test():
+    """THE CORRECTION. `region_for` is the UNION of the boxes it is given, so it
+    contains them by construction — "58 of 58 shots hold the observed text" is
+    geometric feasibility for the observations used and nothing about unseen
+    frames. `built_from` says how many boxes are construction data so a reader
+    can see which claim is on offer."""
+    got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H)
+    assert got["built_from"] == len(SEEN)
+    same = cr.verify_frozen(got["rect"], SEEN, SRC_W, SRC_H)
+    assert same["clipped"] == 0, "of course; they built it"
+    assert same["circular"] is False, "the flag is about the CALLER's choice"
+
+
+def test_a_frozen_region_is_tested_on_boxes_it_never_saw():
+    got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H)
+    later = [{"x0": 0.30, "x1": 0.72, "y0": 0.9148, "y1": 0.9593},
+             {"x0": 0.40, "x1": 0.55, "y0": 0.9259, "y1": 0.9481}]
+    out = cr.verify_frozen(got["rect"], later, SRC_W, SRC_H)
+    assert out["held_out"] == 2
+    assert out["held"] + out["clipped"] == 2
+    assert out["worst_overflow_px"] is not None
+
+
+def test_the_overflow_is_reported_because_three_clipped_is_not_one_finding():
+    """"3 of 40 clipped" and "3 of 40 clipped by two pixels" are different
+    findings, and only the second one is actionable."""
+    frozen = {"x": 1000.0, "y": 1300.0, "w": 500.0, "h": 100.0}
+    out = cr.verify_frozen(frozen, [{"x0": 0.3, "x1": 0.62,
+                                     "y0": 0.915, "y1": 0.955}],
+                           SRC_W, SRC_H)
+    assert out["clipped"] == 1 and out["worst_overflow_px"] > 200
+
+
+def test_an_empty_held_out_set_is_not_a_pass():
+    """The most tempting reading in the module: nothing was clipped, so the
+    region held. Nothing was TESTED."""
+    got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H)
+    for boxes in ([], None, "x", 7):
+        out = cr.verify_frozen(got["rect"], boxes, SRC_W, SRC_H)
+        assert out["clipped"] == 0 and out["held"] == 0, repr(boxes)
+        assert out["why"] == cr.HELD_OUT_EMPTY, repr(boxes)
+        assert out["circular"] is None, repr(boxes)
+
+
+def test_an_unreadable_held_out_box_does_not_count_as_held():
+    got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H)
+    out = cr.verify_frozen(got["rect"], [{"x0": 0.3, "x1": None,
+                                          "y0": 0.9, "y1": 0.95}],
+                           SRC_W, SRC_H)
+    assert out["why"] == cr.HELD_OUT_EMPTY and out["held"] == 0
+
+
+def test_the_subject_caveat_rides_with_every_region():
+    """The face size is `dynamic_plan.subject.face` — a clip-wide average —
+    projected through a scale. The text became local in this batch; the subject
+    did not, and a caller may not promote the one into the other."""
+    got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H)
+    assert got["subject_caveat"] == cr.SUBJECT_IS_A_CLIP_AVERAGE

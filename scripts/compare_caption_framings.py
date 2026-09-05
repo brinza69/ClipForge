@@ -14,6 +14,23 @@ in the 1080x1920 output, and how tall the caption band lands. Plus whether the
 framing contains the observed text at all — which is the question the cumulative
 band could only warn about.
 
+THREE THINGS ITS OUTPUT MAY NOT BE READ AS, and all three were read that way in
+the first report off this script.
+
+"as-shipped holds the text in 13 of 58 shots" means it holds the text IN THE
+FRAMES THAT WERE READ — two per shot. It does not mean it preserves every
+subtitle in those shots, and it cannot: two frames is not temporal coverage.
+
+"region holds it in 58 of 58" is CONDITIONAL and close to circular. The region
+is the union of that shot's own observed boxes, so it contains them by
+construction. It demonstrates geometric feasibility for the observations used,
+not behaviour on frames nobody looked at — `caption_region.verify_frozen` is
+the non-circular version, and `--holdout` runs it here.
+
+And every FACE size is `dynamic_plan.subject.face` — the clip-wide average —
+projected through a scale. The text became local in this batch; the subject did
+not. These are not measurements of the face visible in any given frame.
+
 WHY IT SAMPLES PER SHOT AND NOT PER LINE. The region has to be constant across
 the interval it applies to. Recomputing it as each caption appears would resize
 the picture on every line, which is the defect the whole exercise exists to
@@ -60,12 +77,18 @@ async def _plan_for(project_id: str, clip_id: str):
     return clip, project, decision
 
 
-def _sample_times(shots: list[dict], start: float) -> list[float]:
+def _sample_times(shots: list[dict], start: float, *, count: int,
+                  offset: float = 0.0) -> list[float]:
     """Times on the SOURCE clock: the shots' own times plus the clip's start.
 
     Evenly inside each shot rather than at its edges — a sample taken exactly on
     a boundary belongs to neither shot, and the decoder's rounding decides which
     one it lands in.
+
+    `offset` shifts the whole comb by a fraction of a slot, which is how the
+    held-out frames are guaranteed to be different frames from the ones that
+    built the region. Reusing a construction frame as a test frame is the
+    circularity this option exists to escape, and it would be invisible.
     """
     out: list[float] = []
     for shot in shots:
@@ -73,8 +96,8 @@ def _sample_times(shots: list[dict], start: float) -> list[float]:
             t0, t1 = float(shot["t0"]), float(shot["t1"])
         except (KeyError, TypeError, ValueError):
             continue
-        for i in range(1, PER_SHOT + 1):
-            out.append(start + t0 + (t1 - t0) * i / (PER_SHOT + 1))
+        for i in range(1, count + 1):
+            out.append(start + t0 + (t1 - t0) * (i + offset) / (count + 1))
     return out
 
 
@@ -152,10 +175,63 @@ def _row(shot: dict, plan: dict, obs: Any, start: float) -> dict:
     return out
 
 
+def _holdout(shots: list[dict], plan: dict, obs: Any, start: float,
+             rows: list[dict]) -> list[dict]:
+    """Test each shot's FROZEN region against frames it never saw.
+
+    The regions are taken from `rows` exactly as they were computed — not
+    recomputed over the held-out boxes, which would rebuild the circularity one
+    level down and look like a stronger result.
+    """
+    from services.clipper import caption_region as cr
+    from services.clipper import source_caption_observation as sco
+
+    sw, sh = int(plan.get("src_w") or 0), int(plan.get("src_h") or 0)
+    by_index = {r["shot"]: r for r in rows}
+    out: list[dict] = []
+    for shot in shots:
+        row = by_index.get(shot.get("index"))
+        frozen = ((row or {}).get("framings", {}).get("region") or {}).get("rect")
+        cover = sco.coverage(obs, start + float(shot["t0"]),
+                             start + float(shot["t1"]))
+        got = cr.verify_frozen(frozen, cover["boxes"], sw, sh)
+        out.append({"shot": shot.get("index"),
+                    "held_out_samples": cover["samples"],
+                    "with_text": cover["with_text"], **got})
+    return out
+
+
+def _print_holdout(clip_id: str, held: list[dict]) -> None:
+    """The non-circular figure, with its own denominator.
+
+    A shot whose hold-out frames carried no text is `no_held_out_observation`,
+    and it is counted apart from the shots the region actually held: folding it
+    in would turn "nobody looked" into "the region worked".
+    """
+    testable = [h for h in held if h["held_out"]]
+    clipped = [h for h in testable if h["clipped"]]
+    print(f"  HELD-OUT: {len(testable)} of {len(held)} shots had text in frames "
+          f"that took no part in building their region")
+    if not testable:
+        print("  HELD-OUT: nothing was tested, which is not a pass")
+        return
+    boxes = sum(h["held_out"] for h in testable)
+    lost = sum(h["clipped"] for h in testable)
+    worst = max((h["worst_overflow_px"] or 0.0) for h in testable)
+    print(f"  HELD-OUT: the frozen regions hold {boxes - lost} of {boxes} "
+          f"unseen boxes across those shots; {len(clipped)} shots clip at least "
+          f"one, worst overflow {worst:.0f} source px")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("project")
     ap.add_argument("clips", nargs="+")
+    ap.add_argument("--holdout", type=int, default=0, metavar="N",
+                    help="also read N frames per shot that took NO part in "
+                         "building the regions, and test the frozen regions "
+                         "against them. Without this the region's "
+                         "'contains the text' is circular.")
     args = ap.parse_args()
 
     from services.clipper import source_caption_observation as sco
@@ -179,7 +255,7 @@ def main() -> int:
             refused += 1
             continue
         start = float(clip.start_time or 0.0)
-        times = _sample_times(shots, start)
+        times = _sample_times(shots, start, count=PER_SHOT)
         print(f"{clip_id}: reading {len(times)} frames over {len(shots)} shots "
               f"...", flush=True)
         obs = sco.observe(str(proxy), times)
@@ -189,7 +265,21 @@ def main() -> int:
             continue
 
         rows = [_row(s, plan, obs, start) for s in shots]
-        report.append({"clip": clip_id, "shots": rows,
+        held: Any = None
+        if args.holdout:
+            # DIFFERENT FRAMES, guaranteed by the phase shift rather than hoped
+            # for. These take no part in building any region; they only test
+            # the frozen ones.
+            later = _sample_times(shots, start, count=args.holdout, offset=0.5)
+            print(f"{clip_id}: reading {len(later)} HELD-OUT frames ...",
+                  flush=True)
+            obs2 = sco.observe(str(proxy), later)
+            if obs2["why"]:
+                print(f"{clip_id}: REFUSED the hold-out — {obs2['why']}")
+                refused += 1
+                continue
+            held = _holdout(shots, plan, obs2, start, rows)
+        report.append({"clip": clip_id, "shots": rows, "holdout": held,
                        "observation": {k: obs[k] for k in
                                        ("image_w", "image_h", "read",
                                         "refused", "refusals")},
@@ -198,6 +288,8 @@ def main() -> int:
                        # being asked, not what is being answered.
                        "verdict": None})
         _print(clip_id, rows)
+        if held is not None:
+            _print_holdout(clip_id, held)
 
     (out_dir / "framings.json").write_text(
         json.dumps({"project": args.project, "clips": args.clips,
@@ -232,13 +324,36 @@ def _print(clip_id: str, rows: list[dict]) -> None:
               f"{cells[0]:<28}{cells[1]:<26}{cells[2]}")
     # THE DENOMINATOR BEFORE THE COUNT. "3 framings contain the text" out of an
     # unstated number of shots is the figure this repo keeps catching.
+    frames = sum(r["samples"] for r in rows)
+    print(f"  over {frames} frames read across {len(rows)} shots — "
+          f"{PER_SHOT} per shot, which is not temporal coverage")
     for name in ("as-shipped", "full-fit", "region"):
         held = sum(1 for r in with_text
                    if (r["framings"].get(name) or {}).get("contains_text") is True)
         unknown = sum(1 for r in with_text
                       if (r["framings"].get(name) or {}).get("contains_text") is None)
-        print(f"  {name:<11} holds the observed text in {held} of "
-              f"{len(with_text)} shots with text ({unknown} unanswerable)")
+        note = ("  [CONDITIONAL: built from these same boxes]"
+                if name == "region" else "")
+        print(f"  {name:<11} holds the text READ in {held} of "
+              f"{len(with_text)} shots with text ({unknown} unanswerable){note}")
+
+    # THE JUMP IS BETWEEN NEIGHBOURS, not between the extremes of the clip.
+    # "535..1056, a 2x jump at a cut" put a range and a claim about adjacency in
+    # one sentence, and only the range was measured.
+    for name in ("as-shipped", "region"):
+        ratios = []
+        for a, b in zip(rows, rows[1:]):
+            fa = (a["framings"].get(name) or {}).get("subject_w_out_px")
+            fb = (b["framings"].get(name) or {}).get("subject_w_out_px")
+            if fa and fb:
+                ratios.append(max(fa, fb) / min(fa, fb))
+        if not ratios:
+            print(f"  {name:<11} no adjacent pair could be compared")
+            continue
+        big = sum(1 for r in ratios if r >= 1.5)
+        print(f"  {name:<11} adjacent-shot size ratio: median "
+              f"{sorted(ratios)[len(ratios) // 2]:.2f}, worst {max(ratios):.2f}, "
+              f"{big} of {len(ratios)} pairs at 1.5x or more")
 
 
 def _n(value: Any) -> str:

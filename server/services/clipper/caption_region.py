@@ -19,6 +19,25 @@ rectangle and the delivered sizes that follow from it, so a static comparison
 can be put beside the two treatments that were already rendered. Whether the
 result reads is the question the video probe asks a person.
 
+TWO THINGS ITS OUTPUT MAY NOT BE READ AS, both caught in review after the first
+version had been committed and both of the same family — a number that looks
+like a measurement and is not.
+
+CHECKING THE REGION AGAINST THE BOXES THAT BUILT IT PROVES NOTHING ABOUT
+UNSEEN FRAMES. The region is the union of those boxes, so of course it contains
+them; "58 of 58 shots hold the observed text" is geometric feasibility for the
+observations used, and it is CONDITIONAL. The honest version freezes a region
+and tests it on frames that took no part in building it — `verify_frozen` — and
+the moment a region is adjusted after such a test, those frames become
+construction data and the next test owes new ones.
+
+AND THE SUBJECT IS STILL A CLIP-WIDE AVERAGE. `dynamic_plan["subject"]["face"]`
+is `cx`, `cy` and `w` over the whole clip, so every face size this module
+reports is that average projected through a scale. The TEXT became local in this
+batch; the subject did not. These are not measurements of the face visible in
+any particular frame, and a region that holds the average face may lose the real
+one the moment the speaker moves.
+
 TWO RULES IT WILL NOT BEND.
 
 An interval with no subtitle OBSERVATION does not get a region. Not the
@@ -39,7 +58,14 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 __all__ = ["SCHEMA", "NO_TEXT", "NO_SUBJECT", "NO_GEOMETRY", "TOO_TALL",
-           "region_for", "delivered_sizes"]
+           "SUBJECT_IS_A_CLIP_AVERAGE", "region_for", "delivered_sizes",
+           "verify_frozen"]
+
+#: Rides with every size this module produces. The caller may not quietly
+#: promote a projected average into a per-frame measurement, and a constant it
+#: has to carry is harder to forget than a paragraph it has to remember.
+SUBJECT_IS_A_CLIP_AVERAGE = ("the_subject_box_is_the_clips_average_face_not_a_"
+                             "per_frame_measurement")
 
 SCHEMA = "clipper_caption_region_v1"
 
@@ -118,7 +144,14 @@ def region_for(boxes: Any, subject: Any, src_w: Any, src_h: Any) -> dict:
     """
     out: dict[str, Any] = {"schema": SCHEMA, "why": None, "rect": None,
                            "text_rect": None, "subject_rect": None,
-                           "aspect": None, "wider_than_9_16": None}
+                           "aspect": None, "wider_than_9_16": None,
+                           "subject_caveat": None,
+                           # The boxes this region was BUILT from. Checking it
+                           # against them is circular; `verify_frozen` needs to
+                           # know which frames are construction data.
+                           "built_from": len(boxes) if isinstance(
+                               boxes, Sequence) and not isinstance(
+                                   boxes, (str, bytes)) else None}
     sw, sh = _finite(src_w), _finite(src_h)
     if not sw or not sh or sw < 1 or sh < 1:
         out["why"] = NO_GEOMETRY
@@ -144,6 +177,7 @@ def region_for(boxes: Any, subject: Any, src_w: Any, src_h: Any) -> dict:
         out["why"] = TOO_TALL
         return out
     out["text_rect"], out["subject_rect"] = _rect(text), _rect(face)
+    out["subject_caveat"] = SUBJECT_IS_A_CLIP_AVERAGE
     out["rect"] = {"x": round(x0, 1), "y": round(y0, 1),
                    "w": round(x1 - x0, 1), "h": round(y1 - y0, 1)}
     out["aspect"] = round((x1 - x0) / max(1e-6, y1 - y0), 4)
@@ -185,4 +219,77 @@ def delivered_sizes(rect: Any, *, subject_w: Any, band_h: Any) -> dict:
     # measured the speaker".
     out["subject_w_out_px"] = None if sub is None else round(sub * scale, 1)
     out["band_h_out_px"] = None if band is None else round(band * scale, 1)
+    return out
+
+
+HELD_OUT_EMPTY = "no_held_out_observation_to_test_against"
+NOT_A_REGION = "there_is_no_region_to_test"
+
+
+def verify_frozen(rect: Any, boxes: Any, src_w: Any, src_h: Any) -> dict:
+    """Does a FROZEN region hold text it never saw — the only non-circular test.
+
+    `region_for` builds the rectangle from a set of boxes, so checking it
+    against those same boxes is guaranteed to succeed and says nothing. This
+    takes boxes that took NO part in building it and reports how many it holds,
+    how many it clips, and by how much.
+
+    AND THE MOMENT THE REGION IS ADJUSTED AFTER A RUN OF THIS, the frames used
+    here become construction data — the next verification owes new observations.
+    Nothing in code can enforce that; `held_out` is reported so a reader can see
+    which claim they are being offered.
+
+    `worst_overflow_px` is how far the furthest box pokes outside, in SOURCE
+    pixels, because "3 of 40 clipped" and "3 of 40 clipped by two pixels" are
+    different findings and only the second one is actionable.
+    """
+    out: dict[str, Any] = {"schema": SCHEMA, "why": None, "held_out": 0,
+                           "held": 0, "clipped": 0, "worst_overflow_px": None,
+                           "circular": None}
+    sw, sh = _finite(src_w), _finite(src_h)
+    if not sw or not sh or sw < 1 or sh < 1:
+        out["why"] = NO_GEOMETRY
+        return out
+    if not isinstance(rect, dict):
+        out["why"] = NOT_A_REGION
+        return out
+    r = {k: _finite(rect.get(k)) for k in ("x", "y", "w", "h")}
+    if any(v is None for v in r.values()) or r["w"] <= 0 or r["h"] <= 0:
+        out["why"] = NOT_A_REGION
+        return out
+    if not isinstance(boxes, Sequence) or isinstance(boxes, (str, bytes)):
+        out["why"] = HELD_OUT_EMPTY
+        return out
+
+    worst = 0.0
+    held = clipped = 0
+    for box in boxes:
+        if not isinstance(box, dict):
+            out["why"] = HELD_OUT_EMPTY
+            return out
+        vals = [_finite(box.get(k)) for k in ("x0", "x1", "y0", "y1")]
+        if any(v is None for v in vals):
+            # A held-out observation nobody can read is not a held-out
+            # observation the region passed.
+            out["why"] = HELD_OUT_EMPTY
+            return out
+        x0, x1, y0, y1 = vals  # type: ignore[misc]
+        bx0, bx1 = x0 * sw, x1 * sw
+        by0, by1 = y0 * sh, y1 * sh
+        over = max(r["x"] - bx0, bx1 - (r["x"] + r["w"]),
+                   r["y"] - by0, by1 - (r["y"] + r["h"]))
+        if over > 0.5:
+            clipped += 1
+            worst = max(worst, over)
+        else:
+            held += 1
+    out["held_out"] = held + clipped
+    if not out["held_out"]:
+        # AN EMPTY HELD-OUT SET IS NOT A PASS. It is the most tempting reading
+        # in this whole module: nothing was clipped, so the region held.
+        out["why"] = HELD_OUT_EMPTY
+        return out
+    out["held"], out["clipped"] = held, clipped
+    out["worst_overflow_px"] = round(worst, 1)
+    out["circular"] = False
     return out
