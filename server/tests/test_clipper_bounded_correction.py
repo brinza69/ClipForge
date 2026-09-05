@@ -160,7 +160,12 @@ def test_applying_the_proposal_produces_the_state_that_stops_it():
     contrast = _readable_palette()
     source = _one_layer()
 
-    before = pk.captions(placement(0.75), contrast, source, own_layer=False)
+    # `own_layer=True` with a source that carries none: the duplicate half is
+    # settled by the SOURCE being absent, and our layer is really there, so the
+    # placement half is the only thing left to decide. `own_layer=False` would
+    # short-circuit — a suppressed layer is not judged by the `.ass` it did not
+    # use — and the round trip needs a caption that actually exists.
+    before = pk.captions(placement(0.75), contrast, source, own_layer=True)
     assert before["state"] == pf.FAIL and before["why"] == pk.ON_A_FACE
 
     got = bc.propose({**_clean(), pf.CAPTIONS: before}, position="bottom",
@@ -169,7 +174,7 @@ def test_applying_the_proposal_produces_the_state_that_stops_it():
 
     # APPLY IT, and re-run the same check on the position it proposed.
     after = pk.captions(placement(got["y_pct"]), contrast, source,
-                        own_layer=False)
+                        own_layer=True)
     assert after["state"] == pf.PASS, "the correction actually corrects it"
     again = bc.propose({**_clean(), pf.CAPTIONS: after}, position="bottom",
                        keep_out=KEEP_OUT, still_lands_on_a_face=on_face)

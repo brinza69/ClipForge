@@ -102,17 +102,22 @@ def test_a_recorded_burn_is_not_a_yes_either():
 
 
 def test_the_duplicate_check_clears_when_our_layer_was_suppressed():
-    """The whole point: a source that carries captions and an export that added
-    none is ONE layer, not two."""
+    """The DUPLICATE half clears — a source that carries captions and an export
+    that added none is ONE layer, not two, and the reject goes away.
+
+    The CHECK does not pass, and that is deliberate. Suppressing our layer
+    leaves the source's own subtitle as the only text on screen; whether it
+    survives the crop is a different question with no measurement behind it.
+    A pass here would trade a duplicate for an unverified absence."""
     from services.clipper import publish_captions as pcap
     from services.clipper import publish_preflight as pf
 
     placed = {"placement_refused": None, "worst_share_complete": True,
               "on_face": False}
-    contrast = _readable()
-    got = pcap.captions(placed, contrast, {"state": scap.PRESENT},
+    got = pcap.captions(placed, _readable(), {"state": scap.PRESENT},
                         own_layer=False)
-    assert got["state"] == pf.PASS
+    assert got["state"] == pf.UNAVAILABLE
+    assert pcap.TWO_LAYERS not in got["why"], "the duplicate finding is gone"
 
 
 def _readable():

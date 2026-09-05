@@ -296,11 +296,30 @@ def test_a_source_with_captions_alone_does_not_reject_the_export():
 
 
 def test_a_source_that_captions_a_clip_we_did_not_is_one_layer_not_two():
+    """The DUPLICATE half clears — one layer is not two. The check as a whole
+    does not, because suppressing ours leaves the SOURCE's subtitle as the only
+    text on screen and nothing has measured whether it survives the crop."""
     from services.clipper import source_captions as scap
 
     got = pc.captions(_placed(), _contrast(), {"state": scap.PRESENT},
                       own_layer=False)
-    assert got["state"] == pf.PASS
+    assert got["state"] == pf.UNAVAILABLE
+    assert pc.TWO_LAYERS not in got["why"], "the duplicate finding is gone"
+    assert "source_subtitles_legibility" in got["why"]
+
+
+def test_a_suppressed_layer_is_not_judged_by_the_ass_it_did_not_use():
+    """Six failures on go ghost said `own_layer: false` and
+    `the_caption_sits_on_a_face` in the same record. Both halves read the `.ass`
+    beside the render, and after a `suppress` that file describes a layer nobody
+    burned — the 15 pilotf81b exports still carry one from an earlier run, so
+    the decision has to settle it rather than the file's absence."""
+    got = pc.captions(_placed(on_face=True), _contrast(ok=False),
+                      _clean_source(), own_layer=False)
+    assert got["state"] == pf.UNAVAILABLE
+    assert pc.ON_A_FACE not in got["why"]
+    assert "highlight_floor" not in got["why"]
+    assert got["evidence"]["suppressed_layer"] is True
 
 
 def test_no_source_verdict_cannot_reach_a_pass_on_not_duplicated():

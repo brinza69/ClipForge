@@ -91,6 +91,31 @@ def captions(placement: Any, contrast: Any, source: Any,
         # without ever asking the question.
         unestablished.append("no_source_caption_verdict")
 
+    # --- A SUPPRESSED LAYER IS NOT EVALUATED FROM THE ASS IT DID NOT USE ---
+    # Six failures on go ghost said `own_layer: false` and
+    # `the_caption_sits_on_a_face` in the same record. Both halves came from
+    # `caption_corpus.measure`, which reads the `.ass` beside the render — and
+    # after a `suppress` that file describes a layer nobody burned. The 15
+    # pilotf81b exports still carry one from an earlier run, so a check that
+    # relied on the file being gone would be wrong on the corpus as it stands;
+    # the decision is what settles it, not the leftovers.
+    #
+    # IT DOES NOT BECOME A PASS. Suppressing our layer leaves the SOURCE's
+    # subtitle as the only text on screen, and whether that is legible in the
+    # delivered frame is unverified — a different question, with no measurement
+    # behind it yet.
+    if own_layer is False:
+        evidence["suppressed_layer"] = True
+        unestablished.append("our_layer_was_suppressed_so_the_source_subtitles_"
+                             "legibility_is_what_matters_and_is_unmeasured")
+        if demonstrated:
+            return pf.check(
+                pf.FAIL, why=",".join(sorted(demonstrated)),
+                severity=pf.REJECTABLE if duplicate else pf.REVISABLE,
+                evidence={**evidence, "unestablished": sorted(unestablished)})
+        return pf.check(pf.UNAVAILABLE, why=",".join(sorted(unestablished)),
+                        evidence=evidence)
+
     # --- half two: can the palette be read at all --------------------------
     # BOTH LEGS HAVE TO BE THERE. `{}` is a dict with no `refused` key, so it
     # walked into this branch, found neither `fill` nor `highlight` to object
