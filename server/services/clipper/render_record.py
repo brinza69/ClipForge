@@ -79,16 +79,37 @@ def _digest(path: Path) -> tuple[str | None, int | None, str | None]:
     return hashlib.sha256(data).hexdigest(), len(data), None
 
 
-def ass_events(path: Any) -> dict:
-    """The dialogue events in one `.ass`, on the clock the file is written on.
+#: The three answers, kept apart because two of them look alike from outside.
+EVENTS_READ = "read"
+EVENTS_EMPTY = "empty_demonstrated"
+EVENTS_REFUSED = "refused"
 
-    Count, first and last start, and last end — enough to say whether the layer
-    covers the export or a slice of it, without carrying every line onto the
-    sidecar. A file that cannot be parsed reports `refused` rather than zero
-    events: an empty caption track and an unreadable one are the two answers
-    this whole batch exists to keep apart.
+
+def ass_events(path: Any) -> dict:
+    """The dialogue events in one `.ass`, on the EXPORT's clock.
+
+    IT IS THE EXPORT'S CLOCK AND NOT THE CLIP'S, and that is a fact about
+    `clipper_captions._write_ass` rather than a hope: it applies
+    `dead_air.remap_overlays(overlays, drop_spans)` before writing, because
+    libass positions against absolute times and a caption left on the untrimmed
+    clock drifts further out of sync with every second cut. So the intervals
+    here are directly comparable with the mp4.
+
+    THE INTERVALS, NOT THE COUNT. A count with a first start and a last end
+    says nothing about the coverage between them: forty events and two events
+    can share both endpoints. `intervals` is the merged, sorted union of the
+    events' own spans — word-level overlays overlap heavily, so the union is
+    what "there was text on screen" actually means — and `covered_s` is how
+    much of the export it adds up to.
+
+    THREE ANSWERS, and `state` names them so a consumer cannot collapse the
+    first two: events were READ, the file was read and demonstrably holds none,
+    or nothing could be read at all. An empty caption track and an unreadable
+    one are the pair this whole batch exists to keep apart.
     """
-    out: dict[str, Any] = {"events": None, "first_s": None, "last_start_s": None,
+    out: dict[str, Any] = {"state": EVENTS_REFUSED, "events": None,
+                           "intervals": None, "covered_s": None,
+                           "first_s": None, "last_start_s": None,
                            "last_end_s": None, "refused": None}
     if path is None:
         out["refused"] = NO_FILE
@@ -101,23 +122,35 @@ def ass_events(path: Any) -> dict:
     except Exception:
         out["refused"] = UNREADABLE
         return out
-    starts: list[float] = []
-    ends: list[float] = []
+    spans: list[tuple[float, float]] = []
     for raw_start, raw_end in _DIALOGUE.findall(text):
         s, e = _timestamp(raw_start), _timestamp(raw_end)
-        if s is None or e is None:
+        if s is None or e is None or e < s:
             # ONE UNREADABLE LINE FAILS THE FILE. A partial parse would report
             # a caption track that ends earlier than it does, which is a
-            # measurement of the parser rather than of the export.
+            # measurement of the parser rather than of the export. An end before
+            # its start is unreadable too: it is a perfectly parseable pair of
+            # timestamps and there is no span it could describe.
             out["refused"] = UNREADABLE
             return out
-        starts.append(s)
-        ends.append(e)
-    out["events"] = len(starts)
-    if starts:
-        out["first_s"] = round(min(starts), 3)
-        out["last_start_s"] = round(max(starts), 3)
-        out["last_end_s"] = round(max(ends), 3)
+        spans.append((s, e))
+    out["events"] = len(spans)
+    if not spans:
+        out["state"] = EVENTS_EMPTY
+        out["intervals"], out["covered_s"] = [], 0.0
+        return out
+    out["state"] = EVENTS_READ
+    merged: list[list[float]] = []
+    for s, e in sorted(spans):
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    out["intervals"] = [[round(a, 3), round(b, 3)] for a, b in merged]
+    out["covered_s"] = round(sum(b - a for a, b in merged), 3)
+    out["first_s"] = round(min(s for s, _ in spans), 3)
+    out["last_start_s"] = round(max(s for s, _ in spans), 3)
+    out["last_end_s"] = round(max(e for _, e in spans), 3)
     return out
 
 

@@ -161,3 +161,73 @@ def test_a_missing_file_is_refused_and_not_zero_events(tmp_path):
     for path in (None, tmp_path / "gone.ass"):
         got = rr.ass_events(path)
         assert got["events"] is None and got["refused"] == rr.NO_FILE, repr(path)
+
+
+# --- the intervals, which the count could not stand in for -------------------
+
+
+def test_the_merged_intervals_are_what_coverage_means(tmp_path):
+    """A count with a first start and a last end says nothing about the middle:
+    forty events and two events can share both endpoints. Word-level overlays
+    overlap heavily, so the UNION of the spans is what "there was text on
+    screen" means, and `covered_s` is how much of the export that is."""
+    ass = tmp_path / "a.ass"
+    ass.write_text(
+        "[Events]\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,a\n"
+        "Dialogue: 0,0:00:01.50,0:00:03.00,D,,0,0,0,,b\n"   # overlaps the first
+        "Dialogue: 0,0:00:10.00,0:00:11.00,D,,0,0,0,,c\n",
+        encoding="utf-8")
+    got = rr.ass_events(ass)
+    assert got["state"] == rr.EVENTS_READ and got["events"] == 3
+    assert got["intervals"] == [[1.0, 3.0], [10.0, 11.0]]
+    assert got["covered_s"] == 3.0, "not the 10s between the endpoints"
+    assert got["first_s"] == 1.0 and got["last_end_s"] == 11.0
+
+
+def test_a_gapless_run_of_events_merges_into_one_interval(tmp_path):
+    ass = tmp_path / "a.ass"
+    ass.write_text(
+        "[Events]\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,a\n"
+        "Dialogue: 0,0:00:02.00,0:00:03.00,D,,0,0,0,,b\n",
+        encoding="utf-8")
+    assert rr.ass_events(ass)["intervals"] == [[1.0, 3.0]]
+
+
+def test_the_three_answers_have_three_names(tmp_path):
+    """`empty_demonstrated` and `refused` both have no events, and only one of
+    them is a statement about the export."""
+    empty = tmp_path / "e.ass"
+    empty.write_text("[Script Info]\n[Events]\n", encoding="utf-8")
+    assert rr.ass_events(empty)["state"] == rr.EVENTS_EMPTY
+    assert rr.ass_events(empty)["covered_s"] == 0.0
+    assert rr.ass_events(tmp_path / "gone.ass")["state"] == rr.EVENTS_REFUSED
+    assert rr.ass_events(tmp_path / "gone.ass")["covered_s"] is None
+
+
+def test_an_event_that_ends_before_it_starts_is_unreadable(tmp_path):
+    """Two perfectly parseable timestamps that describe no span at all. Left in,
+    it would shorten a merged interval and understate the coverage."""
+    ass = tmp_path / "a.ass"
+    ass.write_text(
+        "[Events]\n"
+        "Dialogue: 0,0:00:05.00,0:00:04.00,D,,0,0,0,,a\n", encoding="utf-8")
+    got = rr.ass_events(ass)
+    assert got["state"] == rr.EVENTS_REFUSED and got["refused"] == rr.UNREADABLE
+    assert got["intervals"] is None
+
+
+def test_the_intervals_are_on_the_export_clock_because_the_writer_remaps_them():
+    """Read off `_write_ass` rather than assumed. It calls
+    `dead_air.remap_overlays(overlays, drop_spans)` before writing, because
+    libass positions against absolute times and a caption left on the untrimmed
+    clock drifts further out of sync with every second cut. If that ever stops
+    being true, every interval this module reports is on a clock the mp4 does
+    not keep — and nothing else would notice."""
+    import inspect
+
+    from workers import clipper_captions
+
+    src = inspect.getsource(clipper_captions._write_ass)
+    assert "remap_overlays(overlays, drop_spans)" in src
