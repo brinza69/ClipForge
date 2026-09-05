@@ -1,4 +1,4 @@
-"""Does this source have a SECOND region worth pointing a camera at.
+"""Does this source have a SECOND CAMERA in it — not a second subject.
 
 THE DEFECT THIS EXISTS TO STOP. `dynamic_cameras.camera_rects` builds `game`
 and `game_tight` unconditionally, from geometry alone: "everything to the right
@@ -37,20 +37,39 @@ same reason:
     the numbers say so -> recorded, and the second camera stays available
 
 `False` is the expensive answer here, in the mirror of `caption_policy`: a wrong
-`False` costs cutaways on a source that had a real second subject, which is
+`False` costs cutaways on a source that had a real second camera, which is
 visible and recoverable. A wrong `True` is what ships today.
+
+AND IT IS A CLAIM ABOUT CAMERAS, NOT ABOUT TARGETS. The first version of this
+module was called `one_region` and meant "there is one thing to look at", which
+is false on material already in this batch: `b23c14c41495` ends with the speaker
+holding an Apple Watch up to camera, and the display is the point of the
+stretch. One physical camera, two targets. A second target is reached by a
+region built from LOCAL observations, never by the fixed rectangle beside the
+face, and nothing here forecloses it.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["TWO_REGIONS", "ONE_REGION", "HUMAN", "AGENT", "DEFAULT",
+__all__ = ["SECOND_CAMERA", "NO_SECOND_CAMERA", "HUMAN", "AGENT", "DEFAULT",
            "DECIDED_BY", "SETTING", "decide", "off_subject_seconds"]
 
-#: What the planner is allowed to point at.
-TWO_REGIONS = "two_regions"
-ONE_REGION = "one_region"
+#: WHAT THIS DENIES, AND ONLY THAT. `NO_SECOND_CAMERA` says the source has no
+#: second CAMERA — no facecam-over-gameplay composite, no second guest window —
+#: so the rectangle `camera_rects` derives from geometry ("everything to the
+#: right of the facecam") is not a second subject and must not be cut to.
+#:
+#: IT DOES NOT SAY THE SOURCE HAS ONE THING WORTH LOOKING AT, and the first
+#: name for it did, which was wrong on material already in this batch: in
+#: `b23c14c41495`'s last shots the speaker holds an Apple Watch up to camera and
+#: the display is the point of the stretch — one physical camera, two targets.
+#: A second target is reached by a region built from LOCAL observations
+#: (`caption_region.region_for(subject_boxes=...)`), never by a fixed rectangle
+#: beside the face, and nothing here forecloses that.
+SECOND_CAMERA = "second_camera"
+NO_SECOND_CAMERA = "no_second_camera"
 
 HUMAN = "human"
 #: An agent that has actually looked at the source, and says so. Accepted here
@@ -64,11 +83,12 @@ DECIDED_BY: tuple[str, ...] = (HUMAN, AGENT, DEFAULT)
 
 #: The project setting. Three-valued, for the reason `caption_policy.SETTING`
 #: is: `True` and `False` are answers and absent is not one of them.
-SETTING = "source_has_a_second_region"
+SETTING = "source_has_a_second_camera"
 
-_NOBODY = "nobody_has_said_whether_this_source_has_a_second_region"
-_SAID_YES = "a_person_or_an_agent_declared_a_second_region_in_the_source"
-_SAID_NO = "a_person_or_an_agent_declared_this_source_a_single_camera"
+_NOBODY = "nobody_has_said_whether_this_source_has_a_second_camera"
+_SAID_YES = "a_person_or_an_agent_declared_a_second_camera_in_the_source"
+_SAID_NO = ("a_person_or_an_agent_declared_this_source_a_single_camera_which_"
+            "is_not_a_claim_that_it_has_only_one_thing_worth_framing")
 
 
 def decide(setting: Any = None, *, by: Any = None,
@@ -82,7 +102,7 @@ def decide(setting: Any = None, *, by: Any = None,
     module is shaped against.
     """
     out: dict[str, Any] = {"schema": "clipper_layout_policy_v1",
-                           "regions": TWO_REGIONS, "why": _NOBODY,
+                           "regions": SECOND_CAMERA, "why": _NOBODY,
                            "decided_by": DEFAULT,
                            "evidence": evidence if isinstance(evidence, dict)
                            else None}
@@ -97,7 +117,7 @@ def decide(setting: Any = None, *, by: Any = None,
     if setting:
         out["why"] = _SAID_YES
         return out
-    out["regions"] = ONE_REGION
+    out["regions"] = NO_SECOND_CAMERA
     out["why"] = _SAID_NO
     return out
 

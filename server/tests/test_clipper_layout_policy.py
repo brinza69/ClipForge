@@ -1,4 +1,4 @@
-"""Whether the source has a SECOND region, and who says so.
+"""Whether the source has a SECOND CAMERA in it, and who says so.
 
 THE DEFECT. `camera_rects` builds `game` and `game_tight` from geometry alone —
 "everything to the right of the facecam, minus the chat strip" — and nothing
@@ -12,6 +12,13 @@ reads 0.75 to 0.83.
 THE EXISTING GUARD CANNOT CATCH IT. `alive` is motion, detail and menus — it
 rejects a black loading screen. A street with traffic moves, has detail and is
 not a menu, so it passes all three and is still not a second subject.
+
+AND IT IS A CLAIM ABOUT CAMERAS, NOT TARGETS. The first name for this was
+`one_region` and it meant "there is one thing to look at", which is false on
+material already in this batch: `b23c14c41495` ends with the speaker holding an
+Apple Watch up to camera and the display is the point of the stretch. One
+camera, two targets. `test_a_single_camera_may_still_have_a_second_target` is
+that correction and is the test to keep if the rest is ever rewritten.
 """
 
 from __future__ import annotations
@@ -22,14 +29,14 @@ from services.clipper import layout_policy as lp
 # --- a person's or an agent's answer is applied ------------------------------
 
 
-def test_saying_the_source_is_one_camera_removes_the_second_region():
+def test_saying_the_source_is_one_camera_removes_the_geometric_second_one():
     got = lp.decide(False)
-    assert got["regions"] == lp.ONE_REGION and got["decided_by"] == lp.HUMAN
+    assert got["regions"] == lp.NO_SECOND_CAMERA and got["decided_by"] == lp.HUMAN
 
 
 def test_saying_it_has_two_keeps_todays_behaviour():
     got = lp.decide(True)
-    assert got["regions"] == lp.TWO_REGIONS and got["decided_by"] == lp.HUMAN
+    assert got["regions"] == lp.SECOND_CAMERA and got["decided_by"] == lp.HUMAN
 
 
 def test_an_agent_that_looked_may_answer_it():
@@ -37,12 +44,12 @@ def test_an_agent_that_looked_may_answer_it():
     kind: whether the frame is a composite is settled by a contact sheet, where
     caption suppression turns on legibility no still can show."""
     got = lp.decide(False, by=lp.AGENT)
-    assert got["regions"] == lp.ONE_REGION and got["decided_by"] == lp.AGENT
+    assert got["regions"] == lp.NO_SECOND_CAMERA and got["decided_by"] == lp.AGENT
 
 
 def test_nobody_having_said_is_not_somebody_saying_no():
     silent = lp.decide(None)
-    assert silent["regions"] == lp.TWO_REGIONS
+    assert silent["regions"] == lp.SECOND_CAMERA
     assert silent["decided_by"] == lp.DEFAULT
     assert silent["why"] != lp.decide(True)["why"]
 
@@ -53,7 +60,7 @@ def test_a_setting_that_is_not_a_verdict_is_not_a_verdict():
     for bad in ("true", "false", 1, 0, "", [], {}, None):
         got = lp.decide(bad)
         assert got["decided_by"] == lp.DEFAULT, repr(bad)
-        assert got["regions"] == lp.TWO_REGIONS, repr(bad)
+        assert got["regions"] == lp.SECOND_CAMERA, repr(bad)
 
 
 def test_the_evidence_is_recorded_and_applied_to_nothing():
@@ -62,7 +69,7 @@ def test_the_evidence_is_recorded_and_applied_to_nothing():
     fraction of the frame is a threshold chosen on four sources with the answer
     visible, which this repo has already paid for once."""
     got = lp.decide(None, evidence={"off_subject_s": 6.8, "face_w_frac": 0.196})
-    assert got["regions"] == lp.TWO_REGIONS, "measured, and applied to nothing"
+    assert got["regions"] == lp.SECOND_CAMERA, "measured, and applied to nothing"
     assert got["evidence"]["off_subject_s"] == 6.8
 
 
@@ -132,7 +139,7 @@ def test_a_plan_that_is_not_one_is_refused():
 # --- and what it does to the planner -----------------------------------------
 
 
-def test_one_region_never_selects_the_second_camera():
+def test_a_declared_single_camera_never_selects_the_second_one():
     """Through the SAME path a dead gameplay region already takes, so the
     behaviour is the one that was already tested rather than a second one."""
     from services.clipper.dynamic_edit import _pick_camera
@@ -145,7 +152,7 @@ def test_one_region_never_selects_the_second_camera():
 
 
 def test_the_planner_takes_the_declaration_and_does_not_measure_it():
-    """`one_region` is an argument, not a computation. A planner that decided
+    """`no_second_camera` is an argument, not a computation. A planner that decided
     this for itself would be applying an uncalibrated threshold to what the
     renderer frames."""
     import inspect
@@ -153,9 +160,9 @@ def test_the_planner_takes_the_declaration_and_does_not_measure_it():
     from services.clipper import dynamic_edit
 
     src = inspect.getsource(dynamic_edit.plan_dynamic_edit)
-    assert "one_region" in inspect.signature(
+    assert "no_second_camera" in inspect.signature(
         dynamic_edit.plan_dynamic_edit).parameters
-    assert "alive = (not one_region" in src
+    assert "alive = (not no_second_camera" in src
 
 
 def test_the_render_path_declares_it_and_records_it():
@@ -165,8 +172,24 @@ def test_the_render_path_declares_it_and_records_it():
 
     plan_src = inspect.getsource(clipper_render_plan._decide_render)
     assert "layout_policy.decide(" in plan_src
-    assert "one_region=layout_decision" in plan_src
+    assert "no_second_camera=(layout_decision" in plan_src
     # On the sidecar, because a plan that never chose the second camera and a
     # source that never had one produce the same shot list.
     assert '"layout_policy": decision["layout_policy"]' in inspect.getsource(
         clipper_render_jobs.handle_export)
+
+
+def test_a_single_camera_may_still_have_a_second_target():
+    """THE CORRECTION. Declaring `no_second_camera` denies the geometric
+    rectangle beside the face; it does not deny that the source has a second
+    thing worth framing. `b23c14c41495` proves the difference — one camera, and
+    an Apple Watch held up to the lens that is the point of the stretch — and
+    the route to it is a region built from LOCAL observations, which nothing in
+    this policy forecloses."""
+    from services.clipper import caption_region as cr
+
+    watch = [{"x0": 0.44, "x1": 0.58, "y0": 0.30, "y1": 0.50}]
+    text = [{"x0": 0.35, "x1": 0.65, "y0": 0.91, "y1": 0.96}]
+    got = cr.region_for(text, None, 2560, 1440, subject_boxes=watch)
+    assert got["rect"] is not None and got["subject_from"] == "observed"
+    assert lp.decide(False)["regions"] == lp.NO_SECOND_CAMERA

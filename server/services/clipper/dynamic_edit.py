@@ -216,7 +216,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                       game_ui: Sequence[float] | None = None,
                       game_motion_hop: float = 0.25,
                       stable_track: dict | None = None,
-                      one_region: bool = False,
+                      no_second_camera: bool = False,
                       style: dict | None = None) -> dict:
     """Plan the shot list for one candidate.
 
@@ -224,12 +224,15 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
     PROXY pixels — the shape `signals.face_presence` returns, so a dense
     per-clip pass and the coarse whole-VOD track are interchangeable here.
 
-    `one_region` says the SOURCE has nothing but the subject in it — one camera,
-    no gameplay, no second guest. It is a declared fact about the material, from
+    `no_second_camera` says the SOURCE is a single camera — no facecam-over-
+    gameplay composite, no second guest window. NOT that it has one thing worth
+    framing: a speaker holding a watch up to the lens is one camera and two
+    targets, and that target is reached by a region built from local
+    observations, never by the fixed rectangle beside the face. It is a declared fact about the material, from
     `layout_policy`, never a measurement taken here: the discriminators that
     looked obvious are thresholds chosen on four sources with the answer
-    visible, and one of them is backwards. When it is set, the second camera is
-    never selected, through the SAME path a dead gameplay region already takes.
+    visible, and one of them is backwards. When it is set, the geometric second camera is never selected, through the
+    SAME path a dead gameplay region already takes.
 
     It matters because `camera_rects` builds `game` from geometry alone —
     "everything to the right of the facecam" — and on a single-camera source
@@ -374,7 +377,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
         # and is still not a second subject. That is what `one_region` answers,
         # and it answers it from a declaration rather than from a fourth
         # threshold nobody calibrated.
-        alive = (not one_region
+        alive = (not no_second_camera
                  and motions[i] > dead_below
                  and (not details or details[i] > flat_below)
                  and (not uis or uis[i] < ui_above))

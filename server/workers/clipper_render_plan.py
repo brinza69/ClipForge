@@ -184,7 +184,7 @@ async def _dead_spans(clip: ClipModel, project: ProjectModel
 
 async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
                         src_w: int, src_h: int,
-                        one_region: bool = False) -> dict | None:
+                        no_second_camera: bool = False) -> dict | None:
     """A multi-shot edit for this clip, or None when the window cannot carry one.
 
     Returns None rather than raising: a clip that cannot be cut dynamically is
@@ -244,7 +244,7 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
             # from geometry alone, so on a source with nothing but the speaker
             # in it that rectangle is the wall behind him — and none of the
             # three `alive` guards can tell a street from a stream.
-            one_region=one_region),
+            no_second_camera=no_second_camera),
     )
     shots = plan.get("shots") or []
     # What the PLANNER decided, not what survived the merge. A clip whose only
@@ -381,7 +381,8 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
                 clip, project,
                 int(project.width or 1920),
                 int(project.height or 1080),
-                one_region=layout_decision["regions"] == layout_policy.ONE_REGION)
+                no_second_camera=(layout_decision["regions"]
+                                  == layout_policy.NO_SECOND_CAMERA))
         except Exception:
             logger.warning("clip %s: dynamic planning failed, falling back to "
                            "the static layout", clip.id, exc_info=True)
