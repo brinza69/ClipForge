@@ -11,7 +11,8 @@ neither is the geometric truth.
 
 HOW THESE WERE OBTAINED. `scripts/dump_caption_band.py` crops the caption band,
 magnifies it to 1600 px and prints a ruler in fractions of the FRAME's width.
-All 56 construction frames of `6053a598cf06` were read off those seven sheets
+All 56 construction frames of `6053a598cf06` and all 62 of `b23c14c41495`
+were read off those fifteen sheets
 and the left and right margins of each complete line taken from the ruler. (One
 time label was transcribed wrong on the first pass — 1186.2 for 1185.2 — and the
 script caught it by refusing: a frame with no annotation is listed under
@@ -85,14 +86,50 @@ LINES: dict[str, dict[float, tuple[float, float]]] = {
         1198.9: (0.327, 0.672), 1200.4: (0.327, 0.672), 1200.9: (0.327, 0.672),
         1202.5: (0.293, 0.707), 1203.5: (0.293, 0.707),
     },
+    "b23c14c41495": {
+        184.1: (0.393, 0.607), 184.6: (0.393, 0.607), 186.5: (0.365, 0.635),
+        187.7: (0.345, 0.657), 188.1: (0.345, 0.653), 189.1: (0.358, 0.640),
+        189.6: (0.360, 0.640),
+        191.0: (0.313, 0.700), 191.9: (0.313, 0.697), 193.3: (0.333, 0.672),
+        193.9: (0.333, 0.672), 195.3: (0.275, 0.727), 196.1: (0.275, 0.727),
+        197.3: (0.275, 0.727), 197.7: (0.470, 0.532),
+        198.6: (0.272, 0.732), 199.2: (0.272, 0.727), 200.3: (0.343, 0.652),
+        200.7: (0.345, 0.655), 202.9: (0.293, 0.707), 203.5: (0.290, 0.707),
+        205.0: (0.330, 0.670), 207.5: (0.352, 0.648), 208.2: (0.352, 0.648),
+        209.3: (0.393, 0.607), 209.7: (0.393, 0.607), 210.6: (0.355, 0.645),
+        211.2: (0.355, 0.645),
+        212.4: (0.300, 0.700), 213.0: (0.303, 0.700), 214.5: (0.355, 0.648),
+        215.6: (0.352, 0.650), 216.2: (0.352, 0.650), 217.6: (0.292, 0.712),
+        218.3: (0.292, 0.710),
+        219.7: (0.290, 0.710), 220.4: (0.293, 0.707), 221.9: (0.325, 0.675),
+        222.7: (0.355, 0.648), 224.3: (0.457, 0.547), 225.2: (0.307, 0.693),
+        226.7: (0.310, 0.693), 227.4: (0.310, 0.693),
+        228.8: (0.303, 0.693), 229.5: (0.303, 0.693), 231.5: (0.303, 0.697),
+        232.9: (0.300, 0.700), 235.4: (0.283, 0.717), 236.4: (0.283, 0.717),
+        237.8: (0.303, 0.697), 238.3: (0.303, 0.697), 241.2: (0.405, 0.593),
+        241.8: (0.405, 0.593),
+    },
 }
 
-#: Frames confirmed to have NO text on screen, from the same sheets. Listed
+#: Frames confirmed to carry NO SUBTITLE LINE, from the same sheets. Listed
 #: rather than merely absent, because "the agent did not annotate this" and
-#: "there was nothing to annotate" are the two answers this batch exists to keep
+#: "there was no line to annotate" are the two answers this batch exists to keep
 #: apart, and an omission cannot say which one it is.
-NO_TEXT: dict[str, tuple[float, ...]] = {
+NO_LINE: dict[str, tuple[float, ...]] = {
     "6053a598cf06": (1150.7, 1153.6, 1164.6, 1188.0),
+    "b23c14c41495": (185.8, 201.5, 201.9, 205.8, 214.1, 230.9, 233.7, 239.4,
+                     240.0),
+}
+
+#: Of those, the frames that carry OTHER text — not a subtitle line, and not an
+#: empty frame either. `b23c14c41495` at 240.0 s is the Apple Watch face the
+#: speaker holds to the lens, which `caption_labels` already marks
+#: `non_dialogue` and which that label does not licence cropping. Kept apart
+#: because "no subtitle line" and "nothing on screen" are two answers and only
+#: one of them is true here.
+OTHER_TEXT_ONLY: dict[str, tuple[float, ...]] = {
+    "6053a598cf06": (),
+    "b23c14c41495": (240.0,),
 }
 
 
@@ -133,7 +170,7 @@ def main() -> int:
         at = sample.get("t_decoded")
         if at is None:
             continue
-        if at in NO_TEXT.get(args.clip, ()):  # confirmed empty
+        if at in NO_LINE.get(args.clip, ()):  # confirmed empty
             continue
         want = lines.get(at)
         if want is None:
@@ -152,7 +189,8 @@ def main() -> int:
 
     fixed = sco.correct(obs, corrections)
     out = {"clip": args.clip, "annotated": len(corrections),
-           "confirmed_no_text": list(NO_TEXT.get(args.clip, ())),
+           "confirmed_no_line": list(NO_LINE.get(args.clip, ())),
+           "of_which_other_text": list(OTHER_TEXT_ONLY.get(args.clip, ())),
            "not_annotated": missing, "corrections": fixed["corrections"],
            "refusals": fixed["correction_refusals"], "observation": fixed}
     (frames_dir / f"{args.clip}.annotated.json").write_text(
@@ -161,7 +199,10 @@ def main() -> int:
     total = len(obs["samples"])
     print(f"{args.clip}: {total} sampled frames")
     print(f"  {len(corrections)} annotated with a confirmed full line")
-    print(f"  {len(NO_TEXT.get(args.clip, ()))} confirmed to have NO text")
+    other = OTHER_TEXT_ONLY.get(args.clip, ())
+    print(f"  {len(NO_LINE.get(args.clip, ()))} confirmed to have NO subtitle "
+          f"line, of which {len(other)} carry other text" + (f" at {list(other)}"
+          if other else ""))
     print(f"  {len(missing)} NOT annotated" + (f" — {missing}" if missing else ""))
     print(f"  {fixed['corrections']} folded in, "
           f"{len(fixed['correction_refusals'])} refused")

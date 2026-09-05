@@ -53,11 +53,36 @@ built from it would frame nothing.
 
 ---
 
-## What these two settle, and what they do not
+## 3. `b23c14c41495` — the watch phase, and where it starts
+
+Codex placed the boundary at the first presentation gesture, before the frame
+at 228.8 s. Read densely between 223.0 and 226.0 s:
+
+| | |
+|---|---|
+| **the watch is VISIBLE** | from at least f2230 (222.90 s), white, on the speaker's left wrist at the lower left of frame — visible is not presented, and the distinction is the point |
+| **the left forearm is at rest** | f2240 (223.90 s) |
+| **raised into frame** | f2243 (224.20 s), as he says "20K steps" |
+| **gesture boundary** | **[223.90, 224.20]** — recorded as an interval. Where the arm "starts" rising is a judgement about a continuous movement, not a measurement, and a single number would state a precision nothing supports |
+| **he takes it off** | around f2309 (230.90 s): both hands at the wrist, no subtitle on screen; the caption at 231.5 s says "let me take my watch off I want y'all to see it" |
+| **the display fills the frame** | 239.4 and 240.0 s: no face in shot at all, and at 240.0 the detector returns one box on the watch face — the only non-subtitle text in the clip |
+| **end of the phase** | **UNKNOWN.** The clip ends at 241.8 s with the watch still held up; that is where the CLIP stops, not where the phase does |
+
+So the demonstration has three stages, not one: the watch worn and referred to
+(224.2), taken off and offered (230.9), and held to the lens as the subject of
+the frame (239.4). A single region for the whole stretch would have to hold a
+wrist at the lower left and a watch face at the centre, which are not the same
+rectangle.
+
+---
+
+## What these three settle, and what they do not
 
 They settle that the source contains both kinds of second region, and where each
-begins to the frame. They do NOT settle where either ends, and the tables say
-`UNKNOWN` rather than reaching for the clip boundary.
+begins — to the frame for the first two, to a 0.3 s interval for the gesture,
+which is a continuous movement and has no frame where it "starts". They do NOT
+settle where any of them ends, and the tables say `UNKNOWN` rather than reaching
+for the clip boundary.
 
 And they do not license `alive=True`. "An insert is present" must not be
 translated back into the old rectangle beside the face chased by whatever moved
