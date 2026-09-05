@@ -429,13 +429,13 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             "energy": 0.5, "action": 0.5, "speech": 0.0, "text": "",
         }]
 
-    # A `fit` stretch too short to be worth its junction goes back to `crop`
-    # BEFORE the merge, because absorbing one can leave two neighbours
-    # delivering the same picture and the merge is what removes the cut between
-    # them. Human gate, 31 August: every junction a viewer timestamped was a
-    # composition change, and a change is a hard 3.16x jump in apparent size by
-    # the geometry of 16:9. See `MIN_FIT_DWELL_S` for what this does and does
-    # not fix.
+    # OFF, and called anyway so the seam stays visible. The rule absorbed a
+    # brief `fit` run into `crop` on duration alone, and on 5 September a frame
+    # from `pilotee0e/aaf5f324e832` showed what that costs: a man cut off at the
+    # frame edge and a woman pushed to the bottom, over an interval the old
+    # export held whole. It needs evidence that the crop keeps the content, and
+    # nothing measures that yet — so `crop_keeps_content` is not passed and
+    # nothing is absorbed.
     shots = dynamic_geometry.absorb_brief_fit_islands(shots)
 
     # ONE merge, here, on the finished shot list — the fallback above included.

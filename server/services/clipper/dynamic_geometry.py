@@ -129,25 +129,45 @@ MIN_FIT_DWELL_S = 4.0
 
 
 def absorb_brief_fit_islands(shots: list[dict], *,
-                             min_dwell_s: float = MIN_FIT_DWELL_S) -> list[dict]:
+                             min_dwell_s: float = MIN_FIT_DWELL_S,
+                             crop_keeps_content=None) -> list[dict]:
     """Return `shots` with short interior `fit` runs put back to `crop`.
 
-    BOUNDED ON BOTH SIDES BY `crop`, which is what makes it an island rather
-    than an opening or an ending. That is not tidiness: the claim being made is
-    "the subject was there before and after, so it did not really leave", and a
-    leading or trailing `fit` run has no evidence on one side. Those are left
-    alone.
+    OFF UNLESS SOMEBODY CAN SHOW THE CROP KEEPS THE CONTENT, and it was not.
+    The rule shipped as "a `fit` run under the dwell, with `crop` on both sides,
+    becomes `crop`", on the reasoning that the subject was there before and
+    after so it did not really leave. That reasoning is wrong, and a frame from
+    the corpus is what showed it.
 
-    Every shot already carries the `rect` it would be cropped to — `rect` is
-    computed for all shots and `composition` only decides whether the renderer
-    uses it — so flipping the label needs no geometry and invents none.
+        `pilotee0e/aaf5f324e832`, 4.82-7.36s, absorbed at 2.54s. The old `fit`
+        export held both people. The new `crop` cuts the man off at the left
+        edge, pushes the woman's head to the bottom of the frame, and fills the
+        rest with blank wall.
 
-    Call this BEFORE `merge_equivalent_shots`: absorbing an island can make
-    neighbouring shots deliver the same picture, and the merge is what removes
-    the cut between them. Afterwards would be too late, for the same reason the
-    merge itself has to run on the finished list.
+    A SHORT DURATION IS NOT EVIDENCE THAT ANYTHING FITS. It says the planner
+    changed its mind quickly, which is a fact about the plan rather than about
+    the picture — the same distinction as `move: push` on a shot that never
+    moves. Two extra cuts are preferable to a person cut in half, and the
+    junction count is an indicator this rule was optimising while the framing
+    got worse.
+
+    So `crop_keeps_content` is REQUIRED and there is no default. Given the run's
+    shots it answers whether the proposed crop preserves what matters over that
+    interval; only `True` absorbs. Absent, `None` or anything else leaves the
+    run as `fit`, which is what every caller gets today.
+
+    WHAT STAYS TRUE FROM THE FIRST VERSION. The run must be bounded on both
+    sides by `crop` — a leading or trailing `fit` has evidence on one side only.
+    Every shot already carries the `rect` it would be cropped to, so flipping
+    the label invents no geometry. And it runs BEFORE `merge_equivalent_shots`,
+    because absorbing a run can leave neighbours delivering the same picture and
+    the merge is what removes the cut between them.
     """
     if not isinstance(shots, list) or len(shots) < 3:
+        return shots
+    if not callable(crop_keeps_content):
+        # The rule is off. Not silently — this is the whole finding: absorbing
+        # on duration alone made a measurably worse frame.
         return shots
     runs: list[list[int]] = []
     for i, shot in enumerate(shots):
@@ -168,6 +188,13 @@ def absorb_brief_fit_islands(shots: list[dict], *,
             # not zero, and a zero here would silently absorb it.
             continue
         if span != span or span >= min_dwell_s:
+            continue
+        try:
+            keeps = crop_keeps_content([shots[i] for i in run])
+        except Exception:
+            # An answer nobody could obtain is not a yes.
+            continue
+        if keeps is not True:
             continue
         for i in run:
             shots[i] = {**shots[i], "composition": "crop",

@@ -33,13 +33,63 @@ def _comps(shots) -> list[str]:
     return [dg.composition_of(s) for s in shots]
 
 
-def test_a_brief_fit_island_goes_back_to_crop():
-    """The subject was there before it and there after it, so it did not really
-    leave — returning those seconds restores continuity."""
+def _keeps(_run) -> bool:
+    """Somebody's evidence that the proposed crop preserves the content."""
+    return True
+
+
+def test_nothing_is_absorbed_without_evidence_that_the_crop_keeps_content():
+    """THE RULE AS SHIPPED WAS WRONG, and a frame from the corpus showed it.
+
+    It absorbed a brief `fit` run into `crop` on duration alone, reasoning that
+    the subject was there before and after so it did not really leave. On
+    `pilotee0e/aaf5f324e832`, 4.82-7.36s, the old `fit` export held both people
+    and the new `crop` cut the man off at the frame edge and pushed the woman's
+    head to the bottom.
+
+    A short duration says the planner changed its mind quickly. That is a fact
+    about the plan, not about the picture.
+    """
+    shots = _shots(("crop", 0.0, 10.0), ("fit", 10.0, 12.0), ("crop", 12.0, 20.0))
+    assert _comps(dg.absorb_brief_fit_islands(shots)) == ["crop", "fit", "crop"]
+
+
+def test_a_brief_fit_island_goes_back_to_crop_when_the_content_survives():
     got = dg.absorb_brief_fit_islands(
-        _shots(("crop", 0.0, 10.0), ("fit", 10.0, 12.0), ("crop", 12.0, 20.0)))
+        _shots(("crop", 0.0, 10.0), ("fit", 10.0, 12.0), ("crop", 12.0, 20.0)),
+        crop_keeps_content=_keeps)
     assert _comps(got) == ["crop", "crop", "crop"]
     assert got[1]["composition_absorbed"] == 2.0, "and it says why it is not fit"
+
+
+def test_only_True_absorbs():
+    """`None` is a check that could not answer and `0` is not a verdict."""
+    for answer in (None, False, 0, "", "yes", []):
+        got = dg.absorb_brief_fit_islands(
+            _shots(("crop", 0.0, 10.0), ("fit", 10.0, 12.0), ("crop", 12.0, 20.0)),
+            crop_keeps_content=lambda _r, a=answer: a)
+        assert _comps(got)[1] == "fit", repr(answer)
+
+
+def test_a_verifier_that_throws_leaves_the_run_alone():
+    def boom(_run):
+        raise RuntimeError("no evidence")
+
+    got = dg.absorb_brief_fit_islands(
+        _shots(("crop", 0.0, 10.0), ("fit", 10.0, 12.0), ("crop", 12.0, 20.0)),
+        crop_keeps_content=boom)
+    assert _comps(got)[1] == "fit"
+
+
+def test_the_verifier_is_handed_the_whole_run():
+    """The question is about the INTERVAL, not one shot of it — which is the
+    same reason the island is measured as a run."""
+    seen = []
+    dg.absorb_brief_fit_islands(
+        _shots(("crop", 0.0, 5.0), ("fit", 5.0, 6.0), ("fit", 6.0, 7.0),
+               ("crop", 7.0, 15.0)),
+        crop_keeps_content=lambda run: seen.append(len(run)) or True)
+    assert seen == [2]
 
 
 def test_an_earned_fit_run_is_left_alone():
@@ -48,7 +98,8 @@ def test_an_earned_fit_run_is_left_alone():
     removes none of them, and claiming otherwise would be the bigger lie."""
     got = dg.absorb_brief_fit_islands(
         _shots(("crop", 0.0, 8.82), ("fit", 8.82, 22.65), ("crop", 22.65, 38.4),
-               ("fit", 38.4, 52.97), ("crop", 52.97, 60.48)))
+               ("fit", 38.4, 52.97), ("crop", 52.97, 60.48)),
+        crop_keeps_content=_keeps)
     assert _comps(got) == ["crop", "fit", "crop", "fit", "crop"]
 
 
@@ -58,7 +109,8 @@ def test_a_run_of_several_short_fit_shots_is_absorbed_as_one_island():
     rule means to keep."""
     got = dg.absorb_brief_fit_islands(
         _shots(("crop", 0.0, 5.0), ("fit", 5.0, 6.5), ("fit", 6.5, 8.0),
-               ("fit", 8.0, 9.5), ("crop", 9.5, 15.0)))
+               ("fit", 8.0, 9.5), ("crop", 9.5, 15.0)),
+        crop_keeps_content=_keeps)
     assert _comps(got) == ["crop", "fit", "fit", "fit", "crop"]
 
 
@@ -66,10 +118,12 @@ def test_a_leading_or_trailing_fit_run_is_not_an_island():
     """The claim is "the subject was there on both sides". An opening or an
     ending has no evidence on one side, so it is not this rule's to make."""
     lead = dg.absorb_brief_fit_islands(
-        _shots(("fit", 0.0, 1.0), ("crop", 1.0, 10.0), ("crop", 10.0, 20.0)))
+        _shots(("fit", 0.0, 1.0), ("crop", 1.0, 10.0), ("crop", 10.0, 20.0)),
+        crop_keeps_content=_keeps)
     assert _comps(lead)[0] == "fit"
     tail = dg.absorb_brief_fit_islands(
-        _shots(("crop", 0.0, 10.0), ("crop", 10.0, 19.0), ("fit", 19.0, 20.0)))
+        _shots(("crop", 0.0, 10.0), ("crop", 10.0, 19.0), ("fit", 19.0, 20.0)),
+        crop_keeps_content=_keeps)
     assert _comps(tail)[-1] == "fit"
 
 
@@ -77,14 +131,16 @@ def test_a_short_crop_island_is_never_absorbed_into_fit():
     """It would shrink a subject that was demonstrably present, and the corpus
     says the case barely exists: the shortest `crop` island is 3.6s."""
     got = dg.absorb_brief_fit_islands(
-        _shots(("fit", 0.0, 10.0), ("crop", 10.0, 11.0), ("fit", 11.0, 20.0)))
+        _shots(("fit", 0.0, 10.0), ("crop", 10.0, 11.0), ("fit", 11.0, 20.0)),
+        crop_keeps_content=_keeps)
     assert _comps(got) == ["fit", "crop", "fit"]
 
 
 def test_the_threshold_is_exclusive_at_the_boundary():
     got = dg.absorb_brief_fit_islands(
         _shots(("crop", 0.0, 5.0), ("fit", 5.0, 5.0 + dg.MIN_FIT_DWELL_S),
-               ("crop", 5.0 + dg.MIN_FIT_DWELL_S, 20.0)))
+               ("crop", 5.0 + dg.MIN_FIT_DWELL_S, 20.0)),
+        crop_keeps_content=_keeps)
     assert _comps(got)[1] == "fit", "exactly the dwell is long enough"
 
 
@@ -94,7 +150,8 @@ def test_a_clock_nobody_can_read_is_not_a_short_island():
     for bad in (None, "soon", float("nan")):
         shots = _shots(("crop", 0.0, 5.0), ("fit", 5.0, 6.0), ("crop", 6.0, 20.0))
         shots[1]["t1"] = bad
-        assert _comps(dg.absorb_brief_fit_islands(shots))[1] == "fit", repr(bad)
+        assert _comps(dg.absorb_brief_fit_islands(
+            shots, crop_keeps_content=_keeps))[1] == "fit", repr(bad)
 
 
 def test_a_list_too_short_to_have_an_interior_is_returned_unchanged():
@@ -108,7 +165,8 @@ def test_the_absorbed_shot_keeps_the_rect_it_will_now_be_cropped_to():
     """`rect` is computed for every shot and `composition` only decides whether
     the renderer uses it, so flipping the label needs no geometry."""
     got = dg.absorb_brief_fit_islands(
-        _shots(("crop", 0.0, 10.0), ("fit", 10.0, 12.0), ("crop", 12.0, 20.0)))
+        _shots(("crop", 0.0, 10.0), ("fit", 10.0, 12.0), ("crop", 12.0, 20.0)),
+        crop_keeps_content=_keeps)
     assert got[1]["rect"] == {"x": 0, "y": 0, "w": 608, "h": 1080}
 
 

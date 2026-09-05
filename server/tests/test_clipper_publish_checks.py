@@ -158,17 +158,34 @@ def test_a_crop_that_followed_an_unanchored_face_is_not_a_pass():
 
 def test_a_basis_is_a_method_and_presence_is_a_measurement():
     """`target_basis` says HOW the target was defined, never whether it was
-    there — and reading it as the answer passed both of the states this check
-    exists to catch."""
+    there — and reading it as the answer let a `stable_anchor` pass on sixteen
+    samples with `evidence.target = 0.0`."""
     absent = _sidecar(regime_view=_regime(target=0.0, covered=16))
     got = pc.subject(absent)
-    assert got["state"] == pf.FAIL and got["severity"] == pf.REVISABLE
+    assert got["state"] != pf.PASS
     assert got["evidence"]["crop_shots_with_no_target"] == [0, 1]
 
     never = _sidecar(regime_view=_regime(target=0.0, covered=0))
     got = pc.subject(never)
     assert got["state"] == pf.UNAVAILABLE
     assert "nobody_sampled" in got["why"]
+
+
+def test_a_lost_track_is_not_a_demonstrated_absence():
+    """AND THE OTHER HALF OF THE SAME RULE, which this check got wrong in the
+    opposite direction. It reported `fail` on 12 clips, and a frame refuted it:
+    on `pilot2c8a/ec47597c60f2` at 0.70s the target is declared absent in 17 of
+    17 crop shots while the creator fills the delivered frame.
+
+    `evidence.target` starts from source detections and arrives here through the
+    anchor filter and the hysteresis, so a zero says the TRACK lost him — a fact
+    about the tracker. Twelve of those shots carry raw detections compatible
+    with the anchor. There is no route to a subject failure today, and saying so
+    is the honest state."""
+    got = pc.subject(_sidecar(regime_view=_regime(target=0.0, covered=16)))
+    assert got["state"] == pf.UNAVAILABLE
+    assert "not_evidence_the_frame_is_empty" in got["why"]
+    assert got["evidence"]["crop_shots_with_no_target"], "kept for the next reader"
 
 
 def test_a_target_timeline_that_did_not_cover_the_clip_is_unavailable():

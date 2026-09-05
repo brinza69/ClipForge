@@ -297,10 +297,25 @@ def subject(sidecar: Any) -> dict:
     evidence.update({"crop_shots_with_no_target": absent,
                      "crop_shots_never_sampled": unmeasured})
     if absent:
-        # MEASURED. The frame held a 9:16 window on an anchor over a stretch
-        # where the subject was demonstrably not there.
-        return pf.check(pf.FAIL, severity=pf.REVISABLE, evidence=evidence,
-                        why="a_crop_holds_on_a_span_with_no_target_present")
+        # NOT A DEMONSTRATED ABSENCE, and calling it one was wrong. This branch
+        # reported `fail` on 12 clips and a frame refuted it: on
+        # `pilot2c8a/ec47597c60f2` at 0.70s the check declares the target absent
+        # in 17 of 17 crop shots while the creator fills the delivered frame.
+        #
+        # `evidence.target` does start from source detections, but it reaches
+        # here through the anchor filter and the hysteresis. A zero therefore
+        # says THE TRACK LOST HIM, which is a fact about the tracker — and 12 of
+        # those shots carry raw detections compatible with the anchor. Missing
+        # detection is uncertainty, not proof of an empty frame, which is this
+        # repo's oldest rule arriving one layer in.
+        #
+        # So there is no route to a subject FAILURE today. Demonstrating one
+        # needs a signal nobody has: whether the delivered window still contains
+        # what the moment is about. Saying so is the honest state; the 12 are
+        # kept in the evidence so the next reader can find them.
+        return pf.check(pf.UNAVAILABLE, evidence=evidence,
+                        why="the_anchored_track_lost_the_target_which_is_not_"
+                            "evidence_the_frame_is_empty")
     if unmeasured:
         return pf.check(pf.UNAVAILABLE, evidence=evidence,
                         why="a_crop_spans_seconds_nobody_sampled")
