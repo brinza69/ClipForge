@@ -41,11 +41,31 @@ def main() -> int:
     ap.add_argument("t1", type=float)
     ap.add_argument("--step", type=float, default=0.1)
     ap.add_argument("--name", default="t")
+    ap.add_argument("--at", default="",
+                    help="comma-separated decoded times instead of a range; "
+                         "use when the frames to annotate are already known")
+    ap.add_argument("--grid", action="store_true",
+                    help="overlay a labelled grid every 0.1 of width AND "
+                         "height, so a box can be read off both axes")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="magnify each tile by this factor")
+    ap.add_argument("--cols", type=int, default=COLS)
+    ap.add_argument("--rows", type=int, default=ROWS)
     args = ap.parse_args()
 
     import cv2
 
-    if args.t1 <= args.t0 or args.step <= 0:
+    wanted = []
+    if args.at:
+        try:
+            wanted = [float(x) for x in args.at.split(",") if x.strip()]
+        except ValueError:
+            print("REFUSED: --at is not a list of seconds")
+            return 2
+        if not wanted:
+            print("REFUSED: --at is empty")
+            return 2
+    if not wanted and (args.t1 <= args.t0 or args.step <= 0):
         print("REFUSED: t1 must be after t0 and step must be positive")
         return 2
     proxy = DATA / args.project / "proxy" / "proxy.mp4"
@@ -59,8 +79,11 @@ def main() -> int:
     tiles: list[Any] = []
     skipped: list[float] = []
     try:
-        want = args.t0
-        while want <= args.t1 + 1e-6:
+        todo = list(wanted) if wanted else None
+        want = args.t0 if todo is None else todo[0]
+        while (want <= args.t1 + 1e-6) if todo is None else bool(todo):
+            if todo is not None:
+                want = todo.pop(0)
             cap.set(cv2.CAP_PROP_POS_MSEC, want * 1000.0)
             got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             index = cap.get(cv2.CAP_PROP_POS_FRAMES)
@@ -69,8 +92,24 @@ def main() -> int:
                 # Counted, never dropped: a strip one frame short would hide
                 # that a moment was never looked at, which is the whole point.
                 skipped.append(round(want, 3))
-                want += args.step
+                if todo is None:
+                    want += args.step
                 continue
+            if args.scale != 1.0:
+                frame = cv2.resize(
+                    frame, (int(frame.shape[1] * args.scale),
+                            int(frame.shape[0] * args.scale)),
+                    interpolation=cv2.INTER_CUBIC)
+            if args.grid:
+                gh, gw = frame.shape[0], frame.shape[1]
+                for i in range(1, 10):
+                    x, y = int(gw * i / 10.0), int(gh * i / 10.0)
+                    cv2.line(frame, (x, 0), (x, gh), (0, 200, 255), 1)
+                    cv2.line(frame, (0, y), (gw, y), (0, 200, 255), 1)
+                    cv2.putText(frame, f".{i}", (x + 2, 12),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.34, (0, 200, 255), 1)
+                    cv2.putText(frame, f".{i}", (2, y - 3),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.34, (0, 200, 255), 1)
             # BOTH TIMES, because seeking is approximate and a strip labelled
             # with what was asked for states a precision the decoder did not
             # deliver — the same rule the caption observations follow.
@@ -78,21 +117,23 @@ def main() -> int:
                         (4, frame.shape[0] - 6), cv2.FONT_HERSHEY_SIMPLEX,
                         0.42, (255, 255, 255), 1)
             tiles.append(frame)
-            want += args.step
+            if todo is None:
+                want += args.step
     finally:
         cap.release()
 
     if not tiles:
         print("REFUSED: no frame in that range could be read")
         return 2
-    per = COLS * ROWS
+    cols, rows_n = max(1, args.cols), max(1, args.rows)
+    per = cols * rows_n
     made = 0
     for page in range((len(tiles) + per - 1) // per):
         chunk = tiles[page * per:(page + 1) * per]
         rows = []
-        for r in range(0, len(chunk), COLS):
-            row = chunk[r:r + COLS]
-            while len(row) < COLS:
+        for r in range(0, len(chunk), cols):
+            row = chunk[r:r + cols]
+            while len(row) < cols:
                 import numpy as np
 
                 row.append(np.zeros_like(chunk[0]))

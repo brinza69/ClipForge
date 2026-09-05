@@ -73,6 +73,13 @@ def main() -> int:
                     help="only frames at or after this decoded time")
     ap.add_argument("--limit", type=int, default=0,
                     help="stop after this many frames (0 = all)")
+    ap.add_argument("--y0", type=float, default=BAND_Y0,
+                    help="top of the crop, as a fraction of frame height")
+    ap.add_argument("--y1", type=float, default=BAND_Y1)
+    ap.add_argument("--width", type=int, default=OUT_W,
+                    help="magnify to this width; use 3200 to judge whether a "
+                         "descender crosses the detector's box")
+    ap.add_argument("--rows", type=int, default=ROWS)
     args = ap.parse_args()
 
     import cv2
@@ -108,19 +115,19 @@ def main() -> int:
                 skipped += 1
                 continue
             h, w = frame.shape[0], frame.shape[1]
-            y0, y1 = int(BAND_Y0 * h), h
+            y0, y1 = int(args.y0 * h), min(h, int(args.y1 * h))
             band = frame[y0:y1, :]
-            scale = OUT_W / float(w)
-            band = cv2.resize(band, (OUT_W, int(band.shape[0] * scale)),
+            scale = args.width / float(w)
+            band = cv2.resize(band, (args.width, int(band.shape[0] * scale)),
                               interpolation=cv2.INTER_CUBIC)
             for box in sample.get("boxes") or []:
-                bx0, bx1 = int(box["x0"] * OUT_W), int(box["x1"] * OUT_W)
+                bx0, bx1 = int(box["x0"] * args.width), int(box["x1"] * args.width)
                 by0 = int((box["y0"] * h - y0) * scale)
                 by1 = int((box["y1"] * h - y0) * scale)
                 cv2.rectangle(band, (bx0, by0), (bx1, by1), (0, 255, 0), 1)
             cv2.putText(band, f"t={sample.get('t_decoded')}", (6, 16),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-            tiles.append(cv2.vconcat([band, _ruler(cv2, np, OUT_W)]))
+            tiles.append(cv2.vconcat([band, _ruler(cv2, np, args.width)]))
     finally:
         cap.release()
 
@@ -128,10 +135,11 @@ def main() -> int:
         print("REFUSED: no frame could be re-read")
         return 2
     made = []
-    for page in range((len(tiles) + ROWS - 1) // ROWS):
-        chunk = tiles[page * ROWS:(page + 1) * ROWS]
+    rows_per = max(1, args.rows)
+    for page in range((len(tiles) + rows_per - 1) // rows_per):
+        chunk = tiles[page * rows_per:(page + 1) * rows_per]
         sheet = cv2.vconcat(chunk)
-        path = frames_dir / f"{args.clip}.band{page:02d}.jpg"
+        path = frames_dir / f"{args.clip}.band{args.width}.{page:02d}.jpg"
         cv2.imwrite(str(path), sheet, [cv2.IMWRITE_JPEG_QUALITY, 92])
         made.append(path.name)
         print(f"  {path.name}: {len(chunk)} rows")
