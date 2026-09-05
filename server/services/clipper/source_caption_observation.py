@@ -43,7 +43,7 @@ from typing import Any, Sequence
 
 __all__ = ["SCHEMA", "DETECTOR", "AGENT", "HUMAN", "PROVENANCES",
            "NO_DETECTOR", "NO_VIDEO", "FRAME_UNREADABLE", "BAD_TIMES",
-           "observe", "from_annotations", "coverage"]
+           "observe", "from_annotations", "coverage", "disjoint"]
 
 SCHEMA = "source_caption_observation_v1"
 
@@ -93,6 +93,13 @@ def observe(video: Any, at: Sequence[Any], *, reader: Any = None) -> dict:
     as being at 51.15 s states a precision the decoder did not deliver. An
     interval decision made on a box placed a second from where it was seen is
     the kind of error nothing downstream can detect.
+
+    AND SO IS THE FRAME INDEX, which is the only thing that identifies a frame.
+    Two different requested times can decode to the SAME frame, so a caller
+    holding out "different" times has not necessarily held out different
+    evidence — it can test a frozen region against the very frames that built
+    it and report a clean result. `frame` is that identity; comparing requested
+    times, or even decoded times, is comparing the request.
     """
     from services.clipper import source_captions as scap
 
@@ -124,10 +131,16 @@ def observe(video: Any, at: Sequence[Any], *, reader: Any = None) -> dict:
         for want in times:
             cap.set(cv2.CAP_PROP_POS_MSEC, want * 1000.0)
             got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+            # BOTH READ BEFORE `read()`. After it, `POS_FRAMES` points at the
+            # NEXT frame, so an index taken afterwards names a frame nobody
+            # looked at — and two sets compared on it would look disjoint
+            # exactly when they are not.
+            index = cap.get(cv2.CAP_PROP_POS_FRAMES)
             ok, frame = cap.read()
             if not ok or frame is None:
                 samples.append({"t_requested": round(want, 3), "t_decoded": None,
-                                "boxes": None, "refused": FRAME_UNREADABLE})
+                                "frame": None, "boxes": None,
+                                "refused": FRAME_UNREADABLE})
                 continue
             height, width = int(frame.shape[0]), int(frame.shape[1])
             if out["image_w"] is None:
@@ -137,6 +150,7 @@ def observe(video: Any, at: Sequence[Any], *, reader: Any = None) -> dict:
                 "t_requested": round(want, 3),
                 "t_decoded": (round(float(got_ms) / 1000.0, 3)
                               if _finite(got_ms) is not None else None),
+                "frame": (int(index) if _finite(index) is not None else None),
                 "boxes": boxes,
                 "refused": None if boxes is not None else DETECTOR_FAILED,
             })
@@ -224,7 +238,7 @@ def from_annotations(video: Any, samples: Any, *, image_w: Any, image_h: Any,
             return _empty(video, BAD_TIMES, provenance=provenance)
         boxes = _fractions(raw.get("boxes"))
         rows.append({"t_requested": round(t, 3), "t_decoded": round(t, 3),
-                     "boxes": boxes,
+                     "frame": raw.get("frame"), "boxes": boxes,
                      "refused": None if boxes is not None else FRAME_UNREADABLE})
     out = _empty(video, "", provenance=provenance)
     out["why"] = None
@@ -306,4 +320,56 @@ def coverage(observation: Any, t0: Any, t1: Any) -> dict:
     # decision downstream is the same as not having been looked at.
     out["unevidenced"] = (out["with_text"] + out["without_text"]) == 0
     out["why"] = None
+    return out
+
+
+def disjoint(build: Any, holdout: Any) -> dict:
+    """Did the hold-out set really read frames the construction set did not.
+
+    THE CHECK THAT WAS ASSUMED AND SHOULD NOT HAVE BEEN. Shifting the requested
+    times by half a slot does not guarantee different frames: seeking lands on
+    whatever the decoder gives, and two different requests can return the same
+    one. A hold-out that shares frames with the construction set is testing a
+    region against its own inputs — which is exactly the circularity it exists
+    to escape, reported as though it had escaped it.
+
+    Compared on the FRAME INDEX, which identifies a frame. Decoded times are a
+    weaker proxy and requested times are not evidence at all. A sample with no
+    index cannot be shown to be distinct, so it is counted as `unidentified`
+    and blocks the clean answer rather than passing quietly.
+    """
+    out: dict[str, Any] = {"build": 0, "holdout": 0, "shared": 0,
+                           "unidentified": 0, "disjoint": None, "why": None}
+    rows_a = (build or {}).get("samples") if isinstance(build, dict) else None
+    rows_b = (holdout or {}).get("samples") if isinstance(holdout, dict) else None
+    if not isinstance(rows_a, Sequence) or not isinstance(rows_b, Sequence):
+        out["why"] = "there_are_not_two_observations_to_compare"
+        return out
+    seen: set[int] = set()
+    for row in rows_a:
+        if not isinstance(row, dict):
+            continue
+        out["build"] += 1
+        idx = row.get("frame")
+        if isinstance(idx, int) and not isinstance(idx, bool):
+            seen.add(idx)
+        else:
+            out["unidentified"] += 1
+    for row in rows_b:
+        if not isinstance(row, dict):
+            continue
+        out["holdout"] += 1
+        idx = row.get("frame")
+        if isinstance(idx, int) and not isinstance(idx, bool):
+            if idx in seen:
+                out["shared"] += 1
+        else:
+            out["unidentified"] += 1
+    if out["unidentified"]:
+        out["why"] = "some_samples_carry_no_frame_index"
+        return out
+    if not out["build"] or not out["holdout"]:
+        out["why"] = "one_of_the_two_sets_is_empty"
+        return out
+    out["disjoint"] = out["shared"] == 0
     return out

@@ -194,7 +194,9 @@ def _run(monkeypatch, reader, times, decoded_ms: float | None = None):
     import types
 
     class _Cap:
-        CAP_PROP_POS_MSEC = 0
+        """A decoder that answers the two properties separately, and reports a
+        frame index derived from the position — so a test can tell a real
+        disjointness check from one comparing the request."""
 
         def __init__(self, _path):
             self._want = 0.0
@@ -205,7 +207,9 @@ def _run(monkeypatch, reader, times, decoded_ms: float | None = None):
         def set(self, _prop, value):
             self._want = value
 
-        def get(self, _prop):
+        def get(self, prop):
+            if prop == 1:                                # CAP_PROP_POS_FRAMES
+                return float(int(self._want / 40.0))     # 25 fps
             return self._want if decoded_ms is None else decoded_ms
 
         def read(self):
@@ -219,6 +223,50 @@ def _run(monkeypatch, reader, times, decoded_ms: float | None = None):
 
     fake = types.ModuleType("cv2")
     fake.CAP_PROP_POS_MSEC = 0
+    fake.CAP_PROP_POS_FRAMES = 1
     fake.VideoCapture = _Cap
     monkeypatch.setitem(sys.modules, "cv2", fake)
     return sco.observe("x.mp4", times, reader=reader)
+
+
+# --- did the hold-out really hold anything out -------------------------------
+
+
+def test_two_different_times_that_decode_to_one_frame_are_not_disjoint(monkeypatch):
+    """THE CHECK THAT WAS ASSUMED. Shifting the requested times by half a slot
+    does not guarantee different frames: at 25 fps, 1.00 s and 1.02 s are the
+    same frame, and a hold-out built that way tests a region against its own
+    inputs while reporting that it escaped the circularity."""
+    build = _run(monkeypatch, _Reader([]), [1.00])
+    later = _run(monkeypatch, _Reader([]), [1.02])
+    assert build["samples"][0]["t_requested"] != later["samples"][0]["t_requested"]
+    assert build["samples"][0]["frame"] == later["samples"][0]["frame"]
+    got = sco.disjoint(build, later)
+    assert got["shared"] == 1 and got["disjoint"] is False
+
+
+def test_frames_far_enough_apart_are_disjoint(monkeypatch):
+    build = _run(monkeypatch, _Reader([]), [1.00, 2.00])
+    later = _run(monkeypatch, _Reader([]), [1.50, 2.50])
+    got = sco.disjoint(build, later)
+    assert got["disjoint"] is True and got["shared"] == 0
+    assert got["build"] == 2 and got["holdout"] == 2
+
+
+def test_a_sample_with_no_frame_index_cannot_be_shown_to_be_distinct(monkeypatch):
+    """It blocks the clean answer rather than passing quietly: `disjoint: None`
+    is "nobody could tell", and a caller that read it as True would be back to
+    testing the region against its own inputs."""
+    build = _run(monkeypatch, _Reader([]), [1.00])
+    later = {"samples": [{"t_requested": 5.0, "t_decoded": 5.0, "frame": None,
+                          "boxes": []}]}
+    got = sco.disjoint(build, later)
+    assert got["disjoint"] is None and got["unidentified"] == 1
+    assert got["why"] == "some_samples_carry_no_frame_index"
+
+
+def test_an_empty_set_is_not_a_disjoint_one(monkeypatch):
+    build = _run(monkeypatch, _Reader([]), [1.00])
+    for bad in (None, {}, {"samples": []}, 7):
+        got = sco.disjoint(build, bad)
+        assert got["disjoint"] is not True, repr(bad)

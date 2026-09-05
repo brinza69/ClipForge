@@ -266,6 +266,7 @@ def main() -> int:
 
         rows = [_row(s, plan, obs, start) for s in shots]
         held: Any = None
+        held_meta: Any = None
         if args.holdout:
             # DIFFERENT FRAMES, guaranteed by the phase shift rather than hoped
             # for. These take no part in building any region; they only test
@@ -278,8 +279,24 @@ def main() -> int:
                 print(f"{clip_id}: REFUSED the hold-out — {obs2['why']}")
                 refused += 1
                 continue
+            # DID IT ACTUALLY HOLD ANYTHING OUT. Shifting the requested times
+            # does not guarantee different FRAMES — seeking lands where the
+            # decoder puts it, and two requests can return one frame. Compared
+            # on the decoded frame index, which is what identifies a frame.
+            apart = sco.disjoint(obs, obs2)
+            print(f"{clip_id}: hold-out disjoint={apart['disjoint']} "
+                  f"(shared {apart['shared']} of {apart['holdout']} frames"
+                  f"{', ' + apart['why'] if apart['why'] else ''})")
+            if apart["disjoint"] is not True:
+                # A contaminated hold-out reports the circularity as escaped.
+                print(f"{clip_id}: REFUSED the hold-out — it shares frames "
+                      f"with the set that built the regions")
+                refused += 1
+                continue
             held = _holdout(shots, plan, obs2, start, rows)
+            held_meta = apart
         report.append({"clip": clip_id, "shots": rows, "holdout": held,
+                       "holdout_disjoint": held_meta,
                        "observation": {k: obs[k] for k in
                                        ("image_w", "image_h", "read",
                                         "refused", "refusals")},
