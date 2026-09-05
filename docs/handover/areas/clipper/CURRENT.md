@@ -986,6 +986,103 @@ model și nu s-au creat sesiuni reale în S8a/S8b.
 Verificare după S8b: **1.752 passed, 2 failed**, numai cele două 404 TikTok preexistente;
 66 teste de review trec, inclusiv API și două procese; typecheck curat.
 
+## RE-PLANIFICARE ȘI RE-RANDARE — 5 septembrie 2026
+
+Cele 58 de exporturi ale piloturilor au fost **re-planificate**, nu rejucate. `rerender_pilots.py`
+re-encoda din sidecarul de pe disc, deci planul rămânea cel din 22 august — motivul pentru care R1 a
+aterizat pe 29 august, a scos 116 tăieturi invizibile din planner și **n-a schimbat niciun export**.
+`scripts/replan_and_rerender.py` rulează `_decide_render` din nou.
+
+Originalele sunt în `<proiect>/exports_pre_replan/`, iar `exports_pre_caption_fix/` de dinainte
+rămâne neatins. O a doua rulare nu le poate suprascrie.
+
+**Nu s-a pornit fără dovadă.** `scripts/verify_replan.py` re-planifică fără să encodeze și cere patru
+probe; a rulat până a trecut pe toate. Apoi un micro-gate pe patru clipuri, câte unul pentru fiecare
+defect confirmat, înainte de corpus.
+
+### Poarta R0, pe corpusul nou
+
+```
+clipuri                    58        exit 0, integrity_ok: True
+shot-uri                 1231        (erau 1.341)
+tăieturi echivalente        0        ← erau 116, cifra de bază a batch-ului
+salturi induse de trim      0
+granițe necontigue          0
+start pe primul cuvânt  58/58
+coadă <= 50ms           22/58        ← neschimbat, e defectul de boundary
+compoziție          crop=1198, fit=33
+fingerprints          valid=58        ← erau `unavailable`
+```
+
+**Cele 116 sunt zero.** Prima oară când reparația R1 ajunge într-un fișier, la șapte zile după ce a
+fost scrisă.
+
+### Preflight-ul R7, pe corpusul nou
+
+```
+APPROVE 0    REVISE 67    REJECT 22    UNDECIDED 12
+
+geometry_and_duration                  pass 58   fail  0   unavailable  43
+cut_equivalence_and_profile_rhythm     pass  0   fail  0   unavailable 101
+subject_present_when_required          pass  2   fail 12   unavailable  87
+usable_frame_in_fit_and_no_chrome      pass  0   fail  0   unavailable 101
+captions_not_duplicated_or_unreadable  pass  0   fail 55   unavailable  46
+boundary_complete                      pass 44   fail 56   unavailable   1
+provenance_complete                    pass 58   fail  0   unavailable  43
+```
+
+Trei mișcări reale, iar cele 43 de `unavailable` de peste tot sunt proiectele nere-randate:
+
+- **`provenance_complete`: 0 → 58 treceri.** Verificarea a fost `unavailable` pe 101 din 101 tot
+  batch-ul — întâi fiindcă nimic nu purta amprentă, apoi fiindcă un digest de rețetă nu atinge
+  fișierul. Acum sidecarul poartă și `output_identity`, iar cele două jumătăți se verifică amândouă.
+- **`cut_equivalence`: 23 eșecuri → 0.** Nu mai există niciun clip cu tăieturi pe care privitorul nu
+  le poate vedea. Rămâne `unavailable` peste tot, fiindcă jumătatea de ritm nu se evaluează —
+  starea onestă, nu o regresie.
+- **`subject`: 0/0/101 → 2 treceri, 12 EȘECURI, 87 unavailable.** Prima oară când verificarea are
+  intrare, fiindcă `regime_view` ajunge acum pe sidecar.
+
+### Cele 12 eșecuri de subiect sunt toate `pilot2c8a`, și confirmă automat gate-ul uman
+
+| clip | shot-uri `crop` | fără țintă | bază |
+|---|---:|---:|---|
+| `003a5c53c51d` | 46 | **37** | `stable_anchor` |
+| `ec47597c60f2` | 17 | **17** | `stable_anchor` |
+| `2a59b1e41880` | 21 | 17 | `stable_anchor` |
+| `38aa005c7c1f` | 20 | 17 | `stable_anchor` |
+| `ad1b8004ece9` | 10 | **10** | `stable_anchor` |
+| `d646da7201ad` | 9 | 8 | `stable_anchor` |
+
+Trei clipuri au **fiecare** shot `crop` ținut peste un interval unde ținta e măsurat absentă. Toate
+poartă `target_basis: stable_anchor` — adică o ancoră a fost găsită, iar întrebarea „era ținta acolo"
+e alta, exact distincția pe care Codex a numit-o: *o bază e o metodă, nu o măsurătoare.*
+
+**Niciun alt pilot nu are vreun eșec.** Și pilotul care le are pe toate 12 e chiar cel pe care omul l-a
+marcat pe 31 august: „personajul din browser e pus bine când vorbește". Verificarea construită după
+review-ul lui Codex găsește acum defectul R3a singură, pe exact sursa unde un om îl văzuse.
+
+### O scăpare a mea, și reparația
+
+Prima re-randare a folosit `burn/default` pe toate cele 15 clipuri `pilotf81b` — deci **am recreat
+cele 37 de duplicate**, exact ce avertizase Codex. Construisem mecanismul de politică de captions și
+nu setasem setarea pentru proiectul pe care omul îl confirmase.
+
+Reparat: `source_has_burned_captions: true` pe `pilotf81b`, care înregistrează verdictul lui din 31
+august („se mai vede subtitrarea" = a SURSEI, 4 din 4), apoi cele 15 clipuri re-randate.
+**REJECT 37 → 22.** Cele 22 rămase sunt `39c89ae2e16e` și `43a509687a33` — surse pe care detectorul
+le dă `present` și pe care **nimeni nu le-a confirmat**, deci rămân respinse. Corect: detectorul e
+`calibrated: false` și n-are voie să decidă singur.
+
+### Ce NU s-a mișcat, și de ce
+
+- **`boundary_complete` 44/56/1, neschimbat.** Re-planificarea nu re-scorează, deci ferestrele sunt
+  aceleași. R5a mută finalurile la următoarea RULARE DE SCORING, nu la o re-randare.
+- **`usable_frame` 101 `unavailable`.** Cache-ul de chrome e cheiat pe identitatea mp4-ului, iar 58 de
+  fișiere tocmai s-au schimbat — deci verdictele lor sunt corect invalidate și cer ~66 de minute de
+  OCR. Cache-ul a făcut exact ce trebuia.
+- **Cele 57 de joncțiuni lungi** rămân. Verdictul uman din 4 septembrie a ales hard cut dintre trei
+  prezentări; niciuna nu era una pe care el s-o numească bună.
+
 ## Punctul exact de reluare
 
 **Nimic din motor nu e activ.** R2, R3a, R3b, R4, R5 și R6 sunt instrumentare în umbră: calculează,
