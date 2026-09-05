@@ -49,12 +49,28 @@ def main() -> int:
                          "height, so a box can be read off both axes")
     ap.add_argument("--scale", type=float, default=1.0,
                     help="magnify each tile by this factor")
+    ap.add_argument("--frames", default="",
+                    help="comma-separated FRAME indices. Seeking by time lands "
+                         "on whatever frame the decoder gives — asking for "
+                         "224.3 s returned f2243 where the construction sample "
+                         "is f2244 — so an annotation targeting a sample must "
+                         "address it by index, not by the time that produced it")
     ap.add_argument("--cols", type=int, default=COLS)
     ap.add_argument("--rows", type=int, default=ROWS)
     args = ap.parse_args()
 
     import cv2
 
+    by_frame = []
+    if args.frames:
+        try:
+            by_frame = [int(x) for x in args.frames.split(",") if x.strip()]
+        except ValueError:
+            print("REFUSED: --frames is not a list of integers")
+            return 2
+        if not by_frame:
+            print("REFUSED: --frames is empty")
+            return 2
     wanted = []
     if args.at:
         try:
@@ -65,7 +81,7 @@ def main() -> int:
         if not wanted:
             print("REFUSED: --at is empty")
             return 2
-    if not wanted and (args.t1 <= args.t0 or args.step <= 0):
+    if not wanted and not by_frame and (args.t1 <= args.t0 or args.step <= 0):
         print("REFUSED: t1 must be after t0 and step must be positive")
         return 2
     proxy = DATA / args.project / "proxy" / "proxy.mp4"
@@ -79,12 +95,19 @@ def main() -> int:
     tiles: list[Any] = []
     skipped: list[float] = []
     try:
+        frames_todo = list(by_frame) if by_frame else None
         todo = list(wanted) if wanted else None
-        want = args.t0 if todo is None else todo[0]
-        while (want <= args.t1 + 1e-6) if todo is None else bool(todo):
-            if todo is not None:
-                want = todo.pop(0)
-            cap.set(cv2.CAP_PROP_POS_MSEC, want * 1000.0)
+        want = args.t0 if (todo is None and frames_todo is None) else 0.0
+        if todo is not None:
+            want = todo[0]
+        while (bool(frames_todo) if frames_todo is not None
+               else (bool(todo) if todo is not None else want <= args.t1 + 1e-6)):
+            if frames_todo is not None:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frames_todo.pop(0))
+            else:
+                if todo is not None:
+                    want = todo.pop(0)
+                cap.set(cv2.CAP_PROP_POS_MSEC, want * 1000.0)
             got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             index = cap.get(cv2.CAP_PROP_POS_FRAMES)
             ok, frame = cap.read()
@@ -92,7 +115,7 @@ def main() -> int:
                 # Counted, never dropped: a strip one frame short would hide
                 # that a moment was never looked at, which is the whole point.
                 skipped.append(round(want, 3))
-                if todo is None:
+                if todo is None and frames_todo is None:
                     want += args.step
                 continue
             if args.scale != 1.0:
@@ -117,7 +140,7 @@ def main() -> int:
                         (4, frame.shape[0] - 6), cv2.FONT_HERSHEY_SIMPLEX,
                         0.42, (255, 255, 255), 1)
             tiles.append(frame)
-            if todo is None:
+            if todo is None and frames_todo is None:
                 want += args.step
     finally:
         cap.release()

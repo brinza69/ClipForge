@@ -57,9 +57,11 @@ sys.path.insert(0, str(_ROOT / "server"))
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 
 #: Two regions are close enough to merge when neither dimension of their union
-#: exceeds either one by more than this. It is a REPORTING threshold, not a
-#: decision: the cost of merging is printed either way and the choice is the
-#: editor's.
+#: exceeds EITHER of them by more than this — not the larger of them, which is
+#: how the first version called a merge that shrank one phase by a third
+#: "mergeable at 4.4%". It is a REPORTING threshold, not a decision: the cost is
+#: printed either way, in delivered scale as well as in growth, and the choice
+#: is the editor's.
 MERGE_SLACK = 0.08
 
 #: Confirmed sub-pixel shortfall of the detector's y, measured on 52 annotated
@@ -74,6 +76,15 @@ PROXY_H = 270.0
 #: `docs/refs/pilotf81b-source-observations-2026-09-05.md`; the gesture one is
 #: the later end of the observed interval [223.90, 224.20] and that choice is an
 #: EDITING choice, not a detected moment — the observation is the interval.
+#: Which annotated parts each phase must hold, from Codex's table. `screen` is
+#: the display alone and is what the last phase keeps COMPLETE; `face` is the
+#: speaker as context, which is why it is in the removal phase too.
+PHASE_KEEPS: dict[str, tuple[str, ...]] = {
+    "watch-worn": ("face", "hand", "watch"),
+    "removal": ("face", "hand", "watch"),
+    "screen": ("screen", "watch", "hand", "face"),
+}
+
 PHASES: dict[str, list[tuple[str, float, float, str, str]]] = {
     "6053a598cf06": [
         ("speech", 1147.75, 1204.58,
@@ -96,6 +107,70 @@ PHASES: dict[str, list[tuple[str, float, float, str, str]]] = {
 
 NO_SUBJECT_ANNOTATION = ("the_watch_geometry_is_an_agent_annotation_and_none_"
                          "has_been_made_for_this_phase")
+
+
+def _watch_subject(clip: str, phase: str, t0: float, t1: float):
+    """The annotated parts for a watch phase, or `(None, why)`.
+
+    The FRAMES are the construction samples, addressed by index — the
+    annotation was made on those frames and a region built from a different set
+    would be built from a different picture.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "watchann", str(_ROOT / "scripts" / "watch_annotations.py"))
+    wa = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wa)
+
+    keeps = PHASE_KEEPS.get(phase)
+    if keeps is None:
+        return None, f"no_keep_list_declared_for_the_phase_{phase}"
+    samples = _samples_for(clip)
+    frames = [f for t, f in samples if t0 <= t < t1]
+    # The withdrawal frames are not construction samples and are added
+    # deliberately: the clip runs to 242.42 s and 241.8 is only the last thing
+    # the sampler reached, so a region built without them would be built from
+    # the close-up alone.
+    if phase == "screen":
+        frames += [f for f in (2424, 2425) if f in wa.WATCH]
+    if not frames:
+        return None, "no_construction_frame_in_this_phase"
+    missing = [f for f in frames if f not in wa.WATCH]
+    if missing:
+        return None, f"no_watch_annotation_for_frames_{missing}"
+
+    boxes = []
+    for f in frames:
+        for what in keeps:
+            box = wa.WATCH[f].get(what)
+            if box is None:
+                continue
+            x0, x1, y0, y1 = box
+            boxes.append({"x0": x0, "x1": x1, "y0": y0, "y1": y1})
+    if not boxes:
+        return None, "the_annotation_holds_none_of_the_parts_this_phase_keeps"
+    widths = [b["x1"] - b["x0"] for f in frames
+              for k in ("screen", "watch")
+              if (b := (lambda v: {"x0": v[0], "x1": v[1]} if v else None)(
+                  wa.WATCH[f].get(k)))]
+    return {"boxes": boxes, "frames": frames,
+            "not_visible": sum(1 for f in frames if f in wa.WATCH_NOT_VISIBLE),
+            "clipped": sum(1 for f in frames if f in wa.CLIPPED_BY_FRAME),
+            "uncertainty": wa.MARGIN_UNCERTAINTY,
+            # The widest annotated watch or screen in the phase, as the size
+            # whose delivered pixels are worth reporting.
+            "watch_w": (max(widths) if widths else 0.0) * 2560}, None
+
+
+def _samples_for(clip: str) -> list[tuple[float, int]]:
+    """`[(decoded time, frame index)]` for the construction samples."""
+    import json as _json
+
+    path = DATA / "pilotf81b" / "caption_frames" / f"{clip}.samples.json"
+    blob = _json.loads(path.read_text(encoding="utf-8"))
+    return [(s["t_decoded"], s["frame"]) for s in blob["observation"]["samples"]
+            if s.get("frame") is not None and s.get("t_decoded") is not None]
 
 
 def _annotations():
@@ -218,13 +293,42 @@ def main() -> int:
             refused += 1
             print(f"  {name:<12} REFUSED — {row['why']}")
             continue
-        if source != "face":
-            # The watch phases need an agent annotation of the watch, and
-            # there is none. Not the average, not the previous rectangle.
-            row["why"] = NO_SUBJECT_ANNOTATION
+        if source == "watch":
+            subject, why = _watch_subject(args.clip, name, t0, t1)
+            if subject is None:
+                row["why"] = why
+                rows.append(row)
+                refused += 1
+                print(f"  {name:<12} REFUSED — {why}")
+                continue
+            row["subject"] = {"frames": len(subject["frames"]),
+                              "boxes": len(subject["boxes"]),
+                              "not_visible": subject["not_visible"],
+                              "clipped_by_frame": subject["clipped"],
+                              "margin_uncertainty": subject["uncertainty"]}
+            got = cr.region_for(lines, None, sw, sh,
+                                subject_boxes=subject["boxes"])
+            if got["rect"] is None:
+                row["why"] = got["why"]
+                rows.append(row)
+                refused += 1
+                print(f"  {name:<12} REFUSED — {got['why']}")
+                continue
+            sizes = cr.delivered_sizes(got["rect"], subject_w=subject["watch_w"],
+                                       band_h=(0.9704 - 0.9037) * sh)
+            row.update({"region": got["rect"], "sizes": sizes,
+                        "aspect": got["aspect"], "built_from": got["built_from"]})
             rows.append(row)
-            refused += 1
-            print(f"  {name:<12} REFUSED — {row['why']}")
+            print(f"  {name:<12} region {got['rect']}  aspect {got['aspect']}")
+            print(f"  {'':<12} scale {sizes['scale']}, watch "
+                  f"{sizes['subject_w_out_px']}px, band "
+                  f"{sizes['band_h_out_px']}px, bars "
+                  f"{sizes['letterbox_bars_px']}/{sizes['pillarbox_bars_px']}px")
+            print(f"  {'':<12} from {len(lines)} confirmed lines and "
+                  f"{len(subject['boxes'])} annotated parts over "
+                  f"{len(subject['frames'])} frames "
+                  f"({subject['not_visible']} with the watch out of frame, "
+                  f"{subject['clipped']} clipped by an edge)")
             continue
 
         faces = _face_proposals(sidecar, t0, t1, proxy_w, proxy_h)
@@ -279,9 +383,22 @@ def main() -> int:
         ra, rb = a["region"], b["region"]
         w = max(ra["x"] + ra["w"], rb["x"] + rb["w"]) - min(ra["x"], rb["x"])
         h = max(ra["y"] + ra["h"], rb["y"] + rb["h"]) - min(ra["y"], rb["y"])
-        grow = max(w / max(ra["w"], rb["w"]), h / max(ra["h"], rb["h"])) - 1.0
+        # AGAINST EACH REGION, not against the larger of the two. The first
+        # version divided by the larger, which reports a merge that leaves the
+        # big phase untouched and shrinks the small one by a third as "4.4%":
+        # the cost of a merge is what it does to the phase that loses, and the
+        # phase that loses is always the smaller one.
+        each = [max(w / r["w"], h / r["h"]) - 1.0 for r in (ra, rb)]
+        # The delivered consequence, which is what a reader can judge: the
+        # scale each phase would be rendered at before and after.
+        scales = [min(cr.OUT_W / r["w"], cr.OUT_H / r["h"]) for r in (ra, rb)]
+        merged_scale = min(cr.OUT_W / w, cr.OUT_H / h)
         print(f"  merge {a['phase']}+{b['phase']}: union grows "
-              f"{grow * 100:.1f}%  -> {'mergeable' if grow <= MERGE_SLACK else 'costly'}")
+              f"{each[0] * 100:.1f}% over the first and {each[1] * 100:.1f}% "
+              f"over the second  -> "
+              f"{'mergeable' if max(each) <= MERGE_SLACK else 'costly'}")
+        print(f"  {'':<12} scale {scales[0]:.3f}/{scales[1]:.3f} -> "
+              f"{merged_scale:.3f} for both")
 
     out_dir = DATA / args.project / "phase_regions"
     out_dir.mkdir(parents=True, exist_ok=True)
