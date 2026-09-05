@@ -2,10 +2,17 @@
 
 THE MEASUREMENT THAT SETTLED THE BATCH. D-sublot 2 was scoped as "keep the
 source subtitle in frame", and on `pilotf81b` — the source the whole caption
-policy came from — there is no framing that does it: the band is 1216 pixels
-wide and every 9:16 window on a 2560x1440 source is 810. The tests below pin
-that arithmetic, because the tempting version of this module reports a smaller
-cut and calls it an improvement.
+policy came from — no crop of that source can do it: the band is 1216 pixels
+wide and the widest 9:16 crop a 2560x1440 frame allows is 810. The tests below
+pin that arithmetic, because the tempting version of this module reports a
+smaller shortfall and calls it an improvement.
+
+AND THEY PIN THE LIMIT OF IT TOO, which review caught after the fact. The band
+is a union over frames sampled across the whole VOD, so non-containment is a
+conservative geometric warning and NOT an observation that the text on screen
+during a given shot exceeded the crop. `test_the_check_records_it_without_
+charging_a_failure` is that rule, and it is the one to keep if the rest is ever
+rewritten.
 """
 
 from __future__ import annotations
@@ -31,14 +38,16 @@ def _shot(index: int, x: int, w: int = 810, **kw) -> dict:
 
 
 def test_go_ghosts_subtitle_does_not_fit_in_any_window_of_its_own_source():
-    """1216 px of band into an 810 px window. `fits_at_all` is the difference
-    between "move the crop" and "there is nowhere to move it to", and it is
-    what makes this a policy question rather than a planner bug."""
+    """1216 px of band into an 810 px window, and 810 is the WIDEST 9:16 crop a
+    1440-tall frame allows — not merely the narrowest this clip happened to
+    use. That distinction is the difference between "move the crop" and "there
+    is nowhere to move it to", and the first version claimed the second from
+    evidence for the first."""
     got = scs.survival(GO_GHOST, [_shot(0, 858)], {}, SRC_W, SRC_H)
-    assert got["state"] == scs.CUT
+    assert got["state"] == scs.NOT_CONTAINED
     assert got["why"] == scs.IMPOSSIBLE
-    assert got["band_w_px"] == 1216.0 and got["window_w_px"] == 810.0
-    assert got["fits_at_all"] is False
+    assert got["band_w_px"] == 1216.0 and got["widest_crop_w_px"] == 810.0
+    assert got["fits_in_any_crop"] is False
 
 
 def test_the_worst_shot_is_the_one_reported_not_the_average():
@@ -55,13 +64,13 @@ def test_a_band_the_window_contains_is_kept():
                                     "y0": 0.9148, "y1": 0.9667}}
     got = scs.survival(narrow, [_shot(0, 1024)], {}, SRC_W, SRC_H)
     assert got["state"] == scs.KEPT
-    assert got["worst_visible"] == 1.0 and got["fits_at_all"] is True
+    assert got["worst_visible"] == 1.0 and got["fits_in_used_windows"] is True
 
 
 def test_a_fit_shot_keeps_the_whole_frame():
     """`fit` letterboxes the entire source, so nothing of it is cropped away —
-    which is the one framing that could keep go ghost's subtitle, and the
-    reason the finding is a choice rather than a dead end."""
+    the framing chosen on 2026-09-05 for exactly this reason, and why the
+    finding is a choice rather than a dead end."""
     got = scs.survival(GO_GHOST, [_shot(0, 0, composition="fit")], {},
                        SRC_W, SRC_H)
     assert got["state"] == scs.KEPT and got["worst_visible"] == 1.0
@@ -118,7 +127,7 @@ def test_a_shot_that_cannot_be_mapped_stops_a_keep_but_not_a_cut():
 
     cut = scs.survival(GO_GHOST, [_shot(0, 1718), unreadable], {},
                        SRC_W, SRC_H)
-    assert cut["state"] == scs.CUT, "a measured cut is still a cut"
+    assert cut["state"] == scs.NOT_CONTAINED, "a measured shortfall still counts"
     assert cut["refused"] == 1
 
 
@@ -168,7 +177,7 @@ def test_a_present_source_is_measured_against_the_stored_plan():
 
     got = scs.survival_for(_sidecar([_shot(0, 1718)]),
                            {"state": scap.PRESENT, "band": GO_GHOST})
-    assert got["state"] == scs.CUT and got["measured"] == 1
+    assert got["state"] == scs.NOT_CONTAINED and got["measured"] == 1
 
 
 def test_a_plan_that_is_not_a_record_is_unavailable_not_kept():
@@ -195,21 +204,41 @@ def _placed() -> dict:
             "on_face": False}
 
 
-def test_a_cut_source_subtitle_is_a_measured_failure_not_an_open_question():
-    """The whole point of the measurement: before it, every suppressed export
-    came back `unavailable` — including the 15 that ship a subtitle sliced down
-    the middle."""
+def test_the_check_records_it_without_charging_a_failure():
+    """THE RULE THIS FILE EXISTS TO HOLD. The first version made this a `fail`
+    and moved 15 exports into the corpus's caption-failure count. It must not:
+    the band is a union over frames sampled across the whole VOD, so its
+    non-containment is a statement about the CUMULATIVE envelope, not an
+    observation that the text on screen during a shot exceeded the crop. The
+    arithmetic reaches the evidence; the verdict stays open until something
+    establishes the subtitle and the framing at the same moment."""
     from services.clipper import publish_captions as pcap
     from services.clipper import publish_preflight as pf
     from services.clipper import source_captions as scap
 
-    cut = scs.survival(GO_GHOST, [_shot(0, 1718)], {}, SRC_W, SRC_H)
+    warned = scs.survival(GO_GHOST, [_shot(0, 1718)], {}, SRC_W, SRC_H)
     got = pcap.captions(_placed(), _readable(), {"state": scap.PRESENT},
-                        own_layer=False, source_survival=cut)
-    assert got["state"] == pf.FAIL
-    assert got["why"] == pcap.SOURCE_CAPTION_CUT
-    assert got["severity"] == pf.REVISABLE, "not a duplicate; a human can act"
-    assert got["evidence"]["source_caption_survival"]["fits_at_all"] is False
+                        own_layer=False, source_survival=warned)
+    assert got["state"] == pf.UNAVAILABLE, "not a fail on this evidence"
+    assert got["why"] == pcap.SOURCE_CAPTION_UNCONTAINED
+    seen = got["evidence"]["source_caption_survival"]
+    assert seen["fits_in_any_crop"] is False, "the arithmetic still travels"
+    assert seen["uncontained_shots"] == 1 and seen["worst_visible"] < 0.2
+
+
+def test_one_shot_containing_the_envelope_is_reported_and_not_averaged_away():
+    """`63469342ee88` is the counterexample that forced the correction: 8 of its
+    9 shots miss the envelope and one holds it — and the one that holds it is a
+    `fit`, which is the whole letterboxed frame. No CROP could have held it:
+    `_size_timeline` takes the window's width from its height, so a full-height
+    window on this source is 810 px whatever rectangle the planner wrote.
+    Reporting only the worst case would have said "cut in every frame" about
+    that clip too."""
+    envelope_fits = _shot(1, 0, composition="fit")
+    got = scs.survival(GO_GHOST, [_shot(0, 1718), envelope_fits], {},
+                       SRC_W, SRC_H)
+    assert got["state"] == scs.NOT_CONTAINED
+    assert got["measured"] == 2 and got["uncontained_shots"] == 1
 
 
 def test_a_kept_source_subtitle_is_the_only_way_that_branch_passes():

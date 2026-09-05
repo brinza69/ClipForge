@@ -17,7 +17,8 @@ from typing import Any
 
 from services.clipper import publish_preflight as pf
 
-__all__ = ["ON_A_FACE", "TWO_LAYERS", "SOURCE_CAPTION_CUT", "captions"]
+__all__ = ["ON_A_FACE", "TWO_LAYERS", "SOURCE_CAPTION_UNCONTAINED",
+           "captions"]
 
 
 #: The one caption defect a bounded correction can act on, named here because
@@ -27,12 +28,21 @@ ON_A_FACE = "the_caption_sits_on_a_face"
 #: Both layers demonstrated. The word says both, because a reject that rests on
 #: the source alone is a reject about the SOURCE.
 TWO_LAYERS = "the_source_carries_captions_and_so_does_this_export"
-#: We suppressed our layer so the SOURCE's subtitle is the only text on screen,
-#: and the delivered crop does not contain all of it. Not a defect a caption
-#: move can repair — `bounded_correction` acts on `ON_A_FACE` alone — so it
-#: reaches a human with `fits_at_all` beside it, which says whether a re-frame
-#: could have fixed it at all.
-SOURCE_CAPTION_CUT = "the_crop_cuts_the_sources_own_subtitle"
+#: We suppressed our layer, so the SOURCE's subtitle is the only text on screen,
+#: and the delivered crop does not contain the band the detector observed.
+#:
+#: IT IS NOT A `fail` AND MUST NOT BECOME ONE ON THIS EVIDENCE. The band is a
+#: union over frames sampled across the whole VOD, so its non-containment says
+#: the framing does not hold the CUMULATIVE envelope — not that the text on
+#: screen during any shot exceeded the crop. `63469342ee88` contains the
+#: envelope in one of its nine shots. Reporting 15 exports as measured caption
+#: failures out of this would be a label sold as a measurement, which is the
+#: mistake this file exists to stop. A caption defect needs the subtitle
+#: observation and the framing established at the SAME time, and no stored
+#: artefact carries both — so this rides in the evidence, the check stays
+#: `unavailable`, and the reason says what is still missing.
+SOURCE_CAPTION_UNCONTAINED = ("the_crop_does_not_contain_the_bands_cumulative_"
+                              "envelope_which_is_not_a_per_interval_observation")
 
 
 def captions(placement: Any, contrast: Any, source: Any,
@@ -126,11 +136,16 @@ def captions(placement: Any, contrast: Any, source: Any,
         if survived in scs.STATES:
             evidence["source_caption_survival"] = {
                 k: source_survival.get(k) for k in
-                ("state", "why", "worst_visible", "worst_shot", "cut_shots",
-                 "measured", "refused", "band_w_px", "window_w_px",
-                 "fits_at_all")}
-        if survived == scs.CUT:
-            demonstrated.append(SOURCE_CAPTION_CUT)
+                ("state", "why", "worst_visible", "worst_shot",
+                 "uncontained_shots", "measured", "refused", "band_w_px",
+                 "window_w_px", "fits_in_used_windows", "fits_in_any_crop",
+                 "widest_crop_w_px")}
+        if survived == scs.NOT_CONTAINED:
+            # RECORDED, NOT CHARGED. See `SOURCE_CAPTION_UNCONTAINED`: the
+            # geometry is a conservative warning over a cumulative envelope,
+            # and turning it into a `fail` would put 15 unverified caption
+            # defects into a corpus figure.
+            unestablished.append(SOURCE_CAPTION_UNCONTAINED)
         elif survived != scs.KEPT:
             unestablished.append("our_layer_was_suppressed_so_the_source_"
                                  "subtitles_legibility_is_what_matters_and_is_"

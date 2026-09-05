@@ -19,7 +19,25 @@ as a fix.
 
 So what this module owes is the FACT, per export, in a form the publish check
 can act on — and the choice between letterboxing the whole frame, re-enabling
-our own layer, or accepting the cut belongs to whoever reads it.
+our own layer, or accepting the cut belongs to whoever reads it. It was made on
+2026-09-05: letterbox, our layer stays suppressed, proven on two go ghost clips
+before the other thirteen.
+
+AND IT IS A CONSERVATIVE GEOMETRIC WARNING, NOT A PER-INTERVAL OBSERVATION.
+This is the limitation to read before quoting any number out of it, and it was
+caught in review after the first version had already been committed. The band
+is the UNION of the detector's boxes over frames sampled across the WHOLE VOD;
+comparing that one envelope against every shot of every clip demonstrates that
+the framing does not contain the cumulative envelope. It does NOT demonstrate
+that the text on screen during any particular shot exceeds the crop: a short
+line can fit where the envelope does not, and at another moment there may be no
+text at all. `63469342ee88` is the immediate counterexample in the corpus — one
+of its nine shots contains the envelope, between 16.325 s and 18.460 s.
+
+Which is why `NOT_CONTAINED` is spelled the way it is, and why nothing here
+issues a `fail`. A caption defect has to associate the subtitle observation and
+the framing AT THE SAME TIME, and no stored artefact carries both; until an
+execution records them together, this is a warning with its arithmetic attached.
 
 FRACTIONS TRAVEL AND PIXELS DO NOT. The detector runs on the PROXY and reports
 the band as fractions of that frame, so this converts straight to source pixels
@@ -43,14 +61,17 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-__all__ = ["KEPT", "CUT", "UNAVAILABLE", "STATES", "NO_BAND", "NO_SHOTS",
+__all__ = ["KEPT", "NOT_CONTAINED", "UNAVAILABLE", "STATES", "NO_BAND", "NO_SHOTS",
            "NO_GEOMETRY", "NOT_PRESENT", "IMPOSSIBLE", "survival",
            "survival_for"]
 
 KEPT = "kept"
-CUT = "cut"
+#: The framing does not contain the cumulative envelope. NOT "the subtitle is
+#: cut in every frame" — see the limitation in the module docstring, which is
+#: the whole reason this is not called `cut`.
+NOT_CONTAINED = "not_contained"
 UNAVAILABLE = "unavailable"
-STATES: tuple[str, ...] = (KEPT, CUT, UNAVAILABLE)
+STATES: tuple[str, ...] = (KEPT, NOT_CONTAINED, UNAVAILABLE)
 
 #: No band to check. NOT "the crop keeps it" — a source with no detected
 #: subtitle has nothing to lose, and a source whose detector failed has an
@@ -70,9 +91,13 @@ NO_GEOMETRY = "source_dimensions_unknown"
 #: in the last bits of a float, and comparing areas against exactly 1.0 reported
 #: a fully contained band as cut. Half a canvas pixel cannot hide a character.
 _CONTAINED_SLACK_PX = 0.5
-#: The band is wider than any window the aspect ratio allows. Reported as its
-#: own reason because it is the one finding a re-framing cannot act on.
-IMPOSSIBLE = "the_band_is_wider_than_any_9_16_window_on_this_source"
+#: The band is wider than the WIDEST 9:16 window this source can produce —
+#: `src_h * 9/16`, since a crop cannot be taller than the frame. That is a
+#: physical bound and it is the only version of "impossible" this module may
+#: claim. The first version rested it on the narrowest window the clip HAPPENED
+#: to use, which says "it did not fit any of the framings that were tried",
+#: a much weaker sentence wearing the stronger one's name.
+IMPOSSIBLE = "the_band_is_wider_than_the_widest_9_16_crop_this_source_allows"
 
 
 def _fraction(value: Any) -> float | None:
@@ -129,8 +154,13 @@ def survival(band: Any, shots: Sequence[dict] | None, style: Any,
         "schema": "source_caption_survival_v1", "state": UNAVAILABLE,
         "why": None, "shots": 0, "measured": 0, "refused": 0,
         "refusals": [], "worst_visible": None, "worst_shot": None,
-        "cut_shots": 0,
-        "band_w_px": None, "window_w_px": None, "fits_at_all": None,
+        "uncontained_shots": 0,
+        "band_w_px": None, "window_w_px": None,
+        # TWO DIFFERENT SENTENCES, and conflating them is what the first
+        # version did. The first is about the framings this clip actually used;
+        # the second is about what the source's aspect ratio permits at all.
+        "fits_in_used_windows": None, "fits_in_any_crop": None,
+        "widest_crop_w_px": None,
     }
     sw, sh = _fraction(src_w), _fraction(src_h)
     if not sw or not sh or sw < 1 or sh < 1:
@@ -158,20 +188,28 @@ def survival(band: Any, shots: Sequence[dict] | None, style: Any,
 
     windows = [_window(s, style, sw, sh) for s in shots]
 
-    # THE ONE THING A RE-FRAME CANNOT FIX, and it is computed from the NARROWEST
-    # window the clip actually uses: a band wider than that has no position
-    # inside it. Reported even when the worst case is fine, because it is the
-    # difference between "move the crop" and "there is nowhere to move it to".
+    # THE PHYSICAL BOUND, which owes nothing to the framings that were tried: a
+    # 9:16 crop cannot be taller than the frame, so the widest one this source
+    # can produce is `src_h * 9/16`. A band wider than THAT has no position in
+    # any crop, and it is the only "impossible" this module may claim.
+    widest = sh * 9.0 / 16.0
+    out["widest_crop_w_px"] = round(widest, 1)
+    out["fits_in_any_crop"] = bool(bw <= widest)
+
+    # And SEPARATELY, the framings this clip actually used. A band that does not
+    # fit the narrowest of them says "none of the windows that were tried held
+    # it" — a weaker sentence, and it used to be reported under the stronger
+    # one's name.
     widths = [float(w[2]) for w in windows if not isinstance(w, str)]
     if widths:
         out["window_w_px"] = round(min(widths), 1)
-        out["fits_at_all"] = bool(bw <= min(widths))
+        out["fits_in_used_windows"] = bool(bw <= min(widths))
 
     worst: float | None = None
     worst_shot: Any = None
     refusals: list[str] = []
     measured = 0
-    cut_shots = 0
+    uncontained_shots = 0
     for shot, crop in zip(shots, windows):
         if isinstance(crop, str):
             refusals.append(crop)
@@ -190,7 +228,7 @@ def survival(band: Any, shots: Sequence[dict] | None, style: Any,
         if worst is None or visible < worst:
             worst, worst_shot = visible, shot.get("index")
         if poke > _CONTAINED_SLACK_PX:
-            cut_shots += 1
+            uncontained_shots += 1
 
     out["measured"] = measured
     out["refused"] = len(refusals)
@@ -200,10 +238,10 @@ def survival(band: Any, shots: Sequence[dict] | None, style: Any,
         return out
     out["worst_visible"] = round(worst, 4)
     out["worst_shot"] = worst_shot
-    out["cut_shots"] = cut_shots
-    if cut_shots:
-        out["state"] = CUT
-        out["why"] = IMPOSSIBLE if out["fits_at_all"] is False else None
+    out["uncontained_shots"] = uncontained_shots
+    if uncontained_shots:
+        out["state"] = NOT_CONTAINED
+        out["why"] = IMPOSSIBLE if out["fits_in_any_crop"] is False else None
         return out
     if refusals:
         # Every shot that could be read keeps it whole, and some could not be
