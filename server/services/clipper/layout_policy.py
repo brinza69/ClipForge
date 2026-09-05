@@ -40,6 +40,21 @@ same reason:
 `False` costs cutaways on a source that had a real second camera, which is
 visible and recoverable. A wrong `True` is what ships today.
 
+AND ITS DOMAIN IS A PROJECT, WHICH THIS CORPUS ALREADY BREAKS. The setting is
+read off the project config, and on `pilotf81b` that is wrong: an inspection of
+all 15 windows on 2026-09-05 — 35 contact sheets, every clip — found a
+picture-in-picture insert of two photographs in the TOP RIGHT of
+`54a7e6d31dc8` and `de3ce372ba3b`, roughly where `camera_rects` points. Thirteen
+clips have nothing there and two do, so one switch for the project is false
+whichever way it is set.
+
+Worse for the shape of the switch: on `54a7e6d31dc8` the insert is ABSENT for
+the first four shots and present for the remaining thirty-three. The second
+region is time-varying inside a clip, so neither a per-project nor a per-clip
+answer can express it. See `docs/refs/pilotf81b-layout-inspection-2026-09-05.md`
+for what is in each window; the declaration stays experimental on the material
+that was inspected until this is resolved, and it is NOT set on the corpus.
+
 AND IT IS A CLAIM ABOUT CAMERAS, NOT ABOUT TARGETS. The first version of this
 module was called `one_region` and meant "there is one thing to look at", which
 is false on material already in this batch: `b23c14c41495` ends with the speaker
