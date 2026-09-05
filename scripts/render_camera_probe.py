@@ -11,6 +11,12 @@ neither "the rhythm is untouched" nor "the empty background is gone from the
 export". This renders both, through `render_dynamic_clip`, so the second claim
 is about a file.
 
+AND IT ASKS THE FRAMES, NOT ONLY THE PLANS. `off_subject_seconds` compares a
+delivered window with the clip's average face centre — geometry. Rendering two
+files does not by itself turn that into an observation of the frames, so this
+also runs the face detector over both renders and reports the difference between
+them at the same timestamps.
+
 WHAT IT REPORTS BESIDE THE FILES. The boundary times of both plans, matched
 within 40 ms, because equal shot COUNTS prove nothing — the same number of cuts
 at different moments is a different edit. And how many shots deliver the
@@ -82,6 +88,42 @@ def _jumps(plan: dict) -> dict:
     return {"pairs": len(ratios), "median": ordered[len(ordered) // 2],
             "worst": max(ratios),
             "over_1_5": sum(1 for r in ratios if r >= 1.5)}
+
+
+def _faces_in(path: Path, seconds: float, hz: float = 4.0) -> dict:
+    """Is the speaker IN the delivered frames — read off the mp4, not the plan.
+
+    `off_subject_seconds` is geometry: a delivered window compared with the
+    clip's average face centre. Rendering two files does not turn that into an
+    observation of frames, and this is the instrument that does.
+
+    WHAT IT CANNOT SAY. A frame with no detected face is not proof the speaker
+    is absent: the detector fails, and it fails hardest on a face at the edge of
+    frame, which is exactly the population under test. So the two renders are
+    compared against EACH OTHER at the same timestamps — the difference is the
+    finding and the absolute count is a floor.
+
+    AND A MISSING FILE IS NOT AN EMPTY RESULT. The first version of this had a
+    broken path, the detector logged and returned nothing, and the summary
+    printed "0 of 71 frames" for both files: a missing input rendered as a
+    measurement of absence, inside the diagnostic written to catch that.
+    """
+    from services.clipper.signals import face_presence
+
+    out: dict[str, Any] = {"sampled": 0, "seen": 0, "at": {}, "why": None}
+    if not path.is_file():
+        out["why"] = "the_render_is_not_there"
+        return out
+    times = [round(i / hz, 2) for i in range(1, max(2, int(seconds * hz)))]
+    got = face_presence(str(path), times)
+    if not got:
+        out["why"] = "the_detector_returned_nothing_for_this_file"
+        return out
+    seen = {round(float(s.get("t", 0.0)), 2): bool(s.get("boxes")) for s in got}
+    out["at"] = seen
+    out["sampled"] = len(seen)
+    out["seen"] = sum(1 for v in seen.values() if v)
+    return out
 
 
 async def _plans(project_id: str, clip_id: str):
@@ -178,7 +220,28 @@ def main() -> int:
             print(f"  scale jumps ({name}): median {j['median']:.2f}, "
                   f"worst {j['worst']:.2f}, {j['over_1_5']} of {j['pairs']} "
                   f"pairs at 1.5x or more")
-        print(f"  off-subject {oa['seconds']}s -> {ob['seconds']}s\n")
+        print(f"  off-subject {oa['seconds']}s -> {ob['seconds']}s "
+              f"(PLAN geometry, against the clip's AVERAGE face centre)")
+
+        # AND THE SAME QUESTION ASKED OF THE FRAMES. The line above is a plan
+        # measurement; rendering two files does not turn it into an observation
+        # of the delivered picture. This one opens them.
+        secs = sum(db)
+        fa = _faces_in(Path(files["with-second-camera"]), secs)
+        fb = _faces_in(Path(files["no-second-camera"]), secs)
+        row["faces_in_frames"] = {"with": fa, "without": fb}
+        if fa["why"] or fb["why"]:
+            print(f"  frames: REFUSED — {fa['why'] or fb['why']}")
+        else:
+            shared = sorted(set(fa["at"]) & set(fb["at"]))
+            gained = [t for t in shared if fb["at"][t] and not fa["at"][t]]
+            lost = [t for t in shared if fa["at"][t] and not fb["at"][t]]
+            row["faces_in_frames"]["gained_at"] = gained
+            row["faces_in_frames"]["lost_at"] = lost
+            print(f"  frames: face detected {fa['seen']}/{fa['sampled']} -> "
+                  f"{fb['seen']}/{fb['sampled']};  present only after: "
+                  f"{len(gained)}, only before: {len(lost)}")
+        print()
 
     (out_dir / "probe.json").write_text(
         json.dumps({"project": args.project, "rows": rows, "verdict": None},
