@@ -182,3 +182,41 @@ def test_the_subject_caveat_rides_with_every_region():
     did not, and a caller may not promote the one into the other."""
     got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H)
     assert got["subject_caveat"] == cr.SUBJECT_IS_A_CLIP_AVERAGE
+
+
+# --- the subject, observed locally instead of averaged -----------------------
+
+
+def test_observed_subject_boxes_replace_the_clip_average():
+    """The text became local in this batch and the subject has to follow, or
+    the region is half a measurement and half an average over material it does
+    not cover."""
+    here = [{"x0": 0.05, "x1": 0.15, "y0": 0.10, "y1": 0.30}]
+    got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H, subject_boxes=here)
+    assert got["subject_from"] == "observed"
+    assert got["subject_rect"]["x"] == round(0.05 * SRC_W, 1)
+    assert got["subject_caveat"] is None, "the limitation was removed, not hidden"
+
+
+def test_the_average_is_used_and_flagged_when_nothing_local_is_offered():
+    got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H)
+    assert got["subject_from"] == "clip_average"
+    assert got["subject_caveat"] == cr.SUBJECT_IS_A_CLIP_AVERAGE
+
+
+def test_the_subject_need_not_be_a_face():
+    """In `b23c14c41495`'s last shots the thing to keep is the watch screen the
+    speaker holds up, and no face track will ever say so."""
+    watch = [{"x0": 0.44, "x1": 0.58, "y0": 0.30, "y1": 0.50}]
+    got = cr.region_for(SEEN, None, SRC_W, SRC_H, subject_boxes=watch)
+    assert got["rect"] is not None and got["subject_from"] == "observed"
+
+
+def test_an_unreadable_local_subject_does_not_fall_back_to_the_average():
+    """That would answer with the very thing the caller replaced, under a field
+    saying the subject was observed."""
+    for bad in ([], [{"x0": 0.5}], "x", [{"x0": 0.9, "x1": 0.1,
+                                          "y0": 0.1, "y1": 0.2}]):
+        got = cr.region_for(SEEN, SUBJECT, SRC_W, SRC_H, subject_boxes=bad)
+        assert got["rect"] is None, repr(bad)
+        assert got["why"] == cr.NO_SUBJECT, repr(bad)

@@ -43,7 +43,8 @@ from typing import Any, Sequence
 
 __all__ = ["SCHEMA", "DETECTOR", "AGENT", "HUMAN", "PROVENANCES",
            "NO_DETECTOR", "NO_VIDEO", "FRAME_UNREADABLE", "BAD_TIMES",
-           "observe", "from_annotations", "coverage", "disjoint"]
+           "observe", "from_annotations", "coverage", "disjoint", "correct",
+           "CORRECTED"]
 
 SCHEMA = "source_caption_observation_v1"
 
@@ -372,4 +373,88 @@ def disjoint(build: Any, holdout: Any) -> dict:
         out["why"] = "one_of_the_two_sets_is_empty"
         return out
     out["disjoint"] = out["shared"] == 0
+    return out
+
+
+CORRECTED = "corrected"
+NOT_A_CORRECTION = "the_correction_is_not_a_record_with_a_time_boxes_and_a_source"
+
+
+def correct(observation, corrections):
+    """Fold a person's or an agent's corrections into a detector observation.
+
+    THE MOMENT THIS EXISTS FOR. At 1161.1 s on `6053a598cf06` a caption is
+    plainly on screen and the detector returned no boxes. Left alone, that
+    sample is evidence of an EMPTY frame — `coverage` counts it under
+    `without_text`, a region is built as though nothing needed keeping there,
+    and the mistake is invisible because a miss and a gap look identical.
+
+    A corrected sample carries `provenance: corrected` and the `corrected_by`
+    that supplied it, so the record never claims a detector saw what a person
+    supplied. The raw boxes are kept in `detector_boxes` rather than
+    overwritten: the correction is an addition to the evidence, not a
+    replacement of it, and a later pass measuring the detector's recall needs
+    what it actually returned.
+
+    A correction may only ADD. It cannot mark a sample as having no text —
+    "the detector saw something and I say it is not there" is a `non_dialogue`
+    LABEL, which is `caption_labels`' subject, and letting it be spelled here
+    too would put one decision in two places under two names.
+    """
+    out = {**(observation if isinstance(observation, dict) else {}),
+           "corrections": 0, "correction_refusals": []}
+    rows = out.get("samples")
+    if not isinstance(rows, Sequence):
+        out["samples"] = []
+        out["correction_refusals"] = ["there_is_no_observation_to_correct"]
+        return out
+
+    wanted = {}
+    for raw in (corrections if isinstance(corrections, Sequence)
+                and not isinstance(corrections, (str, bytes)) else []):
+        if not isinstance(raw, dict):
+            out["correction_refusals"].append(NOT_A_CORRECTION)
+            continue
+        at = _finite(raw.get("at"))
+        boxes = _fractions(raw.get("boxes"))
+        by = raw.get("by")
+        if at is None or not boxes or by not in (AGENT, HUMAN):
+            # An empty list is a refusal here, not a correction: see above —
+            # this may only add.
+            out["correction_refusals"].append(NOT_A_CORRECTION)
+            continue
+        wanted.setdefault(at, []).append((boxes, by, raw.get("why")))
+
+    fixed = []
+    for row in rows:
+        if not isinstance(row, dict):
+            fixed.append(row)
+            continue
+        when = row.get("t_decoded")
+        when = _finite(row.get("t_requested") if when is None else when)
+        hits = wanted.pop(when, None) if when is not None else None
+        if not hits:
+            fixed.append(row)
+            continue
+        added = [b for boxes, _by, _why in hits for b in boxes]
+        fixed.append({**row,
+                      "detector_boxes": row.get("boxes"),
+                      "boxes": list(row.get("boxes") or []) + added,
+                      # A frame the detector FAILED on is no longer a refusal
+                      # once somebody supplied what is in it.
+                      "refused": None,
+                      "provenance": CORRECTED,
+                      "corrected_by": sorted({by for _b, by, _w in hits}),
+                      "corrected_why": [w for _b, _by, w in hits if w]})
+        out["corrections"] += 1
+    out["samples"] = fixed
+    for at in wanted:
+        # A correction that matched no sample is reported, for the reason a
+        # label that matches nothing is: a pass whose targets silently missed
+        # is indistinguishable from one nobody ran.
+        out["correction_refusals"].append("no_sample_at_%s" % at)
+    out["read"] = sum(1 for s in fixed
+                      if isinstance(s, dict) and s.get("boxes") is not None)
+    out["refused"] = sum(1 for s in fixed
+                         if isinstance(s, dict) and s.get("boxes") is None)
     return out

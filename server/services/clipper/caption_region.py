@@ -134,18 +134,31 @@ def _subject_box(subject: Any, src_w: float, src_h: float
             max(0.0, cy - half), min(src_h, cy + half))
 
 
-def region_for(boxes: Any, subject: Any, src_w: Any, src_h: Any) -> dict:
+def region_for(boxes: Any, subject: Any, src_w: Any, src_h: Any, *,
+               subject_boxes: Any = None) -> dict:
     """The smallest rectangle holding the observed text and the subject.
 
     `boxes` are the subtitle lines actually seen in this interval, as fractions
     of the image they were measured in — `source_caption_observation.coverage`
     returns exactly that list. Fractions, because the detector runs on the proxy
     and pixels do not travel.
+
+    `subject_boxes` are the subject's own boxes OBSERVED IN THIS INTERVAL, in
+    the same fractions. When they are given they are used and the clip-wide
+    average is not: the text became local in this batch and the subject has to
+    follow, or the region is half a measurement and half an average over
+    material it does not cover. They are also what lets the subject be
+    something other than a face — in `b23c14c41495`'s last shots the thing to
+    keep is the watch screen the speaker holds up, and no face track will ever
+    say so.
+
+    `subject_caveat` is set only when the AVERAGE was used, so a reader can
+    tell which of the two answers they were handed without comparing fields.
     """
     out: dict[str, Any] = {"schema": SCHEMA, "why": None, "rect": None,
                            "text_rect": None, "subject_rect": None,
                            "aspect": None, "wider_than_9_16": None,
-                           "subject_caveat": None,
+                           "subject_caveat": None, "subject_from": None,
                            # The boxes this region was BUILT from. Checking it
                            # against them is circular; `verify_frozen` needs to
                            # know which frames are construction data.
@@ -165,7 +178,18 @@ def region_for(boxes: Any, subject: Any, src_w: Any, src_h: Any) -> dict:
         # would produce a framing decision about text nobody saw.
         out["why"] = NO_TEXT
         return out
-    face = _subject_box(subject, sw, sh)
+    face = _union(subject_boxes, sw, sh) if subject_boxes is not None else None
+    out["subject_from"] = "observed" if face is not None else None
+    if face is None:
+        if subject_boxes is not None:
+            # OFFERED AND UNREADABLE. Falling back to the average here would
+            # answer with the thing the caller explicitly replaced, under a
+            # field that says the subject was observed.
+            out["why"] = NO_SUBJECT
+            out["text_rect"] = _rect(text)
+            return out
+        face = _subject_box(subject, sw, sh)
+        out["subject_from"] = "clip_average" if face is not None else None
     if face is None:
         out["why"] = NO_SUBJECT
         out["text_rect"] = _rect(text)
@@ -177,7 +201,11 @@ def region_for(boxes: Any, subject: Any, src_w: Any, src_h: Any) -> dict:
         out["why"] = TOO_TALL
         return out
     out["text_rect"], out["subject_rect"] = _rect(text), _rect(face)
-    out["subject_caveat"] = SUBJECT_IS_A_CLIP_AVERAGE
+    # Only when the average was actually used. Riding it on an observed subject
+    # would be a warning about a limitation the caller had just removed, and a
+    # warning that is sometimes false is one nobody reads.
+    out["subject_caveat"] = (SUBJECT_IS_A_CLIP_AVERAGE
+                             if out["subject_from"] == "clip_average" else None)
     out["rect"] = {"x": round(x0, 1), "y": round(y0, 1),
                    "w": round(x1 - x0, 1), "h": round(y1 - y0, 1)}
     out["aspect"] = round((x1 - x0) / max(1e-6, y1 - y0), 4)

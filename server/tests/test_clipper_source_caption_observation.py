@@ -270,3 +270,79 @@ def test_an_empty_set_is_not_a_disjoint_one(monkeypatch):
     for bad in (None, {}, {"samples": []}, 7):
         got = sco.disjoint(build, bad)
         assert got["disjoint"] is not True, repr(bad)
+
+
+# --- a miss is not a gap -----------------------------------------------------
+
+
+def _det(t, boxes):
+    return {"t_requested": t, "t_decoded": t, "frame": int(t * 25),
+            "boxes": boxes, "refused": None}
+
+
+def _line(x0=0.3, x1=0.7):
+    return {"x0": x0, "x1": x1, "y0": 0.91, "y1": 0.96}
+
+
+def test_a_frame_the_detector_missed_stops_being_evidence_of_an_empty_one():
+    """At 1161.1 s a caption is plainly on screen and no box came back. Left
+    alone that sample counts under `without_text`, a region is built as though
+    nothing needed keeping there, and the mistake is invisible because a miss
+    and a gap look identical."""
+    obs = {"samples": [_det(1.0, []), _det(2.0, [_line()])]}
+    before = sco.coverage(obs, 0.5, 1.5)
+    assert before["without_text"] == 1 and before["with_text"] == 0
+
+    fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line(0.25, 0.75)],
+                               "by": sco.AGENT, "why": "seen_on_the_sheet"}])
+    after = sco.coverage(fixed, 0.5, 1.5)
+    assert fixed["corrections"] == 1
+    assert after["with_text"] == 1 and after["without_text"] == 0
+    assert len(after["boxes"]) == 1
+
+
+def test_the_correction_is_marked_and_the_detectors_own_boxes_are_kept():
+    """The record may never claim a detector saw what a person supplied, and a
+    later pass measuring the detector's recall needs what it returned."""
+    obs = {"samples": [_det(1.0, [_line()])]}
+    fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line(0.1, 0.2)],
+                               "by": sco.HUMAN}])
+    row = fixed["samples"][0]
+    assert row["provenance"] == sco.CORRECTED
+    assert row["corrected_by"] == [sco.HUMAN]
+    assert len(row["detector_boxes"]) == 1 and len(row["boxes"]) == 2
+
+
+def test_a_correction_may_only_add():
+    """Saying the detector saw something that is not really there is a
+    `non_dialogue` LABEL. Spelling it here too would put one decision in two
+    places under two names."""
+    obs = {"samples": [_det(1.0, [_line()])]}
+    for bad in ({"at": 1.0, "boxes": [], "by": sco.AGENT},
+                {"at": 1.0, "boxes": None, "by": sco.AGENT}):
+        fixed = sco.correct(obs, [bad])
+        assert fixed["corrections"] == 0, repr(bad)
+        assert fixed["correction_refusals"], repr(bad)
+        assert len(fixed["samples"][0]["boxes"]) == 1
+
+
+def test_a_correction_without_a_person_or_an_agent_behind_it_is_refused():
+    obs = {"samples": [_det(1.0, [])]}
+    for by in (None, "detector", "", 7):
+        fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line()], "by": by}])
+        assert fixed["corrections"] == 0, repr(by)
+
+
+def test_a_correction_that_matched_no_sample_is_reported():
+    obs = {"samples": [_det(1.0, [])]}
+    fixed = sco.correct(obs, [{"at": 9.0, "boxes": [_line()], "by": sco.AGENT}])
+    assert fixed["corrections"] == 0
+    assert any("no_sample_at" in r for r in fixed["correction_refusals"])
+
+
+def test_correcting_a_refused_frame_makes_it_readable_again():
+    obs = {"samples": [{"t_requested": 1.0, "t_decoded": 1.0, "frame": 25,
+                        "boxes": None, "refused": sco.DETECTOR_FAILED}]}
+    fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line()], "by": sco.AGENT}])
+    assert fixed["samples"][0]["refused"] is None
+    assert fixed["read"] == 1 and fixed["refused"] == 0
