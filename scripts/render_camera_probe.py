@@ -56,6 +56,34 @@ def _keys(plan: dict) -> list:
     return [dg.visual_key(s, style, sw, sh) for s in plan.get("shots") or []]
 
 
+def _jumps(plan: dict) -> dict:
+    """Apparent-size ratio between ADJACENT delivered windows.
+
+    The crop's width is what sets the magnification — the output is a fixed
+    1080 wide — so the ratio of neighbouring widths is how much bigger or
+    smaller the picture suddenly reads. A `crop`-to-`fit` junction is the 3.16x
+    a human already objected to; this is the same quantity at every cut.
+    """
+    from services.clipper import evidence_map as em
+
+    sw, sh = int(plan.get("src_w") or 0), int(plan.get("src_h") or 0)
+    style = plan.get("style") if isinstance(plan.get("style"), dict) else {}
+    widths = []
+    for shot in plan.get("shots") or []:
+        crop = em.crop_window(shot, src_w=sw, src_h=sh, style=style)
+        widths.append(None if isinstance(crop, str) else float(crop[2]))
+    ratios = [max(a, b) / min(a, b) for a, b in zip(widths, widths[1:])
+              if a and b]
+    if not ratios:
+        # NOT zero jumps. A clip whose windows could not be read has an unknown
+        # amount of scale change in it.
+        return {"pairs": None, "median": None, "worst": None, "over_1_5": None}
+    ordered = sorted(ratios)
+    return {"pairs": len(ratios), "median": ordered[len(ordered) // 2],
+            "worst": max(ratios),
+            "over_1_5": sum(1 for r in ratios if r >= 1.5)}
+
+
 async def _plans(project_id: str, clip_id: str):
     from database import init_db
     from workers.clipper_render_plan import _dynamic_plan, _load
@@ -113,6 +141,13 @@ def main() -> int:
 
         da = [float(s["t1"]) - float(s["t0"]) for s in a["shots"]]
         db = [float(s["t1"]) - float(s["t0"]) for s in b["shots"]]
+        # THE SCALE JUMPS, because a face-building alternation replaced by
+        # face-to-larger-face is a different viewing experience even when the
+        # cuts land at the same moments. Measured between ADJACENT shots, never
+        # across the clip's extremes: a range and an adjacency claim in one
+        # sentence measures only the range.
+        jumps = {name: _jumps(plan) for name, plan in
+                 (("with", a), ("without", b))}
         row = {
             "clip": clip_id, "files": files,
             "boundaries": {"with": len(ba), "without": len(bb),
@@ -121,6 +156,7 @@ def main() -> int:
                               round(statistics.median(db), 2)],
             "identical_pictures": {"same": same,
                                    "of": min(len(ka), len(kb))},
+            "scale_jumps": jumps,
             "off_subject_s": [oa["seconds"], ob["seconds"]],
             # NOT a recommendation. Whether the replacement shot is the right
             # one is what the files are for.
@@ -134,6 +170,14 @@ def main() -> int:
         print(f"  shots delivering the IDENTICAL picture: {same} of "
               f"{min(len(ka), len(kb))} — the rest changed, because replacing a "
               f"game shot moves the rung its neighbours get")
+        for name in ("with", "without"):
+            j = jumps[name]
+            if j["pairs"] is None:
+                print(f"  scale jumps ({name}): none could be compared")
+                continue
+            print(f"  scale jumps ({name}): median {j['median']:.2f}, "
+                  f"worst {j['worst']:.2f}, {j['over_1_5']} of {j['pairs']} "
+                  f"pairs at 1.5x or more")
         print(f"  off-subject {oa['seconds']}s -> {ob['seconds']}s\n")
 
     (out_dir / "probe.json").write_text(
