@@ -20,10 +20,12 @@ them at the same timestamps.
 WHAT IT REPORTS BESIDE THE FILES. The boundary times of both plans, matched
 within 40 ms, because equal shot COUNTS prove nothing — the same number of cuts
 at different moments is a different edit. And how many shots deliver the
-IDENTICAL picture by `dynamic_geometry.visual_key`, which is the honest measure
-of how much of the edit actually changed: replacing one game shot moves the face
-rung its neighbours get, so the difference is never confined to the shots that
-were wrong.
+same picture by `dynamic_geometry.visual_key`, measured over TIME rather than by
+shot index — the moment one boundary disappears the shots stop corresponding
+positionally, and comparing them by index measures an alignment error.
+
+A boundary with no partner is also not a boundary that MOVED: both sides are
+counted, and `only_in_b == 0` is what makes it a removal.
 
 Writes into `<project>/camera_probe/`, never `exports/`.
 """
@@ -54,12 +56,79 @@ def _bounds(plan: dict) -> list[float]:
     return [round(float(s["t0"]), 3) for s in (plan.get("shots") or [])][1:]
 
 
-def _keys(plan: dict) -> list:
+def _match_boundaries(ba: list[float], bb: list[float]) -> dict:
+    """`{matched, only_in_a, only_in_b}` — and a boundary with no partner is
+    NOT thereby a boundary that moved.
+
+    The first version reported `len(ba) - kept` as "moved", which is a claim
+    about where a cut went. On `30d7c6d4eae5` eight boundaries coincide exactly
+    and the one at 11.930 s simply DISAPPEARS: no new boundary shows up
+    anywhere, so nothing moved and one cut was removed. Both sides are counted
+    here precisely so a reader can tell those apart — `only_in_b` empty is what
+    makes it a removal.
+    """
+    used: set[int] = set()
+    matched = 0
+    for t in ba:
+        for i, u in enumerate(bb):
+            if i not in used and abs(t - u) <= SAME_CUT_S:
+                used.add(i)
+                matched += 1
+                break
+    return {"matched": matched, "only_in_a": len(ba) - matched,
+            "only_in_b": len(bb) - len(used)}
+
+
+def _timeline(plan: dict) -> list[tuple[float, float, Any]]:
+    """`[(t0, t1, visual_key)]` — the delivered picture over TIME."""
     from services.clipper import dynamic_geometry as dg
 
     style = plan.get("style") or {}
     sw, sh = int(plan["src_w"]), int(plan["src_h"])
-    return [dg.visual_key(s, style, sw, sh) for s in plan.get("shots") or []]
+    out = []
+    for shot in plan.get("shots") or []:
+        try:
+            t0, t1 = float(shot["t0"]), float(shot["t1"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append((t0, t1, dg.visual_key(shot, style, sw, sh)))
+    return out
+
+
+def _same_picture_seconds(a: dict, b: dict) -> dict:
+    """How many SECONDS the two plans deliver the same picture.
+
+    NOT `zip(shots_a, shots_b)`, which is what the first version did: it
+    compares positions in a list, and the moment one boundary disappears the
+    shots stop corresponding by index, so "4 of 9 identical" was measuring an
+    alignment error. Compared over the overlapping time intervals instead —
+    on `30d7c6d4eae5` that is 11.305 s identical and 6.805 s different of
+    18.110 s, a smaller change than the shot count suggested.
+
+    It compares the framing COMMANDS, not decoded pixels. Two identical
+    `visual_key`s schedule the same crop; whether the encoder produced the same
+    bytes is `output_identity`'s question and the byte-identical control on
+    `b23c14c41495` is the case where it happens to answer both.
+    """
+    ta, tb = _timeline(a), _timeline(b)
+    same = diff = unknown = 0.0
+    for a0, a1, ka in ta:
+        for b0, b1, kb in tb:
+            lo, hi = max(a0, b0), min(a1, b1)
+            if hi <= lo:
+                continue
+            if ka is None or kb is None:
+                # A shot whose size timeline moves has no key. Not "different":
+                # nobody can say, and folding it into either column would be an
+                # answer nobody has.
+                unknown += hi - lo
+            elif ka == kb:
+                same += hi - lo
+            else:
+                diff += hi - lo
+    return {"same_s": round(same, 3), "different_s": round(diff, 3),
+            "unknown_s": round(unknown, 3),
+            "overlap_s": round(same + diff + unknown, 3)}
 
 
 def _jumps(plan: dict) -> dict:
@@ -160,10 +229,8 @@ def main() -> int:
             refused += 1
             continue
         ba, bb = _bounds(a), _bounds(b)
-        kept = sum(1 for t in ba
-                   if any(abs(t - u) <= SAME_CUT_S for u in bb))
-        ka, kb = _keys(a), _keys(b)
-        same = sum(1 for x, y in zip(ka, kb) if x is not None and x == y)
+        cuts = _match_boundaries(ba, bb)
+        picture = _same_picture_seconds(a, b)
         oa, ob = lp.off_subject_seconds(a), lp.off_subject_seconds(b)
 
         src = _source_path(project)
@@ -192,12 +259,10 @@ def main() -> int:
                  (("with", a), ("without", b))}
         row = {
             "clip": clip_id, "files": files,
-            "boundaries": {"with": len(ba), "without": len(bb),
-                           "kept_within_40ms": kept, "moved": len(ba) - kept},
+            "boundaries": {"with": len(ba), "without": len(bb), **cuts},
             "median_shot_s": [round(statistics.median(da), 2),
                               round(statistics.median(db), 2)],
-            "identical_pictures": {"same": same,
-                                   "of": min(len(ka), len(kb))},
+            "same_picture": picture,
             "scale_jumps": jumps,
             "off_subject_s": [oa["seconds"], ob["seconds"]],
             # NOT a recommendation. Whether the replacement shot is the right
@@ -205,13 +270,17 @@ def main() -> int:
             "verdict": None,
         }
         rows.append(row)
-        print(f"  boundaries {len(ba)} -> {len(bb)}, {kept} kept within "
-              f"{SAME_CUT_S * 1000:.0f}ms, {len(ba) - kept} moved")
+        print(f"  boundaries {len(ba)} -> {len(bb)}: {cuts['matched']} match "
+              f"within {SAME_CUT_S * 1000:.0f}ms, {cuts['only_in_a']} only "
+              f"before, {cuts['only_in_b']} only after"
+              + ("  (removed, not moved: nothing new appeared)"
+                 if cuts["only_in_a"] and not cuts["only_in_b"] else ""))
         print(f"  median shot {row['median_shot_s'][0]}s -> "
               f"{row['median_shot_s'][1]}s")
-        print(f"  shots delivering the IDENTICAL picture: {same} of "
-              f"{min(len(ka), len(kb))} — the rest changed, because replacing a "
-              f"game shot moves the rung its neighbours get")
+        print(f"  same picture for {picture['same_s']}s of "
+              f"{picture['overlap_s']}s, different for "
+              f"{picture['different_s']}s, unknown {picture['unknown_s']}s "
+              f"(over TIME, not by shot index)")
         for name in ("with", "without"):
             j = jumps[name]
             if j["pairs"] is None:
