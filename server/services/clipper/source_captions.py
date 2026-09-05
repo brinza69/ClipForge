@@ -176,6 +176,11 @@ def _bands(frames: Sequence[Any], reader) -> tuple[list[dict], int]:
     """
     hits = [0] * BANDS
     widest = [0.0] * BANDS
+    #: The UNION of the band's boxes across the frames it appeared in, in
+    #: fractions of the frame. A crop that contains this contains the subtitle
+    #: in every frame it was seen in; a crop that contains only the average
+    #: keeps the short lines and cuts the long ones.
+    extent: list[list[float] | None] = [None] * BANDS
     analysed = 0
     for frame in frames:
         found = _frame_bands(frame, reader)
@@ -183,15 +188,41 @@ def _bands(frames: Sequence[Any], reader) -> tuple[list[dict], int]:
             # The frame is a failure, WHOLE. Not a frame with fewer boxes.
             continue
         analysed += 1
-        for band, width_frac in found.items():
+        for band, seen in found.items():
             hits[band] += 1
-            widest[band] = max(widest[band], width_frac)
-    return ([{"band": i, "frames": hits[i], "widest": round(widest[i], 3)}
+            widest[band] = max(widest[band], seen[0])
+            box = list(seen[1:])
+            prev = extent[band]
+            extent[band] = box if prev is None else [
+                min(prev[0], box[0]), max(prev[1], box[1]),
+                min(prev[2], box[2]), max(prev[3], box[3])]
+    return ([{"band": i, "frames": hits[i], "widest": round(widest[i], 3),
+              "extent": _extent_dict(extent[i])}
              for i in range(BANDS)], analysed)
 
 
-def _frame_bands(frame: Any, reader) -> dict[int, float] | None:
-    """`{band: widest line}` for one frame, or None if it could not be read.
+def _extent_dict(box: list[float] | None) -> dict | None:
+    """The union rectangle as named fractions, or None if the band had none.
+
+    None means "no box ever landed here", which is not the same sentence as a
+    zero-sized rectangle — a consumer that read `{x0: 0, x1: 0}` as a real
+    extent would conclude the subtitle is infinitely croppable.
+    """
+    if box is None:
+        return None
+    return {"x0": round(box[0], 4), "x1": round(box[1], 4),
+            "y0": round(box[2], 4), "y1": round(box[3], 4)}
+
+
+def _frame_bands(frame: Any, reader
+                 ) -> dict[int, tuple[float, float, float, float, float]] | None:
+    """`{band: (widest line, x0, x1, y0, y1)}` for one frame, or None.
+
+    All five are fractions of the frame. The last four are the band's ENVELOPE
+    in this frame — the union of its boxes — because a caption the detector
+    broke into three boxes is one caption and a crop has to keep all of it. The
+    first is still the widest SINGLE box, which is what the `present` rule was
+    calibrated on and must not silently change meaning.
 
     ATOMIC, and that is the whole point of it being its own function. Only the
     `detect()` CALL used to be inside the `try`; the parsing was outside, so a
@@ -207,7 +238,7 @@ def _frame_bands(frame: Any, reader) -> dict[int, float] | None:
         if height < 1 or width < 1:
             return None
         boxes = reader.detect(frame, text_threshold=0.7, low_text=0.4)[0][0]
-        out: dict[int, float] = {}
+        out: dict[int, tuple[float, float, float, float, float]] = {}
         for box in boxes or []:
             x0, x1, y0, y1 = (float(box[0]), float(box[1]),
                               float(box[2]), float(box[3]))
@@ -226,7 +257,15 @@ def _frame_bands(frame: Any, reader) -> dict[int, float] | None:
                 return None
             band = min(BANDS - 1,
                        max(0, int(((y0 + y1) / 2.0 / height) * BANDS)))
-            out[band] = max(out.get(band, 0.0), (x1 - x0) / width)
+            fx0, fx1 = x0 / width, x1 / width
+            fy0, fy1 = y0 / height, y1 / height
+            prev = out.get(band)
+            if prev is None:
+                out[band] = ((x1 - x0) / width, fx0, fx1, fy0, fy1)
+            else:
+                out[band] = (max(prev[0], (x1 - x0) / width),
+                             min(prev[1], fx0), max(prev[2], fx1),
+                             min(prev[3], fy0), max(prev[4], fy1))
         return out
     except Exception:
         return None

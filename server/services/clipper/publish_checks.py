@@ -504,13 +504,17 @@ def checks_for(sidecar: Any, *, chrome: Any = None, placement: Any = None,
                own_caption_layer: bool | None = None,
                export_path: Any = None) -> dict[str, dict]:
     """All seven, from whatever is available. Missing inputs stay unavailable."""
+    from services.clipper import source_caption_survival as scs
+
     return {
         pf.GEOMETRY: geometry(sidecar),
         pf.EQUIVALENCE: equivalence(sidecar),
         pf.SUBJECT: subject(sidecar),
         pf.FRAME: frame(chrome),
         pf.CAPTIONS: captions(placement, contrast, source_captions,
-                              own_layer=own_caption_layer),
+                              own_layer=own_caption_layer,
+                              source_survival=scs.survival_for(
+                                  sidecar, source_captions)),
         pf.BOUNDARY: boundary(boundary_view),
         pf.PROVENANCE: provenance(sidecar, export_path=export_path),
     }

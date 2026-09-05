@@ -17,7 +17,7 @@ from typing import Any
 
 from services.clipper import publish_preflight as pf
 
-__all__ = ["ON_A_FACE", "TWO_LAYERS", "captions"]
+__all__ = ["ON_A_FACE", "TWO_LAYERS", "SOURCE_CAPTION_CUT", "captions"]
 
 
 #: The one caption defect a bounded correction can act on, named here because
@@ -27,10 +27,17 @@ ON_A_FACE = "the_caption_sits_on_a_face"
 #: Both layers demonstrated. The word says both, because a reject that rests on
 #: the source alone is a reject about the SOURCE.
 TWO_LAYERS = "the_source_carries_captions_and_so_does_this_export"
+#: We suppressed our layer so the SOURCE's subtitle is the only text on screen,
+#: and the delivered crop does not contain all of it. Not a defect a caption
+#: move can repair — `bounded_correction` acts on `ON_A_FACE` alone — so it
+#: reaches a human with `fits_at_all` beside it, which says whether a re-frame
+#: could have fixed it at all.
+SOURCE_CAPTION_CUT = "the_crop_cuts_the_sources_own_subtitle"
 
 
 def captions(placement: Any, contrast: Any, source: Any,
-             *, own_layer: bool | None = None) -> dict:
+             *, own_layer: bool | None = None,
+             source_survival: Any = None) -> dict:
     """Duplicated, covering something, or unreadable — three halves, one answer.
 
     THE ORDER IS THE RULE, and getting it wrong is what this function did:
@@ -105,16 +112,38 @@ def captions(placement: Any, contrast: Any, source: Any,
     # delivered frame is unverified — a different question, with no measurement
     # behind it yet.
     if own_layer is False:
+        from services.clipper import source_caption_survival as scs
+
         evidence["suppressed_layer"] = True
-        unestablished.append("our_layer_was_suppressed_so_the_source_subtitles_"
-                             "legibility_is_what_matters_and_is_unmeasured")
+        # AND THE QUESTION THAT REPLACES THE ONE WE STOPPED ASKING. With our
+        # layer off, the source's own subtitle is the only text on screen, so
+        # what matters is whether the crop delivers it whole. `survival`
+        # measures that against the DELIVERED window; without it this branch
+        # can only say the question is open, which is what it used to say for
+        # every clip.
+        survived = (source_survival.get("state")
+                    if isinstance(source_survival, dict) else None)
+        if survived in scs.STATES:
+            evidence["source_caption_survival"] = {
+                k: source_survival.get(k) for k in
+                ("state", "why", "worst_visible", "worst_shot", "cut_shots",
+                 "measured", "refused", "band_w_px", "window_w_px",
+                 "fits_at_all")}
+        if survived == scs.CUT:
+            demonstrated.append(SOURCE_CAPTION_CUT)
+        elif survived != scs.KEPT:
+            unestablished.append("our_layer_was_suppressed_so_the_source_"
+                                 "subtitles_legibility_is_what_matters_and_is_"
+                                 "unmeasured")
         if demonstrated:
             return pf.check(
                 pf.FAIL, why=",".join(sorted(demonstrated)),
                 severity=pf.REJECTABLE if duplicate else pf.REVISABLE,
                 evidence={**evidence, "unestablished": sorted(unestablished)})
-        return pf.check(pf.UNAVAILABLE, why=",".join(sorted(unestablished)),
-                        evidence=evidence)
+        if unestablished:
+            return pf.check(pf.UNAVAILABLE, why=",".join(sorted(unestablished)),
+                            evidence=evidence)
+        return pf.check(pf.PASS, evidence=evidence)
 
     # --- half two: can the palette be read at all --------------------------
     # BOTH LEGS HAVE TO BE THERE. `{}` is a dict with no `refused` key, so it
