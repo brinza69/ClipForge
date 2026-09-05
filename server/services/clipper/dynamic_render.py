@@ -408,6 +408,19 @@ def render_dynamic_clip(src: str, plan: dict, out: str, *, start: float,
         start=start, duration=float(plan.get("duration") or 0.0),
         src_w=src_w, src_h=src_h, **kwargs)
 
+    # WHAT WAS ACTUALLY SENT, taken here because here is the only place it
+    # exists. `caption_policy` records the decision and `output_identity`
+    # records the file; whether THIS call carried a `subtitles=` filter is a
+    # third fact, and reconstructing it later from the project's setting is the
+    # reconstruction `own_caption_layer` had to stop making.
+    #
+    # BEFORE the encode, so a render that fails still leaves the record of what
+    # was attempted — and read off `cmd`, not off `ass_path`, because the
+    # filtergraph is what ffmpeg gets.
+    from services.clipper import render_record
+
+    record = render_record.record(cmd, ass_path=ass_path)
+
     try:
         final.parent.mkdir(parents=True, exist_ok=True)
         run(cmd, timeout=RENDER_TIMEOUT, what="dynamic clip render")
@@ -419,6 +432,7 @@ def render_dynamic_clip(src: str, plan: dict, out: str, *, start: float,
             )
         storage.finalize_output(temp, final)
         return {"path": str(final), "size": size, "sendcmd": cmd_path,
+                "render_record": record,
                 "shots": len(plan.get("shots") or []), "hits": len(plan.get("hits") or [])}
     finally:
         temp.unlink(missing_ok=True)
