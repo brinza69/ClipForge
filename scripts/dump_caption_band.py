@@ -80,13 +80,18 @@ def main() -> int:
                     help="magnify to this width; use 3200 to judge whether a "
                          "descender crosses the detector's box")
     ap.add_argument("--rows", type=int, default=ROWS)
+    ap.add_argument("--suffix", default="",
+                    help="read <clip><suffix>.samples.json — `.holdout` for the "
+                         "verification set, whose lines must be annotated too: "
+                         "a region built from complete lines and checked against "
+                         "detector boxes would score better than it is")
     args = ap.parse_args()
 
     import cv2
     import numpy as np
 
     frames_dir = DATA / args.project / "caption_frames"
-    samples_path = frames_dir / f"{args.clip}.samples.json"
+    samples_path = frames_dir / f"{args.clip}{args.suffix}.samples.json"
     if not samples_path.exists():
         print(f"REFUSED: no samples at {samples_path}; run dump_caption_frames")
         return 2
@@ -139,7 +144,8 @@ def main() -> int:
     for page in range((len(tiles) + rows_per - 1) // rows_per):
         chunk = tiles[page * rows_per:(page + 1) * rows_per]
         sheet = cv2.vconcat(chunk)
-        path = frames_dir / f"{args.clip}.band{args.width}.{page:02d}.jpg"
+        path = (frames_dir /
+                f"{args.clip}{args.suffix}.band{args.width}.{page:02d}.jpg")
         cv2.imwrite(str(path), sheet, [cv2.IMWRITE_JPEG_QUALITY, 92])
         made.append(path.name)
         print(f"  {path.name}: {len(chunk)} rows")

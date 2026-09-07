@@ -66,6 +66,57 @@ def _times(shots: list[dict], start: float, per_shot: int) -> list[float]:
     return out
 
 
+def _observe_frames(video: str, frames: list[int]) -> dict:
+    """`source_caption_observation.observe`, addressed by frame index.
+
+    The same record in the same shape — the detector, the boxes as fractions,
+    the refusals — but seeking by `POS_FRAMES` so a hold-out set is exactly the
+    frames it was chosen to be. `observe` seeks by time, and a hold-out picked
+    to avoid the construction frames can land back on them.
+    """
+    import cv2
+
+    from services.clipper import source_captions as scap
+    from services.clipper import source_caption_observation as sco
+
+    engine = scap._reader()
+    if engine is None:
+        return sco._empty(video, sco.NO_DETECTOR)
+    cap = cv2.VideoCapture(video)
+    try:
+        if not cap.isOpened():
+            return sco._empty(video, sco.NO_VIDEO)
+        out = sco._empty(video, "")
+        out["why"] = None
+        samples = []
+        for index in frames:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+            at = cap.get(cv2.CAP_PROP_POS_FRAMES)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                samples.append({"t_requested": None, "t_decoded": None,
+                                "frame": index, "boxes": None,
+                                "refused": sco.FRAME_UNREADABLE})
+                continue
+            h, w = int(frame.shape[0]), int(frame.shape[1])
+            if out["image_w"] is None:
+                out["image_w"], out["image_h"] = w, h
+            boxes = sco._boxes(frame, engine, w, h)
+            samples.append({
+                "t_requested": None,
+                "t_decoded": round(float(got_ms) / 1000.0, 3),
+                "frame": int(at), "boxes": boxes,
+                "refused": None if boxes is not None else sco.DETECTOR_FAILED})
+        out["samples"] = samples
+        out["read"] = sum(1 for s in samples if s["boxes"] is not None)
+        out["refused"] = len(samples) - out["read"]
+        out["refusals"] = sorted({s["refused"] for s in samples if s["refused"]})
+        return out
+    finally:
+        cap.release()
+
+
 def _draw(frame: Any, sample: dict, shot: Any, cv2: Any) -> Any:
     """Boxes numbered by their INDEX in the sample, plus the decoded time."""
     height, width = frame.shape[0], frame.shape[1]
@@ -86,6 +137,15 @@ def main() -> int:
     ap.add_argument("project")
     ap.add_argument("clips", nargs="+")
     ap.add_argument("--per-shot", type=int, default=2)
+    ap.add_argument("--frames", default="",
+                    help="comma-separated FRAME indices instead of per-shot "
+                         "sampling. This is how a HOLD-OUT set is observed: the "
+                         "frames are chosen to be disjoint from the "
+                         "construction set and addressed by index, because "
+                         "seeking by time lands on whatever the decoder gives")
+    ap.add_argument("--suffix", default="",
+                    help="write to <clip><suffix>.samples.json instead of "
+                         "overwriting the construction observation")
     args = ap.parse_args()
 
     import cv2
@@ -108,9 +168,19 @@ def main() -> int:
             print(f"{clip_id}: REFUSED — no shots")
             return 2
         start = float(clip.start_time or 0.0)
-        times = _times(shots, start, args.per_shot)
-        print(f"{clip_id}: reading {len(times)} frames ...", flush=True)
-        obs = sco.observe(str(proxy), times)
+        if args.frames:
+            try:
+                want = [int(x) for x in args.frames.split(",") if x.strip()]
+            except ValueError:
+                print("REFUSED: --frames is not a list of integers")
+                return 2
+            print(f"{clip_id}: reading {len(want)} frames by index ...",
+                  flush=True)
+            obs = _observe_frames(str(proxy), want)
+        else:
+            times = _times(shots, start, args.per_shot)
+            print(f"{clip_id}: reading {len(times)} frames ...", flush=True)
+            obs = sco.observe(str(proxy), times)
         if obs["why"]:
             print(f"{clip_id}: REFUSED — {obs['why']}")
             return 2
@@ -150,12 +220,12 @@ def main() -> int:
                     row.append(np.zeros_like(chunk[0]))
                 rows.append(cv2.hconcat(row))
             sheet = cv2.vconcat(rows)
-            path = out_dir / f"{clip_id}.sheet{page:02d}.jpg"
+            path = out_dir / f"{clip_id}{args.suffix}.sheet{page:02d}.jpg"
             cv2.imwrite(str(path), sheet, [cv2.IMWRITE_JPEG_QUALITY, 88])
             made.append(str(path))
             print(f"  {path.name}: {len(chunk)} frames")
 
-        (out_dir / f"{clip_id}.samples.json").write_text(
+        (out_dir / f"{clip_id}{args.suffix}.samples.json").write_text(
             json.dumps({"clip": clip_id, "start": start,
                         "shot_of_sample": owner, "observation": obs},
                        indent=1, default=str), encoding="utf-8")
