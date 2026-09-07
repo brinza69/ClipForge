@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -126,16 +125,22 @@ def main() -> int:
 
     for name in projects:
         exports = DATA / name / "exports"
-        backup = DATA / name / BACKUP
         if not args.dry_run:
-            if backup.exists():
-                # A SECOND RUN WOULD BACK UP THE NEW FILES over the only record
-                # of the old ones, and the evidence for the defect would be gone.
-                bad.append(f"{name}: {BACKUP}/ already exists — refusing to "
-                           "overwrite the record of the originals")
+            # PRESERVE THE GENERATION THIS RUN REPLACES, into a directory that
+            # does not exist. The version before this REFUSED when the backup
+            # was there, which protected the data and meant a second run could
+            # never preserve anything at all — the mirror of the bug in
+            # `replan_and_rerender`, and the reason both now share one
+            # implementation.
+            from services.clipper import export_generations as eg
+
+            got = eg.preserve(DATA / name, label="pre_caption_fix")
+            if got["why"]:
+                bad.append(f"{name}: nothing preserved — {got['why']}")
                 continue
-            shutil.copytree(exports, backup)
-            print(f"{name}: originals copied to {BACKUP}/", flush=True)
+            print(f"{name}: preserved {got['files']} files "
+                  f"({got['bytes'] / 1e6:.0f} MB) to "
+                  f"{Path(got['destination']).name}/", flush=True)
 
         for path in sorted(exports.glob("*.json")):
             try:

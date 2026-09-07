@@ -17,13 +17,16 @@ until that has passed — including its fourth proof, which is a decision a pers
 has to have made about the long `crop<->fit` junctions. Hours of encoding spent
 on a version somebody then rejects is the failure this pair exists to avoid.
 
-THE ORIGINALS ARE MOVED, NOT OVERWRITTEN, following `rerender_pilots.py` exactly:
-each project's `exports/` is copied to `exports_pre_replan/` first and the run
-refuses to start if that already holds a copy. The 58 stored exports are the
-corpus every measurement in this batch rests on — the 116 equivalent cuts, the
-84 junctions, the 37 duplicate-caption rejections, the human's 20 verdicts. A
-second run that backed the NEW files up over them would erase the evidence for
-every one of those numbers.
+EVERY RUN PRESERVES THE GENERATION IT IS ABOUT TO REPLACE, into a directory that
+does not yet exist — `services.clipper.export_generations`, which both this and
+`rerender_pilots.py` use so there is one implementation. The version before it
+CONTINUED when `exports_pre_replan/` already existed, on the reasoning that
+`copytree` refuses an existing destination and the originals were therefore
+safe. They were; the generation the run was about to replace was not. That
+directory holds the corpus from before the FIRST replan, and it exists on all
+four pilots, so a second run would have overwritten the current 58 exports —
+the caption policy applied, the 37-to-22 reject figure, the survival and
+provenance numbers — with no copy of them anywhere.
 
 A CLIP THAT CANNOT BE RENDERED KEEPS ITS ROW AND FAILS THE RUN. It does not
 vanish, and the sidecar is written only after the encode returns.
@@ -35,7 +38,6 @@ import argparse
 import asyncio
 import json
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -45,27 +47,40 @@ sys.path.insert(0, str(_ROOT / "server"))
 
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 
-#: Where the pre-replan corpus goes. NOT `exports_pre_caption_fix/`, which holds
-#: the generation before that one and must not be overwritten either.
+#: The label the preserved generations carry: `exports_pre_replan/`, then
+#: `exports_pre_replan_02/` and so on. A serial rather than a timestamp because
+#: the ORDER is what a reader needs, and two runs a second apart sort by name in
+#: the order they happened.
 BACKUP = "exports_pre_replan"
 
 
 def _preserve(project_id: str) -> str | None:
-    """Copy `exports/` aside once. Returns why not, or None."""
-    root = DATA / project_id
-    exports, backup = root / "exports", root / BACKUP
-    if not exports.is_dir():
-        return "no exports directory"
-    if backup.exists():
-        # ALREADY PRESERVED, so the run continues. The guard's purpose is that
-        # the originals are never lost, and they are not: `copytree` refuses an
-        # existing destination, so a second pass cannot back the NEW files up
-        # over them. Refusing the whole run instead would make a smoke render on
-        # a few clips block the full one on the same project, which is the
-        # opposite of what a micro-gate is for.
-        print(f"  ({BACKUP}/ already holds the pre-replan record)", flush=True)
-        return None
-    shutil.copytree(exports, backup)
+    """Copy the CURRENT `exports/` aside. Returns why not, or None.
+
+    THE VERSION THIS REPLACES CONTINUED WHEN THE BACKUP EXISTED, and argued the
+    originals were safe because `copytree` refuses an existing destination. That
+    is true and is not the danger. The danger runs the other way:
+
+        run 1   exports/ = A  ->  exports_pre_replan/ = A; exports/ becomes B
+        run 2   the backup exists, nothing is preserved; exports/ becomes C
+                and B is gone
+
+    `exports_pre_replan/` holds the generation before the FIRST run, never the
+    one the NEXT run replaces — and it already exists on all four pilots, so the
+    corpus every current measurement rests on was one run away from being
+    overwritten with no copy anywhere.
+
+    Now every run preserves into a directory that does not exist, and a run that
+    cannot preserve does not proceed.
+    """
+    from services.clipper import export_generations as eg
+
+    got = eg.preserve(DATA / project_id, label="pre_replan")
+    if got["why"]:
+        return got["why"]
+    print(f"  preserved {got['files']} files "
+          f"({got['bytes'] / 1e6:.0f} MB) to {Path(got['destination']).name}/",
+          flush=True)
     return None
 
 
