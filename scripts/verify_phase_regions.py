@@ -75,6 +75,56 @@ SPEECH_KEEPS = ("face",)
 WINDOW_S = 0.5
 
 
+#: Half a proxy frame at 10 fps. Two times closer than this can be the same
+#: decoded frame, and `_review_faces` carries no index to settle it with.
+FACE_COLLISION_S = 0.05
+
+NO_SIDECAR = "there_is_no_sidecar_for_this_clip"
+NO_FACE_ROWS = "the_sidecar_carries_no_review_faces"
+
+
+def _face_collisions(project: str, clip: str, holdout: dict) -> dict:
+    """Hold-out frames that may be a face observation the regions were built on.
+
+    REFUSES rather than returning zero when the sidecar or its face rows cannot
+    be read: "no collisions found" and "nothing was looked at" are the two
+    answers this whole file exists to keep apart.
+    """
+    out: dict[str, Any] = {"why": None, "collisions": 0, "frames": [],
+                           "window_s": FACE_COLLISION_S, "face_samples": 0}
+    path = DATA / project / "exports" / f"{clip}.json"
+    if not path.exists():
+        out["why"] = f"{NO_SIDECAR}: {path}"
+        return out
+    try:
+        blob = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        out["why"] = f"{NO_SIDECAR}: {exc}"
+        return out
+    rows = ((blob.get("dynamic_plan") or {}).get("_review_faces")) or []
+    if not rows:
+        out["why"] = NO_FACE_ROWS
+        return out
+    times = []
+    for row in rows:
+        try:
+            times.append(float(row.get("t")))
+        except (TypeError, ValueError):
+            continue
+    if not times:
+        out["why"] = NO_FACE_ROWS
+        return out
+    out["face_samples"] = len(times)
+    for s in holdout["samples"]:
+        t, f = s.get("t_decoded"), s.get("frame")
+        if t is None:
+            continue
+        if any(abs(t - ft) < FACE_COLLISION_S for ft in times):
+            out["collisions"] += 1
+            out["frames"].append(f)
+    return out
+
+
 def _watch_annotations():
     spec = importlib.util.spec_from_file_location(
         "wa", str(_ROOT / "scripts" / "watch_annotations.py"))
@@ -135,10 +185,26 @@ def _check_subject(cr, wa, phase, frames, parts, sw, sh):
     rows = {}
     clipped = indeterminate = 0
     # The margins are read off a grid every 0.1 of the frame and resolve to
-    # about +/-0.01 of it. An overflow SMALLER than that is neither a clip nor a
-    # pass: the instrument cannot tell the two apart. It gets its own state,
-    # counted apart from both, and it does NOT clear the exit code — a thing
-    # that could not be measured must never read as a thing that was fine.
+    # about +/-0.01 of it, and that uncertainty decides the verdict — Codex's
+    # rule, per MARGIN, against THAT AXIS's tolerance:
+    #
+    #   held           the whole possible extent, as far as the source shows
+    #                  it, fits
+    #   clipped        the overflow survives even at the end of the
+    #                  uncertainty most favourable to fitting
+    #   indeterminate  both are compatible with the measurement
+    #
+    # THE FIRST VERSION WAS ASYMMETRIC and Codex caught it: any nominal
+    # overflow <= 0.5 px was `held`, so the tolerance only ever applied once a
+    # box had already left. The face at f2308 sits 7.2 px INSIDE the region
+    # against a vertical uncertainty of +/-14.4 px — the real margin may well be
+    # outside, and it was reading as held.
+    #
+    # AND THE AXIS IS CHOSEN PER MARGIN, NOT BY THE BIGGEST NUMBER. The
+    # horizontal and vertical tolerances differ (25.6 and 14.4 source px here),
+    # so taking the largest overflow in pixels first and then asking about its
+    # tolerance can call a box held on the strength of a wide margin while a
+    # smaller one on the other axis is already outside.
     tol_x = wa.MARGIN_UNCERTAINTY * sw
     tol_y = wa.MARGIN_UNCERTAINTY * sh
     for part, got in boxes.items():
@@ -149,27 +215,47 @@ def _check_subject(cr, wa, phase, frames, parts, sw, sh):
             continue
         r = phase["region"]
         held = cut = maybe = 0
-        worst = None
+        worst_cut = worst_maybe = None
         for b in got:
-            overs = [(r["x"] - b["x0"] * sw, tol_x),
-                     (b["x1"] * sw - (r["x"] + r["w"]), tol_x),
-                     (r["y"] - b["y0"] * sh, tol_y),
-                     (b["y1"] * sh - (r["y"] + r["h"]), tol_y)]
-            over, tol = max(overs, key=lambda o: o[0])
-            if over <= 0.5:
-                held += 1
-                continue
-            if over <= tol:
+            # A MARGIN THAT SITS ON THE SOURCE FRAME EDGE IS NOT A MEASUREMENT.
+            # The annotation stops there because the thing continues outside
+            # the picture, and what is out there is in no frame — so no region
+            # can be sized to hold it, and there is nothing for +/-0.01 to be
+            # the uncertainty OF. Codex's own wording carries this: held is
+            # "the whole possible extent, VISIBLE IN THE SOURCE, fits". Giving
+            # such a margin the normal tolerance made 24 boxes indeterminate
+            # whose visible extent reaches the region's edge exactly.
+            edge = 1e-9
+            margins = [
+                ("left", r["x"] - b["x0"] * sw,
+                 0.0 if b["x0"] <= edge else tol_x),
+                ("right", b["x1"] * sw - (r["x"] + r["w"]),
+                 0.0 if b["x1"] >= 1.0 - edge else tol_x),
+                ("top", r["y"] - b["y0"] * sh,
+                 0.0 if b["y0"] <= edge else tol_y),
+                ("bottom", b["y1"] * sh - (r["y"] + r["h"]),
+                 0.0 if b["y1"] >= 1.0 - edge else tol_y)]
+            verdict = "held"
+            for side, over, tol in margins:
+                if over - tol > 0.0:
+                    verdict = "clipped"
+                    if worst_cut is None or over - tol > worst_cut[3]:
+                        worst_cut = (b["frame"], side, round(over, 1),
+                                     round(over - tol, 1), round(tol, 1))
+                elif over + tol > 0.0 and verdict != "clipped":
+                    verdict = "indeterminate"
+                    if worst_maybe is None or over > worst_maybe[2]:
+                        worst_maybe = (b["frame"], side, round(over, 1),
+                                       round(tol, 1))
+            if verdict == "clipped":
+                cut += 1
+            elif verdict == "indeterminate":
                 maybe += 1
             else:
-                cut += 1
-            if worst is None or over > worst[1]:
-                worst = (b["frame"], round(over, 1), round(tol, 1))
+                held += 1
         rows[part] = {"why": None, "held_out": len(got), "held": held,
                       "clipped": cut, "indeterminate": maybe,
-                      "worst_overflow_px": round(worst[1], 1) if worst else 0.0,
-                      "worst_frame": worst[0] if worst else None,
-                      "tolerance_px": round(worst[2], 1) if worst else None}
+                      "worst_clip": worst_cut, "worst_indeterminate": worst_maybe}
         clipped += cut
         indeterminate += maybe
     unseen = [p for p, r in rows.items() if r.get("why")]
@@ -259,6 +345,15 @@ def main() -> int:
     a = json.loads(build.read_text(encoding="utf-8"))["observation"]
     b = json.loads(held.read_text(encoding="utf-8"))["observation"]
     apart = sco.disjoint(a, b)
+    # AND THE CAPTION SAMPLES ARE NOT THE ONLY THING THE REGIONS WERE BUILT
+    # FROM. Codex: the speech region also used `_review_faces` at 4 Hz, and on
+    # `6053a598cf06` five hold-out times coincide with one of those samples.
+    # A time coincidence does not by itself prove the decoded frames are the
+    # same — `_review_faces` keeps the time and the boxes and no frame index,
+    # so the question cannot be settled from what is stored. That is exactly
+    # why they must not be counted as independent observations of the subject:
+    # they stay in the report, and out of the denominator.
+    collisions = _face_collisions(args.project, args.clip, b)
     if apart["disjoint"] is not True:
         # A hold-out that shares frames with the construction set reports the
         # circularity as escaped, which is worse than not running at all.
@@ -288,6 +383,13 @@ def main() -> int:
     print(f"{args.clip}  hold-out {apart['holdout']} frames, "
           f"{apart['shared']} shared with construction, "
           f"disjoint={apart['disjoint']}, {len(no_line)} carry no line")
+    if collisions["why"]:
+        print(f"  REFUSED: the face observations could not be read — "
+              f"{collisions['why']}")
+        return 2
+    print(f"  {collisions['collisions']} hold-out frame(s) fall within "
+          f"{collisions['window_s']}s of a `_review_faces` sample used to build "
+          f"a region: {collisions['frames']}")
     rows = []
     clipped_total = 0
     indeterminate_total = 0
@@ -328,11 +430,18 @@ def main() -> int:
                 unlooked.append(f"{phase['phase']}/{part}")
                 print(f"  {'':<12} {part:<7} {r['why']}")
                 continue
-            print(f"  {'':<12} {part:<7} {r['held']} held, {r['clipped']} "
-                  f"clipped, {r['indeterminate']} indeterminate of "
-                  f"{r['held_out']}; worst {r['worst_overflow_px']} source px"
-                  + (f" at f{r['worst_frame']} (tolerance "
-                     f"{r['tolerance_px']}px)" if r["worst_frame"] else ""))
+            line = (f"  {'':<12} {part:<7} {r['held']} held, {r['clipped']} "
+                    f"clipped, {r['indeterminate']} indeterminate of "
+                    f"{r['held_out']}")
+            if r["worst_clip"]:
+                f, side, over, past, tol = r["worst_clip"]
+                line += (f"; worst clip f{f} {side} {over}px, {past}px past the "
+                         f"{tol}px tolerance")
+            elif r["worst_indeterminate"]:
+                f, side, over, tol = r["worst_indeterminate"]
+                line += (f"; closest f{f} {side} {over}px against a {tol}px "
+                         f"tolerance")
+            print(line)
 
     # THE TRANSITIONS. Only meaningful across the WHOLE phase list: restricting
     # the run to one phase leaves every boundary with nothing on its far side.
