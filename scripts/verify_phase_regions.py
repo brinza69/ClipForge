@@ -58,7 +58,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("project")
     ap.add_argument("clip")
-    ap.add_argument("--phase", default="speech")
+    ap.add_argument("--phase", default="", help="one phase, or all of them")
     args = ap.parse_args()
 
     from services.clipper import caption_region as cr
@@ -72,9 +72,10 @@ def main() -> int:
         return 2
     blob = json.loads(regions_path.read_text(encoding="utf-8"))
     sw, sh = int(blob["src_w"]), int(blob["src_h"])
-    phase = next((p for p in blob["phases"] if p["phase"] == args.phase), None)
-    if phase is None or not phase.get("region"):
-        print(f"REFUSED: no built region for the phase {args.phase!r}")
+    wanted = [p for p in blob["phases"] if p.get("region")
+              and (not args.phase or p["phase"] == args.phase)]
+    if not wanted:
+        print(f"REFUSED: no built region for {args.phase or 'any phase'}")
         return 2
 
     key = f"{args.clip}.holdout"
@@ -111,29 +112,45 @@ def main() -> int:
         return 2
 
     pad = Y_PAD_PROXY_PX / PROXY_H
-    boxes = [{"x0": x0, "x1": x1, "y0": LINE_Y0, "y1": min(1.0, LINE_Y1 + pad)}
-             for x0, x1 in lines.values()]
-    got = cr.verify_frozen(phase["region"], boxes, sw, sh)
+    print(f"{args.clip}  hold-out {apart['holdout']} frames, "
+          f"{apart['shared']} shared with construction, "
+          f"disjoint={apart['disjoint']}, {len(no_line)} carry no line")
+    rows = []
+    clipped_total = 0
+    for phase in wanted:
+        t0, t1 = float(phase["t0"]), float(phase["t1"])
+        inside = {t: xx for t, xx in lines.items() if t0 <= t < t1}
+        boxes = [{"x0": x0, "x1": x1, "y0": LINE_Y0,
+                  "y1": min(1.0, LINE_Y1 + pad)} for x0, x1 in inside.values()]
+        got = cr.verify_frozen(phase["region"], boxes, sw, sh)
+        clipped_total += got["clipped"] or 0
+        # THE SUBJECT HALF IS NOT VERIFIED HERE. A watch phase's region has to
+        # hold the watch as well as the line, and the hold-out frames carry no
+        # watch annotation — so reporting only the lines and calling the phase
+        # verified would be a partial check wearing a complete answer's name.
+        subject_verified = phase.get("subject_source") == "face"
+        rows.append({"phase": phase["phase"], "lines": got,
+                     "subject_verified": subject_verified})
+        print(f"  {phase['phase']:<12} LINES {got['held']} held, "
+              f"{got['clipped']} clipped of {got['held_out']}; worst overflow "
+              f"{got['worst_overflow_px']} source px"
+              + ("" if subject_verified
+                 else "   [SUBJECT NOT VERIFIED: the hold-out frames carry no "
+                      "watch annotation]"))
 
-    print(f"{args.clip} / {args.phase}")
-    print(f"  region {phase['region']}  built from {phase.get('built_from')} "
-          f"observations")
-    print(f"  hold-out {apart['holdout']} frames, {apart['shared']} shared with "
-          f"construction, disjoint={apart['disjoint']}")
-    print(f"  {len(no_line)} of them carry no subtitle line")
-    print(f"  LINES: {got['held']} held, {got['clipped']} clipped, of "
-          f"{got['held_out']}; worst overflow {got['worst_overflow_px']} "
-          f"source px")
-
-    out = {"clip": args.clip, "phase": args.phase, "region": phase["region"],
-           "disjoint": apart, "lines": got,
+    out = {"clip": args.clip, "disjoint": apart, "phases": rows,
            "held_out_frames": [s.get("frame") for s in b["samples"]],
            "verdict": None}
     (DATA / args.project / "phase_regions"
-     / f"{args.clip}.{args.phase}.verification.json").write_text(
+     / f"{args.clip}.verification.json").write_text(
         json.dumps(out, indent=1, default=str), encoding="utf-8")
-    # A clipped line is a real finding and the exit code carries it.
-    return 0 if not got["clipped"] else 2
+    unverified = [r["phase"] for r in rows if not r["subject_verified"]]
+    if unverified:
+        print(f"  {len(unverified)} phase(s) have their SUBJECT unverified: "
+              f"{unverified}")
+    # A clipped line is a real finding, and so is a phase whose subject nobody
+    # checked: neither may leave a clean exit code behind.
+    return 0 if not clipped_total and not unverified else 2
 
 
 if __name__ == "__main__":
