@@ -71,6 +71,9 @@ def _annotations():
 #: share are identical, so the two tables cannot drift apart in silence.
 SPEECH_KEEPS = ("face",)
 
+#: Half-width of the transition window, in seconds.
+WINDOW_S = 0.5
+
 
 def _watch_annotations():
     spec = importlib.util.spec_from_file_location(
@@ -186,9 +189,13 @@ def _transitions(cr, wa, phases, frames_at, sw, sh):
     out = []
     for a, b in zip(phases, phases[1:]):
         edge = float(b["t0"])
-        near = [(t, f) for t, f in frames_at if abs(t - edge) <= 0.35]
+        # Codex: all the frames within about half a second either side, and
+        # widen it if the gesture starts earlier or runs on past it. The
+        # 223.90-224.20 gesture interval fits inside this window at 224.20.
+        near = [(t, f) for t, f in frames_at if abs(t - edge) <= WINDOW_S]
         if not near:
-            out.append({"boundary": edge, "why": "no_holdout_frame_within_0.35s"})
+            out.append({"boundary": edge,
+                        "why": f"no_holdout_frame_within_{WINDOW_S}s"})
             continue
         rows = []
         for t, f in sorted(near):
