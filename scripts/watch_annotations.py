@@ -377,3 +377,30 @@ HOLDOUT_HAND_NOT_VISIBLE: tuple[int, ...] = (2323, 2334)
 #             0.640-0.790 / 0.280-1.000 reached into the bokeh right of the head
 #             sliver; this box alone produced the one CLIP the previous
 #             verification reported
+
+
+# --- the FRESH lot, next door --------------------------------------------------
+#
+# Split into `watch_annotations_fresh.py` ONLY because this file reached 544
+# lines against a limit of 500. It is re-exported here so that every consumer
+# still sees one annotation module, which is what it is: the three lots differ
+# in what they are FOR, not in how they were read.
+
+
+def _sibling(name: str):
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).with_name(name)
+    spec = importlib.util.spec_from_file_location(path.stem, str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_fresh = _sibling("watch_annotations_fresh.py")
+
+FRESH = _fresh.FRESH
+FRESH_WATCH_NOT_VISIBLE = _fresh.FRESH_WATCH_NOT_VISIBLE
+FRESH_HAND_NOT_VISIBLE = _fresh.FRESH_HAND_NOT_VISIBLE
+WITHDRAWAL_INTERVAL = _fresh.WITHDRAWAL_INTERVAL

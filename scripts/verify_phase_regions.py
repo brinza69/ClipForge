@@ -69,6 +69,9 @@ def _annotations():
 #: it — the speech region comes from the plan's faces — but the verification
 #: still has to name what it is checking. `_keeps` asserts the phases the two
 #: share are identical, so the two tables cannot drift apart in silence.
+#: Slack for the float comparisons that decide a verdict.
+_EPS = 1e-6
+
 SPEECH_KEEPS = ("face",)
 
 #: Half-width of the transition window, in seconds.
@@ -129,7 +132,7 @@ STALE_TIMES = "the_stored_times_predate_the_pos_msec_fix"
 NO_FPS = "the_proxy_would_not_report_a_frame_rate"
 
 
-def _times_match_indices(project: str, observation: dict) -> dict:
+def _times_match_indices(project: str, observation: dict, phases) -> dict:
     """Does every stored `t_decoded` equal its own frame's presentation time.
 
     A sample file written before the `POS_MSEC` fix carries a correct index
@@ -139,14 +142,23 @@ def _times_match_indices(project: str, observation: dict) -> dict:
     without noticing would put the old error straight back into a result that
     looks new.
 
-    REFUSES rather than correcting them. The arithmetic is trivial — add one
-    frame — and writing a computed value into a file that calls itself an
-    observation is how a derivation starts reading as a measurement.
+    IT DOES NOT CORRECT THEM. The arithmetic is trivial — add one frame — and
+    writing a computed value into a file that calls itself an observation is how
+    a derivation starts reading as a measurement.
+
+    WHAT IT REFUSES ON is not the staleness itself but its CONSEQUENCE: whether
+    correcting a time would move a sample across a phase boundary. On this
+    corpus every stored time is one frame early and NOT ONE sample changes
+    phase, so the files are wrong labels over right assignments — a
+    documentation defect, reported in full, rather than a measurement defect.
+    The distinction matters because refusing on the staleness alone would block
+    a lot that never reads these files, and passing silently would hide the day
+    a boundary moves and one of them does cross.
     """
     import cv2
 
     out: dict[str, Any] = {"why": None, "checked": 0, "off": 0, "fps": None,
-                           "worst": None}
+                           "worst": None, "would_change_phase": []}
     proxy = DATA / project / "proxy" / "proxy.mp4"
     cap = cv2.VideoCapture(str(proxy))
     try:
@@ -158,6 +170,12 @@ def _times_match_indices(project: str, observation: dict) -> dict:
         return out
     out["fps"] = fps
     half = 0.5 / fps
+    edges = sorted({float(t0) for _, t0, _, _, _ in phases}
+                   | {float(t1) for _, _, t1, _, _ in phases})
+
+    def _band(x):
+        return sum(1 for e in edges if x >= e)
+
     for sample in observation["samples"]:
         f, t = sample.get("frame"), sample.get("t_decoded")
         if f is None or t is None:
@@ -168,8 +186,46 @@ def _times_match_indices(project: str, observation: dict) -> dict:
             out["off"] += 1
             if out["worst"] is None or abs(gap) > abs(out["worst"][1]):
                 out["worst"] = (f, round(gap, 3))
-    if out["off"]:
+            if _band(t) != _band(f / fps):
+                out["would_change_phase"].append(f)
+    if out["would_change_phase"]:
         out["why"] = STALE_TIMES
+    return out
+
+
+NOT_INDEPENDENT = "frames_in_this_lot_were_already_looked_at"
+
+
+def _fresh_is_independent(wa, clip: str) -> dict:
+    """Is the fresh lot actually disjoint from everything used to build.
+
+    `select_fresh_lot` excluded these frames by construction, and "by
+    construction" is the kind of guarantee this corpus has repeatedly found to
+    be a claim rather than a fact. This recomputes it from the tables and the
+    windows themselves, so a lot that drifted — an annotation added to WATCH
+    after the lot was chosen, a boundary moved — is caught rather than trusted.
+    """
+    import importlib.util as _il
+
+    spec = _il.spec_from_file_location(
+        "bpr", str(_ROOT / "scripts" / "build_phase_regions.py"))
+    bpr = _il.module_from_spec(spec)
+    spec.loader.exec_module(bpr)
+
+    out: dict[str, Any] = {"why": None, "checked": len(wa.FRESH), "shared": {}}
+    fps = bpr.PROXY_FPS
+    for f in sorted(wa.FRESH):
+        if f in wa.WATCH:
+            out["shared"][f] = "construction"
+        elif f in wa.HOLDOUT:
+            out["shared"][f] = "previous_holdout"
+        else:
+            for _, t0, _, _, _ in (bpr.PHASES.get(clip) or [])[1:]:
+                if abs(f / fps - float(t0)) <= 0.5:
+                    out["shared"][f] = f"transition_window_at_{t0}"
+                    break
+    if out["shared"]:
+        out["why"] = NOT_INDEPENDENT
     return out
 
 
@@ -197,17 +253,23 @@ def _keeps():
 
 
 #: A part that is neither annotated nor declared invisible has not been looked
-#: at, and a frame nobody looked at is not a frame the region held.
-_NOT_VISIBLE = {"watch": "HOLDOUT_WATCH_NOT_VISIBLE",
-                "hand": "HOLDOUT_HAND_NOT_VISIBLE"}
+#: at, and a frame nobody looked at is not a frame the region held. The name is
+#: completed with the lot's prefix, so `fresh` cannot silently consult the
+#: hold-out's list of invisible watches and read a gap as a looked-at absence.
+_NOT_VISIBLE = {"watch": "WATCH_NOT_VISIBLE", "hand": "HAND_NOT_VISIBLE"}
 
 
-def _subject_boxes(wa, frames, parts):
-    """`({part: [box]}, missing)` for the hold-out frames of one phase."""
+#: `{lot: (table attribute, not-visible attribute prefix)}`.
+LOTS = {"holdout": ("HOLDOUT", "HOLDOUT_"), "fresh": ("FRESH", "FRESH_")}
+
+
+def _subject_boxes(wa, frames, parts, which="holdout"):
+    """`({part: [box]}, missing)` for one phase's frames of the chosen lot."""
+    table = getattr(wa, LOTS[which][0])
     got: dict[str, list] = {p: [] for p in parts}
     missing: list[str] = []
     for f in frames:
-        ann = wa.HOLDOUT.get(f)
+        ann = table.get(f)
         if ann is None:
             missing.append(f"f{f}:unannotated")
             continue
@@ -219,15 +281,15 @@ def _subject_boxes(wa, frames, parts):
                                   "frame": f})
                 continue
             name = _NOT_VISIBLE.get(part)
-            if name and f in getattr(wa, name, ()):
+            if name and f in getattr(wa, LOTS[which][1] + name, ()):
                 continue          # looked at, and there was nothing to see
             missing.append(f"f{f}:{part}")
     return got, missing
 
 
-def _check_subject(cr, wa, phase, frames, parts, sw, sh):
+def _check_subject(cr, wa, phase, frames, parts, sw, sh, which="holdout"):
     """Every declared part of one phase against its frozen region."""
-    boxes, missing = _subject_boxes(wa, frames, parts)
+    boxes, missing = _subject_boxes(wa, frames, parts, which)
     if missing:
         return {"why": "not_looked_at", "missing": missing}, None
     rows = {}
@@ -285,12 +347,18 @@ def _check_subject(cr, wa, phase, frames, parts, sw, sh):
                  0.0 if b["y1"] >= 1.0 - edge else tol_y)]
             verdict = "held"
             for side, over, tol in margins:
-                if over - tol > 0.0:
+                # EPS, not 0.0: an overflow of exactly one tolerance is the
+                # boundary between `clipped` and `indeterminate`, and floating
+                # point put f2414's watch and hand on the wrong side of it —
+                # 14.4 px against a 14.4 px tolerance reported as clipped by
+                # 0.0 px. A verdict that turns on the last bit of a float is
+                # not a verdict.
+                if over - tol > _EPS:
                     verdict = "clipped"
                     if worst_cut is None or over - tol > worst_cut[3]:
                         worst_cut = (b["frame"], side, round(over, 1),
                                      round(over - tol, 1), round(tol, 1))
-                elif over + tol > 0.0 and verdict != "clipped":
+                elif over + tol > _EPS and verdict != "clipped":
                     verdict = "indeterminate"
                     if worst_maybe is None or over > worst_maybe[2]:
                         worst_maybe = (b["frame"], side, round(over, 1),
@@ -358,6 +426,15 @@ def main() -> int:
     ap.add_argument("project")
     ap.add_argument("clip")
     ap.add_argument("--phase", default="", help="one phase, or all of them")
+    ap.add_argument("--set", dest="which", default="holdout",
+                    choices=("holdout", "fresh"),
+                    help="which lot judges the candidate. `holdout` is the "
+                         "26 frames from before the replay correction — they "
+                         "are DIAGNOSTIC AND REGRESSION material for the "
+                         "corrected candidate, not independent confirmation of "
+                         "it, because they were corrected in the same pass that "
+                         "moved the regions. `fresh` is the lot chosen by "
+                         "`select_fresh_lot.py` before anyone looked at it")
     args = ap.parse_args()
 
     from services.clipper import caption_region as cr
@@ -377,11 +454,10 @@ def main() -> int:
         print(f"REFUSED: no built region for {args.phase or 'any phase'}")
         return 2
 
-    key = f"{args.clip}.holdout"
     ann = _annotations()
-    lines = ann.LINES.get(key)
-    if not lines:
-        print(f"REFUSED: no annotated hold-out lines for {key}")
+    lines = ann.LINES.get(f"{args.clip}.holdout")
+    if args.which == "holdout" and not lines:
+        print(f"REFUSED: no annotated hold-out lines for {args.clip}")
         return 2
 
     build = frames_dir / f"{args.clip}.samples.json"
@@ -403,17 +479,28 @@ def main() -> int:
     # they stay in the report, and out of the denominator.
     collisions = _face_collisions(args.project, args.clip, b)
     # BEFORE ANY OF IT, do the stored times name the frames they sit next to.
+    import importlib.util as _il
+
+    _spec = _il.spec_from_file_location(
+        "bpr_phases", str(_ROOT / "scripts" / "build_phase_regions.py"))
+    _bpr = _il.module_from_spec(_spec)
+    _spec.loader.exec_module(_bpr)
+    _phases = _bpr.PHASES.get(args.clip) or []
     for which, obs in (("construction", a), ("hold-out", b)):
-        fresh = _times_match_indices(args.project, obs)
-        if fresh["why"]:
+        stale = _times_match_indices(args.project, obs, _phases)
+        if stale["why"]:
             print(f"REFUSED: the {which} sample file is not usable — "
-                  f"{fresh['why']}; {fresh['off']} of {fresh['checked']} times "
-                  f"disagree with their own frame index at {fresh['fps']} fps, "
-                  f"worst f{fresh['worst'][0]} by {fresh['worst'][1]}s"
-                  if fresh["worst"] else
-                  f"REFUSED: the {which} sample file is not usable — "
-                  f"{fresh['why']}")
+                  f"{stale['why']}, and {len(stale['would_change_phase'])} "
+                  f"sample(s) change phase once corrected: "
+                  f"{stale['would_change_phase'][:8]}")
             return 2
+        if stale["off"]:
+            # Reported in full every run, never quietly tolerated: the labels
+            # are wrong, and the only reason this is not a refusal is that no
+            # assignment moves when they are made right.
+            print(f"  NOTE: {stale['off']} of {stale['checked']} {which} times "
+                  f"predate the POS_MSEC fix (worst f{stale['worst'][0]} by "
+                  f"{stale['worst'][1]}s) — 0 change phase once corrected")
     if apart["disjoint"] is not True:
         # A hold-out that shares frames with the construction set reports the
         # circularity as escaped, which is worse than not running at all.
@@ -423,13 +510,15 @@ def main() -> int:
     # EVERY hold-out sample must be accounted for, as an annotated line or as a
     # frame confirmed to carry none. A frame nobody annotated is not a frame the
     # region held.
-    no_line = set(ann.NO_LINE.get(key, ()))
-    times = [s["t_decoded"] for s in b["samples"] if s.get("t_decoded") is not None]
-    missing = [t for t in times if t not in lines and t not in no_line]
-    if missing:
-        print(f"REFUSED: {len(missing)} hold-out frames are not annotated: "
-              f"{missing[:8]}")
-        return 2
+    no_line = set(ann.NO_LINE.get(f"{args.clip}.holdout", ()))
+    if args.which == "holdout":
+        times = [s["t_decoded"] for s in b["samples"]
+                 if s.get("t_decoded") is not None]
+        missing = [t for t in times if t not in lines and t not in no_line]
+        if missing:
+            print(f"REFUSED: {len(missing)} hold-out frames are not annotated: "
+                  f"{missing[:8]}")
+            return 2
 
     pad = Y_PAD_PROXY_PX / PROXY_H
     wa = _watch_annotations()
@@ -440,30 +529,57 @@ def main() -> int:
     # by index.
     frames_at = [(s["t_decoded"], s["frame"]) for s in b["samples"]
                  if s.get("t_decoded") is not None and s.get("frame") is not None]
-    print(f"{args.clip}  hold-out {apart['holdout']} frames, "
-          f"{apart['shared']} shared with construction, "
-          f"disjoint={apart['disjoint']}, {len(no_line)} carry no line")
-    if collisions["why"]:
-        print(f"  REFUSED: the face observations could not be read — "
-              f"{collisions['why']}")
-        return 2
-    print(f"  {collisions['collisions']} hold-out frame(s) fall within "
-          f"{collisions['window_s']}s of a `_review_faces` sample used to build "
-          f"a region: {collisions['frames']}")
+    if args.which == "fresh":
+        # The fresh lot is addressed by index alone: no caption samples were
+        # taken for it, so its time is the frame's own presentation time.
+        frames_at = [(f / 10.0, f) for f in sorted(wa.FRESH)]
+        indep = _fresh_is_independent(wa, args.clip)
+        if indep["why"]:
+            # A "fresh" lot that shares frames with construction reports the
+            # circularity as escaped, which is worse than not running at all.
+            print(f"REFUSED: {indep['why']} — {indep['shared']}")
+            return 2
+        print(f"{args.clip}  FRESH lot, {indep['checked']} frames, none shared "
+              f"with construction, the previous hold-out or a transition window")
+    else:
+        print(f"{args.clip}  hold-out {apart['holdout']} frames, "
+              f"{apart['shared']} shared with construction, "
+              f"disjoint={apart['disjoint']}, {len(no_line)} carry no line")
+        if collisions["why"]:
+            print(f"  REFUSED: the face observations could not be read — "
+                  f"{collisions['why']}")
+            return 2
+        print(f"  {collisions['collisions']} hold-out frame(s) fall within "
+              f"{collisions['window_s']}s of a `_review_faces` sample used to "
+              f"build a region: {collisions['frames']}")
     rows = []
     clipped_total = 0
     indeterminate_total = 0
     unlooked = []
     for phase in wanted:
         t0, t1 = float(phase["t0"]), float(phase["t1"])
-        inside = {t: xx for t, xx in lines.items() if t0 <= t < t1}
-        boxes = [{"x0": x0, "x1": x1, "y0": LINE_Y0,
-                  "y1": min(1.0, LINE_Y1 + pad)} for x0, x1 in inside.values()]
-        got = cr.verify_frozen(phase["region"], boxes, sw, sh)
-        clipped_total += got["clipped"] or 0
-        print(f"  {phase['phase']:<12} LINES {got['held']} held, "
-              f"{got['clipped']} clipped of {got['held_out']}; worst overflow "
-              f"{got['worst_overflow_px']} source px")
+        if args.which == "fresh":
+            # THE LINE HALF IS NOT VERIFIED BY THIS LOT and is not carried over
+            # from the previous one. Those 63 lines were held by regions that
+            # have since moved; reusing the number would attach a result to a
+            # candidate it was never measured on, which is the whole failure
+            # this file exists to prevent. Annotating the caption band on these
+            # 36 frames is a separate round of looking, and it has not happened.
+            got = {"why": "not_annotated_for_the_fresh_lot", "held": None,
+                   "clipped": None, "held_out": 0, "worst_overflow_px": None}
+            unlooked.append(f"{phase['phase']}/lines")
+            print(f"  {phase['phase']:<12} LINES not verified by this lot — "
+                  f"the caption band on these frames has not been read")
+        else:
+            inside = {t: xx for t, xx in lines.items() if t0 <= t < t1}
+            boxes = [{"x0": x0, "x1": x1, "y0": LINE_Y0,
+                      "y1": min(1.0, LINE_Y1 + pad)}
+                     for x0, x1 in inside.values()]
+            got = cr.verify_frozen(phase["region"], boxes, sw, sh)
+            clipped_total += got["clipped"] or 0
+            print(f"  {phase['phase']:<12} LINES {got['held']} held, "
+                  f"{got['clipped']} clipped of {got['held_out']}; worst "
+                  f"overflow {got['worst_overflow_px']} source px")
 
         # THE SUBJECT HALF. A region that holds every subtitle and loses the
         # watch has kept the caption and thrown the clip away.
@@ -472,9 +588,10 @@ def main() -> int:
         if parts is None:
             sub = {"why": f"no_keep_list_declared_for_{phase['phase']}"}
         elif not mine:
-            sub = {"why": "no_holdout_frame_falls_in_this_phase"}
+            sub = {"why": f"no_{args.which}_frame_falls_in_this_phase"}
         else:
-            sub, _ = _check_subject(cr, wa, phase, mine, parts, sw, sh)
+            sub, _ = _check_subject(cr, wa, phase, mine, parts, sw, sh,
+                                    args.which)
         rows.append({"phase": phase["phase"], "lines": got, "subject": sub,
                      "subject_frames": mine})
         if sub["why"]:
@@ -506,7 +623,17 @@ def main() -> int:
     # THE TRANSITIONS. Only meaningful across the WHOLE phase list: restricting
     # the run to one phase leaves every boundary with nothing on its far side.
     tr = []
-    if not args.phase:
+    if args.which == "fresh":
+        # By construction there is no fresh frame within 0.5 s of a boundary —
+        # they were excluded as already inspected. Printing an empty
+        # transitions section would read as "the cuts were checked and nothing
+        # was wrong", so it says what it is instead.
+        print("\n  transitions: NOT CHECKED BY THIS LOT — the +/-0.5 s windows "
+              "were excluded from it as already inspected; the transition "
+              "result stands from the hold-out run, on regions that have since "
+              "moved")
+        unlooked.append("transitions")
+    elif not args.phase:
         tr = _transitions(cr, wa, wanted, frames_at, sw, sh)
         print("\n  transitions")
         for t in tr:
@@ -531,12 +658,13 @@ def main() -> int:
                 print(f"      f{r['frame']} {r['t']:.2f}s {r['part']:<7} held by "
                       f"{r['phase']}, NOT by the other side of the cut")
 
-    out = {"clip": args.clip, "disjoint": apart, "phases": rows,
+    out = {"clip": args.clip, "lot": args.which, "disjoint": apart,
+           "phases": rows,
            "transitions": tr,
            "held_out_frames": [s.get("frame") for s in b["samples"]],
            "verdict": None}
     (DATA / args.project / "phase_regions"
-     / f"{args.clip}.verification.json").write_text(
+     / f"{args.clip}.verification.{args.which}.json").write_text(
         json.dumps(out, indent=1, default=str), encoding="utf-8")
     if unlooked:
         print(f"\n  {len(unlooked)} thing(s) nobody looked at: {unlooked}")

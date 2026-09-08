@@ -121,7 +121,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("project")
     ap.add_argument("--set", dest="which", default="construction",
-                    choices=("construction", "holdout"))
+                    choices=("construction", "holdout", "fresh"))
     ap.add_argument("--frames", default="",
                     help="comma-separated frame indices; default is every "
                          "annotated frame in the chosen set")
@@ -133,7 +133,8 @@ def main() -> int:
     import cv2
 
     wa = _annotations()
-    table = wa.WATCH if args.which == "construction" else wa.HOLDOUT
+    table = {"construction": wa.WATCH, "holdout": wa.HOLDOUT,
+             "fresh": wa.FRESH}[args.which]
     if args.frames:
         try:
             want = [int(x) for x in args.frames.split(",") if x.strip()]
