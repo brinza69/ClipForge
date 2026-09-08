@@ -131,13 +131,18 @@ def observe(video: Any, at: Sequence[Any], *, reader: Any = None) -> dict:
         samples: list[dict] = []
         for want in times:
             cap.set(cv2.CAP_PROP_POS_MSEC, want * 1000.0)
-            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-            # BOTH READ BEFORE `read()`. After it, `POS_FRAMES` points at the
-            # NEXT frame, so an index taken afterwards names a frame nobody
-            # looked at — and two sets compared on it would look disjoint
-            # exactly when they are not.
+            # THE INDEX BEFORE THE READ, THE TIME AFTER IT, and neither the
+            # other way round. After `read()` the index points at the NEXT
+            # frame, so an index taken afterwards names a frame nobody looked
+            # at, and two sets compared on it would look disjoint exactly when
+            # they are not. But BEFORE the read `POS_MSEC` names the PREVIOUS
+            # frame — measured on this proxy, set(POS_FRAMES, 2243) gives index
+            # 2243 with msec 224200 while f2243's presentation time is 224.3 s.
+            # Reading both before, which is what this did, gives a correct
+            # index with a time one frame early.
             index = cap.get(cv2.CAP_PROP_POS_FRAMES)
             ok, frame = cap.read()
+            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             if not ok or frame is None:
                 samples.append({"t_requested": round(want, 3), "t_decoded": None,
                                 "frame": None, "boxes": None,

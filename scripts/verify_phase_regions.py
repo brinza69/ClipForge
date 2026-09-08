@@ -125,6 +125,54 @@ def _face_collisions(project: str, clip: str, holdout: dict) -> dict:
     return out
 
 
+STALE_TIMES = "the_stored_times_predate_the_pos_msec_fix"
+NO_FPS = "the_proxy_would_not_report_a_frame_rate"
+
+
+def _times_match_indices(project: str, observation: dict) -> dict:
+    """Does every stored `t_decoded` equal its own frame's presentation time.
+
+    A sample file written before the `POS_MSEC` fix carries a correct index
+    with a time ONE FRAME EARLY, because the property was read before `read()`
+    where it names the previous frame. Those files are still on disk and every
+    phase assignment in this script is made from their times, so using one
+    without noticing would put the old error straight back into a result that
+    looks new.
+
+    REFUSES rather than correcting them. The arithmetic is trivial — add one
+    frame — and writing a computed value into a file that calls itself an
+    observation is how a derivation starts reading as a measurement.
+    """
+    import cv2
+
+    out: dict[str, Any] = {"why": None, "checked": 0, "off": 0, "fps": None,
+                           "worst": None}
+    proxy = DATA / project / "proxy" / "proxy.mp4"
+    cap = cv2.VideoCapture(str(proxy))
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) if cap.isOpened() else 0.0
+    finally:
+        cap.release()
+    if not fps or fps <= 0:
+        out["why"] = NO_FPS
+        return out
+    out["fps"] = fps
+    half = 0.5 / fps
+    for sample in observation["samples"]:
+        f, t = sample.get("frame"), sample.get("t_decoded")
+        if f is None or t is None:
+            continue
+        out["checked"] += 1
+        gap = t - f / fps
+        if abs(gap) > half:
+            out["off"] += 1
+            if out["worst"] is None or abs(gap) > abs(out["worst"][1]):
+                out["worst"] = (f, round(gap, 3))
+    if out["off"]:
+        out["why"] = STALE_TIMES
+    return out
+
+
 def _watch_annotations():
     spec = importlib.util.spec_from_file_location(
         "wa", str(_ROOT / "scripts" / "watch_annotations.py"))
@@ -354,6 +402,18 @@ def main() -> int:
     # why they must not be counted as independent observations of the subject:
     # they stay in the report, and out of the denominator.
     collisions = _face_collisions(args.project, args.clip, b)
+    # BEFORE ANY OF IT, do the stored times name the frames they sit next to.
+    for which, obs in (("construction", a), ("hold-out", b)):
+        fresh = _times_match_indices(args.project, obs)
+        if fresh["why"]:
+            print(f"REFUSED: the {which} sample file is not usable — "
+                  f"{fresh['why']}; {fresh['off']} of {fresh['checked']} times "
+                  f"disagree with their own frame index at {fresh['fps']} fps, "
+                  f"worst f{fresh['worst'][0]} by {fresh['worst'][1]}s"
+                  if fresh["worst"] else
+                  f"REFUSED: the {which} sample file is not usable — "
+                  f"{fresh['why']}")
+            return 2
     if apart["disjoint"] is not True:
         # A hold-out that shares frames with the construction set reports the
         # circularity as escaped, which is worse than not running at all.

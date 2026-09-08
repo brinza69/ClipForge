@@ -167,12 +167,14 @@ def main() -> int:
                 refused.append((index, NO_ANNOTATION))
                 continue
             cap.set(cv2.CAP_PROP_POS_FRAMES, index)
-            # BEFORE the read. After it the property names the NEXT frame, and
-            # a check that reads it afterwards is off by one in the direction
-            # that always looks fine.
+            # The INDEX before the read — after it the property names the NEXT
+            # frame, and a check that reads it afterwards is off by one in the
+            # direction that always looks fine. The TIME goes after the read,
+            # because before it `POS_MSEC` names the PREVIOUS frame; see
+            # `source_caption_observation.observe` for the measurement.
             at = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             ok, frame = cap.read()
+            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             if not ok or frame is None:
                 refused.append((index, UNREADABLE))
                 continue

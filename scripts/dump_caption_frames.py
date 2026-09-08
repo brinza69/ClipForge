@@ -91,9 +91,12 @@ def _observe_frames(video: str, frames: list[int]) -> dict:
         samples = []
         for index in frames:
             cap.set(cv2.CAP_PROP_POS_FRAMES, index)
-            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+            # The index BEFORE the read, the TIME AFTER it: the two properties
+            # disagree by one frame at the same instant. See
+            # `source_caption_observation.observe` for the measurement.
             at = cap.get(cv2.CAP_PROP_POS_FRAMES)
             ok, frame = cap.read()
+            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             if not ok or frame is None:
                 samples.append({"t_requested": None, "t_decoded": None,
                                 "frame": index, "boxes": None,

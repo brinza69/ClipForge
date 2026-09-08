@@ -352,3 +352,68 @@ def test_correcting_a_refused_frame_makes_it_readable_again():
     fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line()], "by": sco.AGENT}])
     assert fixed["samples"][0]["refused"] is None
     assert fixed["read"] == 1 and fixed["refused"] == 0
+
+
+# --- the two properties disagree by one frame --------------------------------
+
+
+def test_the_decoded_time_is_the_frame_that_was_read_not_the_one_before(
+        monkeypatch):
+    """`POS_FRAMES` before the read, `POS_MSEC` after it, and neither swapped.
+
+    Measured on the pilot proxy: `set(POS_FRAMES, 2243)` leaves `POS_FRAMES` at
+    2243 and `POS_MSEC` at 224200, and f2243's presentation time is 224.3 s.
+    Reading both before the read — which this module did — pairs a correct index
+    with a time one frame early. On `b23c14c41495` that carried f2425 as a
+    construction frame of the final phase when its true time, 242.5 s, is past
+    the clip's end at 242.42.
+    """
+    import sys
+    import types
+
+    fps = 10.0
+
+    class _Cap:
+        """A decoder with the real off-by-one: before a read, the index names
+        the frame about to be decoded and the time names the one before it."""
+
+        def __init__(self, _path):
+            self._next = 0
+            self._read = -1
+
+        def isOpened(self):
+            return True
+
+        def set(self, prop, value):
+            self._next = int(round(value / 1000.0 * fps)) if prop == 0 else int(value)
+            self._read = self._next - 1
+
+        def get(self, prop):
+            if prop == 1:                       # CAP_PROP_POS_FRAMES
+                return float(self._next)
+            return self._read / fps * 1000.0    # CAP_PROP_POS_MSEC
+
+        def read(self):
+            self._read = self._next
+            self._next += 1
+
+            class _F:
+                shape = (270, 480, 3)
+
+            return True, _F()
+
+        def release(self):
+            pass
+
+    fake = types.ModuleType("cv2")
+    fake.CAP_PROP_POS_MSEC = 0
+    fake.CAP_PROP_POS_FRAMES = 1
+    fake.VideoCapture = _Cap
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+
+    got = sco.observe("x.mp4", [224.3], reader=lambda *a, **k: [])
+    sample = got["samples"][0]
+    assert sample["frame"] == 2243, "the index still names the frame that was read"
+    assert sample["t_decoded"] == 224.3, (
+        "the time must be the read frame's, not the previous frame's "
+        f"(got {sample['t_decoded']})")

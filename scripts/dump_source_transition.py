@@ -108,9 +108,12 @@ def main() -> int:
                 if todo is not None:
                     want = todo.pop(0)
                 cap.set(cv2.CAP_PROP_POS_MSEC, want * 1000.0)
-            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+            # The index BEFORE the read, the TIME AFTER it: the two properties
+            # disagree by one frame at the same instant. See
+            # `source_caption_observation.observe` for the measurement.
             index = cap.get(cv2.CAP_PROP_POS_FRAMES)
             ok, frame = cap.read()
+            got_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             if not ok or frame is None:
                 # Counted, never dropped: a strip one frame short would hide
                 # that a moment was never looked at, which is the whole point.
