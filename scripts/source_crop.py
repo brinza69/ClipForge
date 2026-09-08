@@ -114,6 +114,15 @@ def main() -> int:
     ap.add_argument("--part", default="",
                     help="crop around one annotated part; default is the union "
                          "of every part on the frame")
+    ap.add_argument("--edge", default="",
+                    help="crop a BAND around one margin of --part "
+                         "(top|bottom|left|right) instead of the whole box. "
+                         "This is the calibration view: the question is where "
+                         "ONE edge lies, and a crop of the whole object spends "
+                         "its pixels on the parts nobody is arguing about")
+    ap.add_argument("--band", type=float, default=0.05,
+                    help="half-width of the --edge band, as a fraction of the "
+                         "frame")
     ap.add_argument("--step", type=float, default=0.02,
                     help="grid spacing as a fraction of the FULL frame; ticks "
                          "at every step, full lines every 0.1")
@@ -177,8 +186,31 @@ def main() -> int:
                 continue
 
             use = {args.part: boxes[args.part]} if args.part else boxes
+            if args.edge and not args.part:
+                refused.append((pf, "an_edge_needs_a_part"))
+                continue
             if args.full:
                 x0, y0, x1, y1 = 0, 0, w, h
+            elif args.edge:
+                bx0, bx1, by0, by1 = boxes[args.part]
+                # NOT `at`: that name holds the decoded SOURCE FRAME INDEX
+                # and is stamped on the image. Shadowing it printed the edge
+                # position where the frame number belongs — a mislabelled
+                # frame, which is the failure this whole file exists to avoid.
+                edge_at = None
+                if args.edge in ("top", "bottom"):
+                    edge_at = by0 if args.edge == "top" else by1
+                    fx0, fx1 = bx0 - MARGIN, bx1 + MARGIN
+                    fy0, fy1 = edge_at - args.band, edge_at + args.band
+                elif args.edge in ("left", "right"):
+                    edge_at = bx0 if args.edge == "left" else bx1
+                    fx0, fx1 = edge_at - args.band, edge_at + args.band
+                    fy0, fy1 = by0 - MARGIN, by1 + MARGIN
+                else:
+                    refused.append((pf, f"unknown_edge: {args.edge}"))
+                    continue
+                x0, x1 = max(0, int(fx0 * w)), min(w, int(fx1 * w))
+                y0, y1 = max(0, int(fy0 * h)), min(h, int(fy1 * h))
             else:
                 fx0 = min(b[0] for b in use.values()) - MARGIN
                 fx1 = max(b[1] for b in use.values()) + MARGIN
@@ -202,11 +234,18 @@ def main() -> int:
                 cv2.putText(crop, name, (bx0 + 4, max(16, by0 + 20)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                             COLOURS.get(name, (255, 255, 255)), 1)
+            asked = ""
+            if args.edge:
+                which_i = {"left": 0, "right": 1, "top": 2, "bottom": 3}
+                asked = (f"  EDGE {args.part}.{args.edge} annotated at "
+                         f"{boxes[args.part][which_i[args.edge]]:.3f}")
             cv2.putText(crop, f"proxy f{pf}  {t:.2f}s  source f{at}  "
-                              f"crop x{x0}-{x1} y{y0}-{y1}  NATIVE",
+                              f"crop x{x0}-{x1} y{y0}-{y1}  NATIVE{asked}",
                         (4, crop.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX,
                         0.5, (255, 255, 255), 1)
-            name = f"{args.which}.f{pf}" + (f".{args.part}" if args.part else "")
+            name = (f"{args.which}.f{pf}"
+                    + (f".{args.part}" if args.part else "")
+                    + (f".{args.edge}" if args.edge else ""))
             path = out_dir / f"{name}.png"
             # PNG, not JPEG: the question is where a soft edge ends, and a
             # lossy codec invents exactly the kind of gradient being read.

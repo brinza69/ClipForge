@@ -229,6 +229,40 @@ def _fresh_is_independent(wa, clip: str) -> dict:
     return out
 
 
+NO_LOT_FILE = "there_is_no_frozen_fresh_lot_for_this_clip"
+
+
+def _fresh_provenance(project: str, clip: str, wa) -> dict:
+    """Which fresh frames are the quarter selection and which are the extras.
+
+    Codex: "Pastreaza rezultatele separate: cele doua suplimentare nu inchid
+    deficitul din primul sfert al fazei `screen`." The lot is 34 frames chosen
+    by the quarter rule plus 2 that exist only because the withdrawal is
+    inspected whole — f2420 and f2423. Aggregating all 36 into one number lets
+    the extras stand in for the quarter that could not be filled, which is the
+    one thing the deficit was reported to prevent.
+    """
+    out: dict[str, Any] = {"why": None, "selected": [], "withdrawal_extra": [],
+                           "deficits": []}
+    path = DATA / project / "phase_regions" / f"{clip}.fresh_lot.json"
+    if not path.exists():
+        out["why"] = f"{NO_LOT_FILE}: {path}"
+        return out
+    blob = json.loads(path.read_text(encoding="utf-8"))
+    chosen = set(blob.get("selected") or ())
+    out["deficits"] = blob.get("deficits") or []
+    for f in sorted(wa.FRESH):
+        (out["selected"] if f in chosen
+         else out["withdrawal_extra"]).append(f)
+    # Every fresh frame has to come from one of the two, or the lot on disk and
+    # the annotation have drifted apart and neither figure means anything.
+    unaccounted = [f for f in out["withdrawal_extra"]
+                   if f not in set(blob.get("withdrawal", {}).get("frames") or ())]
+    if unaccounted:
+        out["why"] = f"annotated_frames_in_no_part_of_the_frozen_lot: {unaccounted}"
+    return out
+
+
 def _watch_annotations():
     spec = importlib.util.spec_from_file_location(
         "wa", str(_ROOT / "scripts" / "watch_annotations.py"))
@@ -523,10 +557,12 @@ def main() -> int:
     pad = Y_PAD_PROXY_PX / PROXY_H
     wa = _watch_annotations()
     keeps = _keeps()
+    prov: dict[str, Any] = {"selected": [], "withdrawal_extra": []}
     # `{decoded time: frame index}` for the hold-out samples, so a phase's
     # frames are the ones the decoder actually returned and not the ones asked
     # for. Both are needed: the phase window is on the clock, the annotation is
     # by index.
+    unlooked: list[str] = []
     frames_at = [(s["t_decoded"], s["frame"]) for s in b["samples"]
                  if s.get("t_decoded") is not None and s.get("frame") is not None]
     if args.which == "fresh":
@@ -539,8 +575,21 @@ def main() -> int:
             # circularity as escaped, which is worse than not running at all.
             print(f"REFUSED: {indep['why']} — {indep['shared']}")
             return 2
+        prov = _fresh_provenance(args.project, args.clip, wa)
+        if prov["why"]:
+            print(f"REFUSED: {prov['why']}")
+            return 2
         print(f"{args.clip}  FRESH lot, {indep['checked']} frames, none shared "
               f"with construction, the previous hold-out or a transition window")
+        print(f"  {len(prov['selected'])} chosen by the quarter rule, "
+              f"{len(prov['withdrawal_extra'])} extra for the withdrawal "
+              f"({prov['withdrawal_extra']}) — counted apart, because the "
+              f"extras do not fill a quarter that was short")
+        for d in prov["deficits"]:
+            print(f"  DEFICIT STANDS: {d['phase']} q{d['quarter']} "
+                  f"[{d['t0']}, {d['t1']}) had {d['eligible']} eligible "
+                  f"frame(s), short by {d['short_by']}")
+            unlooked.append(f"{d['phase']}/q{d['quarter']}")
     else:
         print(f"{args.clip}  hold-out {apart['holdout']} frames, "
               f"{apart['shared']} shared with construction, "
@@ -555,7 +604,6 @@ def main() -> int:
     rows = []
     clipped_total = 0
     indeterminate_total = 0
-    unlooked = []
     for phase in wanted:
         t0, t1 = float(phase["t0"]), float(phase["t1"])
         if args.which == "fresh":
@@ -593,7 +641,13 @@ def main() -> int:
             sub, _ = _check_subject(cr, wa, phase, mine, parts, sw, sh,
                                     args.which)
         rows.append({"phase": phase["phase"], "lines": got, "subject": sub,
-                     "subject_frames": mine})
+                     "subject_frames": mine,
+                     "from_quarter_rule": [f for f in mine
+                                           if args.which != "fresh"
+                                           or f in prov["selected"]],
+                     "withdrawal_extra": [f for f in mine
+                                          if args.which == "fresh"
+                                          and f in prov["withdrawal_extra"]]})
         if sub["why"]:
             unlooked.append(phase["phase"])
             print(f"  {'':<12} SUBJECT REFUSED: {sub['why']} "
