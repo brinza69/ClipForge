@@ -68,6 +68,38 @@ at 228.8 s. Read densely between 223.0 and 226.0 s:
 | **the display fills the frame** | 239.4 and 240.0 s: no face in shot at all, and at 240.0 the detector returns one box on the watch face — the only non-subtitle text in the clip |
 | **end of the phase** | **UNKNOWN.** The clip ends at 241.8 s with the watch still held up; that is where the CLIP stops, not where the phase does |
 
+### CORRECTION, 2026-09-08 — the times in the table above are one frame early
+
+Every time in this section was read from `CAP_PROP_POS_MSEC` taken BEFORE the
+decode, where it names the PREVIOUS frame. The two properties disagree by one
+frame at the same instant:
+
+    set(POS_FRAMES, 2243)  ->  POS_FRAMES 2243, POS_MSEC 224200
+    read()                 ->  POS_FRAMES 2244, POS_MSEC 224300
+
+and f2243's presentation time is index/fps = 224.3 s. So the FRAME INDICES above
+are right and the seconds beside them are each 0.1 s early. Fixed in
+`source_caption_observation.observe` and the three scripts that mirror it.
+
+THE BOUNDARIES WERE NOT SHIFTED BY 100 ms. Codex: "unele sunt alegeri
+editoriale, iar baza fiecăreia trebuie identificată." Each was re-observed on a
+frame with a corrected label, and all three land on the numbers they already
+had:
+
+| | basis | corrected |
+|---|---|---|
+| **gesture** | f2240 at rest (224.00), f2242 ALREADY RISING (224.20) — the white cuff is up at the lower centre-right. The interval narrows by one frame, from [f2240, f2243] to **[224.00, 224.20]**, and its later end is still 224.20 | **224.20** |
+| **taken off** | f2309 (230.90): the watch prominent on the wrist, the other hand moving to it | **230.90** |
+| **display fills the frame** | f2394 (239.40): the watch held to the lens, screen legible, the face reduced to a dark sliver behind it | **239.40** |
+
+That the numbers survive is a coincidence of where the frames fall, not a reason
+the correction did not matter. It DID matter once, at the other end: f2425 was
+carried as a construction frame of the final phase on a label of 242.40, and its
+true time is 242.5 s against a clip that ends at 242.42. It is not in the clip,
+and the screen region was partly built from it.
+`build_phase_regions._in_clip` now refuses any such frame, and the withdrawal
+list names f2424 alone.
+
 So the demonstration has three stages, not one: the watch worn and referred to
 (224.2), taken off and offered (230.9), and held to the lens as the subject of
 the frame (239.4). A single region for the whole stretch would have to hold a

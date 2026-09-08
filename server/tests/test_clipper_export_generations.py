@@ -190,3 +190,41 @@ def test_a_refusal_to_preserve_stops_the_run_in_both_scripts():
     for name in ("replan_and_rerender.py", "rerender_pilots.py"):
         src = (root / name).read_text(encoding="utf-8")
         assert 'got["why"]' in src, name
+
+
+# --- frames the clip does not contain ----------------------------------------
+
+
+def test_a_frame_past_the_clips_end_cannot_constrain_its_region():
+    """`build_phase_regions._in_clip`, and why it exists.
+
+    The screen phase's withdrawal frames were added by hand, on time labels that
+    the `POS_MSEC` fix later showed to be one frame early. Under the corrected
+    times f2424 is at 242.4 s and inside the clip, f2425 at 242.5 s and past its
+    end of 242.42 — so the region was partly built from a picture the viewer
+    never sees. This lives in the generations test file only because the two
+    share nothing else; it belongs to the same rule as the inventory, that a
+    record must not include what it never held.
+    """
+    import importlib.util
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "bpr", str(root / "scripts" / "build_phase_regions.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    inside, outside = m._in_clip([2424, 2425], m.CLIP_START, m.CLIP_END)
+    assert inside == [2424] and outside == [2425]
+
+    # The boundary itself: a frame exactly at the start is in, one at the end is
+    # not — the clip is a half-open interval like every other window here.
+    first = int(m.CLIP_START * m.PROXY_FPS) + 1
+    inside, outside = m._in_clip([first, int(m.CLIP_END * m.PROXY_FPS)],
+                                 m.CLIP_START, m.CLIP_END)
+    assert inside == [first, int(m.CLIP_END * m.PROXY_FPS)], (inside, outside)
+
+    # And the list no longer names it.
+    src = (root / "scripts" / "build_phase_regions.py").read_text(encoding="utf-8")
+    assert "(2424, 2425)" not in src, "f2425 is back in the withdrawal frames"

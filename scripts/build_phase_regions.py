@@ -85,6 +85,10 @@ PHASE_KEEPS: dict[str, tuple[str, ...]] = {
     "screen": ("screen", "watch", "hand", "face"),
 }
 
+#: `b23c14c41495`'s own bounds on the source clock. The end is what makes
+#: f2425 (242.5 s) an out-of-clip frame.
+CLIP_START, CLIP_END = 183.62, 242.42
+
 PHASES: dict[str, list[tuple[str, float, float, str, str]]] = {
     "6053a598cf06": [
         ("speech", 1147.75, 1204.58,
@@ -108,6 +112,29 @@ PHASES: dict[str, list[tuple[str, float, float, str, str]]] = {
 NO_SUBJECT_ANNOTATION = ("the_watch_geometry_is_an_agent_annotation_and_none_"
                          "has_been_made_for_this_phase")
 
+
+
+#: The proxy's frame rate, verified against the file rather than assumed:
+#: `CAP_PROP_FPS` reports 10.0 and frame `i` is presented at `i / fps`.
+PROXY_FPS = 10.0
+
+OUTSIDE_CLIP = "frames_outside_the_clip_cannot_constrain_its_region"
+
+
+def _in_clip(frames, start: float, end: float):
+    """Split frames into those the clip actually contains and those it does not.
+
+    A frame's time is `index / fps` — its presentation time — NOT what
+    `POS_MSEC` reported before the decode, which named the previous frame and
+    was 0.1 s early on every sample this corpus stored. Under the corrected
+    times f2425 sits at 242.5 s while the clip ends at 242.42, so the screen
+    region was partly built from a frame that is not in the clip. A region
+    cannot be constrained by a picture the viewer never sees.
+    """
+    inside, outside = [], []
+    for f in frames:
+        (inside if start <= f / PROXY_FPS < end else outside).append(f)
+    return inside, outside
 
 def _watch_subject(clip: str, phase: str, t0: float, t1: float):
     """The annotated parts for a watch phase, or `(None, why)`.
@@ -133,7 +160,18 @@ def _watch_subject(clip: str, phase: str, t0: float, t1: float):
     # the sampler reached, so a region built without them would be built from
     # the close-up alone.
     if phase == "screen":
-        frames += [f for f in (2424, 2425) if f in wa.WATCH]
+        # f2425 WAS IN THIS LIST and is not in the clip: it sits at 242.5 s
+        # against an end of 242.42. It was added on a time label that the
+        # `POS_MSEC` fix later showed to be one frame early. The guard below
+        # would catch it now; it is off the list because listing a frame the
+        # viewer never sees as a thing the region must hold is wrong on its own.
+        frames += [f for f in (2424,) if f in wa.WATCH]
+    # AND EVERY ONE OF THEM HAS TO BE IN THE CLIP. The withdrawal frames above
+    # were added by hand on the strength of a time label that turned out to be
+    # one frame early; f2425 is past the end and was constraining the region.
+    frames, outside = _in_clip(frames, CLIP_START, CLIP_END)
+    if outside:
+        return None, f"{OUTSIDE_CLIP}: {outside}"
     if not frames:
         return None, "no_construction_frame_in_this_phase"
     missing = [f for f in frames if f not in wa.WATCH]

@@ -163,6 +163,15 @@ CLIPPED_BY_FRAME: tuple[int, ...] = (2244, 2253, 2268, 2275, 2289, 2296, 2310,
                                      2316, 2338, 2355, 2365, 2379, 2384, 2395,
                                      2401, 2413, 2419, 2424, 2425)
 
+#: Frames that were annotated and are NOT IN THE CLIP. f2425 is at 242.5 s
+#: against an end of 242.42; it was reached, and added to the screen phase's
+#: withdrawal frames, on a time label that the `POS_MSEC` fix later showed to be
+#: one frame early. The annotation stays because the frame was genuinely looked
+#: at and the record of that is worth keeping — but a region cannot be
+#: constrained by a picture the viewer never sees, and
+#: `build_phase_regions._in_clip` refuses it.
+OUT_OF_CLIP: tuple[int, ...] = (2425,)
+
 #: How well the margins are resolved, in fractions of the frame. Read off a
 #: 480x270 proxy at 3x against a grid every 0.1; nothing finer is claimed.
 MARGIN_UNCERTAINTY = 0.01
