@@ -10,6 +10,18 @@ that batch — ten margins, re-measured on the 2560x1440 source with
 `source_crop.py --edge`, with the crop framed on the margin alone and the
 region's own edge nowhere on screen.
 
+AND AN INTERVAL IS ONLY A MEASUREMENT IF IT COVERS THE WHOLE CONTOUR. Codex,
+reading the saved crop for f2400 after this file first claimed [0.730, 0.750]:
+"nota justifica intervalul prin conturul vizibil la inaltimea 0.20-0.35. In
+cadrul salvat, capul se bombeaza mai la dreapta in jurul inaltimii 0.43, aparent
+dincolo de 0.750. Intervalul unei portiuni de contur nu delimiteaza automat
+marginea dreapta a intregului cap." That is the same failure the corpus keeps
+finding in new places: a partial measurement wearing the whole answer's name.
+The three `face.right` rows were each justified from the one height band where
+the silhouette is legible, and the head's widest point is not in that band. They
+now carry `whole_contour: False`, their verdict is `unmeasured` rather than
+`held`, and the exit code says so.
+
 EACH MARGIN IS AN INTERVAL, NOT A POINT. Codex again: "Pentru fiecare margine
 dificila, inregistreaza intervalul in care poate fi localizata." A defocused
 knuckle or a white strap against a pale wall does not have a pixel where it
@@ -20,7 +32,8 @@ tolerance. "O clasificare pe tipuri de muchii poate ajuta organizarea — dar nu
 justifica singura o noua toleranta numerica. Nu inlocui global +/-0,01 cu
 +/-0,05 doar fiindca a doua valoare acopera discrepantele constatate."
 
-WHAT IT FOUND. Eight of the ten margins change verdict. The proxy readings are
+WHAT IT FOUND. Eight of the ten margins change verdict, and three of those
+change to `unmeasured` because they were never measurements at all. The proxy readings are
 displaced from the source intervals by 10 to 154 source pixels against a
 declared tolerance of +/-25.6 px horizontally and +/-14.4 vertically — six
 times the tolerance at worst — and in BOTH DIRECTIONS. f2357's hand was
@@ -30,9 +43,9 @@ have been a bias to subtract. This is not that: it is noise wider than the
 tolerance, and it is why four "clips" and several "indeterminate" verdicts were
 neither.
 
-AND IT IS NOT A LICENCE TO CALL THE REGIONS GOOD. Seven of the ten come out
-`held` and two straddle, but that is seven margins on seven frames, not a
-verification. What it establishes is that the INSTRUMENT was wrong, so every
+AND IT IS NOT A LICENCE TO CALL THE REGIONS GOOD. Five of the ten come out
+`held`, two straddle and three measure nothing, and five held margins on five
+frames is not a verification. What it establishes is that the INSTRUMENT was wrong, so every
 verdict computed with it — in both directions — has to be redone.
 """
 
@@ -68,14 +81,18 @@ CALIBRATION: dict[tuple[int, str, str], dict[str, Any]] = {
         "note": "two knuckles at different heights, both soft; Codex read the "
                 "same frame and also declined to give it a point"},
     (2400, "face", "right"): {
-        "proxy": 0.790, "source": (0.730, 0.750),
+        "proxy": 0.790, "source": (0.730, 0.750), "whole_contour": False,
         "against": "bokeh_highlights", "kind": "head_silhouette",
-        "note": "legible where the durag meets the sky band at y 0.20-0.35; "
-                "below y 0.5 the boundary is inside the bokeh and unreadable"},
+        "note": "the interval is the silhouette at y 0.20-0.35 ONLY. Codex found "
+                "the head bulging further right around y 0.43, apparently past "
+                "0.750, and below y 0.5 the boundary is inside the bokeh. This "
+                "does not delimit the right margin of the whole head"},
     (2403, "face", "right"): {
-        "proxy": 0.775, "source": (0.730, 0.750),
+        "proxy": 0.775, "source": (0.730, 0.750), "whole_contour": False,
         "against": "bokeh_highlights", "kind": "head_silhouette",
-        "note": "same structure as f2400 one tenth of a second later"},
+        "note": "same structure as f2400 a tenth of a second later, and read the "
+                "same partial way — the band where the silhouette is legible, "
+                "not the widest point of the head"},
     # --- ambiguous margins that were NOT called clips ----------------------
     (2414, "watch", "top"): {
         "proxy": 0.075, "source": (0.110, 0.130),
@@ -92,10 +109,11 @@ CALIBRATION: dict[tuple[int, str, str], dict[str, Any]] = {
         "note": "the easiest of the hard ones — black on blue — and still 0.012 "
                 "to 0.028 out"},
     (2405, "face", "right"): {
-        "proxy": 0.755, "source": (0.725, 0.745),
+        "proxy": 0.755, "source": (0.725, 0.745), "whole_contour": False,
         "against": "bokeh_highlights", "kind": "head_silhouette",
         "note": "sat at exactly the region edge on the proxy reading, which is "
-                "the position most likely to be an artefact of the reading"},
+                "the position most likely to be an artefact of it; read from "
+                "the same partial band as f2400 and f2403"},
     # --- controls: margins the tolerance verdict called `held` -------------
     (2357, "hand", "top"): {
         "proxy": 0.235, "source": (0.185, 0.200),
@@ -135,7 +153,12 @@ def _region_edge(region: dict, side: str, sw: int, sh: int) -> float:
     return (region["y"] + region["h"]) / sh
 
 
-def verdict(interval: tuple[float, float], edge: float, side: str) -> str:
+#: A margin whose interval was read from part of the contour only.
+UNMEASURED = "unmeasured"
+
+
+def verdict(interval: tuple[float, float], edge: float, side: str,
+            whole_contour: bool = True) -> str:
     """`held`, `clipped` or `indeterminate` from an interval and a boundary.
 
     No tolerance appears here. The uncertainty IS the interval, measured on the
@@ -144,6 +167,11 @@ def verdict(interval: tuple[float, float], edge: float, side: str) -> str:
     interval is on the safe side is held; one whose whole interval is outside is
     clipped; one the boundary passes through is neither, and says so.
     """
+    if not whole_contour:
+        # The extreme of the object may be somewhere this reading never looked.
+        # `held` here would be a claim about the whole head from a measurement
+        # of one band of it.
+        return UNMEASURED
     lo, hi = interval
     outside_is_less = side in ("left", "top")
     if outside_is_less:
@@ -197,10 +225,12 @@ def main() -> int:
         over = (edge - p) if side in ("left", "top") else (p - edge)
         was = ("clipped" if over * span - tol > 1e-6
                else "indeterminate" if over * span + tol > 1e-6 else "held")
-        now = verdict((lo, hi), edge, side)
+        whole = bool(row.get("whole_contour", True))
+        now = verdict((lo, hi), edge, side, whole)
         d_lo, d_hi = (lo - p) * span, (hi - p) * span
         rows.append({"frame": frame, "part": part, "side": side, "phase": phase,
                      "proxy": p, "source": [lo, hi], "region_edge": edge,
+                     "whole_contour": whole,
                      "tolerance_verdict": was, "interval_verdict": now,
                      "displacement_px": [round(d_lo, 1), round(d_hi, 1)],
                      "against": row["against"], "kind": row["kind"]})
@@ -210,6 +240,7 @@ def main() -> int:
               f"{was:<14} {now}")
 
     changed = [r for r in rows if r["tolerance_verdict"] != r["interval_verdict"]]
+    partial = [r for r in rows if not r["whole_contour"]]
     worst = max(rows, key=lambda r: max(abs(v) for v in r["displacement_px"]))
     print(f"\n  {len(rows)} margins re-measured on the source, "
           f"{len(changed)} change verdict")
@@ -225,15 +256,20 @@ def main() -> int:
           + ("  — BOTH, so it is noise and not a bias to subtract"
              if len(signs) > 1 else ""))
 
+    if partial:
+        names = [f"f{r['frame']} {r['part']}.{r['side']}" for r in partial]
+        print(f"  {len(partial)} margin(s) were read from PART of the contour "
+              f"and measure nothing about the object's extreme: {names}")
     out = {"schema": "clipper_edge_calibration_v1", "clip": args.clip,
-           "margins": rows, "changed": len(changed)}
+           "margins": rows, "changed": len(changed),
+           "partial_contour": len(partial)}
     dest = (DATA / args.project / "phase_regions"
             / f"{args.clip}.edge_calibration.json")
     dest.write_text(json.dumps(out, indent=1), encoding="utf-8")
     print(f"  written to {dest}")
     # A calibration that changes verdicts is not a pass: it says the verdicts
     # computed with the old instrument have to be redone.
-    return 0 if not changed else 2
+    return 0 if not (changed or partial) else 2
 
 
 if __name__ == "__main__":
