@@ -126,6 +126,12 @@ def main() -> int:
     ap.add_argument("--step", type=float, default=0.02,
                     help="grid spacing as a fraction of the FULL frame; ticks "
                          "at every step, full lines every 0.1")
+    ap.add_argument("--bare", action="store_true",
+                    help="draw the grid and NO annotation boxes. This is the "
+                         "coverage pass's view: Codex, on re-reading limits, "
+                         "\"limita trebuie confirmata pe sursa, nu mostenita "
+                         "din cutia gresita\" — and a wrong box drawn over the "
+                         "frame is exactly what a fresh reading would anchor on")
     ap.add_argument("--full", action="store_true",
                     help="the whole source frame instead of a crop, for when "
                          "the question is where something is rather than "
@@ -224,7 +230,7 @@ def main() -> int:
                 continue
 
             _grid(crop, x0, y0, w, h, cv2, args.step)
-            for name, box in sorted(use.items()):
+            for name, box in sorted(({} if args.bare else use).items()):
                 bx0 = int(box[0] * w) - x0
                 bx1 = int(box[1] * w) - x0
                 by0 = int(box[2] * h) - y0
