@@ -38,6 +38,7 @@ __all__ = ["DEFAULT_STYLE", "CAMERAS", "camera_rects", "plan_dynamic_edit"]
 from services.clipper import dynamic_geometry
 from services.clipper import series
 from services.clipper import dynamic_subject as subject_mod
+from services.clipper.dynamic_face_framing import face_framing
 from services.clipper.dynamic_cameras import (   # noqa: F401  (re-exported)
     ASPECT,
     CAMERAS,
@@ -392,22 +393,13 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
         previous = camera
 
         rect = dict(cams[camera])
+        framing_fit, framing_reason = False, None
         if camera in _FACE_CAMS:
             cx, cy = _centre_at(samples, t0, t1, fallback)
-            moved = _rect(0, rect["h"], cx, cy, CAMERAS[camera][1], src_w, src_h)
-            # A face shot whose crop does not contain the face is not a face
-            # shot. Re-centring per shot follows the subject, which is what it
-            # is for, but it follows THIS WINDOW'S detections — and the cluster
-            # centre is computed over the whole clip and is the stable one. When
-            # a window's detections are bad the crop walks off the inset the
-            # cluster had already located correctly.
-            #
-            # Found by Pass D on a real export, not by reading this: clip
-            # e8fa6b35ea66 shot 15 is `face_medium` at y=260 when the camera is
-            # at y=34 and the subject sits at cy=176. The frames are Minecraft
-            # dirt. Falling back to the camera rect is right because that rect
-            # is built around the cluster, which is the thing that was correct.
-            rect = moved if _contains(moved, face["cx"], face["cy"]) else dict(cams[camera])
+            rect, framing_fit, framing_reason = face_framing(
+                rect, (cx, cy), face, CAMERAS[camera][1], src_w, src_h,
+                anchored=anchor is not None,
+                observed_centres=[(x, y) for t, x, y, _ in samples if t0 <= t < t1])
         else:
             # Point the second camera at whatever actually moved in this shot,
             # falling back to the static action centre when nothing did.
@@ -434,12 +426,15 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             "action": round(action, 3),
             "speech": round(ratio, 3),
             "text": text[:120],
-            # `fit` only where nobody is on screen. Everything else keeps the
-            # framing that the visual test showed working — this is deliberately
-            # not a redesign of the shots that were already fine.
-            "composition": subject_mod.composition_for(
+            # Keep the presence-based choice unless conflicting face proposals
+            # require a wider frame than 9:16 can contain. That fallback does
+            # not assert that nobody is present; its reason rides on the shot.
+            "composition": "fit" if framing_fit else subject_mod.composition_for(
                 presence, t0, t1, presence_hop, presence_raw),
         })
+        if framing_reason:
+            shots[-1].update(move="hold", snap=False, shake=0.0,
+                             framing_adjustment=framing_reason)
 
     if not shots:
         warnings.append("The window was too short to cut; rendering it as one shot.")

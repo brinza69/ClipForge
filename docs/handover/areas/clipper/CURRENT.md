@@ -1,5 +1,16 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 9 septembrie 2026 — cropul care revenea pe perdea
+
+Plannerul nu mai tratează automat mediana feței pe clip ca pe o cameră fixă.
+Un conflict cu poziția locală poate lărgi încadrarea pentru a păstra ambele
+propuneri, cu motiv și limite explicite. Ancora sursei și contraexemplul
+Minecraft rămân protejate. Probe MP4 înainte/după, limite și verificări:
+[raportul încadrării](../../../refs/clipper-face-framing-2026-09-09.md).
+Lotul repară un defect concret; subtitrările native și încadrarea generală
+nu sunt închise. Directorul `after/` din probe conține o încercare respinsă
+pe Minecraft; candidatul final este în `final/`.
+
 ## Actualizare 9 septembrie 2026 — export comun implementat
 
 Calea normală, re-planificarea, replay-ul planurilor stocate și probele camera/letterbox
