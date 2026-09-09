@@ -74,6 +74,19 @@ def test_the_other_spelling_of_the_filter_is_recognised(tmp_path):
     assert Path(got["ass_path"]).resolve() == ass.resolve()
 
 
+def test_the_static_renderers_real_command_records_its_caption_filter(tmp_path):
+    from services.clipper.render import build_render_cmd
+
+    ass = tmp_path / "a.ass"
+    ass.write_text("[Events]\n", encoding="utf-8")
+    argv = build_render_cmd("source.mp4", {"start": 0, "end": 2}, {}, str(ass),
+                            "out.mp4", fps=24, crf=22, preset="fast", has_audio=False)
+    got = rr.record(argv, ass_path=str(ass))
+    assert got["caption_filter"] is True
+    assert got["offered_matches_used"] is True
+    assert got["ass_sha256"] is not None
+
+
 def test_an_escaped_path_is_unescaped_before_it_is_opened(tmp_path):
     r"""THROUGH THE SHIPPING FUNCTION, never through a re-spelling of it here.
     `escape_filter_path` turns backslashes into forward slashes and escapes the

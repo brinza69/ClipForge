@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from workers import clipper_render_output as output
+
 import inspect
 import json
 
@@ -194,7 +196,7 @@ def test_the_explanation_and_sidecar_name_the_same_selection_identity():
     run_id = "abc123def456"
     assert _reasoning_of({"selection_run_id": run_id}) == {
         "selection_run_id": run_id}
-    source = inspect.getsource(clipper_render_jobs.handle_export)
+    source = inspect.getsource(output._write_sidecar)
     assert '"selection_run_id": clip.selection_run_id' in source
 
 

@@ -27,6 +27,7 @@ from config import settings
 from database import async_session
 from models import ClipModel, ClipStatus, ProjectModel
 from services.clipper import storage
+from workers.clipper_render_output import _size_bytes  # noqa: F401 — compatibility
 
 # Re-exported, not just imported: `_decide_render` and friends were defined in
 # this module until the 2026-08-18 split, and the tests that pin today's fixes
@@ -129,20 +130,6 @@ async def _vision_review(clip: ClipModel, cfg: dict, rendered: Path,
     return merged
 
 
-def _size_bytes(path: str | Path) -> int | None:
-    """The source file's size, or None when it cannot be read.
-
-    Part of the render fingerprint: two runs against the same path are only the
-    same input if the file behind it has not been replaced. None rather than 0,
-    because a source that is gone and a source that is empty are different
-    facts and the audit refuses to spell absence as a measurement.
-    """
-    try:
-        return Path(path).stat().st_size
-    except OSError:
-        return None
-
-
 def _job_origin(metadata: object) -> str:
     """Who asked for this render, from the job that carries it.
 
@@ -165,9 +152,7 @@ def _job_origin(metadata: object) -> str:
 
 async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Full-quality 1080x1920 deliverable."""
-    import asyncio
-
-    from services.clipper.render import _has_audio, render_clip
+    from workers.clipper_render_output import render_export
 
     if not clip_id:
         raise RuntimeError("export job started without a clip id")
@@ -182,12 +167,8 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         clip, project, paths["exports_dir"],
         on_stage=lambda p, m: queue.update_progress(job_id, p, m))
     cfg = decision["cfg"]
-    drop = decision["drop"]
-    plan = decision["plan"]
     dyn = decision["dyn"]
-    fps = decision["fps"]
     caption_y = decision["caption_y"]
-    ass_path = decision["ass_path"]
 
     # Pass D. It runs BEFORE the encode on purpose: a finding that arrives after
     # a 12-24s render can only be reported, one that arrives before it can be
@@ -206,209 +187,34 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
             # Advisory, and it stays advisory: a reviewer that crashes must not
             # cost the export it was meant to improve.
             logger.warning("clip %s: review failed", clip.id, exc_info=True)
-        finally:
-            dyn.pop("_review_faces", None)
-            dyn.pop("_panels", None)
-            dyn.pop("_stable_track", None)
-            dyn.pop("_motion", None)
-            dyn.pop("_motion_hop", None)
-            dyn.pop("_rhythm", None)
+
+    async def review_rendered(out, review):
+        # Paid, advisory review stays a job concern. It sees the encoded file;
+        # a provider failure cannot erase the local findings or lose the export.
+        if review is not None and bool(
+                cfg.get("vision_review", settings.clipper_vision_review)):
+            try:
+                return await _vision_review(clip, cfg, out, review)
+            except Exception:
+                logger.warning("clip %s: vision review failed", clip.id, exc_info=True)
+        return review
 
     out = storage.export_path(project_id, clip.id)
     try:
-        if dyn:
-            from services.clipper import dynamic_render
-
-            await queue.update_progress(
-                job_id, 0.20, f"Rendering {len(dyn['shots'])} shots")
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: dynamic_render.render_dynamic_clip(
-                    src, dyn, str(out), start=float(clip.start_time or 0.0),
-                    work_dir=paths["exports_dir"], ass_path=ass_path,
-                    src_w=int(project.width or 1920),
-                    src_h=int(project.height or 1080),
-                    fps=fps, crf=int(settings.clipper_export_crf),
-                    preset=settings.clipper_export_preset,
-                    # The four the static call below has always had, and this
-                    # one never did. `dynamic_edit` became the default on
-                    # 2026-08-17, so the options were live on a path nothing
-                    # took: the watermark vanished, `trim_silence` did nothing,
-                    # and — because `_write_ass` above applies `drop` either
-                    # way — the captions were shifted for cuts that were never
-                    # made.
-                    watermark=str(cfg.get("watermark_text") or ""),
-                    drop_spans=drop,
-                    has_audio=_has_audio(src),
-                    is_cancelled=lambda: queue.is_cancelled(job_id)),
-            )
-        else:
-            result = await render_clip(
-                src,
-                _candidate(clip),
-                plan,
-                ass_path,
-                str(out),
-                fps=fps,
-                crf=int(settings.clipper_export_crf),
-                preset=settings.clipper_export_preset,
-                watermark=str(cfg.get("watermark_text") or ""),
-                drop_spans=drop,
-                on_progress=lambda p, m: queue.update_progress(job_id, 0.05 + 0.9 * p, m),
-                is_cancelled=lambda: queue.is_cancelled(job_id),
-            )
+        await queue.update_progress(job_id, 0.20, "Rendering export")
+        result = await render_export(
+            clip, project, decision, out, src=src, review_result=review_result,
+            after_render=review_rendered,
+            on_progress=lambda p, m: queue.update_progress(job_id, 0.20 + 0.7 * p, m),
+            is_cancelled=lambda: queue.is_cancelled(job_id))
     except Exception:
         async with async_session() as session:
             await session.execute(
                 update(ClipModel).where(ClipModel.id == clip.id).values(
-                    status=ClipStatus.failed.value
-                )
-            )
+                    status=ClipStatus.failed.value))
             await session.commit()
         raise
-
-    # Pass D's second half, and the only part of the pipeline that spends money.
-    # It runs AFTER the encode where the local half runs before it, and the
-    # asymmetry is deliberate: the local half can still change the caption
-    # position, so arriving early is worth something; this one is advisory, so
-    # it is worth more seeing exactly what ships — captions burned, crop
-    # applied — than a reconstruction of it.
-    if review_result is not None and bool(
-            cfg.get("vision_review", settings.clipper_vision_review)):
-        try:
-            review_result = await _vision_review(clip, cfg, out, review_result)
-        except Exception:
-            logger.warning("clip %s: vision review failed", clip.id, exc_info=True)
-
-    # A sidecar with everything needed to reproduce this file — source
-    # timestamps, scores, the layout and caption plans, and the model versions
-    # that produced them (brief §25).
-    sidecar = out.with_suffix(".json")
-
-    # Imported here, not at module scope, for the reason the dynamic branch
-    # above already does it: this module is imported to register job handlers
-    # long before any render runs.
-    from services.clipper import (dynamic_render, edit_quality,
-                                  output_identity, render as static_render,
-                                  render_input)
-
-    render = {"fps": fps, "crf": settings.clipper_export_crf,
-              "preset": settings.clipper_export_preset,
-              "watermark": decision["watermark"]}
-    source = {"path": src, "url": project.source_url,
-              "size_bytes": _size_bytes(src)}
-
-    body = {
-        "clip_id": clip.id,
-        "project_id": project_id,
-        # The selection trace that produced this clip. This labels provenance;
-        # it is not part of the image recipe and therefore stays outside the
-        # render fingerprint. NULL is honest for clips created before S7f.
-        "selection_run_id": clip.selection_run_id,
-        # WHICH renderer made this file. The two paths produce different videos
-        # from the same plan, so one constant for both would file a static
-        # export under a grammar of shots it never had.
-        "render_version": (dynamic_render.RENDER_VERSION if dyn
-                           else static_render.RENDER_VERSION),
-        "source": source,
-        "source_start": clip.start_time,
-        "source_end": clip.end_time,
-        "duration": clip.duration,
-        "title": clip.title,
-        "headline": clip.headline_text,
-        "transcript": clip.transcript_text,
-        "overall_score": clip.overall_score,
-        "sub_scores": clip.sub_scores,
-        "score_reason": clip.score_reason,
-        "layout_plan": plan,
-        # Present only when the multi-shot path rendered this file. The
-        # static layout_plan above is still written either way, because
-        # it is what a re-render falls back to.
-        "dynamic_plan": dyn,
-        # Pass D's verdict on this exact cut. Written whether or not it
-        # found anything: "APPROVE, twelve frames sampled" is a fact
-        # about the file, and an absent key would be ambiguous between
-        # "clean" and "never reviewed".
-        "review": review_result,
-        # The plan as STORED, plus the two things the export decided about it.
-        # Not a pre-merged "effective" plan: merging here would put a second
-        # copy of `_write_ass`'s rule in this file, and the merged result cannot
-        # be taken apart again by anything that needs to know what was decided
-        # at score time and what was decided at render time.
-        "caption_plan": clip.caption_plan,
-        # The height the captions were actually burned at when the export moved
-        # them off detected game UI, `null` when the stored position stood.
-        "caption_y": caption_y,
-        "content_type": clip.content_type,
-        # What grammar this clip WOULD be cut with, why, and whether the mode in
-        # force actually applied it. Recorded on every export since R2 so the
-        # profile can be compared against the delivered edit without changing it.
-        "edit_profile": decision["edit_profile"],
-        # R3a: the composition the creator's own presence would have chosen,
-        # beside the one that shipped. Recorded on every export, applied on
-        # none — the difference is the measurement.
-        "creator_view": decision["creator_view"],
-        # R3b: what each stretch is, and the gap between how many regime
-        # boundaries exist and how many the viewer would see. Recorded, applied
-        # to nothing — forcing a cut on every regime change would put back the
-        # 116 invisible cuts R1 removed.
-        "regime_view": decision["regime_view"],
-        # R4: which boundaries would earn a cut and why, against the §4 band for
-        # this profile. The band is compared, never enforced — a proposal padded
-        # to reach a guardrail would make the guardrail unfalsifiable.
-        "rhythm_view": decision["rhythm_view"],
-        "analysis_version": project.analysis_version,
-        "ranker_version": clip.ranker_version,
-        # WHETHER A CAPTION LAYER WAS BURNED AT ALL, and who decided. A sidecar
-        # that simply has no `.ass` beside it cannot distinguish "the source
-        # already carries captions so we added none" from "the file was cleaned
-        # up" — and that ambiguity is exactly what `own_caption_layer` had to
-        # stop answering `False` to.
-        "caption_policy": decision["caption_policy"],
-        # AND WHETHER THE SOURCE HAD A SECOND REGION AT ALL. A plan that never
-        # chose the second camera and a source that never had one produce the
-        # same shot list, so without this a later reader cannot tell a clip
-        # framed on one camera by decision from one framed that way by chance.
-        "layout_policy": decision["layout_policy"],
-        # The dead seconds this render removed. Without them the sidecar
-        # describes a longer clip than the file: every downstream time —
-        # captions, shot boundaries — is on a clock the mp4 does not keep.
-        "drop_spans": drop,
-        "render": render,
-    }
-
-    # Computed from the sidecar itself, through the ONE projection the audit
-    # uses to recheck it. Building a separate payload here is how a fingerprint
-    # stops meaning anything: the two definitions drift, and the check passes
-    # for a file whose plan has changed underneath it.
-    # WHAT THE CALL ACTUALLY CARRIED, before the fingerprint, because v2 covers
-    # the CONTENT of the `.ass` that was burned — an input that changes the
-    # picture. The paths and the argv digest inside it are details of one run
-    # and `render_input.caption_identity` leaves them out; two renders of the
-    # same recipe write the subtitle file to two temporary names and must still
-    # fingerprint the same.
-    body["render_record"] = (result or {}).get("render_record")
-    # AND THE SCHEMA IS DECLARED. A record with no such field is read with the
-    # v1 formula under an assumption that is reported; from here the assumption
-    # is not needed, and a v2 mismatch may never be rescued by v1.
-    body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V2
-    body["input_fingerprint"] = edit_quality.input_fingerprint(
-        body, schema=render_input.FINGERPRINT_SCHEMA_V2)
-    # AND THE OTHER HALF, which the recipe cannot reach. `input_fingerprint`
-    # proves the plan was not edited after the render; it never touches the mp4,
-    # so `provenance_complete` had no route to a pass at all. This measures what
-    # came out — digest, bytes, and the width/height `FINGERPRINT_KEYS` records
-    # as having "no shared authority to read from". The delivered file is that
-    # authority: two renderers can disagree about what they meant to produce and
-    # cannot disagree about what exists.
-    #
-    # AFTER the fingerprint, deliberately: the recipe digest must not depend on
-    # the output, or a re-render of the same plan would change its own recipe.
-    body["output_identity"] = output_identity.probe(out)
-
-    storage.atomic_write_json(
-        sidecar, body, indent=2, ensure_ascii=False, default=str)
+    review_result = result["sidecar"]["review"]
 
     async with async_session() as session:
         # The review goes on the row as well as the sidecar. Sidecar-only was

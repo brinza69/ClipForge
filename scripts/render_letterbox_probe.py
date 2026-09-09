@@ -66,13 +66,15 @@ def _letterboxed(plan: dict) -> dict:
 
 async def _plan_for(project_id: str, clip_id: str):
     from database import init_db
-    from services.clipper import storage
     from workers.clipper_render_plan import _decide_render, _load
 
     await init_db()
     clip, project = await _load(clip_id)
-    paths = storage.paths(project_id)
-    decision = await _decide_render(clip, project, paths["exports_dir"])
+    if project.id != project_id:
+        raise ValueError("clip belongs to another project")
+    work = DATA / project_id / "letterbox_probe"
+    work.mkdir(parents=True, exist_ok=True)
+    decision = await _decide_render(clip, project, work)
     return clip, project, decision
 
 
@@ -133,7 +135,8 @@ def main() -> int:
     ap.add_argument("clips", nargs="+")
     args = ap.parse_args()
 
-    from services.clipper import dynamic_render, source_caption_survival as scs
+    from services.clipper import source_caption_survival as scs
+    from workers.clipper_render_output import render_export
     from services.clipper import source_captions as scap
     from workers.clipper_render_plan import _source_path
 
@@ -160,7 +163,6 @@ def main() -> int:
             failed += 1
             continue
         src = _source_path(project)
-        start = float(clip.start_time or 0.0)
         row: dict[str, Any] = {
             "clip": clip_id,
             "source_captions": state,
@@ -176,11 +178,8 @@ def main() -> int:
             path = out_dir / f"{clip_id}.{name}.mp4"
             print(f"{clip_id}: rendering {name} "
                   f"({len(use.get('shots') or [])} shots) ...", flush=True)
-            result = dynamic_render.render_dynamic_clip(
-                str(src), use, str(path), start=start, work_dir=str(out_dir),
-                ass_path=decision.get("ass_path"),
-                src_w=int(project.width or 1920),
-                src_h=int(project.height or 1080))
+            result = asyncio.run(render_export(
+                clip, project, {**decision, "dyn": use}, path, src=str(src)))
             row["files"][name] = str(path.resolve())
             # FROM THE CALL THAT RAN. `caption_policy` says suppress; this says
             # whether the encode carried a subtitle filter, and the 15 stored

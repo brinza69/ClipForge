@@ -1,5 +1,17 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 9 septembrie 2026 — export comun implementat
+
+Calea normală, re-planificarea, replay-ul planurilor stocate și probele camera/letterbox
+folosesc acum `workers/clipper_render_output.py` pentru encode și sidecar v2.
+Detalii, probe reale și limite: [raportul lotului](../../../refs/clipper-shared-export-2026-09-09.md).
+Acest lot nu activează `story_v2` sau `content_aware` și nu certifică încadrarea ori
+lizibilitatea. Cele 301 fișiere existente din exports au fost reverificate prin hash:
+0 modificate, 0 adăugate. Probele noi sunt în `data/codex-analysis-20260909/shared-export/`.
+
+Secțiunile istorice de mai jos conțin și constatări ulterior retrase în analiza
+adnotărilor; nu reprezintă toate aceeași rulare și nu înlocuiesc artefactele curente.
+
 ## Scop
 
 Transformă un VOD sau un videoclip lung într-o listă de clipuri verticale candidate, clasificate și exportabile.

@@ -58,9 +58,10 @@ __all__ = ["FINGERPRINT_SCHEMA", "FINGERPRINT_SCHEMA_V1", "FINGERPRINT_SCHEMA_V2
 #: scores, no review, no ids, because two reruns of the same recipe must
 #: fingerprint the same or the digest says nothing.
 #:
-#: NOT a claim that this is everything that changes the image. The output size
-#: is decided by defaults inside the two renderers with no shared authority to
-#: read it from, so it is absent here until one exists. See the production plan.
+#: NOT a claim that this is everything that changes the image. Since the shared
+#: export path (2026-09-09), output dimensions are explicit in `render` and so
+#: covered by this projection. Older records retain their original, smaller
+#: render dictionary; their missing dimensions are never backfilled.
 FINGERPRINT_SCHEMA_V1 = "clipper_render_input_v1"
 FINGERPRINT_KEYS_V1: tuple[str, ...] = (
     "source", "source_start", "source_end", "layout_plan", "dynamic_plan",

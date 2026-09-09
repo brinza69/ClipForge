@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from copy import deepcopy
 import json
 import os
 import statistics
@@ -197,15 +198,26 @@ def _faces_in(path: Path, seconds: float, hz: float = 4.0) -> dict:
 
 async def _plans(project_id: str, clip_id: str):
     from database import init_db
-    from workers.clipper_render_plan import _dynamic_plan, _load
+    from services.clipper import layout_policy as lp
+    from workers.clipper_render_plan import _decide_render, _load
 
     await init_db()
     clip, project = await _load(clip_id)
-    w, h = int(project.width or 1920), int(project.height or 1080)
-    with_second = await _dynamic_plan(clip, project, w, h,
-                                      no_second_camera=False)
-    without = await _dynamic_plan(clip, project, w, h, no_second_camera=True)
-    return clip, project, with_second, without
+    if project.id != project_id:
+        raise ValueError("clip belongs to another project")
+    decisions = []
+    for name, second in (("with-second-camera", True), ("no-second-camera", False)):
+        # An experimental override on a detached COPY, never a declaration on
+        # the project. All other options take the normal export decision path.
+        variant = deepcopy(project)
+        variant.clipper_settings = {**(project.clipper_settings or {}),
+                                    lp.SETTING: second, "layout_decided_by": lp.AGENT}
+        work = DATA / project_id / "camera_probe" / name
+        work.mkdir(parents=True, exist_ok=True)
+        decision = await _decide_render(clip, variant, work)
+        decision["layout_policy"]["evidence"] = {"experimental_override": True}
+        decisions.append(decision)
+    return clip, project, decisions[0], decisions[1]
 
 
 def main() -> int:
@@ -214,7 +226,8 @@ def main() -> int:
     ap.add_argument("clips", nargs="+")
     args = ap.parse_args()
 
-    from services.clipper import dynamic_render, layout_policy as lp
+    from services.clipper import layout_policy as lp
+    from workers.clipper_render_output import render_export
     from workers.clipper_render_plan import _source_path
 
     out_dir = DATA / args.project / "camera_probe"
@@ -223,7 +236,8 @@ def main() -> int:
     refused = 0
 
     for clip_id in args.clips:
-        clip, project, a, b = asyncio.run(_plans(args.project, clip_id))
+        clip, project, da, db = asyncio.run(_plans(args.project, clip_id))
+        a, b = da["dyn"], db["dyn"]
         if not (a and b and a.get("shots") and b.get("shots")):
             print(f"{clip_id}: REFUSED — one of the two plans has no shots")
             refused += 1
@@ -234,18 +248,14 @@ def main() -> int:
         oa, ob = lp.off_subject_seconds(a), lp.off_subject_seconds(b)
 
         src = _source_path(project)
-        start = float(clip.start_time or 0.0)
         files: dict[str, str] = {}
-        for name, plan in (("with-second-camera", a),
-                           ("no-second-camera", b)):
+        for name, decision in (("with-second-camera", da),
+                               ("no-second-camera", db)):
+            plan = decision["dyn"]
             path = out_dir / f"{clip_id}.{name}.mp4"
             print(f"{clip_id}: rendering {name} "
                   f"({len(plan['shots'])} shots) ...", flush=True)
-            dynamic_render.render_dynamic_clip(
-                str(src), plan, str(path), start=start, work_dir=str(out_dir),
-                ass_path=None,
-                src_w=int(project.width or 1920),
-                src_h=int(project.height or 1080))
+            asyncio.run(render_export(clip, project, decision, path, src=str(src)))
             files[name] = str(path.resolve())
 
         da = [float(s["t1"]) - float(s["t0"]) for s in a["shots"]]

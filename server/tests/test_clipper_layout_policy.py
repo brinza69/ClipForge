@@ -23,6 +23,8 @@ that correction and is the test to keep if the rest is ever rewritten.
 
 from __future__ import annotations
 
+from workers import clipper_render_output as output
+
 from services.clipper import layout_policy as lp
 
 
@@ -176,7 +178,7 @@ def test_the_render_path_declares_it_and_records_it():
     # On the sidecar, because a plan that never chose the second camera and a
     # source that never had one produce the same shot list.
     assert '"layout_policy": decision["layout_policy"]' in inspect.getsource(
-        clipper_render_jobs.handle_export)
+        output._write_sidecar)
 
 
 def test_a_single_camera_may_still_have_a_second_target():

@@ -44,7 +44,10 @@ SCHEMA = "clipper_render_record_v1"
 #: uses the same filter. Both spellings ffmpeg accepts are matched, because a
 #: recogniser that knows only the spelling in use today reports `false` the day
 #: somebody switches to the other one — and `false` here is a claim, not a gap.
-_FILTER = re.compile(r"(?:^|[,;\[\s])(subtitles|ass)\s*=", re.IGNORECASE)
+# A chained filter can follow an input label directly: `[v]subtitles=...`.
+# The static export uses exactly that spelling; missing `]` reported an absent
+# layer while the real MP4 carried it (shared-export integration fixture).
+_FILTER = re.compile(r"(?:^|[,;\[\]\s])(subtitles|ass)\s*=", re.IGNORECASE)
 _FILENAME = re.compile(r"(?:filename\s*=\s*)?'((?:[^'\\]|\\.)*)'")
 
 #: `Dialogue: 0,0:00:01.23,0:00:02.34,...`

@@ -290,8 +290,9 @@ def build_render_cmd(
         graph = (f"{graph};[{vlabel.strip('[]')}]select='{keep}',"
                  f"setpts=N/FRAME_RATE/TB[vcut]")
         vlabel = "[vcut]"
-        graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
-        alabel = "[acut]"
+        if has_audio:
+            graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
+            alabel = "[acut]"
 
     if has_audio:
         # The same chain the multi-shot renderer runs. It goes INSIDE the
@@ -335,6 +336,8 @@ async def render_clip(
     fps: int,
     crf: int,
     preset: str,
+    out_w: int = 1080,
+    out_h: int = 1920,
     watermark: str = "",
     drop_spans: Sequence[tuple[float, float]] | None = None,
     on_progress: ProgressFn | None = None,
@@ -348,9 +351,16 @@ async def render_clip(
     cmd = build_render_cmd(
         src, cand, plan, ass_path, str(temp),
         fps=fps, crf=crf, preset=preset, watermark=watermark,
+        out_w=out_w, out_h=out_h,
         drop_spans=drop_spans,
         has_audio=bool(_has_audio(src)),
     )
+    # Capture the argv that is about to run on the static path too. Inferring
+    # this afterwards from caption_policy or an ASS filename loses whether the
+    # filter actually appeared in the encoder command.
+    from services.clipper import render_record
+
+    record = render_record.record(cmd, ass_path=ass_path)
     _, duration = _window(cand)
     if drop_spans:
         from services.clipper.dead_air import removed_seconds
@@ -366,6 +376,7 @@ async def render_clip(
         result = await _verify(str(temp), duration)
         storage.finalize_output(temp, final)
         result["path"] = str(final)
+        result["render_record"] = record
         return result
     finally:
         temp.unlink(missing_ok=True)

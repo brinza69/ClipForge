@@ -28,12 +28,13 @@ is moved into place only when ffmpeg returns zero.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "server"))
@@ -41,8 +42,6 @@ sys.path.insert(0, str(_ROOT / "server"))
 DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
 BACKUP = "exports_pre_caption_fix"
 
-from services.clipper.dynamic_render import (  # noqa: E402
-    build_dynamic_cmd, write_sendcmd)
 
 
 def _needed(side: dict) -> str | None:
@@ -58,6 +57,13 @@ def _needed(side: dict) -> str | None:
     for key in ("source_start", "duration"):
         if not isinstance(side.get(key), (int, float)):
             return f"no_{key}"
+    policy = side.get("caption_policy")
+    if not isinstance(policy, dict) or policy.get("action") not in ("burn", "suppress"):
+        return "caption_policy_missing_replan_instead_of_guessing_from_an_ass_file"
+    options = side.get("render")
+    if not isinstance(options, dict) or any(options.get(k) is None
+            for k in ("fps", "crf", "preset", "watermark")):
+        return "encoder_options_missing_replan_instead"
     return None
 
 
@@ -76,30 +82,43 @@ def _render(path: Path, side: dict, dry: bool) -> dict:
         row["would_render"] = str(mp4)
         return row
 
-    tmp = mp4.with_suffix(".rendering.mp4")
-    cmd_path = write_sendcmd(plan, plan["src_w"], plan["src_h"],
-                             str(path.with_suffix(".cmd.txt")))
-    argv = build_dynamic_cmd(
-        (side["source"] or {})["path"], plan, cmd_path,
-        str(ass) if ass.exists() else None, str(tmp),
-        start=float(side["source_start"]), duration=float(side["duration"]),
-        src_w=plan["src_w"], src_h=plan["src_h"],
-        fps=int((side.get("render") or {}).get("fps") or 30),
-        crf=int((side.get("render") or {}).get("crf") or 18),
-        preset=str((side.get("render") or {}).get("preset") or "medium"))
+    # Replay the stored decision. Reading today's project settings would make
+    # this a re-plan under the old plan's name. An undeclared caption policy is
+    # refused above: a stale ASS is not permission to burn another layer.
+    source = side["source"]
+    policy = side["caption_policy"]
+    if policy["action"] == "burn" and not ass.is_file():
+        row["refused"] = "burn_requested_but_ass_missing"
+        return row
+    clip = SimpleNamespace(
+        id=side.get("clip_id") or path.stem, selection_run_id=side.get("selection_run_id"),
+        start_time=side["source_start"], end_time=side.get("source_end"),
+        duration=side["duration"], title=side.get("title"), headline_text=side.get("headline"),
+        transcript_text=side.get("transcript"), overall_score=side.get("overall_score"),
+        sub_scores=side.get("sub_scores"), score_reason=side.get("score_reason"),
+        caption_plan=side.get("caption_plan"), content_type=side.get("content_type"),
+        ranker_version=side.get("ranker_version"))
+    project = SimpleNamespace(id=row["project"], source_url=source.get("url"),
+                              width=plan["src_w"], height=plan["src_h"],
+                              analysis_version=side.get("analysis_version"))
+    decision = {"dyn": plan, "plan": side.get("layout_plan"),
+                "fps": side["render"]["fps"], "render": side["render"],
+                "watermark": side["render"]["watermark"],
+                "drop": side.get("drop_spans"), "caption_y": side.get("caption_y"),
+                "ass_path": str(ass) if policy["action"] == "burn" else None,
+                "caption_policy": policy,
+                **{k: side.get(k) for k in ("layout_policy", "edit_profile", "creator_view",
+                                           "regime_view", "rhythm_view")}}
+    from workers.clipper_render_output import render_export
 
     started = time.time()
-    result = subprocess.run(argv, capture_output=True, text=True)
+    try:
+        result = asyncio.run(render_export(clip, project, decision, mp4, src=source["path"]))
+    except Exception as exc:
+        row["refused"] = f"{type(exc).__name__}: {exc}"
+    else:
+        row["bytes"] = result["size"]
     row["seconds"] = round(time.time() - started, 1)
-    if result.returncode != 0 or not tmp.exists():
-        # HALF-WRITTEN IS WORSE THAN MISSING. The temporary file is removed so
-        # nothing downstream reads a truncated render as a finished one.
-        tmp.unlink(missing_ok=True)
-        row["refused"] = f"ffmpeg_exit_{result.returncode}"
-        row["stderr"] = result.stderr[-400:]
-        return row
-    tmp.replace(mp4)
-    row["bytes"] = mp4.stat().st_size
     return row
 
 

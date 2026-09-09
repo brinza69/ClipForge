@@ -22,6 +22,8 @@ the verifier alters no sidecar and no mp4 on disk.
 
 from __future__ import annotations
 
+from workers import clipper_render_output as output
+
 import json
 from pathlib import Path
 
@@ -172,7 +174,7 @@ def test_every_path_that_writes_a_fingerprint_writes_v2():
 
     from workers import clipper_render_jobs as jobs
 
-    src = inspect.getsource(jobs.handle_export)
+    src = inspect.getsource(output._write_sidecar)
     assert 'body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V2' in src
     assert "schema=render_input.FINGERPRINT_SCHEMA_V2" in src
 

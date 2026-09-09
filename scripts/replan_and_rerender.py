@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 import time
@@ -84,62 +83,32 @@ def _preserve(project_id: str) -> str | None:
     return None
 
 
-async def _render_one(project_id: str, clip_id: str) -> dict:
-    from services.clipper import dynamic_render, edit_quality, output_identity
+async def _render_one(project_id: str, clip_id: str, *, output_dir: Path | None = None) -> dict:
     from services.clipper import storage
+    from workers.clipper_render_output import render_export
     from workers.clipper_render_plan import _decide_render, _load, _source_path
 
     clip, project = await _load(clip_id)
+    if project.id != project_id:
+        raise ValueError("clip belongs to another project")
     paths = storage.paths(project_id)
-    out = paths["exports_dir"] / f"{clip_id}.mp4"
-    decision = await _decide_render(clip, project, paths["exports_dir"])
-    plan = decision.get("dyn") or {}
-    if not (plan.get("shots") or []):
-        return {"clip": clip_id, "refused": "the re-plan has no shots"}
-
-    src_w, src_h = int(project.width or 1920), int(project.height or 1080)
-    dynamic_render.render_dynamic_clip(
-        str(_source_path(project)), plan, str(out),
-        start=float(clip.start_time or 0.0),
-        work_dir=str(paths["exports_dir"]),
-        ass_path=decision.get("ass_path"),
-        src_w=src_w, src_h=src_h,
-        drop_spans=decision.get("drop"),
-        watermark=decision.get("watermark") or "")
-
-    body = {
-        "clip_id": clip_id, "project_id": project_id,
-        "source": str(_source_path(project)),
-        "source_start": float(clip.start_time or 0.0),
-        "source_end": float(clip.end_time or 0.0),
-        "duration": float(clip.duration or 0.0),
-        "render_version": dynamic_render.RENDER_VERSION,
-        "layout_plan": decision.get("plan"),
-        "caption_plan": clip.caption_plan,
-        "caption_y": decision.get("caption_y"),
-        "caption_policy": decision.get("caption_policy"),
-        "dynamic_plan": plan,
-        "drop_spans": decision.get("drop"),
-        "content_type": clip.content_type,
-        "edit_profile": decision.get("edit_profile"),
-        "creator_view": decision.get("creator_view"),
-        "regime_view": decision.get("regime_view"),
-        "rhythm_view": decision.get("rhythm_view"),
-        "analysis_version": project.analysis_version,
-        "ranker_version": clip.ranker_version,
-        "render": decision.get("render"),
-    }
-    body["input_fingerprint"] = edit_quality.input_fingerprint(body)
-    body["output_identity"] = output_identity.probe(out)
-    storage.atomic_write_json(out.with_suffix(".json"), body, indent=2,
-                              ensure_ascii=False, default=str)
+    work = Path(output_dir) if output_dir is not None else paths["exports_dir"]
+    work.mkdir(parents=True, exist_ok=True)
+    out = work / f"{clip_id}.mp4"
+    if output_dir is not None and (out.exists() or out.with_suffix(".json").exists()):
+        raise FileExistsError(f"probe output already exists: {out}")
+    decision = await _decide_render(clip, project, work)
+    result = await render_export(clip, project, decision, out, src=str(_source_path(project)))
+    body = result["sidecar"]
     return {"clip": clip_id, "refused": None,
-            "shots": len(plan.get("shots") or []),
+            "shots": len((decision["dyn"] or {}).get("shots") or []),
+            "renderer": body["render_version"], "path": str(out),
             "bytes": body["output_identity"].get("bytes")}
 
 
 async def _project(project_id: str, *, dry_run: bool,
-                   only: set[str] | None = None) -> list[dict]:
+                   only: set[str] | None = None,
+                   output_root: Path | None = None) -> list[dict]:
     from sqlalchemy import select
 
     from database import async_session, init_db
@@ -156,15 +125,22 @@ async def _project(project_id: str, *, dry_run: bool,
     if dry_run:
         return [{"clip": c, "refused": None, "dry_run": True} for c in have]
 
-    why = _preserve(project_id)
-    if why:
-        return [{"clip": "-", "refused": why}]
+    output_dir = output_root / project_id if output_root is not None else None
+    if output_dir is not None:
+        live = (DATA / project_id / "exports").resolve()
+        resolved = output_dir.resolve()
+        if resolved == live or live in resolved.parents:
+            return [{"clip": "-", "refused": "probe output must be outside exports"}]
+    else:
+        why = _preserve(project_id)
+        if why:
+            return [{"clip": "-", "refused": why}]
 
     out = []
     for i, clip_id in enumerate(have, 1):
         started = time.time()
         try:
-            row = await _render_one(project_id, clip_id)
+            row = await _render_one(project_id, clip_id, output_dir=output_dir)
         except Exception as exc:
             row = {"clip": clip_id, "refused": f"{type(exc).__name__}: {exc}"}
         row["seconds"] = round(time.time() - started, 1)
@@ -182,6 +158,8 @@ def main() -> int:
     ap.add_argument("--only", default="",
                     help="comma-separated clip ids — the micro-gate Codex asks "
                          "for before the full corpus")
+    ap.add_argument("--output-dir", type=Path,
+                    help="render isolated probes under DIR/project; leave exports unchanged")
     args = ap.parse_args()
     only = {c.strip() for c in args.only.split(",") if c.strip()} or None
 
@@ -191,7 +169,7 @@ def main() -> int:
         rows.extend({"project": project, **row}
                     for row in asyncio.run(_project(project,
                                                     dry_run=args.dry_run,
-                                                    only=only)))
+                                                    only=only, output_root=args.output_dir)))
 
     refused = [r for r in rows if r["refused"]]
     print(f"\n{len(rows) - len(refused)} rendered, {len(refused)} refused")

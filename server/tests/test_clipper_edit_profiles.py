@@ -13,6 +13,8 @@ would make them look calibrated.
 
 from __future__ import annotations
 
+from workers import clipper_render_output as output
+
 import pytest
 
 from routers.clipper_settings import _default_settings, _normalise_settings
@@ -221,7 +223,7 @@ def test_the_export_records_the_profile_on_every_render():
     from workers import clipper_render_jobs as jobs
     from workers import clipper_render_plan as plan
 
-    assert '"edit_profile": decision["edit_profile"]' in inspect.getsource(jobs.handle_export)
+    assert '"edit_profile": decision["edit_profile"]' in inspect.getsource(output._write_sidecar)
     assert '"edit_profile"' in inspect.getsource(plan._decide_render)
 
 

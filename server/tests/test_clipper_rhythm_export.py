@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from services.clipper import dynamic_rhythm, edit_profiles
 from workers import clipper_render_jobs as jobs
+from workers import clipper_render_output as output
 
 from tests.test_clipper_dynamic_export import _Clip, _Project, _decide_in, wired
 
@@ -91,7 +92,7 @@ async def test_the_working_key_never_becomes_a_deliverable(wired, monkeypatch,
     decision = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
                                 monkeypatch, tmp_path)
     assert "_rhythm" in decision["dyn"], "it has to get there to be popped"
-    assert '"_rhythm"' in inspect.getsource(jobs.handle_export)
+    assert '"_rhythm"' in inspect.getsource(output.render_export)
 
 
 async def test_the_proposal_is_not_part_of_the_render_fingerprint(
