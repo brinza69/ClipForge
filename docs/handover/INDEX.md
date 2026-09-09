@@ -28,6 +28,7 @@ Acesta este punctul de intrare pentru handover-urile aplicației. ClipForge nu e
 
 Handover-urile vechi sunt păstrate în arhivă și trebuie consultate ca istoric, nu ca sursă pentru starea actuală:
 
+- [`handoff-clipper-session-5.md`](archive/clipper/handoff-clipper-session-5.md)
 - [`handoff-clipper-session-4.md`](archive/clipper/handoff-clipper-session-4.md)
 - [`handoff-clipper-session-3.md`](archive/clipper/handoff-clipper-session-3.md)
 - [`handoff-clipper-session-2.md`](archive/clipper/handoff-clipper-session-2.md)

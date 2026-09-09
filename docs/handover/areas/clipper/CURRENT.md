@@ -1083,6 +1083,111 @@ le dă `present` și pe care **nimeni nu le-a confirmat**, deci rămân respinse
 - **Cele 57 de joncțiuni lungi** rămân. Verdictul uman din 4 septembrie a ales hard cut dintre trei
   prezentări; niciuna nu era una pe care el s-o numească bună.
 
+## ÎNCADRAREA PE FAZE — stare la 9 septembrie 2026
+
+Istoricul complet al arcului 5–9 septembrie este în
+[`handoff-clipper-session-5.md`](../../archive/clipper/handoff-clipper-session-5.md).
+Aici doar starea.
+
+### Ce este livrat și măsurat
+
+**Stratul suprimat, reparat.** `services/clipper/layout_policy.py` decide
+`SECOND_CAMERA` / `NO_SECOND_CAMERA` (`SETTING = "source_has_a_second_camera"`);
+`plan_dynamic_edit(..., no_second_camera=True)` scoate ramura `alive`. Verificat
+**pe cadre randate**, nu pe plan: pe `pilotf81b` 48,1 s → **0,0 s** în care
+încadrarea nu conține subiectul, fețe găsite în export 60/71 → **71/71**, clip de
+control identic pe octeți (`23d9ec2a87842a67`).
+
+**Generațiile de exporturi.** `services/clipper/export_generations.py` înlocuiește
+cele două `_preserve` care aveau bug-uri opuse — unul continua când backup-ul
+exista și pierdea generația pe care o înlocuia, celălalt refuza și nu putea
+păstra niciodată a doua. Serial (`exports_pre_replan_02`), inventar cu sha256
+scris **în interiorul** copiei. 19 inventare există deja pe disc.
+
+**Adresarea temporală.** Indexul se citește ÎNAINTE de `read()`, timpul DUPĂ —
+cele două proprietăți ale decodorului sunt în dezacord cu un cadru în același
+moment. Reparat în `source_caption_observation.observe` și în cele trei scripturi
+care îl oglindesc, cu test care pică pe ordinea veche. `build_phase_regions._in_clip`
+refuză orice cadru din afara clipului: **f2425 era cadru de construcție al fazei
+`screen` și e la 242,5 s față de un final la 242,42.**
+
+### Ce NU este verificat, și de ce
+
+**Cele patru regiuni ale lui `b23c14c41495` sunt înghețate dar NU sunt
+verificate.** Candidatul curent e construit din adnotări citite pe proxy la
+`--scale 3.0`, despre care lotul de calibrare a arătat că sunt deplasate cu 10–154
+px sursă față de o toleranță declarată de ±25,6 px orizontal / ±14,4 vertical —
+**de șase ori toleranța, în ambele direcții**. Toleranța nu era o măsurătoare a
+instrumentului, era o presupunere despre el.
+
+**Constatarea deschisă:** pe primele 7 din 21 de cadre ale fazei `screen`, citite
+întregi la rezoluția sursei, capul vorbitorului ajunge la x 0,785–0,810 față de o
+muchie a regiunii la 0,755 — **tăiat cu până la 141 px sursă**. Aceeași margine a
+trecut prin patru verdicte (tăiat → ținut → nemăsurat → tăiat) și abia ultimul s-a
+uitat la obiectul întreg.
+
+Rămân în plus neverificate: subiectul fazei `speech` (44 + 55 cadre de hold-out
+fără adnotare de față), jumătatea de LINII pentru regiunile care s-au mutat între
+timp, tranzițiile (rezultatul lor stă pe regiuni care s-au mutat de atunci) și
+deficitul din `screen` q0, unde a existat un singur cadru eligibil.
+
+**Nimic din toate astea nu e cablat la randare.**
+
+### Instrumentele, și de ce fiecare există
+
+| Fișier | Ce face, și defectul care l-a cerut |
+|---|---|
+| `scripts/watch_annotations.py` + `_fresh.py` | geometria confirmată vizual, trei loturi (construcție / hold-out / fresh). Poartă valorile ÎNLOCUITE și un motiv pe cutie, fiindcă întrebarea următorului cititor e „a fost mereu așa, sau a fost mutată după un verdict" |
+| `scripts/build_phase_regions.py` | o regiune constantă pe fază, din observații confirmate; refuză o fază fără adnotare de subiect, și orice cadru din afara clipului |
+| `scripts/verify_phase_regions.py` | singurul test necircular; verifică LINIILE și SUBIECTUL separat, plus tranzițiile; `--set holdout\|fresh` |
+| `scripts/select_fresh_lot.py` | alege lotul ÎNAINTE să-l vadă cineva, după o regulă convenită în avans; raportează deficitul, nu-l completează |
+| `scripts/replay_annotations.py` | desenează coordonatele STOCATE peste cadrul pe care îl numesc — verifică transcrierea și adresarea, nu geometria |
+| `scripts/source_crop.py` | **sursa 2560×1440, fără interpolare.** `--full --bare` e vederea pentru pasul 1; `--edge` pentru o singură margine. Grila e etichetată în fracțiuni din CADRUL ÎNTREG |
+| `scripts/edge_calibration.py` | pasul 2: intervale precise, doar pentru marginile care stabilesc extremele |
+| `scripts/coverage_bounds.py` | pasul 1: o limită conservatoare pentru fiecare parte pe fiecare cadru relevant |
+
+### Cinci lucruri de nu repetat
+
+1. **Un cadru pe planșă.** Planșele cu două cadre alăturate au propria riglă per
+   tile; fiecare cadru din dreapta a ieșit deplasat cu 0,26–0,30 din cadru și a
+   distrus prima adnotare întreagă.
+2. **Mărirea proxy-ului nu adaugă detaliu.** 480×270 mărit la 1440 interpolează.
+   Sursa e 2560×1440 și e pe disc.
+3. **Un decupaj strâns pe o muchie ascunde conturul care decide extrema.**
+   `f2400` a fost citit la înălțimea 0,20–0,35, unde silueta se vede pe cer, iar
+   capul e cel mai lat mai jos, în bokeh.
+4. **Nu compara o măsurătoare cu una luată cu alt instrument.** Prima rulare de
+   hold-out a raportat un fapt despre două treceri de citire ca fapt despre
+   regiune.
+5. **Nu înlocui ±0,01 cu ±0,05 fiindcă acoperă discrepanțele.** Incertitudinea e
+   intervalul măsurat pe cadrul căruia îi aparține; verdictul e dacă muchia
+   regiunii cade înăuntrul lui.
+
+### Punctul exact de reluare pentru încadrare
+
+Planul e al lui Codex, în două treceri, și **nu cere încă un lot nou de 36**:
+
+1. **PASUL 1, în curs: `coverage_bounds`.** 27 din 258 de perechi cadru/parte au
+   limită; 1 confirmată absentă; **230 necitite**. Rulează cu exit 2 până se
+   închide. Vederea e `source_crop --full --bare` — obiectele întregi, **fără
+   nicio cutie desenată**, fiindcă limita trebuie confirmată pe sursă, nu
+   moștenită din cutia greșită. Se înregistrează o limită sigură („marginea
+   dreaptă e înainte de 0,79"), nu o poziție inventată.
+2. **PASUL 2: `edge_calibration`,** intervale precise doar pentru marginile care
+   ies extreme ale reuniunii (`coverage_bounds --extremes` le numește) și pentru
+   cazurile neclare. Ce nu poate influența reuniunea nu merită precizie.
+3. **Construcția** ia **capetele exterioare** ale intervalelor (stânga/sus =
+   capătul inferior, dreapta/jos = capătul superior), reuniune peste cadrele
+   fazei, intervalele păstrate separat de cutia derivată, rotunjirea în pixeli
+   păstrează conținerea. Promisiunea rezultată e „conține toate pozițiile permise
+   de observațiile înregistrate" — **nu** „păstrează subiectul pe toată durata".
+4. **Reconstruiește o singură dată**, apoi randează proba video: conținerea,
+   mărimea textului și a subiectului, tranzițiile și retragerea ceasului, pe toată
+   secvența. Cele trei tabele existente rămân material de dezvoltare și regresie,
+   cu istoricul păstrat; **nu mai pot fi prezentate ca verificare independentă** a
+   candidatului nou.
+5. Abia după ce instrumentul e stabil: cele 99 de cadre de față pentru `speech`.
+
 ## Punctul exact de reluare
 
 **Nimic din motor nu e activ.** R2, R3a, R3b, R4, R5 și R6 sunt instrumentare în umbră: calculează,
@@ -1144,6 +1249,10 @@ schimbare de imagine) și R5a (mută finalul a 261 de ferestre, la următoarea r
     continuă randarea neutră și evaluarea selecției, minimum 10 surse distincte și 150 de momente.
     Gate-ul rămâne deschis.
 12. **P** — activarea graduală.
+
+**Încadrarea pe faze** are propriul punct de reluare, în secțiunea de mai sus.
+Nu e în lista numerotată fiindcă nu e un batch din planul de producție: a pornit
+dintr-un defect livrat și a devenit o revizuire a instrumentului de măsură.
 
 **În afara planului:** pipeline-ul TikTok nu e construit — router-ul nu e montat, sidebar-ul duce la o
 pagină inexistentă, iar cele două teste care pică în suită sunt ale lui, de dinaintea acestor sesiuni.
@@ -1274,4 +1383,5 @@ Reparat, dar artefactul existent păstrează cifra veche: la o comparație, ia `
 - [`Reasoning v2 — audit și plan de consolidare`](../../../plans/ai-stream-clipper-reasoning-v2.md)
 - [`Motor de selecție și montaj content-aware — plan de producție v1`](../../../plans/ai-stream-clipper-production-engine-v1.md) — **următorul plan de implementare**; pornește cu Batch R0 și păstrează reasoning-ul și randarea ca gate-uri separate
 - [`docs/refs/reasoning-baseline-2026-08-21.json`](../../../refs/reasoning-baseline-2026-08-21.json) — baseline-ul de comparație
+- [`handoff-clipper-session-5.md`](../../archive/clipper/handoff-clipper-session-5.md) — încadrarea pe faze și cele cinci defecte ale instrumentului de măsură
 - [`handoff-clipper-session-4.md`](../../archive/clipper/handoff-clipper-session-4.md) — istoric detaliat

@@ -30,6 +30,17 @@ regula că o clasificare slabă cumpără un montaj mai sigur, niciodată unul m
 [`plans/ai-stream-clipper-production-engine-v1.md`](../plans/ai-stream-clipper-production-engine-v1.md).
 Detaliile și cifrele sunt în [`areas/clipper/CURRENT.md`](areas/clipper/CURRENT.md).
 
+**În paralel cu planul, ÎNCADRAREA PE FAZE (5–9 septembrie).** A pornit de la un defect
+livrat — pe surse fără a doua cameră, 48,1 s din `pilotf81b` aveau o încadrare care nu
+conținea subiectul — și e reparat și măsurat pe cadre randate (0,0 s, 71/71 fețe). Ce a
+urmat nu e închis: cele patru regiuni pe faze ale lui `b23c14c41495` sunt înghețate dar
+**neverificate**, fiindcă instrumentul cu care fuseseră adnotate — citirea proxy-ului
+480×270 mărit — s-a dovedit de șase ori mai imprecis decât toleranța pe care o declara.
+Re-măsurarea pe sursa 2560×1440 e în curs, 27 din 258 de perechi cadru/parte. Nimic din
+asta nu e cablat la randare. Starea și punctul de reluare sunt în handover-ul modulului;
+istoricul și cele cinci defecte de instrument în
+[`archive/clipper/handoff-clipper-session-5.md`](archive/clipper/handoff-clipper-session-5.md).
+
 R3–R7 sunt livrate ca instrumentare/shadow, R8 este închis, S7a a livrat envelope-ul comun,
 S7b recuperează promises și anchors per chunk, S7c recuperează verdictul judge per rundă și
 întrebare exactă, S7d propagă identitatea canonică a ancorei la toate variantele, S7e separă
