@@ -256,6 +256,7 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
         src_h = int(src_w * (int(info.get("height") or 0) or 1)
                     / max(1, int(info.get("width") or 0) or 1))
         return {"faces": faces, "motion": totals, "motion_hop": motion_hop,
+                "proxy_width": info.get("width"), "proxy_height": info.get("height"),
                 "focus": focus,
                 "detail": detail, "ui": ui, "band": tuple(band),
                 "panels": ui_panels(window, src_w, src_h),

@@ -61,6 +61,7 @@ def _decision(*, dynamic=True, burn=False, ass_path=None):
                           {"t0": 1.0, "t1": 2.0, "composition": "fit",
                            "rect": {"x": 0, "y": 0, "w": 320, "h": 180}}],
                 "_review_faces": [{"t": 1.0, "boxes": [[1, 2, 3, 4]]}],
+                "_face_space": {"width": 80, "height": 45, "clock": "source_requested"},
                 "_rhythm": {"scenes": [1.0]}} if dynamic else None,
         "caption_policy": {"action": "burn" if burn else "suppress", "decided_by": "human"},
         "layout_policy": {"regions": "no_second_camera", "decided_by": "agent"},

@@ -92,6 +92,36 @@ def _caption_y(clip: ClipModel, dyn: dict | None) -> float | None:
         return None
 
 
+def _caption_faces(clip, project, dyn, caption_y):
+    """Refine the render-time position using local faces; keep manual edits."""
+    from services.clipper.caption_faces import place
+    from services.clipper.captions import _norm_rect, panels_to_keep_out
+
+    if not clip.caption_plan:
+        return caption_y, None
+    try:
+        # Static split-screen head rectangles do not describe a dynamic crop.
+        # Retain other reserved areas and the existing panel avoidance policy.
+        keep = [r for r in (((clip.layout_plan or {}).get("safe_zones") or {})
+                            .get("keep_out") or []) if r.get("kind") != "face"]
+        keep += panels_to_keep_out((dyn or {}).get("_panels") or [],
+                                  (dyn or {}).get("shots") or [])
+        normalized = [_norm_rect(r, 1080, 1920) for r in keep]
+        keep = [{"y": r[1] * 1920, "h": (r[3] - r[1]) * 1920}
+                for r in normalized if r is not None]
+        current = (caption_y if caption_y is not None
+                   else float(clip.caption_plan.get("y_pct", .75)))
+        report = place(clip.caption_plan, dyn, start=float(clip.start_time),
+                       src_w=project.width, src_h=project.height,
+                       current_y=current, keep_out=keep)
+        return (report["y_pct"] if report["applied"] else caption_y), report
+    except (TypeError, ValueError, KeyError):
+        logger.warning("clip %s: unreadable caption/face observations", clip.id,
+                       exc_info=True)
+        return caption_y, {"applied": False, "coverage_complete": False,
+                           "reason": "unreadable_observations"}
+
+
 def _write_ass(clip: ClipModel, out_dir: Path,
                drop_spans: Sequence[tuple[float, float]] | None = None,
                y_pct: float | None = None) -> str | None:
@@ -104,8 +134,8 @@ def _write_ass(clip: ClipModel, out_dir: Path,
     so a caption left on the untrimmed clock drifts further out of sync with
     every second cut.
 
-    `y_pct` overrides the stored caption height when the export found game UI
-    the score-time plan could not have known about. The plan itself is left
+    `y_pct` overrides the stored caption height when the export found UI or
+    local faces the score-time plan could not have known about. The plan is left
     alone: it is a record of what was decided then, and a re-score would
     recompute it anyway.
     """
@@ -116,7 +146,7 @@ def _write_ass(clip: ClipModel, out_dir: Path,
         return None
     plan = clip.caption_plan
     if y_pct is not None and abs(float(plan.get("y_pct") or 0.0) - y_pct) > 1e-4:
-        logger.info("clip %s: caption moved %.3f -> %.3f to clear detected game UI",
+        logger.info("clip %s: caption moved %.3f -> %.3f around detected content",
                     clip.id, float(plan.get("y_pct") or 0.0), y_pct)
         plan = {**plan, "y_pct": y_pct}
     try:

@@ -51,7 +51,7 @@ async def render_export(clip, project, decision: dict, out: str | Path, *,
         # not renderer inputs. Clean ALL callers, not only the normal worker;
         # otherwise probes fingerprint private tracks no export records.
         for key in ("_review_faces", "_panels", "_stable_track", "_motion",
-                    "_motion_hop", "_rhythm"):
+                    "_motion_hop", "_rhythm", "_face_space"):
             dyn.pop(key, None)
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -137,9 +137,11 @@ def _write_sidecar(clip, project, decision, out, *, src, dyn, render,
         # be taken apart again by anything that needs to know what was decided
         # at score time and what was decided at render time.
         "caption_plan": clip.caption_plan,
-        # The height the captions were actually burned at when the export moved
-        # them off detected game UI, `null` when the stored position stood.
+        # The height actually burned after UI/face placement; `null` when the
+        # stored position stood.
         "caption_y": caption_y,
+        # Placement evidence is advisory; effective caption_y is fingerprinted.
+        "caption_face_placement": decision.get("caption_face_placement"),
         "content_type": clip.content_type,
         # What grammar this clip WOULD be cut with, why, and whether the mode in
         # force actually applied it. Recorded on every export since R2 so the

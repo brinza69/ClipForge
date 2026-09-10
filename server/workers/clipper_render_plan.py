@@ -32,6 +32,7 @@ from services.clipper.candidate_terms import _num
 # Split out at the 500-line limit and re-exported: both render handlers and the
 # tests that pin today's fixes reach for these through this module.
 from workers.clipper_captions import (  # noqa: F401
+    _caption_faces,
     _caption_y,
     _clip_words,
     _write_ass,
@@ -267,6 +268,9 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
     # popped before the sidecar is written — the track is dozens of samples of
     # box coordinates and belongs in neither the plan nor the deliverable.
     plan["_review_faces"] = window["faces"]
+    plan["_face_space"] = {"width": window.get("proxy_width"),
+                           "height": window.get("proxy_height"),
+                           "clock": "source_requested"}
     # The anchor the planner framed on, handed over rather than recomputed:
     # `_decide_render` would otherwise read `faces.json` a second time and could
     # disagree with the plan it is describing. Popped before the sidecar with
@@ -425,6 +429,9 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     # calibrated, this call gains its second argument and nothing else moves.
     caption_policy_decision = caption_policy.decide(
         cfg.get(caption_policy.SETTING))
+    caption_face_placement = None
+    if caption_policy_decision["action"] == caption_policy.BURN:
+        caption_y, caption_face_placement = _caption_faces(clip, project, dyn, caption_y)
 
     return {
         "cfg": cfg,
@@ -438,6 +445,7 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
         "dyn": dyn,
         "fps": fps,
         "caption_y": caption_y,
+        "caption_face_placement": caption_face_placement,
         # WHETHER TO BURN A LAYER AT ALL, decided before it is written. A
         # project whose source already carries burned subtitles gets none from
         # us — that is the defect 37 of 101 stored clips are rejected for and a

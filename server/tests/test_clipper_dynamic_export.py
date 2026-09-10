@@ -65,6 +65,7 @@ def wired(monkeypatch, tmp_path):
         "faces": [{"t": 100.0, "boxes": [[10, 10, 40, 40]]}],
         "motion": [0.1, 0.2], "focus": [-1.0, 120.0], "detail": [3.0, 4.0],
         "ui": [0.0, 0.0], "band": (0.25, 1.0, 0.0, 0.8), "hop": 0.25,
+        "proxy_width": 640, "proxy_height": 360,
     })
     return dynamic_edit, proxy
 
@@ -80,6 +81,9 @@ async def test_a_planned_edit_records_the_frame_it_was_measured_in(wired, monkey
     assert plan["src_w"] == 1920 and plan["src_h"] == 1080
     assert plan["band"] == [0.25, 1.0, 0.0, 0.8]
     assert plan["faces_seen"] == 1
+    # Dimensions come from the decoded window, not the stale 480x270 signals.
+    assert plan["_face_space"] == {"width": 640, "height": 360,
+                                   "clock": "source_requested"}
 
 
 async def test_a_single_shot_falls_back_to_the_static_layout(wired, monkeypatch):
@@ -370,7 +374,7 @@ async def test_the_creator_view_reaches_the_export_and_the_working_key_does_not(
     # the sidecar is a deliverable, and a face track is not part of it.
     dyn = decision["dyn"]
     for key in ("_review_faces", "_panels", "_stable_track", "_motion",
-                "_motion_hop", "_rhythm"):
+                "_motion_hop", "_rhythm", "_face_space"):
         dyn.pop(key, None)
     assert not [k for k in dyn if k.startswith("_")], "working data in the plan"
 

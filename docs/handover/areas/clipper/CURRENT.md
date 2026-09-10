@@ -1,5 +1,14 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 11 septembrie 2026 — captions în afara fețelor observate
+
+Poziția automată poate evita fețele locale proiectate prin cropul rendererului;
+rămâne constantă pe clip, respectă editarea manuală și nu se aplică stratului
+suprimat. Proba Speed mută textul de pe gură pe piept în cadrele inspectate.
+Este o euristică cu acoperire incompletă, nu un nou pass al porții de captions.
+1.970 teste trec; corpusul existent este neschimbat.
+[Probe, condiții și limite](../../../refs/clipper-caption-faces-2026-09-11.md).
+
 ## Actualizare 10 septembrie 2026 — subtitrări, timp și editor
 
 Subtitrarea se arde după eliminarea pauzelor; și cuvintele evidențiate își mută

@@ -4,6 +4,13 @@
 **Data hărții:** 3 septembrie 2026.
 **TikTok:** exclus din această hartă, conform cerinței proiectului.
 
+## Actualizare Clipper, 11 septembrie 2026
+
+Randarea comună, sincronizarea captions/editor și evitarea automată a fețelor
+observate au ajuns în probe MP4 separate. Starea actuală și limitele sunt în
+[handover-ul Clipper](areas/clipper/CURRENT.md); cifrele din secțiunea istorică
+de mai jos nu descriu aceste probe noi. Publicarea automată nu este aprobată.
+
 ## Stare, 29 august 2026
 
 Reasoning v2 al Clipper-ului este implementat până la Batch 6 inclusiv, rulează în
