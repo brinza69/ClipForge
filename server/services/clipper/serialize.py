@@ -15,8 +15,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from models import ClipModel, ProjectModel
+from models import ClipModel, ClipStatus, ProjectModel
 from services.clipper import edit_profiles
+
+
+def invalidate_render(clip: ClipModel) -> None:
+    """Keep files/history on disk, stop presenting the old file as this edit."""
+    clip.preview_path = None
+    clip.export_path = None
+    clip.review = None
+    if clip.status == ClipStatus.exported.value:
+        clip.status = ClipStatus.approved.value
+
 
 # Fields a PATCH /clips/{id} is allowed to touch, mapped to a coercer. Anything
 # not in here is ignored rather than 400-ing, so a newer frontend talking to an
@@ -105,6 +115,7 @@ def clip_to_dict(clip: ClipModel) -> dict[str, Any]:
             clip.content_type, clip.content_confidence, clip.content_type_origin),
         "layout_plan": clip.layout_plan,
         "caption_plan": clip.caption_plan,
+        "caption_preset_id": clip.caption_preset_id,
         "warnings": clip.warnings or [],
         "dedupe_group": clip.dedupe_group,
         "is_alternative": _as_bool(clip.is_alternative),

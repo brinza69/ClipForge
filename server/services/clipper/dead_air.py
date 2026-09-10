@@ -208,7 +208,16 @@ def remap_overlays(overlays: Sequence[dict],
         end = remap_time(_num(ov.get("end_t")), spans)
         if end <= start:
             continue                      # wholly inside removed time
-        out.append({**ov, "start_t": start, "end_t": end})
+        mapped = {**ov, "start_t": start, "end_t": end}
+        # Highlight events use these times independently of the line's times.
+        # Remapping only the line held LEFT for the entire LEFT RIGHT caption
+        # after a one-second cut (encoded-clock regression, 2026-09-10).
+        if isinstance(ov.get("words"), list):
+            mapped["words"] = [
+                {**word, **{key: remap_time(_num(word[key]), spans)
+                           for key in ("start", "end") if key in word}}
+                if isinstance(word, dict) else word for word in ov["words"]]
+        out.append(mapped)
     return out
 
 

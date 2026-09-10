@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { errorDescription, readApiError } from "@/lib/api-error";
 import { CLIPPER_API, type ClipperClip } from "@/types/clipper";
+import { ClipFramePreview } from "./clip-frame-preview";
 
 interface Preset {
   id: string;
@@ -117,16 +118,14 @@ export function ClipEditor({
   // Bumped on every save so the <img> refetches — the frame is rendered
   // server-side from the SAVED clip, so it is only true after a round trip.
   const [frameKey, setFrameKey] = useState(0);
-  const [at, setAt] = useState(0.5);
 
   useEffect(() => {
     if (!clip) return;
     setStart(clip.start_time);
     setEnd(clip.end_time);
     setHeadline(clip.headline_text ?? "");
-    setPresetId(clip.caption_plan?.preset_id ?? "");
+    setPresetId(clip.caption_plan?.preset_id ?? clip.caption_preset_id ?? "");
     setCaptionY(clip.caption_plan?.y_pct ?? 0.75);
-    setAt(Math.min(0.5, Math.max(0, clip.duration / 2)));
     setError(null);
   }, [clip]);
 
@@ -145,7 +144,7 @@ export function ClipEditor({
     return (
       trimmed ||
       headline !== (clip.headline_text ?? "") ||
-      presetId !== (clip.caption_plan?.preset_id ?? "") ||
+      presetId !== (clip.caption_plan?.preset_id ?? clip.caption_preset_id ?? "") ||
       Math.abs(captionY - (clip.caption_plan?.y_pct ?? 0.75)) > 1e-4
     );
   }, [clip, trimmed, headline, presetId, captionY]);
@@ -160,7 +159,7 @@ export function ClipEditor({
       body.end_time = end;
     }
     if (headline !== (clip.headline_text ?? "")) body.headline_text = headline;
-    if (presetId && presetId !== (clip.caption_plan?.preset_id ?? "")) {
+    if (presetId && presetId !== (clip.caption_plan?.preset_id ?? clip.caption_preset_id ?? "")) {
       body.caption_preset_id = presetId;
     }
     if (clip.caption_plan && Math.abs(captionY - (clip.caption_plan.y_pct ?? 0.75)) > 1e-4) {
@@ -229,44 +228,8 @@ export function ClipEditor({
         </DialogHeader>
 
         <div className="grid gap-5 sm:grid-cols-[300px_1fr]">
-          {/* The still, rendered server-side through the same overlay builder
-              the export uses — so the caption STYLE and HEIGHT are the real
-              thing. The framing is not: the endpoint returns the 16:9 source
-              and the export crops it to 9:16, which is said below rather than
-              left for someone to discover after shipping a clip. */}
-          <div className="space-y-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              key={frameKey}
-              src={`${CLIPPER_API}/clips/${clip.id}/preview-frame?t=${at.toFixed(2)}&v=${frameKey}`}
-              alt={`Frame at ${at.toFixed(1)}s with the captions burned in`}
-              className="w-full rounded-lg border border-border/40 bg-black"
-            />
-            <input
-              type="range"
-              min={0}
-              max={Math.max(0.1, duration)}
-              step={0.1}
-              value={Math.min(at, duration)}
-              onChange={(e) => setAt(Number.parseFloat(e.target.value))}
-              className="w-full"
-              aria-label="Frame to preview"
-            />
-            <p className="text-center text-[11px] tabular-nums text-muted-foreground">
-              +{at.toFixed(1)}s of {duration.toFixed(1)}s
-            </p>
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              The whole source frame. Caption style and height are exactly what
-              the export burns; the framing is not — the export crops this to
-              9:16. Use <span className="text-foreground/70">render preview</span> to
-              see the cut itself.
-            </p>
-            {trimmed && (
-              <p className="rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-500">
-                The still is of the SAVED clip. Save to see the new boundaries.
-              </p>
-            )}
-          </div>
+          <ClipFramePreview key={clip.id} clipId={clip.id} duration={clip.duration}
+            revision={frameKey} dirty={dirty} />
 
           <div className="space-y-4">
             <Field
@@ -332,7 +295,8 @@ export function ClipEditor({
                 <button
                   type="button"
                   onClick={() => regenerate("captions")}
-                  disabled={busy !== null}
+                  disabled={busy !== null || dirty}
+                  title={dirty ? "Save your changes before rebuilding captions" : ""}
                   className="shrink-0 rounded border border-border/50 px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted/40 disabled:opacity-50"
                 >
                   {busy === "captions" ? "…" : "rebuild"}

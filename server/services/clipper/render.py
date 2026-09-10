@@ -42,7 +42,7 @@ CancelFn = Callable[[], bool]
 #: named a grammar of shots and letterboxing that never touched it. A verdict
 #: filed under the wrong renderer is worse than an unstamped one: it is
 #: attributable, and to the wrong thing.
-RENDER_VERSION = "render_static_split_v1"
+RENDER_VERSION = "render_static_split_v2_caption_clock"
 
 # A 60-second clip encodes in well under a minute; this ceiling only ever fires
 # on a wedged child process, not on a slow-but-working encode.
@@ -270,7 +270,8 @@ def build_render_cmd(
     """
     out_w, out_h = even(out_w), even(out_h)
     start, duration = _window(cand)
-    graph, vlabel = _filter_complex(plan, ass_path, watermark, out_w, out_h)
+    graph, vlabel = _filter_complex(
+        plan, None if drop_spans else ass_path, watermark, out_w, out_h)
 
     alabel = "0:a?"  # `?` keeps a silent source renderable instead of fatal
     if drop_spans:
@@ -294,6 +295,10 @@ def build_render_cmd(
             graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
             alabel = "[acut]"
 
+        from services.clipper.render_timeline import append_captions
+
+        graph, vlabel = append_captions(graph, vlabel, ass_path)
+
     if has_audio:
         # The same chain the multi-shot renderer runs. It goes INSIDE the
         # filtergraph rather than in `-af` because when dead air is trimmed the
@@ -306,6 +311,9 @@ def build_render_cmd(
         graph += f";[{alabel.strip('[]').rstrip('?')}]{loudness_chain()}[aout]"
         alabel = "[aout]"
 
+    from services.clipper.render_timeline import output_frames
+
+    graph, vlabel = output_frames(graph, vlabel, fps)
     return [
         ffmpeg_bin(), "-y", "-loglevel", "error",
         "-ss", f"{start:.3f}",

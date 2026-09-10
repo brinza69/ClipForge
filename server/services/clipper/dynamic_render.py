@@ -87,7 +87,9 @@ __all__ = [
 #:                             four review sessions carried the same note
 #:   render_v3_letterbox     — the same selection, with the geometry correct and
 #:                             the bars filled with a blurred copy of the frame
-RENDER_VERSION = "render_v3_letterbox"
+#:   render_v4_caption_clock — captions burn after pause removal; shot commands
+#:                             still run on the original clip clock
+RENDER_VERSION = "render_v4_caption_clock"
 
 #: How hard the letterbox fill is blurred. See `build_dynamic_filtergraph`.
 BACKDROP_SIGMA = 40
@@ -258,7 +260,8 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
     and drifted out of sync by the whole trimmed duration.
     """
     graph, vlabel = build_dynamic_filtergraph(
-        plan, cmd_path, ass_path, src_w=src_w, src_h=src_h, out_w=out_w, out_h=out_h)
+        plan, cmd_path, None if drop_spans else ass_path,
+        src_w=src_w, src_h=src_h, out_w=out_w, out_h=out_h)
 
     if watermark and watermark.strip():
         # Imported from the static renderer rather than reimplemented: the two
@@ -297,6 +300,10 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
             graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
             alabel = "[acut]"
 
+        from services.clipper.render_timeline import append_captions
+
+        graph, vlabel = append_captions(graph, vlabel, ass_path)
+
     # Loudness goes INSIDE the graph once the audio has been through `aselect`:
     # ffmpeg will not run `-af` on a stream a complex graph produced. Without
     # trimming it stays on `-af`, so a command with no drop spans is exactly
@@ -309,6 +316,9 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
         else:
             af = ["-af", loudness_chain()]
 
+    from services.clipper.render_timeline import output_frames
+
+    graph, vlabel = output_frames(graph, vlabel, fps)
     cmd = [
         ffmpeg_bin(), "-y", "-loglevel", "error",
         "-ss", f"{max(0.0, start):.3f}",

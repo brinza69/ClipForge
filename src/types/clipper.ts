@@ -286,6 +286,7 @@ export interface ClipperClip {
   edit_profile: EditProfile | null;
   layout_plan: LayoutPlan | null;
   caption_plan: CaptionPlan | null;
+  caption_preset_id?: string | null;
   warnings: string[] | null;
   dedupe_group: string | null;
   is_alternative: boolean;

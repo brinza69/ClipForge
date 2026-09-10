@@ -33,6 +33,7 @@ from services.clipper.serialize import (
     CLIP_PATCHABLE_JSON,
     apply_patch,
     clip_to_dict,
+    invalidate_render as _invalidate_render,
 )
 
 logger = logging.getLogger("clipforge.clipper.clips")
@@ -105,6 +106,19 @@ async def patch_clip(
     clip = await _load_clip(session, clip_id)
     before = {"start_time": clip.start_time, "end_time": clip.end_time}
 
+    # The ASS reads the plan's style, not the separate preset preference used
+    # by rebuild. Saving the selector used to change only that preference.
+    payload = dict(payload or {})
+    if payload.get("caption_preset_id"):
+        from services.captioner_presets import DEFAULT_PRESETS
+
+        preset = payload["caption_preset_id"]
+        if not isinstance(preset, str) or preset not in DEFAULT_PRESETS:
+            raise _err(400, "unknown_caption_preset", "Choose an available caption style.")
+        caption_plan = payload.get("caption_plan", clip.caption_plan)
+        if isinstance(caption_plan, dict):
+            payload["caption_plan"] = {**caption_plan, "preset_id": preset,
+                                       "style": dict(DEFAULT_PRESETS[preset])}
     changed = apply_patch(clip, payload or {}, CLIP_PATCHABLE, CLIP_PATCHABLE_JSON)
 
     if "start_time" in changed or "end_time" in changed:
@@ -121,9 +135,11 @@ async def patch_clip(
             )
         clip.start_time, clip.end_time = start, end
         clip.duration = round(end - start, 3)
-        # A hand-edited clip's stale render is worse than none: drop the paths
-        # so the UI shows "needs re-render" instead of the old file.
-        clip.preview_path = None
+
+    if set(changed) & {"start_time", "end_time", "caption_plan", "caption_preset_id", "layout_plan"}:
+        if clip.status == ClipStatus.exporting.value:
+            raise _err(409, "export_in_progress", "Wait for this export to finish before editing.")
+        _invalidate_render(clip)
 
     if changed:
         await session.commit()
@@ -235,6 +251,8 @@ async def regenerate(
     if what == "captions":
         from services.clipper.captions import build_caption_plan
 
+        if clip.status == ClipStatus.exporting.value:
+            raise _err(409, "export_in_progress", "Wait for this export to finish before editing.")
         transcript = await _project_transcript(session, clip.project_id)
         try:
             clip.caption_plan = build_caption_plan(
@@ -245,6 +263,7 @@ async def regenerate(
                 position=cfg.get("caption_position") or "bottom",
                 layout=clip.layout_plan or {},
             )
+            _invalidate_render(clip)
             await session.commit()
         except Exception as exc:
             logger.exception("caption regeneration failed")
@@ -258,14 +277,9 @@ async def regenerate(
 async def preview_frame(
     clip_id: str, t: float | None = None, session: AsyncSession = Depends(get_session)
 ) -> Response:
-    """A single still with the captions burned in, for the editor.
-
-    Reuses services/caption_overlays.render_preview_frame — the same code path
-    the Caption Studio already uses, so what the user sees here matches what
-    the export will produce.
-    """
-    from services.caption_overlays import render_preview_frame
-    from services.clipper.captions import caption_plan_to_overlays
+    """A still of the saved export recipe; `t` is on the delivered clock."""
+    import math
+    from workers.clipper_preview_frame import render_frame
 
     clip = await _load_clip(session, clip_id)
     project = await session.get(ProjectModel, clip.project_id)
@@ -273,32 +287,21 @@ async def preview_frame(
     if not source:
         raise _err(409, "source_missing", "The source video has not been downloaded yet.")
 
-    # `t` is relative to the clip; the frame lives at clip.start + t in the source.
     offset = float(t if t is not None else 0.5)
-    absolute = max(0.0, float(clip.start_time or 0.0) + max(0.0, offset))
-
-    overlays: list[dict] = []
-    if clip.caption_plan:
-        try:
-            overlays = caption_plan_to_overlays(clip.caption_plan)
-        except Exception:
-            logger.exception("could not build overlays for the preview frame")
+    if not math.isfinite(offset) or offset < 0:
+        raise _err(400, "invalid_frame_time", "Choose a non-negative frame time.")
 
     try:
-        png = await _in_thread(lambda: render_preview_frame(source, overlays, absolute))
+        result = await render_frame(clip, project, offset)
     except Exception as exc:
         logger.exception("preview frame render failed")
         raise _err(500, "preview_failed", "Could not render that frame.", str(exc)[:200])
 
-    # Short cache: the editor re-requests on every scrub, but an edit must show
-    # up immediately.
-    return Response(content=png, media_type="image/png", headers={"Cache-Control": "max-age=5"})
-
-
-async def _in_thread(fn):
-    import asyncio
-
-    return await asyncio.get_event_loop().run_in_executor(None, fn)
+    return Response(content=result["png"], media_type="image/png", headers={
+        "Cache-Control": "no-store", "X-Clip-Time": str(result["at"]),
+        "X-Clip-Duration": str(result["duration"]),
+        "X-Caption-Action": result["caption_action"],
+    })
 
 
 @router.get("/clips/{clip_id}/preview-file")

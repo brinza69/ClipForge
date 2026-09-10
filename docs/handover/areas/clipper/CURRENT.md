@@ -1,5 +1,15 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 10 septembrie 2026 — subtitrări, timp și editor
+
+Subtitrarea se arde după eliminarea pauzelor; și cuvintele evidențiate își mută
+timestampurile. Editorul folosește planul și comenzile exportului, inclusiv
+politica de captions, crop/fit și o grilă comună de cadre. Presetul salvat
+schimbă stilul efectiv; o editare invalidează referința la exportul vechi fără
+să șteargă fișierul. Probe sintetice și un MP4 Speed separat de corpus:
+[raportul și limitele lotului](../../../refs/clipper-editor-captions-2026-09-10.md).
+Subtitrarea nativă și calitatea editorială generală rămân deschise.
+
 ## Actualizare 9 septembrie 2026 — cropul care revenea pe perdea
 
 Plannerul nu mai tratează automat mediana feței pe clip ca pe o cameră fixă.

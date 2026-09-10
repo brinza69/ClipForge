@@ -97,7 +97,10 @@ def test_captions_are_burned_inside_the_same_filter_complex():
     # appended after it, and asserting on the graph's last character made this
     # test a statement about filter ORDER, which it never meant to be.
     assert _video_branch(graph).endswith("[vout]")
-    assert cmd[cmd.index("-map") + 1] == "[vout]"
+    # The encoded stream now includes the explicit frame grid after this
+    # composition. The still and MP4 must use that same sampling stage.
+    assert ";[vout]fps=" in graph
+    assert graph.endswith(cmd[cmd.index("-map") + 1])
 
 
 def test_ass_path_is_escaped_for_the_filter_parser():
@@ -105,12 +108,13 @@ def test_ass_path_is_escaped_for_the_filter_parser():
     assert "D\\:/proj/captions.ass" in graph
 
 
-def test_without_captions_the_layout_pad_is_mapped_directly():
+def test_without_captions_the_layout_reaches_the_shared_frame_grid():
     cmd = _cmd()
     graph = _graph(cmd)
     assert "subtitles=" not in graph
     assert _video_branch(graph).endswith("[v]")
-    assert cmd[cmd.index("-map") + 1] == "[v]"
+    assert ";[v]fps=" in graph
+    assert graph.endswith(cmd[cmd.index("-map") + 1])
 
 
 # --------------------------------------------------------------------------
@@ -136,7 +140,8 @@ def test_audio_is_levelled_the_same_way_the_multi_shot_path_levels_it():
 
     graph = _graph(_cmd())
     assert loudness_chain() in graph
-    assert graph.endswith("[aout]")
+    assert f"{loudness_chain()}[aout]" in graph
+    assert "[aout]" in _cmd()
 
 
 def test_encoder_settings():
@@ -243,7 +248,8 @@ def test_empty_watermark_adds_no_drawtext():
 def test_watermark_and_captions_share_one_chain():
     graph = _graph(_cmd(ass_path="D:/proj/c.ass", watermark="clipforge"))
     assert graph.count(";[v]") == 1
-    assert graph.count("[vout]") == 1
+    assert any(stage.startswith("[v]subtitles=") and "drawtext=" in stage
+               for stage in graph.split(";"))
     assert "subtitles=" in graph and "drawtext=" in graph
 
 
