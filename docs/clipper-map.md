@@ -65,6 +65,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 |---|---|
 | `ingest.py` | download or copy the source, build the 480p proxy, extract audio, sample frames |
 | `signals.py` | Pass A: per-hop loudness, peaks, silence, speech, motion, scene cuts, faces |
+| `face_detector.py` | shared Haar detector (re-exported by signals); sampled read/detection states, failure reasons, decoded index/PTS distinct from requested time. No detector threshold change. |
 | `storage.py` | the ONE place that knows artifact paths and names. Adding an artifact means adding it here |
 | `urlguard.py` | URL policy check before anything is fetched |
 | `series.py` | scaling a measured series onto 0..1, ONCE. `dynamic_edit` and `dynamic_regimes` scale different populations — per-shot means against per-sample values — and that difference is deliberate; the arithmetic under it is shared, because a duplicated helper is one edit away from being a second rule. Returns whether the series had any spread, since a flat one lands at 0.5 and 0.5 sits under a default cut-off of 0.6 |
@@ -143,7 +144,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `render.py` | the static path: one filtergraph, one encode, optional dead-air cuts. Holds `RENDER_VERSION = render_static_split_v2_caption_clock`, the counterpart to `dynamic_render`'s — a static export stamped with the dynamic version is attributable to a grammar of shots it never had |
 | `render_timeline.py` | Shared delivered timeline: burn remapped captions after pause removal, then sample the composed image on one explicit frame grid for static/dynamic exports and editor stills. Real encoded regressions cover missing captions and fractional seeks at 30/60 fps. |
 | `captions.py` | the caption plan and its overlays |
-| `caption_faces.py` | stable automatic caption height around local face proposals mapped through the delivered crop; preserves manual positions, refuses unsupported motion/size, records incomplete coverage. Wired before ASS writing in the common render decision. Real Speed MP4 and limits: `docs/refs/clipper-caption-faces-2026-09-11.md` |
+| `caption_faces.py` | stable automatic caption height around local face proposals mapped through the delivered crop; preserves manual positions, refuses unsupported motion/size, records incomplete coverage. Distinguishes detection absence, read failures, detector failures, legacy and contradictory observations; rejects contradictory boxes. Wired before ASS writing in the common render decision. Real Speed MP4 and limits: `docs/refs/clipper-caption-faces-2026-09-11.md` |
 | `dynamic_edit.py` | the multi-shot planner: which camera, where the subject is. Calls `merge_equivalent_shots` ONCE, on the finished shot list, so every caller gets a plan with no invisible cut. It replaced `_merge_dead_cuts`, which compared the planned RECTANGLE and so could not see composition: two `fit` shots have different rects and deliver the identical full frame, which is how 116 invisible cuts reached the pilot corpus |
 | `dynamic_subject.py` | two questions about the subject. Per span: is any face present — hysteresis over the 0.25s track, deciding `crop` vs `fit`. Per source: `stable_track` anchors face-family crops on a fixed webcam overlay. Since R3a, `anchored_track` drops every detection that is not on the fixed anchor and `creator_presence` back-dates a confirmed absence to where it began — recorded as `creator_view` beside each export, applied to none of them. Measured on the Moist pilot: 36% of the samples carrying a face are anchor-compatible — the wording matters, because nobody labelled the boxes and geometry is all this knows. The presence effect is deliberately NOT quoted from `faces.json` — its median gap there is 6.7s, which rounds `ENTER_S` to one sample and measures a different rule |
 | `dynamic_cuts.py` | WHERE the edit cuts, on the clock — sentence ends, peaks, rhythm. Split from `dynamic_edit.py` at 500 lines; knows nothing about cameras |
@@ -302,6 +303,8 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_shared_export.py` (real encoder: normal/replan/frozen replay, decoded captions, cancellations) · `test_clipper_llm_select.py` ·
 `test_clipper_caption_clock.py` (decoded caption timing and per-word clock) · `test_clipper_editor_frame.py` (API edits, PNG versus MP4, suppression, stale exports, frame-index selection) ·
 `test_clipper_caption_faces.py` (local crop/time mapping, conservative refusals, real burned pixels and manual/suppression controls) ·
+`test_clipper_face_detector.py` (read states, invalid addresses, actual decoded-pixel clock oracle and one-frame mutation checks) ·
+`test_clipper_face_observation_flow.py` (real window extraction through render planning to caption counters; decoded-window clock, legacy uncertainty, EOF and terminal sample exclusion) ·
 `test_clipper_ranker.py` · `test_clipper_render.py` · `test_clipper_signals.py` ·
 `test_clipper_storage.py` · `test_clipper_captions.py` · `test_clipper_api.py` ·
 `test_clipper_urlguard.py` · `test_clipper_resume.py` · `test_job_claim.py` ·

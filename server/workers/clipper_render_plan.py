@@ -270,7 +270,8 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
     plan["_review_faces"] = window["faces"]
     plan["_face_space"] = {"width": window.get("proxy_width"),
                            "height": window.get("proxy_height"),
-                           "clock": "source_requested"}
+                           "clock": "source_requested",
+                           "decoded_space": window.get("face_decoded_space")}
     # The anchor the planner framed on, handed over rather than recomputed:
     # `_decide_render` would otherwise read `faces.json` a second time and could
     # disagree with the plan it is describing. Popped before the sidecar with

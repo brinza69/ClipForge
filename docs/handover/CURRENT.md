@@ -11,6 +11,11 @@ observate au ajuns în probe MP4 separate. Starea actuală și limitele sunt în
 [handover-ul Clipper](areas/clipper/CURRENT.md); cifrele din secțiunea istorică
 de mai jos nu descriu aceste probe noi. Publicarea automată nu este aprobată.
 
+La 12 septembrie, lotul A al observațiilor de față este închis: separă erorile
+tehnice de zero detecții și păstrează adresa ferestrei analizate. 2.005 teste
+trec; proba Speed rămâne identică la nivel de octeți. Detectorul Haar nu este
+încă înlocuit. Contractul și probele sunt în handover-ul Clipper de mai sus.
+
 ## Stare, 29 august 2026
 
 Reasoning v2 al Clipper-ului este implementat până la Batch 6 inclusiv, rulează în

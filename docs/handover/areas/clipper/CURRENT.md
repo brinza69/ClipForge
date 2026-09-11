@@ -1,5 +1,17 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 12 septembrie 2026 — lot A de observații închis
+
+Codex a terminat corecțiile începute de Claude: stări distincte pentru citire și
+detecție, index/PTS verificabile în fereastra analizată, refuzul adreselor
+indisponibile și al observațiilor contradictorii în plasarea captions.
+Claude Code a făcut review static fără alte constatări; Codex a executat
+2.005 teste trecute, probele de regresie și exportul Speed, identic ca octeți
+cu proba acceptată anterior. Cele 301 fișiere existente din exports sunt intacte.
+Detectorul Haar, pragurile și ratările lui nu s-au schimbat. Următorul lot este
+îmbunătățirea detecției/urmăririi pe probe etichetate, nu reluarea lotului A.
+[Contract, rezultate și limite](../../../refs/clipper-face-observations-2026-09-12.md).
+
 ## Actualizare 11 septembrie 2026 — captions în afara fețelor observate
 
 Poziția automată poate evita fețele locale proiectate prin cropul rendererului;

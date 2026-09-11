@@ -244,7 +244,12 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
 
         times = [i * FACE_HOP_S for i in range(int(duration / FACE_HOP_S) + 1)]
         samples = face_presence(str(window), times)
-        faces = [{"t": float(s.get("t", 0.0)) + start, "boxes": s.get("boxes") or []}
+        # Pass through state metadata; frame_index and decoded_t name positions
+        # in window.mp4, not the original source — adding start does not certify
+        # a source timestamp because the re-encode shifts the clock.
+        faces = [{**s, "t": float(s["t"]) + start, "clock": "source_requested",
+                  "decoded_space": ("reencoded_window"
+                                    if s.get("decoded_space") == "analysed_file" else None)}
                  for s in samples]
         if band is None:
             info = video_info(str(window))
@@ -256,6 +261,7 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
         src_h = int(src_w * (int(info.get("height") or 0) or 1)
                     / max(1, int(info.get("width") or 0) or 1))
         return {"faces": faces, "motion": totals, "motion_hop": motion_hop,
+                "face_decoded_space": "reencoded_window",
                 "proxy_width": info.get("width"), "proxy_height": info.get("height"),
                 "focus": focus,
                 "detail": detail, "ui": ui, "band": tuple(band),

@@ -15,8 +15,12 @@ def observed():
         {"t0": 0, "t1": 2, "composition": "crop", "anchor": [540, 960],
          "rect": {"x": 0, "y": 0, "w": 1080, "h": 1920}}],
         "_face_space": {"width": 108, "height": 192, "clock": "source_requested"},
-        "_review_faces": [{"t": 100.5, "boxes": [[20, 40, 60, 93.5]]},
-                          {"t": 101.5, "boxes": []}]}
+        "_review_faces": [
+            {"t": 100.5, "boxes": [[20, 40, 60, 93.5]], "state": "detected",
+             "frame_index": 42, "decoded_t": 0.5},
+            {"t": 101.5, "boxes": [], "state": "empty",
+             "frame_index": 43, "decoded_t": 1.5},
+        ]}
 
 
 def decide(dyn=None, plan=None, y=.51, keep=None):
@@ -34,6 +38,20 @@ def test_exact_bottom_preset_can_clear_a_face_when_the_grid_cannot():
     assert report["empty_samples"] == 1 and not report["coverage_complete"]
     assert dyn == untouched
     assert not decide(y=.75)["applied"]
+
+
+@pytest.mark.parametrize("state,boxes", [
+    ("future_state", []), ("future_state", [[20, 40, 60, 93.5]]),
+    ("empty", [[20, 40, 60, 93.5]]), ("unreadable", [[20, 40, 60, 93.5]]),
+    ("detector_unavailable", [[20, 40, 60, 93.5]]), ("detected", []),
+    ("empty", None)])
+def test_unknown_or_contradictory_observation_cannot_move_caption(state, boxes):
+    dyn = observed()
+    dyn["_review_faces"] = [{"t": 100.5, "state": state, "boxes": boxes}]
+    report = decide(dyn)
+    assert report["samples_in_shots"] == report["invalid_state_samples"] == 1
+    assert report["empty_samples"] == report["mapped_boxes"] == 0
+    assert not report["applied"] and report["y_pct"] == .51
 
 
 @pytest.mark.parametrize("change,reason", [

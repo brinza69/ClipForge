@@ -29,6 +29,10 @@ from typing import Any, Sequence
 import numpy as np
 
 from services.clipper import ANALYSIS_VERSION
+from services.clipper.face_detector import (  # re-exported; callers import from here
+    FACE_MIN_NEIGHBOURS, FACE_MIN_SIZE, FACE_SCALE_FACTOR,
+    detect_faces, face_cascades, face_presence,
+)
 from services.clipper.ffmpeg_tools import FFmpegError, ffmpeg_bin, run, video_info
 
 logger = logging.getLogger("clipforge.clipper.signals")
@@ -377,122 +381,6 @@ def motion_timeline(proxy_path: str, *, hop_s: float = 0.5) -> dict[str, Any]:
     result["ui"] = [round(v, 5) for v in uis]
     return result
 
-
-FACE_SCALE_FACTOR = 1.05
-FACE_MIN_NEIGHBOURS = 5
-FACE_MIN_SIZE = (20, 20)
-_FACE_MERGE_IOU = 0.35
-
-
-def _merge_boxes(boxes: list[list[int]]) -> list[list[int]]:
-    """Drop boxes that overlap one already kept — two cascades see one face twice."""
-    kept: list[list[int]] = []
-    for box in sorted(boxes, key=lambda b: -b[2] * b[3]):
-        x0, y0, w0, h0 = box
-        for x1, y1, w1, h1 in kept:
-            ix = max(0, min(x0 + w0, x1 + w1) - max(x0, x1))
-            iy = max(0, min(y0 + h0, y1 + h1) - max(y0, y1))
-            inter = ix * iy
-            if inter and inter / float(w0 * h0 + w1 * h1 - inter) >= _FACE_MERGE_IOU:
-                break
-        else:
-            kept.append(box)
-    return kept
-
-
-_FACE_CASCADES: list[Any] | None = None
-
-
-def face_cascades() -> list[Any]:
-    """The tuned cascade set, loaded once.
-
-    Two cascades, not one: a co-stream has a facecam per person and they are
-    rarely both facing the lens. Measured over 40 frames, the frontal cascade
-    found the left facecam 17 times and the right one NEVER (that streamer was
-    turned away); the profile cascade found the right one 3 times. Neither
-    produced a false positive at 1.05/5, the best of six combinations tried —
-    1.15 missed almost everything, minNeighbors=3 let nine into the gameplay.
-    """
-    global _FACE_CASCADES
-    if _FACE_CASCADES is not None:
-        return _FACE_CASCADES
-    _FACE_CASCADES = []
-    cv2 = _cv2()
-    if cv2 is None:
-        return _FACE_CASCADES
-    for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"):
-        c = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / name))
-        if not c.empty():
-            _FACE_CASCADES.append(c)
-        else:
-            logger.warning("face_cascades: could not load cascade %s", name)
-    return _FACE_CASCADES
-
-
-def detect_faces(grey: Any) -> list[list[int]]:
-    """Face boxes in one GREYSCALE frame, as [x, y, w, h].
-
-    The single entry point for face detection in the clipper. There used to be
-    a second, untuned one in content_type.py, and on the co-stream it measured
-    0 faces in 40 frames where this finds the left facecam in 14 and the right
-    in 13 with one false positive — which is why regions.json reported no
-    webcam on a source with two of them. Equalisation is part of the tuning,
-    not a nicety: these facecams are small and dim.
-    """
-    cascades = face_cascades()
-    if not cascades:
-        return []
-    cv2 = _cv2()
-    if cv2 is None:
-        return []
-    equalised = cv2.equalizeHist(grey)
-    raw: list[list[int]] = []
-    for cascade in cascades:
-        for x, y, w, h in cascade.detectMultiScale(
-                equalised, FACE_SCALE_FACTOR, FACE_MIN_NEIGHBOURS,
-                minSize=FACE_MIN_SIZE):
-            raw.append([int(x), int(y), int(w), int(h)])
-    return _merge_boxes(raw)
-
-
-def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
-    """Face boxes at each requested timestamp, in PROXY pixel coordinates.
-
-    Always returns one entry per requested time (empty `boxes` when the frame
-    is unreadable) so callers can zip it against their own sample grid.
-    """
-    stamps = [float(t) for t in (times or []) if float(t) >= 0]
-    blank = [{"t": round(t, 3), "boxes": []} for t in stamps]
-    cv2 = _cv2()
-    if cv2 is None or not stamps:
-        return blank
-    if not proxy_path or not Path(proxy_path).exists():
-        logger.warning("face_presence: missing proxy %s", proxy_path)
-        return blank
-
-    if not face_cascades():
-        return blank
-
-    out: list[dict[str, Any]] = []
-    cap = cv2.VideoCapture(str(proxy_path))
-    try:
-        if not cap.isOpened():
-            logger.warning("face_presence: cannot open %s", proxy_path)
-            return blank
-        for t in stamps:
-            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                out.append({"t": round(t, 3), "boxes": []})
-                continue
-            grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            out.append({"t": round(t, 3), "boxes": detect_faces(grey)})
-    except cv2.error as exc:
-        logger.warning("face_presence: detection failed for %s (%s)", proxy_path, exc)
-        return blank
-    finally:
-        cap.release()
-    return out
 
 
 def _face_sample_times(duration: float) -> list[float]:

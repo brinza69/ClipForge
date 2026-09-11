@@ -83,7 +83,7 @@ async def test_a_planned_edit_records_the_frame_it_was_measured_in(wired, monkey
     assert plan["faces_seen"] == 1
     # Dimensions come from the decoded window, not the stale 480x270 signals.
     assert plan["_face_space"] == {"width": 640, "height": 360,
-                                   "clock": "source_requested"}
+                                   "clock": "source_requested", "decoded_space": None}
 
 
 async def test_a_single_shot_falls_back_to_the_static_layout(wired, monkeypatch):

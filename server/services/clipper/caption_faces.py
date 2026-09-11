@@ -24,12 +24,16 @@ def place(plan: dict, dyn: dict | None, *, start: float, src_w: int,
     separately; they cannot veto avoidance of a positively observed face, but
     neither can they certify the unobserved part of a clip as clear.
     """
-    report = {"schema": "clipper_caption_faces_v1", "applied": False,
+    report = {"schema": "clipper_caption_faces_v2", "applied": False,
               "y_pct": current_y, "coverage_complete": False,
               "caption_extent": "approximate_full_width_two_line_band",
               "face_basis": "detector_proposals_at_requested_source_times",
               "mapped_boxes": 0, "empty_samples": 0, "off_frame_boxes": 0,
-              "shots_without_mapped_faces": 0}
+              "shots_without_mapped_faces": 0,
+              "unreadable_samples": 0, "detector_unavailable_samples": 0,
+              "legacy_unknown_samples": 0, "invalid_state_samples": 0,
+              "detected_samples": 0, "samples_in_shots": 0,
+              "address_unavailable_samples": 0, "observation_reasons": {}}
 
     def stop(reason):
         return {**report, "reason": reason}
@@ -39,6 +43,7 @@ def place(plan: dict, dyn: dict | None, *, start: float, src_w: int,
     if not dyn or not dyn.get("shots"):
         return stop("no_dynamic_observations")
     space = dyn.get("_face_space") or {}
+    report["observation_space"] = dict(space)
     pw, ph = space.get("width"), space.get("height")
     if (space.get("clock") != "source_requested" or
             not all(isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -66,11 +71,36 @@ def place(plan: dict, dyn: dict | None, *, start: float, src_w: int,
             return stop(crop)
         count = len(faces)
         for sample in samples:
-            t = sample["t"] - start
-            if not shot["t0"] <= t < shot["t1"]:
+            # Compare on the same requested source clock. Subtracting start
+            # turned (.47 + 2) - .47 into 1.9999999999999998, admitting the
+            # terminal sample into [0, 2) and sometimes the preceding shot.
+            if not shot["t0"] + start <= sample["t"] < shot["t1"] + start:
                 continue
-            boxes = sample.get("boxes") or []
-            report["empty_samples"] += not boxes
+            report["samples_in_shots"] += 1
+            boxes = sample.get("boxes")
+            state = sample.get("state")
+            if state is None:
+                # Legacy positive boxes remain proposals, with unknown read state.
+                report["legacy_unknown_samples"] += 1
+                boxes = boxes or []
+            elif (not isinstance(boxes, list) or
+                  state not in ("detected", "empty", "unreadable", "detector_unavailable") or
+                  bool(boxes) != (state == "detected")):
+                report["invalid_state_samples"] += 1
+                continue
+            else:
+                report[state + "_samples"] += 1
+            reason = sample.get("reason")
+            if reason:
+                reasons = report["observation_reasons"]
+                reasons[reason] = reasons.get(reason, 0) + 1
+            index, decoded_t = sample.get("frame_index"), sample.get("decoded_t")
+            if (not isinstance(index, int) or isinstance(index, bool) or index < 0 or
+                    not isinstance(decoded_t, (int, float)) or isinstance(decoded_t, bool) or
+                    not math.isfinite(decoded_t) or decoded_t < 0 or
+                    sample.get("decoded_space") != "reencoded_window" or
+                    sample.get("address_basis") != "opencv_ffmpeg_metadata"):
+                report["address_unavailable_samples"] += 1
             for box in boxes:
                 mapped = evidence_map.map_box(box, proxy_w=pw, proxy_h=ph,
                     src_w=src_w, src_h=src_h, crop=crop)
