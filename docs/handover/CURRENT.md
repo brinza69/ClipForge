@@ -20,6 +20,11 @@ Lotul B1 al detectorului nou este verificat: adaptor și comparație pe cadre,
 cu 2.053 teste trecute și aceleași două erori TikTok cunoscute. Încă nu schimbă
 detectorul aplicației; urmează profilul pentru fețe mici și proba video.
 
+B2 este verificat (2.096 teste trecute, 2 TikTok excluse), dar proba Speed
+respinge înlocuirea directă: zoom excesiv și subtitrare peste față. Profilul
+nou rămâne opțional pentru probe; încadrarea trebuie separată de dimensiunea
+cutiei returnate de detector. Detaliile și fișierele sunt în handover-ul Clipper.
+
 ## Stare, 29 august 2026
 
 Reasoning v2 al Clipper-ului este implementat până la Batch 6 inclusiv, rulează în

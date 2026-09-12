@@ -1,4 +1,4 @@
-# Face detector B — B1 accepted, B2 probe pending
+# Face detector B — B1/B2 verified, direct live replacement rejected
 
 Codex supervises Claude Code. Batch A remains accepted at `2c64703`.
 This document records accepted B1 instrumentation and subsequent measurements.
@@ -36,8 +36,9 @@ in `review-03-20260912-193602-994316/`. Maximum-cardinality matching also agrees
 with independent exhaustive enumeration on 689 binary adjacency graphs.
 
 Full suite: 2053 passed, two known TikTok 404 failures, exit 1. The attempted
-forward-slash deselection did not match this Windows run's node IDs; those
-two tests actually ran. No new failure. All six code files are <=500 lines.
+deselection used the wrong `server/` prefix: pytest's root is `server`, and
+collection reports `tests/test_tiktok_transform.py::...`. Those two tests
+actually ran. No new failure. All six code files are <=500 lines.
 The read-only export inventory confirms 390/390 files unchanged.
 
 ## Frozen observations
@@ -118,10 +119,41 @@ Measured mean inference in this one sequential CPU run: Haar 94.3ms, YuNet
 Raw outputs, exhaustive one-to-one scores, and per-source figures:
 `data/claude-face-detection/batch-b/fresh-confirmation-v1.json`.
 
-## Next acceptance work
+## B2 verification and rendered counterexample
 
-Implement the
-explicit 2x/.75 candidate with provenance and correctly mapped coordinates,
-test it against the frozen raw native outputs, and inspect downstream framing
-before changing a live caller. Tracking/subject identity is not supplied by
-either detector. Existing corpus exports and stored sidecars stay untouched.
+Claude implemented the explicit profiles, optional injection through the existing
+sampler/window path and benchmark profile selection. Codex corrected an injected
+exception that erased the entire sample list, preserved preprocessing failure,
+recorded actual dimensions/raw model boxes, and removed fallback settings invented
+for test doubles. The default window call remains compatible with existing callers.
+Independent real-model coordinate checks pass 20 odd/non-square cases; the 20
+fresh benchmark rows match the previously frozen native API predictions.
+Artifacts: `b2-final-1958/` and `profile-oracle-20260912-195821-634599/` in the
+batch directory. Full suite: **2096 passed, 2 deselected**, exit 0 (138.03s).
+The exact exclusions are `tests/test_tiktok_transform.py::test_list_endpoint_ok`
+and `tests/test_tiktok_transform.py::test_create_rejects_invalid_url`.
+
+Actual integer output boxes give 27 TP/0 FP/6 FN at IoU .3; at .5 they give
+10/17/23. The earlier float-box result was 11/16/22: endpoint rounding moves
+one match on `two_people-3` across .5. This does not justify changing labels.
+
+The common renderer produced two Speed files for `d789060e273d`, in
+`data/claude-face-detection/batch-b/speed-probe-20260912-195851-910623/`:
+
+- Haar: 72 samples, 42 detected/30 empty, 45 proposed boxes, caption moved to .75.
+- Small-face YuNet: 72 detected samples, 102 proposed boxes; caption placement
+  returns `no_clear_position_in_observations` and retains .51.
+- Both are 1080x1920, 60fps, 17.9s with audio, fully decoded; v2 fingerprints
+  and output identities match. All 390 existing export files remain unchanged.
+- Nine shot intervals coincide. Renderer crop windows imply 1.28–1.455 times
+  greater magnification under YuNet. This is a geometry ratio, not a face-size
+  measurement. Decoded frames at 1, 3.5, 8 and 15s show the practical consequence:
+  text covers the face; at 8s the top of the head is cut. Saved side-by-side PNGs
+  show the two actual exports, not reconstructed plans.
+
+**B2's adapter/injection is accepted for probes. Replacing the live detector
+directly is rejected.** Smaller detected face widths drive tighter framing in
+`dynamic_cameras`; the caption rule then has no clear fixed position. The next
+product change must separate observed face boxes from framing geometry and verify
+caption placement on another rendered candidate. Neither detector supplies
+tracking/subject identity. The shipping worker still uses Haar.

@@ -21,7 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"))
 
 from services.clipper.face_yunet import (
-    MODEL_FILENAME, MODEL_SHA256, SCORE_THRESH, NMS_THRESH, TOP_K,
+    MODEL_FILENAME, MODEL_SHA256,
     STATE_EMPTY, STATE_UNAVAILABLE,
 )
 from benchmark_face_detectors import main, run_haar
@@ -184,7 +184,7 @@ def test_inference_unavailable_exits_nonzero_and_scores_null(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _UnavailYuNet()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _UnavailYuNet()):
             with pytest.raises(SystemExit) as exc:
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     assert exc.value.code != 0
@@ -252,7 +252,7 @@ def test_mixed_confirmed_uncertain_exits_two(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit) as exc:
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     assert exc.value.code == 2, "exit must be 2 when uncertain frames remain"
@@ -295,7 +295,7 @@ def test_f1_zero_not_null_when_denominator_nonzero(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit) as exc:
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     data = json.loads(out.read_text())
@@ -318,16 +318,17 @@ def test_yunet_model_identity_always_present_in_row(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit):
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     data = json.loads(out.read_text())
     yunet = data["results"][0]["yunet"]
     assert yunet["model_id"] == MODEL_FILENAME
     assert yunet["expected_model_hash"] == MODEL_SHA256
-    assert yunet["score_thresh"] == SCORE_THRESH
-    assert yunet["nms_thresh"] == NMS_THRESH
-    assert yunet["top_k"] == TOP_K
+    # This detector double never supplied settings; they are unknown.
+    assert yunet["score_thresh"] is None
+    assert yunet["nms_thresh"] is None
+    assert yunet["top_k"] is None
 
 
 def test_frame_identity_fields_preserved_in_result(tmp_path):
@@ -343,7 +344,7 @@ def test_frame_identity_fields_preserved_in_result(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit):
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     row = json.loads(out.read_text())["results"][0]

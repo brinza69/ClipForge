@@ -117,7 +117,8 @@ def detect_faces(grey: Any) -> list[list[int]]:
     return _merge_boxes(raw)
 
 
-def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
+def face_presence(proxy_path: str, times: list[float], *,
+                  detector: Any = None) -> list[dict[str, Any]]:
     """Face boxes at each requested timestamp, in PROXY pixel coordinates.
 
     Each entry carries:
@@ -142,6 +143,21 @@ def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
                          PTS — off by one frame (verified by pixel oracle on
                          this system).  None when the frame was not decoded,
                          or when the backend returns NaN/inf/negative.
+      ``detector_meta`` – (only when ``detector`` is supplied) full metadata
+                         dict from the injected detector's .detect() result,
+                         excluding state/reason/boxes which are promoted to the
+                         top-level entry.  Present even when state is
+                         detector_unavailable, so the caller can inspect profile,
+                         score_thresh, inference_ms, etc. alongside the decoded
+                         address.  Absent on decode-failure entries.
+
+    ``detector`` (keyword-only): if supplied, must duck-type ``.detect(BGR)``
+    and return a dict with at least ``state``, ``reason``, ``boxes``.  Haar
+    cascades are NOT loaded when a detector is provided.  Decoding failure
+    (STATE_UNREADABLE) remains distinct from inference failure
+    (STATE_UNAVAILABLE): an unavailable inference still carries the decoded
+    address (frame_index, decoded_t) when the frame was successfully read.
+    YuNet must not depend on Haar cascades and does not fall back to them.
 
     Addresses are FFMPEG backend reports, with conventions verified by real
     decoded-pixel tests. Other backends have no verified address convention
@@ -169,7 +185,7 @@ def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
     if not proxy_path or not Path(proxy_path).exists():
         logger.warning("face_presence: missing proxy %s", proxy_path)
         return [failed(t, STATE_UNREADABLE, "file_missing") for t in stamps]
-    if not face_cascades():
+    if detector is None and not face_cascades():
         return [failed(t, STATE_UNAVAILABLE, "cascades_unavailable") for t in stamps]
 
     out: list[dict[str, Any]] = []
@@ -216,17 +232,39 @@ def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
             decoded_t = (round(raw_msec / 1000.0, 6)
                          if backend == "FFMPEG" and math.isfinite(raw_msec)
                          and raw_msec >= 0 else None)
-            reason = None
-            try:
-                grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                boxes = detect_faces(grey)
-                state = STATE_DETECTED if boxes else STATE_EMPTY
-            except cv2.error:
-                boxes, state, reason = [], STATE_UNAVAILABLE, "detection_error"
-            out.append({"t": round(t, 3), "boxes": boxes, "state": state,
-                        "reason": reason, "frame_index": pre_idx, "decoded_t": decoded_t,
-                        "clock": "analysed_file_requested", "decoded_space": "analysed_file",
-                        "address_basis": "opencv_ffmpeg_metadata" if backend == "FFMPEG" else None})
+            if detector is not None:
+                try:
+                    det_result = detector.detect(frame)
+                    if det_result["state"] not in (STATE_DETECTED, STATE_EMPTY, STATE_UNAVAILABLE):
+                        raise ValueError("invalid detector state")
+                except Exception as exc:
+                    det_result = {"state": STATE_UNAVAILABLE, "reason": "detection_error",
+                                  "boxes": [], "detail": str(exc)}
+                boxes = det_result.get("boxes", [])
+                state = det_result["state"]
+                reason = det_result.get("reason")
+                # Preserve full detector metadata alongside the decoded address.
+                # Excludes state/reason/boxes which are already at top level.
+                detector_meta: dict[str, Any] | None = {
+                    k: v for k, v in det_result.items()
+                    if k not in ("state", "reason", "boxes")}
+            else:
+                reason = None
+                detector_meta = None
+                try:
+                    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    boxes = detect_faces(grey)
+                    state = STATE_DETECTED if boxes else STATE_EMPTY
+                except cv2.error:
+                    boxes, state, reason = [], STATE_UNAVAILABLE, "detection_error"
+            entry: dict[str, Any] = {
+                "t": round(t, 3), "boxes": boxes, "state": state,
+                "reason": reason, "frame_index": pre_idx, "decoded_t": decoded_t,
+                "clock": "analysed_file_requested", "decoded_space": "analysed_file",
+                "address_basis": "opencv_ffmpeg_metadata" if backend == "FFMPEG" else None}
+            if detector_meta is not None:
+                entry["detector_meta"] = detector_meta
+            out.append(entry)
     finally:
         cap.release()
     return out

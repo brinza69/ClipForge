@@ -117,7 +117,7 @@ def test_inferred_scored_paired_scored_counts(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit) as exc:
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     assert exc.value.code == 2
@@ -143,7 +143,7 @@ def test_yunet_unavailable_counts_not_paired(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _UnavailYuNet()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _UnavailYuNet()):
             with pytest.raises(SystemExit) as exc:
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     assert exc.value.code == 1
@@ -169,7 +169,7 @@ def test_by_source_includes_counts(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit):
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     data = json.loads(out.read_text())
@@ -193,7 +193,7 @@ def test_gt_count_set_for_confirmed_frame(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit):
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     row = json.loads(out.read_text())["results"][0]
@@ -227,7 +227,7 @@ def test_gt_count_null_for_uncertain(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit):
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     row = json.loads(out.read_text())["results"][0]
@@ -251,7 +251,7 @@ def test_unknown_gt_frames_counted(tmp_path):
     from services.clipper import face_detector
     with patch.object(face_detector, "_FACE_CASCADES",
                       [_MockCascade(), _MockCascade()]):
-        with patch.object(bench, "YuNetDetector", lambda _: _NoopDetector()):
+        with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit):
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
     counts = json.loads(out.read_text())["counts"]

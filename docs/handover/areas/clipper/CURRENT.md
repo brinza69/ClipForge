@@ -5,15 +5,23 @@
 Codex a verificat lotul B1 implementat cu Claude Code (adaptor YuNet și comparație
 pe cadre), inclusiv corecțiile raportării și probele independente prin main().
 Suita completă: 2.053 teste trecute, aceleași două eșecuri TikTok 404 cunoscute
-(excluderea cu separator `/` nu a selectat nodurile Windows, deci au rulat).
+(excluderea a folosit prefixul `server/`, dar nodurile pornesc din `tests/`,
+conform colectării pytest; deci cele două teste au rulat).
 Predicțiile pe 40 de cadre coincid cu apelurile OpenCV salvate independent;
 raportul păstrează un cadru incert, exit 2. Cele 390 de fișiere din exports sunt
 neschimbate față de inventarul de la începutul acestui lot.
 Detectorul din aplicație rămâne cel din lotul A.
 Probe vizuale înghețate: 40 de cadre inițiale și 20 de confirmare la alte momente.
 [Rezultatele și limitele lotului B](../../../refs/clipper-face-detector-b-2026-09-12.md).
-Urmează B2: profilul explicit 2x/.75, pe aceeași cale de eșantionare, apoi probă
-Speed separată. PRP-ul B2 permite probe, nu activarea implicită în aplicație.
+B1 este comis la `30e4247`. B2 este verificat: profil explicit 2x/.75 și aceeași
+cale de eșantionare; 2.096 teste trecute, cele două TikTok excluse corect.
+Proba Speed a respins ACTIVAREA DIRECTĂ: 72/72 observații cu fețe, dar zoom
+mai mare și text peste față. La 8s este tăiat și capul. Ambele MP4 se decodează
+integral; 390/390 fișiere existente sunt intacte. Probele sunt în
+`data/claude-face-detection/batch-b/speed-probe-20260912-195851-910623/`.
+Următoarea corecție de produs separă geometria încadrării de cutia detectorului;
+nu se activează YuNet implicit pe baza numărului de detecții. Claude B2 a încheiat
+fără epuizarea cotei (sesiunea `40f2f95e-4773-434d-bc5b-7abb4dce09c9`).
 
 Ordinea cerută de utilizator: se termină întâi partea de detecție începută,
 folosind Claude Code; apoi se analizează modelul de montaj pentru live-ul xQc:

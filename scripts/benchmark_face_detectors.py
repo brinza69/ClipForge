@@ -34,7 +34,8 @@ sys.path.insert(0, str(_ROOT / "server"))
 from services.clipper.face_detector import detect_faces, face_cascades  # noqa: E402
 from services.clipper.face_yunet import (                                 # noqa: E402
     YuNetDetector,
-    MODEL_FILENAME, MODEL_SHA256, SCORE_THRESH, NMS_THRESH, TOP_K,
+    MODEL_FILENAME, MODEL_SHA256,
+    PROFILES,
 )
 from benchmark_report import aggregate, aggregate_by_source, frame_counts, write_stub  # noqa: E402
 
@@ -305,14 +306,21 @@ def process_frame(frame: dict, yunet: YuNetDetector, *, row_index: int = -1) -> 
         "boxes": yn["boxes"], "scores_per_box": yn.get("scores", []),
         "inference_ms": yn.get("inference_ms"),
         "scores": yunet_scores,
-        # Model identity from constants — always present regardless of mock state.
+        # Model identity — always present regardless of mock state.
         "model_id": MODEL_FILENAME,
         "expected_model_hash": MODEL_SHA256,
         "model_hash": getattr(yunet, "_measured_hash", yn.get("model_hash")),
         "hash_verified": (getattr(yunet, "_measured_hash", None) == MODEL_SHA256),
-        "score_thresh": SCORE_THRESH,
-        "nms_thresh": NMS_THRESH,
-        "top_k": TOP_K,
+        # Missing observed settings stay unknown, including in test doubles.
+        "profile": yn.get("profile"),
+        "score_thresh": yn.get("score_thresh"),
+        "nms_thresh": yn.get("nms_thresh"),
+        "top_k": yn.get("top_k"),
+        "scale": yn.get("scale"),
+        "input_size": yn.get("input_size"),
+        "model_input_size": yn.get("model_input_size"),
+        "interpolation": yn.get("interpolation"),
+        "raw_boxes_model_space": yn.get("raw_boxes_model_space"),
     }
     if yn["state"] == _STATE_UNAVAIL:
         yunet_row["unscored_reason"] = yn.get("reason") or _STATE_UNAVAIL
@@ -348,6 +356,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", required=True, help="output JSON path")
     ap.add_argument("--split", choices=["dev", "holdout"],
                     help="filter to one split")
+    ap.add_argument("--profile", choices=list(PROFILES), default="native_v1",
+                    help="YuNet detector profile (default: native_v1)")
     args = ap.parse_args(argv)
 
     exit_code = 0
@@ -408,7 +418,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
 
     # Initialise YuNet (failure reported as error; processing continues).
-    yunet = YuNetDetector(args.model)
+    yunet = YuNetDetector(args.model, profile=args.profile)
     if yunet.init_error:
         reason, detail = yunet.init_error
         fail(f"YuNet init failed: {reason}: {detail}")

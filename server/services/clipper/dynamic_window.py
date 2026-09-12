@@ -219,7 +219,7 @@ def ui_panels(window: Path | str, src_w: int, src_h: int,
 
 def analyse_window(proxy: Path | str, start: float, duration: float,
                    band: tuple[float, float, float, float] | None,
-                   src_w: int) -> dict[str, Any]:
+                   src_w: int, *, detector: Any = None) -> dict[str, Any]:
     """Everything `plan_dynamic_edit` needs for one candidate.
 
     Returns `{"faces", "motion", "focus", "detail", "ui", "band", "hop"}`.
@@ -243,7 +243,8 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
             check=True, capture_output=True, timeout=_CUT_TIMEOUT_S)
 
         times = [i * FACE_HOP_S for i in range(int(duration / FACE_HOP_S) + 1)]
-        samples = face_presence(str(window), times)
+        samples = (face_presence(str(window), times) if detector is None else
+                   face_presence(str(window), times, detector=detector))
         # Pass through state metadata; frame_index and decoded_t name positions
         # in window.mp4, not the original source — adding start does not certify
         # a source timestamp because the re-encode shifts the clock.
