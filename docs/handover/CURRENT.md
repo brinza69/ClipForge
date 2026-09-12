@@ -25,6 +25,11 @@ respinge înlocuirea directă: zoom excesiv și subtitrare peste față. Profilu
 nou rămâne opțional pentru probe; încadrarea trebuie separată de dimensiunea
 cutiei returnate de detector. Detaliile și fișierele sunt în handover-ul Clipper.
 
+La 13 septembrie, Claude a accesat doar metadatele și miniatura referinței xQc.
+Codex a respins deducerea unei specificații de montaj din miniatură; analiza
+temporală și audio așteaptă acces la video-ul efectiv. Starea este în handover-ul
+Clipper de mai sus; nu s-a implementat un tratament nou din această referință.
+
 ## Stare, 29 august 2026
 
 Reasoning v2 al Clipper-ului este implementat până la Batch 6 inclusiv, rulează în

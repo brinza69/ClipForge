@@ -1,5 +1,20 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 13 septembrie 2026 — acces la referința de montaj xQc
+
+La cererea utilizatorului, Claude Code a încercat accesul public la referința
+`T1jsllUvrHA`. A obținut metadate și miniaturi, dar nu a vizionat video-ul și nu
+a ascultat sunetul. Codex a inspectat aceeași miniatură: material sus, reacție
+jos, text alb în imaginea de sus. Acestea sunt observații despre miniatură;
+nu stabilesc tăieturile, proporțiile exportului sau un tratament de randare.
+Codex a respins specificația dedusă de Claude din ea, inclusiv presupusa cerință
+de a păstra barele browserului. Claude a corectat raportul, verificat de Codex:
+`data/claude-xqc-reference/RESULT.md`; originalul respins este păstrat separat.
+Nu există un proiect local pentru URL-ul exact
+(căutare în DB doar în citire). Analiza montajului așteaptă acces la video-ul
+efectiv. Controlul Chrome a fost oprit de instrument din cauza imposibilității
+de a verifica URL-ul; nu se ocolește această restricție.
+
 ## Actualizare 12 septembrie 2026 — B1 verificat, detector nou încă neactivat
 
 Codex a verificat lotul B1 implementat cu Claude Code (adaptor YuNet și comparație
@@ -26,7 +41,8 @@ fără epuizarea cotei (sesiunea `40f2f95e-4773-434d-bc5b-7abb4dce09c9`).
 Ordinea cerută de utilizator: se termină întâi partea de detecție începută,
 folosind Claude Code; apoi se analizează modelul de montaj pentru live-ul xQc:
 https://youtube.com/shorts/T1jsllUvrHA?is=Xfai9xR99IRBuIN-
-Referința nu a fost încă analizată. La epuizarea cotei Claude se salvează
+Starea accesului la referință este în actualizarea din 13 septembrie de mai sus.
+La epuizarea cotei Claude se salvează
 progresul și se așteaptă reluarea explicită a utilizatorului; fără reluare programată.
 
 ## Actualizare 12 septembrie 2026 — lot A de observații închis
