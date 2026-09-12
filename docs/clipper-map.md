@@ -66,6 +66,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `ingest.py` | download or copy the source, build the 480p proxy, extract audio, sample frames |
 | `signals.py` | Pass A: per-hop loudness, peaks, silence, speech, motion, scene cuts, faces |
 | `face_detector.py` | shared Haar detector (re-exported by signals); sampled read/detection states, failure reasons, decoded index/PTS distinct from requested time. No detector threshold change. |
+| `face_yunet.py` | Batch B1: independent YuNet adapter (`cv2.FaceDetectorYN`, pinned to `face_detection_yunet_2023mar.onnx`). Each `YuNetDetector` instance owns its mutable backend. Verifies model size + SHA-256 on init; returns detected/empty/detector_unavailable with per-box scores, model_id/hash and inference time. Non-finite or degenerate-after-clamp box → unavailable, never empty. Not wired into the pipeline yet. |
 | `storage.py` | the ONE place that knows artifact paths and names. Adding an artifact means adding it here |
 | `urlguard.py` | URL policy check before anything is fetched |
 | `series.py` | scaling a measured series onto 0..1, ONCE. `dynamic_edit` and `dynamic_regimes` scale different populations — per-shot means against per-sample values — and that difference is deliberate; the arithmetic under it is shared, because a duplicated helper is one edit away from being a second rule. Returns whether the series had any spread, since a flat one lands at 0.5 and 0.5 sits under a default cut-off of 0.6 |
@@ -269,6 +270,8 @@ operations). Split to stay under the 500-line limit.
 | `scripts/prune_clipper.py` | reclaim disk from finished projects. Dry-run by default; never touches exports or analysis |
 | `scripts/score_contribution.py` | weight x sd per sub-score — which one actually orders the board. Found dead features twice, three sessions apart |
 | `scripts/score_content_type.py` | the content classifier scored against `source-labels.md` — 6/11 |
+| `scripts/benchmark_face_detectors.py` | Batch B1: compare Haar and YuNet on a labelled PNG manifest (`clipper_face_benchmark_v1`). CLI: `--manifest --model --out [--split dev|holdout]`. Hash-verifies every image; maximum-cardinality box matching (not greedy) at IoU 0.3 and 0.5; per-frame, per-source and pooled TP/FP/FN with latency stats. Nonzero exit on any error — empty manifest, unannotated frame, hash/dimension mismatch, missing model, failed inference, invalid field types. Counts: `*_inferred` (detector ran), `*_scored` (confirmed+validated GT), `paired_scored`, `unknown_gt_frames`. `gt_count` null for refused/uncertain. Uncertain frames run through both detectors; GT scoring skipped. Error frames stay in the denominator. No winner label. Aggregation helpers imported from `benchmark_report.py`. |
+| `scripts/benchmark_report.py` | Batch B1: aggregation and reporting helpers split from `benchmark_face_detectors.py` to keep both under 500 lines. `aggregate()` — two-pass TP/FP/FN with `inferred`/`scored`/`unavailable`/`errors`/`unscored_gt_faces`/`uncertain_gt_proposals`; counts uncertain-frame errors independently before the `continue`. `aggregate_by_source()` — per-source dict including `counts` (same keys as global). `frame_counts()` — `*_inferred`/`*_scored`/`*_unavailable`/`paired_scored`/`unknown_gt_frames`. `write_stub()` — minimal JSON on early exit. |
 | `scripts/facecam_dataset.py` | 68 labelled candidate rects + what each feature separates |
 | `scripts/facecam_train.py` | the classifier that lost to `corner_proximity`, leave-one-source-out |
 | `scripts/measure_inset_border.py` | border coverage and persistence per candidate rect — the measurement that showed two facecams have no border at all |
@@ -304,6 +307,9 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_caption_clock.py` (decoded caption timing and per-word clock) · `test_clipper_editor_frame.py` (API edits, PNG versus MP4, suppression, stale exports, frame-index selection) ·
 `test_clipper_caption_faces.py` (local crop/time mapping, conservative refusals, real burned pixels and manual/suppression controls) ·
 `test_clipper_face_detector.py` (read states, invalid addresses, actual decoded-pixel clock oracle and one-frame mutation checks) ·
+`test_face_yunet.py` (B1: adapter state failures, box clamping/invalidity, model identity, maximum-cardinality matching with greedy counterexample) ·
+`test_benchmark_detectors.py` (B1: benchmark exit codes, annotation/GT validation, cascade availability, uncertain-frame handling, refused-frame accounting, F1 edge case, model identity in rows) ·
+`test_benchmark_report_contract.py` (B1 report contract: inferred/scored/paired_scored counts, known GT subtotal and unknown frames, gt_count field, uncertain-frame errors/unavailability in aggregate, field type validation) ·
 `test_clipper_face_observation_flow.py` (real window extraction through render planning to caption counters; decoded-window clock, legacy uncertainty, EOF and terminal sample exclusion) ·
 `test_clipper_ranker.py` · `test_clipper_render.py` · `test_clipper_signals.py` ·
 `test_clipper_storage.py` · `test_clipper_captions.py` · `test_clipper_api.py` ·

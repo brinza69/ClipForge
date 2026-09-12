@@ -1,5 +1,26 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 12 septembrie 2026 — B1 verificat, detector nou încă neactivat
+
+Codex a verificat lotul B1 implementat cu Claude Code (adaptor YuNet și comparație
+pe cadre), inclusiv corecțiile raportării și probele independente prin main().
+Suita completă: 2.053 teste trecute, aceleași două eșecuri TikTok 404 cunoscute
+(excluderea cu separator `/` nu a selectat nodurile Windows, deci au rulat).
+Predicțiile pe 40 de cadre coincid cu apelurile OpenCV salvate independent;
+raportul păstrează un cadru incert, exit 2. Cele 390 de fișiere din exports sunt
+neschimbate față de inventarul de la începutul acestui lot.
+Detectorul din aplicație rămâne cel din lotul A.
+Probe vizuale înghețate: 40 de cadre inițiale și 20 de confirmare la alte momente.
+[Rezultatele și limitele lotului B](../../../refs/clipper-face-detector-b-2026-09-12.md).
+Urmează B2: profilul explicit 2x/.75, pe aceeași cale de eșantionare, apoi probă
+Speed separată. PRP-ul B2 permite probe, nu activarea implicită în aplicație.
+
+Ordinea cerută de utilizator: se termină întâi partea de detecție începută,
+folosind Claude Code; apoi se analizează modelul de montaj pentru live-ul xQc:
+https://youtube.com/shorts/T1jsllUvrHA?is=Xfai9xR99IRBuIN-
+Referința nu a fost încă analizată. La epuizarea cotei Claude se salvează
+progresul și se așteaptă reluarea explicită a utilizatorului; fără reluare programată.
+
 ## Actualizare 12 septembrie 2026 — lot A de observații închis
 
 Codex a terminat corecțiile începute de Claude: stări distincte pentru citire și
