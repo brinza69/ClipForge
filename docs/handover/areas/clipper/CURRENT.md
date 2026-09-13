@@ -1,5 +1,24 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 13 septembrie 2026 — sursa locală și trei probe reale
+
+Sursa indicată de utilizator în `2c8af11153a3/source/source.mp4` a fost citită.
+Claude Code a pregătit probele, iar Codex a verificat trei exporturi reale de
+12 secunde prin calea comună. Cropul îngust taie „Boogah” și numeralul;
+varianta largă le păstrează la 8,5 s, dar aduce browserul în imagine. Toate se
+decodează, au sidecar v2 verificat și lasă 390/390 fișiere de export intacte.
+[Probe, corecții și limite](../../../refs/clipper-reaction-local-2026-09-13.md).
+Fit-ul explicit din `PRPs/clipper-reaction-panel-fit.md` este acum implementat
+și randat: `data/claude-xqc-reference/panel_fit_20260913_214419_372541/reaction_content_fit.mp4`.
+24 cadre noi inspectate: fără barele browserului, „Boogah”/numeral păstrate;
+rămân pierderea fâșiei stângi și costul blurului. Audio codat identic cu C.
+2.138 teste trecute, 2 TikTok excluse; 210 filtre legacy identice cu `bb99f81`.
+Versiune statică `render_static_split_v3_reaction_fit`; modurile existente
+păstrează geometria. Nu este încă o opțiune automată activată în aplicație.
+Urmează legarea observațiilor locale și a intervalelor potrivite la exportul
+obișnuit, nu aplicarea acelorași dreptunghiuri întregului live.
+Nu s-a identificat episodul din Short și nu s-a ascultat audio-ul referinței.
+
 ## Actualizare 13 septembrie 2026 — acces la referința de montaj xQc
 
 La cererea utilizatorului, Claude Code a încercat accesul public la referința

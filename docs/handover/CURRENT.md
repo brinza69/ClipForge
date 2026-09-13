@@ -30,6 +30,13 @@ Codex a respins deducerea unei specificații de montaj din miniatură; analiza
 temporală și audio așteaptă acces la video-ul efectiv. Starea este în handover-ul
 Clipper de mai sus; nu s-a implementat un tratament nou din această referință.
 
+Sursa locală indicată apoi de utilizator a produs trei probe de 12 secunde:
+cropul îngust taie text, cel larg aduce browserul în cadru. Codex a verificat
+MP4-urile și păstrarea celor 390 de fișiere existente. Fit-ul explicit a produs
+apoi un MP4 fără barele browserului, verificat pe 24 cadre noi; 2.138 teste trec,
+2 TikTok excluse. Rămâne experimental, cu pierderea laterală declarată și fără
+activare automată în interfață; probele și limitele sunt în handover-ul Clipper.
+
 ## Stare, 29 august 2026
 
 Reasoning v2 al Clipper-ului este implementat până la Batch 6 inclusiv, rulează în

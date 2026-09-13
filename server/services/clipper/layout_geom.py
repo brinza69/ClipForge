@@ -178,9 +178,60 @@ def _pip_box(face_rect: Any, face_pct: float, out_w: int, out_h: int) -> dict[st
     ph = min(ph, max(MIN_LANE, even(out_h - top - margin)))
     return _mk(margin, top, pw, ph)
 
+
+def _game_fit_box(
+    game_rect: dict, out_w: int, game_band_h: int
+) -> tuple[int, int, int, int]:
+    """Proportionally fit game_rect inside out_w × game_band_h.
+
+    Returns (fg_w, fg_h, off_x, off_y) — all even integers. The shared even()
+    first rounds to an integer then rounds odd values down, so dimensions can
+    differ from ideal proportional scaling by up to 1.5 output pixels.
+    """
+    gr_w = int((game_rect or {}).get("w") or 0)
+    gr_h = int((game_rect or {}).get("h") or 0)
+    if gr_w <= 0 or gr_h <= 0 or game_band_h <= 0 or out_w <= 0:
+        return out_w, game_band_h, 0, 0
+    # Avoid floating-point ratio comparison: multiply through.
+    if gr_w * game_band_h >= gr_h * out_w:  # game aspect >= band aspect → width binds
+        fg_w = out_w
+        fg_h = max(2, even(out_w * gr_h / gr_w))
+    else:                                     # game aspect < band aspect → height binds
+        fg_h = game_band_h
+        fg_w = max(2, even(game_band_h * gr_w / gr_h))
+    off_x = even((out_w - fg_w) // 2)
+    off_y = even((game_band_h - fg_h) // 2)
+    return fg_w, fg_h, off_x, off_y
+
+
+def _game_fit_lane(
+    game_rect: dict, out_w: int, band_h: int,
+    fg_w: int, fg_h: int, off_x: int, off_y: int,
+    label: str,
+) -> str:
+    """Fit game_rect proportionally over a blurred fill, ending in [label].
+
+    Background: game_rect scaled to fill the band (scale-to-fill then crop),
+    blurred. Foreground: game_rect scaled to the computed even dimensions.
+    No content outside game_rect enters either layer.
+    """
+    c = f"crop={game_rect['w']}:{game_rect['h']}:{game_rect['x']}:{game_rect['y']}"
+    # Chroma planes (yuv420p) are half the luma size; conservative bound is
+    # min(out_w, band_h)//4 so the radius is valid for both planes.
+    blur_r = min(20, max(1, min(out_w, band_h) // 4))
+    bg = (
+        f"[0:v]{c},scale={out_w}:{band_h}"
+        f":force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop={out_w}:{band_h},boxblur={blur_r}:3,setsar=1[{label}_bg]"
+    )
+    fg = f"[0:v]{c},scale={fg_w}:{fg_h}:flags=lanczos,setsar=1[{label}_fg]"
+    ov = f"[{label}_bg][{label}_fg]overlay={off_x}:{off_y}[{label}]"
+    return f"{bg};{fg};{ov}"
+
 def _safe_zones(layout: str, face_rect: dict | None, game_rect: dict | None,
                 chat: dict | None, hud: Sequence[dict], face_pct: float,
-                subjects: Sequence[dict] = ()) -> dict:
+                subjects: Sequence[dict] = (),
+                game_content_fit: bool = False) -> dict:
     """Caption keep-out geometry in OUTPUT (1080x1920) coords.
 
     `lane` is where game_rect lands on the canvas — chat and HUD live in the
@@ -194,6 +245,11 @@ def _safe_zones(layout: str, face_rect: dict | None, game_rect: dict | None,
         game_y = band_h if layout == "face_top_game_bottom" else 0
         keep.append({**_mk(0, face_y, OUT_W, band_h), "kind": "face"})
         lane = _mk(0, game_y, OUT_W, rest_h)
+        # game_content_fit: chat/HUD project through the fitted foreground box,
+        # not the full band. Face keep-out remains conservative (full band).
+        if game_content_fit and layout == "game_top_face_bottom" and isinstance(game_rect, dict):
+            fg_w, fg_h, off_x, off_y = _game_fit_box(game_rect, OUT_W, rest_h)
+            lane = _mk(off_x, game_y + off_y, fg_w, fg_h)
     elif layout == "pip":
         keep.append({**_pip_box(face_rect, face_pct, OUT_W, OUT_H), "kind": "face"})
         lane = _mk(0, 0, OUT_W, OUT_H)
@@ -273,6 +329,39 @@ def build_filtergraph(plan: dict, out_w: int = OUT_W, out_h: int = OUT_H) -> str
     layout = str(plan.get("layout") or "fullscreen_crop")
     face, game = plan.get("face_rect"), plan.get("game_rect")
     face_pct = min(FACE_PCT_MAX, max(FACE_PCT_MIN, _num(plan.get("face_pct"), 0.35)))
+    game_content_fit = plan.get("game_content_fit")
+    if game_content_fit is not None and not isinstance(game_content_fit, bool):
+        raise ValueError(
+            f"game_content_fit must be bool or absent, got "
+            f"{type(game_content_fit).__name__}"
+        )
+    if game_content_fit:
+        if layout not in ("game_top_face_bottom",):
+            raise ValueError(
+                f"game_content_fit=True is only supported for game_top_face_bottom, "
+                f"not {layout!r}"
+            )
+        # An enabled explicit reaction mode must not fall through to the legacy
+        # fullscreen path. Refuse missing or malformed rects here, before the
+        # isinstance guard below would silently drop them.
+        if not isinstance(game, dict) or not isinstance(face, dict):
+            raise ValueError(
+                "game_content_fit=True requires game_rect and face_rect as dicts; "
+                f"got game_rect={type(game).__name__}, face_rect={type(face).__name__}"
+            )
+        for name, rect in (("game_rect", game), ("face_rect", face)):
+            values = [rect.get(k) for k in ("x", "y", "w", "h")]
+            if (any(type(v) is not int or v % 2 for v in values)
+                    or any(v < 0 for v in values[:2])
+                    or any(v < 2 for v in values[2:])):
+                raise ValueError(f"game_content_fit requires a valid even {name}")
+            # Builder plans carry their coordinate space. Refuse a subsequently
+            # edited out-of-bounds crop rather than ffmpeg silently clamping it.
+            sw, sh = plan.get("src_w"), plan.get("src_h")
+            if (sw is not None or sh is not None) and (
+                    type(sw) is not int or type(sh) is not int
+                    or rect["x"] + rect["w"] > sw or rect["y"] + rect["h"] > sh):
+                raise ValueError(f"game_content_fit {name} is outside its source")
 
     if layout in _STACKED and isinstance(face, dict) and isinstance(game, dict):
         band_h, rest_h = _bands(face_pct, out_h)
@@ -283,7 +372,11 @@ def build_filtergraph(plan: dict, out_w: int = OUT_W, out_h: int = OUT_H) -> str
             top = _lane(face, out_w, band_h, "top", sharpen=True)
             bot = _lane(game, out_w, rest_h, "bot")
         else:
-            top = _lane(game, out_w, rest_h, "top")
+            if game_content_fit:
+                fg_w, fg_h, off_x, off_y = _game_fit_box(game, out_w, rest_h)
+                top = _game_fit_lane(game, out_w, rest_h, fg_w, fg_h, off_x, off_y, "top")
+            else:
+                top = _lane(game, out_w, rest_h, "top")
             bot = _lane(face, out_w, band_h, "bot", sharpen=True)
         return f"{top};{bot};[top][bot]vstack=inputs=2[v]"
 

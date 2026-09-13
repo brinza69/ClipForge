@@ -27,6 +27,7 @@ five files that do not exist.
 | ground truth for the detectors — what each source actually is | `source-labels.md` |
 | how to run the pipeline by hand | `ai-stream-clipper-runbook.md` |
 | the measured recipe behind the multi-shot edit | `dynamic-edit-recipe.md` |
+| local reaction-source probes, what was decoded and what remains unverified | `refs/clipper-reaction-local-2026-09-13.md` |
 | what is already on disk and can be skipped | `../data/clipper/MANIFEST.md` |
 
 Older handoffs are history, superseded but not wrong about the code they
@@ -137,6 +138,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `segment_type.py` | content type per stretch rather than per file, and the signal slicing that allows it. `verdict_at` returns the type WITH its confidence and provenance — `type_at` throws the confidence away, which was fine until an edit profile needed to tell a measured verdict from a fallback |
 | `layout.py` | plan one 9:16 frame: which layout, which rects, which safe zones |
 | `layout_geom.py` | the rect arithmetic behind it |
+| `reaction_layout.py` | explicit experimental source-above/reaction-below plan from caller-supplied source rectangles; fits content over blurred fill. First consumer is the local media probe, not automatic VOD planning; see `../PRPs/clipper-reaction-panel-fit.md` |
 
 ### Rendering
 
@@ -292,6 +294,7 @@ One file per area, all pure — no ffmpeg, no network, no live model. The suite
 runs against a throwaway data directory (see `tests/conftest.py`).
 
 `test_clipper_analysis.py` (candidates, scoring, dedupe, layout) ·
+`test_clipper_reaction_layout.py` (explicit content fit, bounds refusals, HUD mapping, common export sidecar and decoded edge/shape markers) ·
 `test_clipper_story.py` (story engine, promises, callbacks) ·
 `test_clipper_atoms.py` · `test_clipper_threads.py` · `test_clipper_episodes.py` ·
 `test_clipper_dead_air.py` · `test_clipper_segment_type.py` ·
