@@ -4,6 +4,15 @@
 **Data hărții:** 3 septembrie 2026.
 **TikTok:** exclus din această hartă, conform cerinței proiectului.
 
+## Actualizare Clipper, 19 septembrie 2026
+
+Editorul are selecție manuală a celor două regiuni pentru clipuri de reacție,
+folosită de previzualizarea și exportul obișnuit, cu refuzul încadrării învechite.
+Proba reală prin API/export este identică cu D; 390 de fișiere existente intacte.
+Alegerea automată a regiunilor și evitarea scrisului din material de către captions
+nu sunt rezolvate de acest lot. Rezultatele și limitele sunt în
+[handover-ul Clipper](areas/clipper/CURRENT.md).
+
 ## Actualizare Clipper, 11 septembrie 2026
 
 Randarea comună, sincronizarea captions/editor și evitarea automată a fețelor

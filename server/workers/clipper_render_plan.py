@@ -127,6 +127,19 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
     src_w = int(project.width or 1920)
     src_h = int(project.height or 1080)
     if clip.layout_plan:
+        # An explicit reaction layout has its own validation path. A bound plan
+        # that fails (stale source, expanded window, wrong dims) raises rather
+        # than falling back — a silent crop substitution is worse than an error.
+        if clip.layout_plan.get("game_content_fit") is True:
+            from services.clipper.reaction_edit import validate_binding
+            validate_binding(
+                clip.layout_plan,
+                _source_path(project),
+                src_w, src_h,
+                float(clip.start_time or 0.0),
+                float(clip.end_time or 0.0),
+            )
+            return clip.layout_plan
         if _plan_fits(clip.layout_plan, src_w, src_h):
             return clip.layout_plan
         logger.warning(
@@ -378,8 +391,11 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     layout_decision = layout_policy.decide(
         cfg.get(layout_policy.SETTING), by=cfg.get("layout_decided_by"))
 
+    # An explicit per-clip reaction layout overrides dynamic planning, even when
+    # the project has dynamic_edit=True. The user's crop selection IS the edit.
+    _reaction_fit = isinstance(plan, dict) and plan.get("game_content_fit") is True
     dyn = None
-    if bool(cfg.get("dynamic_edit", settings.clipper_dynamic_edit)):
+    if not _reaction_fit and bool(cfg.get("dynamic_edit", settings.clipper_dynamic_edit)):
         await stage(0.10, "Planning the shot list")
         try:
             dyn = await _dynamic_plan(
@@ -398,6 +414,15 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     # caption position the render did not use — it would go on reporting a
     # caption it had already caused to move.
     caption_y = _caption_y(clip, dyn)
+    # For a reaction layout, dyn=None means _caption_y returns None and
+    # _caption_faces skips the static face keep-out (it requires shots). We
+    # explicitly resolve from the plan's safe_zones so the reaction band is
+    # kept clear even after a /regenerate that resets the stored y_pct.
+    if _reaction_fit and caption_y is None:
+        _cp = clip.caption_plan if isinstance(clip.caption_plan, dict) else None
+        if _cp and not _cp.get("y_pct_manual"):
+            from services.clipper.captions import resolve_position
+            _, caption_y = resolve_position(str(_cp.get("position") or "bottom"), plan)
     # Resolved on every render, applied on none of them yet. In
     # `content_aware_shadow` this is the whole of R2: the profile becomes
     # observable beside every export while the delivered plan stays exactly what

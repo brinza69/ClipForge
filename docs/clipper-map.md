@@ -139,6 +139,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `layout.py` | plan one 9:16 frame: which layout, which rects, which safe zones |
 | `layout_geom.py` | the rect arithmetic behind it |
 | `reaction_layout.py` | explicit experimental source-above/reaction-below plan from caller-supplied source rectangles; fits content over blurred fill. First consumer is the local media probe, not automatic VOD planning; see `../PRPs/clipper-reaction-panel-fit.md` |
+| `reaction_edit.py` | binding of a manually selected reaction layout to source version/dimensions and clip interval; rejects stale or malformed edits in the ordinary worker |
 
 ### Rendering
 
@@ -232,6 +233,8 @@ Not clipper: `remix_pipeline.py`, `parallel_pipeline.py`, `doodle_pipeline.py`,
 
 `clipper.py` (projects, settings, artifacts) and `clipper_clips.py` (clip-level
 operations). Split to stay under the 500-line limit.
+`clipper_reaction.py` adds source-frame reading and save/clear of per-clip reaction
+regions; it shares the ordinary layout, caption and export paths.
 
 ## Frontend
 
@@ -250,6 +253,9 @@ operations). Split to stay under the 500-line limit.
 | `src/components/clipper/candidate-grid.tsx` | the board: sort, filter, bulk actions |
 | `src/components/clipper/candidate-card.tsx` | one clip, with its actions |
 | `src/components/clipper/clip-editor.tsx` | trim, headline, caption preset and height, over a server-rendered still |
+| `src/components/clipper/reaction-framing.tsx` | manual content/reaction selection on source frames, interval-bound save, and return to automatic framing |
+| `src/components/clipper/reaction-selection.ts` | original-pixel rectangle quantization, reaction aspect lock and source-frame metadata validation; `reaction-selection.test.mjs` runs via Node's test runner |
+| `src/types/clipper-reaction.ts` | the saved reaction source/window binding, not a visual coverage certificate |
 | `src/components/clipper/clip-frame-preview.tsx` | Saved-edit still with export framing, output-clock slider, loading/error states and a suppression notice. Debounces requests and releases temporary image URLs. |
 | `src/components/clipper/score-breakdown.tsx` | the 16 sub-scores behind the number |
 | `src/components/clipper/reasoning-panel.tsx` | why this clip — anchor, payoff, verdicts (§34), and since R2 the editing grammar it resolved to, with the reason in words. Displays what the backend resolved; the type-to-profile map is NOT repeated in TypeScript |
@@ -295,6 +301,9 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 
 `test_clipper_analysis.py` (candidates, scoring, dedupe, layout) ·
 `test_clipper_reaction_layout.py` (explicit content fit, bounds refusals, HUD mapping, common export sidecar and decoded edge/shape markers) ·
+`test_clipper_reaction_editor.py` (source-frame API, manual save/clear, binding and ordinary render) ·
+`test_clipper_reaction_editor2.py` (resolver failure propagation, frozen source token, actual ASS/MP4 caption and preview checks) ·
+`test_clipper_reaction_binding_regressions.py` (independent source clock/pixels, invalid-window and malformed-plan refusals, recovery) ·
 `test_clipper_story.py` (story engine, promises, callbacks) ·
 `test_clipper_atoms.py` · `test_clipper_threads.py` · `test_clipper_episodes.py` ·
 `test_clipper_dead_air.py` · `test_clipper_segment_type.py` ·

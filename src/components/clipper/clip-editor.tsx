@@ -8,11 +8,9 @@
 // with the captions burned in through the SAME code path the export uses. None
 // of it had a UI, so editing a clip meant curl. Phase 9.6 of the task board.
 //
-// What this deliberately does NOT do is drag-to-crop. Editing the layout rects
-// by hand is a canvas tool and a build of its own; the layout is planned from
-// detected regions and the honest fix for a bad one is better detection, which
-// is where the work has gone. `layout_plan` stays patchable over the API for
-// anyone who needs it.
+// ReactionFraming adds explicit source-region selection for a reaction clip.
+// Its saved choice is bound to the source and clip interval, and the ordinary
+// preview/export honor it ahead of dynamic planning.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -20,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { errorDescription, readApiError } from "@/lib/api-error";
 import { CLIPPER_API, type ClipperClip } from "@/types/clipper";
 import { ClipFramePreview } from "./clip-frame-preview";
+import { ReactionFraming } from "./reaction-framing";
 
 interface Preset {
   id: string;
@@ -105,7 +104,7 @@ export function ClipEditor({
   clip: ClipperClip | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onSaved: () => void;
+  onSaved: (clip?: ClipperClip) => void;
 }) {
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(0);
@@ -183,7 +182,7 @@ export function ClipEditor({
         return;
       }
       setFrameKey((k) => k + 1);
-      onSaved();
+      onSaved((await r.json()).clip);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -208,7 +207,7 @@ export function ClipEditor({
           return;
         }
         setFrameKey((k) => k + 1);
-        onSaved();
+        onSaved((await r.json()).clip);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -352,6 +351,10 @@ export function ClipEditor({
             </div>
           </div>
         </div>
+        <ReactionFraming key={`${clip.id}:${clip.start_time}:${clip.end_time}`}
+          clip={clip} disabled={dirty || busy !== null || clip.status === "exporting"}
+          onBusyChange={(active) => setBusy(active ? "reaction" : null)}
+          onSaved={(updated) => { setFrameKey((k) => k + 1); onSaved(updated); }} />
       </DialogContent>
     </Dialog>
   );

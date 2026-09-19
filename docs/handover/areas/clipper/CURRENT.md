@@ -1,5 +1,26 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 19 septembrie 2026 — încadrarea de reacție ajunge în editor/export
+
+Cu Claude Code la backend și Codex la interfață/verificare, editorul permite
+alegerea manuală a materialului urmărit și a reacției pe cadrul original.
+Planul este legat de sursă și interval; prevalează asupra montajului dinamic,
+iar o sursă schimbată sau un interval extins îl refuză. Revenirea la automat
+rămâne disponibilă. Editorul preia după salvare obiectul confirmat de server.
+
+Proba prin API și `handle_export`, într-o bază separată, produce MP4 identic
+la nivel de octeți cu D; cele 390 de fișiere existente sunt intacte. Captionul
+de diagnostic este desenat deasupra reacției, dar poate acoperi scrisul din
+materialul urmărit: aceasta rămâne o limită, nu un verdict de publicare.
+[Contract, artefacte și limite](../../../refs/clipper-reaction-editor-2026-09-19.md).
+Interacțiunea browserului nu a fost verificată vizual; build-ul și geometria
+frontendului sunt verificate separat de probele backendului. Alegerea regiunilor
+este manuală, nu un detector automat pentru tot live-ul. Claude nu a raportat
+epuizarea cotei; opririle intermediare au fost limitele de ture ale sarcinii.
+Verificare finală: **2.201 teste Python trecute, 2 TikTok excluse**, plus 3 teste
+Node, TypeScript, lint pe fișierele noi și build de producție. Nicio activare
+globală a detectorului sau schimbare de politică de captions pe proiect.
+
 ## Actualizare 13 septembrie 2026 — sursa locală și trei probe reale
 
 Sursa indicată de utilizator în `2c8af11153a3/source/source.mp4` a fost citită.

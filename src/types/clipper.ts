@@ -223,6 +223,10 @@ export interface LayoutPlan {
   keyframes: { t: number; rect: Rect }[];
   warnings: string[];
   face_pct: number;
+  game_content_fit?: boolean;
+  src_w?: number;
+  src_h?: number;
+  reaction_binding?: import("./clipper-reaction").ReactionBinding;
 }
 
 import type { CaptionPlan } from "./clipper-captions";
