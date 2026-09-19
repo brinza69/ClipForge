@@ -140,6 +140,7 @@ ingest  →  transcribe  →  analyze  →  score  →  export / preview
 | `layout_geom.py` | the rect arithmetic behind it |
 | `reaction_layout.py` | explicit experimental source-above/reaction-below plan from caller-supplied source rectangles; fits content over blurred fill. First consumer is the local media probe, not automatic VOD planning; see `../PRPs/clipper-reaction-panel-fit.md` |
 | `reaction_edit.py` | binding of a manually selected reaction layout to source version/dimensions and clip interval; rejects stale or malformed edits in the ordinary worker |
+| `reaction_captions.py` | automatic caption placement outside the fitted reaction foreground and reaction band; transient keep-outs, shared approximate envelope, explicit no-room refusal. Manual and non-rendered layers bypass; see `refs/clipper-reaction-caption-gap-2026-09-19.md` |
 
 ### Rendering
 
@@ -304,6 +305,8 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_reaction_editor.py` (source-frame API, manual save/clear, binding and ordinary render) ·
 `test_clipper_reaction_editor2.py` (resolver failure propagation, frozen source token, actual ASS/MP4 caption and preview checks) ·
 `test_clipper_reaction_binding_regressions.py` (independent source clock/pixels, invalid-window and malformed-plan refusals, recovery) ·
+`test_clipper_reaction_captions.py` (blur-gap placement, supported envelope, bypasses and refusal behavior) ·
+`test_clipper_reaction_gap_regressions.py` (suppressed/removed layers, actual preset style and ASS-control counterexamples) ·
 `test_clipper_story.py` (story engine, promises, callbacks) ·
 `test_clipper_atoms.py` · `test_clipper_threads.py` · `test_clipper_episodes.py` ·
 `test_clipper_dead_air.py` · `test_clipper_segment_type.py` ·

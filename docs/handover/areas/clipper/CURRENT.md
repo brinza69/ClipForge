@@ -1,5 +1,24 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 20 septembrie 2026 — subtitrarea reacției folosește banda liberă
+
+Încadrarea explicită de reacție rezervă temporar și imaginea materialului urmărit
+pentru poziționarea automată a subtitrării. Folosește geometria rendererului și
+refuză poziționarea automată dacă anvelopa textului nu încape; poziția manuală
+rămâne a utilizatorului. Selecțiile salvate și geometria lor nu sunt rescrise.
+Politica de suprimare se aplică înainte de poziționare, iar textele eliminate
+sau din afara ferestrei nu cer spațiu. Claude Code a implementat lotul; verificarea
+independentă a corectat inclusiv amestecarea ceasului original cu cel scurtat.
+[Contract, probe și limite](../../../refs/clipper-reaction-caption-gap-2026-09-19.md).
+Aceasta nu este detecție OCR și nu rezolvă alegerea automată a celor două regiuni.
+Anvelopa rămâne aproximativă; stilurile mari/animate cer poziționare manuală.
+Proba finală: `data/claude-xqc-reference/caption_gap_20260920_005030_790630/`.
+Text pe unul/două rânduri în banda 904..1152px; imaginile rezervate rămân identice
+cu controlul fără text în cele două cadre măsurate. MP4 decodat integral,
+390 de fișiere existente neschimbate. **2.244 teste trecute, 2 TikTok excluse**;
+Claude a verificat separat cele 43 de teste noi și nu a găsit alte probleme.
+Nu a fost raportată epuizarea cotei Claude; verificarea finală s-a încheiat normal.
+
 ## Actualizare 19 septembrie 2026 — încadrarea de reacție ajunge în editor/export
 
 Cu Claude Code la backend și Codex la interfață/verificare, editorul permite

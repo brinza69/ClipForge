@@ -4,6 +4,14 @@
 **Data hărții:** 3 septembrie 2026.
 **TikTok:** exclus din această hartă, conform cerinței proiectului.
 
+## Actualizare Clipper, 20 septembrie 2026
+
+Subtitrarea automată a încadrării explicite de reacție caută acum spațiu și în
+afara materialului urmărit, în banda blurată disponibilă. Un spațiu insuficient
+cere ajustare manuală; straturile suprimate și textele nelivrate nu blochează
+exportul. Selecția regiunilor rămâne manuală. Probe și limite în
+[handover-ul Clipper](areas/clipper/CURRENT.md).
+
 ## Actualizare Clipper, 19 septembrie 2026
 
 Editorul are selecție manuală a celor două regiuni pentru clipuri de reacție,

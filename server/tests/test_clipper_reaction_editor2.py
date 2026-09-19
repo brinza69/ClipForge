@@ -142,7 +142,7 @@ async def test_put_caption_resolve_failure_refuses_without_mutation(client, reac
     from models import ClipModel
     cid, src = reaction_db["cid"], reaction_db["src"]
 
-    with patch("services.clipper.captions.resolve_position",
+    with patch("services.clipper.reaction_captions.resolve_position",
                side_effect=RuntimeError("injected caption failure")):
         r = await client.put(f"/api/clipper/clips/{cid}/reaction-layout",
                              json=_valid_put_body(src))
@@ -158,11 +158,14 @@ async def test_worker_caption_resolve_failure_raises(valid_binding, small_source
     for a non-manual reaction caption."""
     from workers import clipper_render_plan as crp
     plan, _ = valid_binding
-    auto_caption = {"position": "bottom", "y_pct": 0.85, "chunks": []}
+    auto_caption = {
+        "position": "bottom", "y_pct": 0.85,
+        "chunks": [{"text": "hello", "start": 0.0, "end": 1.0}],
+    }
     clip = _make_clip(layout_plan=plan, caption_plan=auto_caption)
     proj = _make_project(str(small_source))
 
-    with patch("services.clipper.captions.resolve_position",
+    with patch("services.clipper.reaction_captions.resolve_position",
                side_effect=RuntimeError("injected resolve failure")), \
          patch.object(crp, "_dead_spans", new_callable=AsyncMock, return_value=[]):
         with pytest.raises(RuntimeError, match="injected resolve failure"):

@@ -356,18 +356,29 @@ async def put_reaction_layout(
     }
 
     # --- automatic caption placement ---------------------------------------
-    # Resolve y_pct using the new plan safe_zones. Manual placements stay.
-    # A failed resolution refuses the edit before any mutation is committed.
+    # Only resolve when the layer will actually be burned. A suppressed layer
+    # with an unsupported style or a no-gap region must not block the PUT.
+    # A ValueError is an actionable placement failure → 422. Any other
+    # exception is unexpected and also produces a non-2xx response so that
+    # no mutation reaches the DB.
     new_caption_plan = clip.caption_plan
-    if new_caption_plan and not new_caption_plan.get("y_pct_manual"):
+    from services.clipper import caption_policy as cap_pol
+    _burn = (cap_pol.decide(
+        (project.clipper_settings or {}).get(cap_pol.SETTING)
+    )["action"] == cap_pol.BURN)
+    if _burn and new_caption_plan and not new_caption_plan.get("y_pct_manual"):
         try:
-            from services.clipper.captions import resolve_position
-            pos = str(new_caption_plan.get("position") or "bottom")
-            _, new_y = resolve_position(pos, plan)
-            new_caption_plan = {**new_caption_plan, "y_pct": new_y}
+            from services.clipper.reaction_captions import resolve_reaction_caption_y
+            new_y = resolve_reaction_caption_y(
+                plan, new_caption_plan, clip_duration=clip_end - clip_start)
+            if new_y is not None:
+                new_caption_plan = {**new_caption_plan, "y_pct": new_y}
+        except ValueError as exc:
+            raise _err(422, "caption_placement_failed", str(exc)) from exc
         except Exception as exc:
-            raise _err(422, "caption_placement_failed",
-                       "Could not place captions for this layout. Check the caption settings.") from exc
+            raise _err(500, "caption_placement_error",
+                       "Caption placement failed unexpectedly. "
+                       "Try again or set caption position manually.") from exc
 
     # --- commit ------------------------------------------------------------
     clip.layout_plan = plan

@@ -414,15 +414,6 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     # caption position the render did not use — it would go on reporting a
     # caption it had already caused to move.
     caption_y = _caption_y(clip, dyn)
-    # For a reaction layout, dyn=None means _caption_y returns None and
-    # _caption_faces skips the static face keep-out (it requires shots). We
-    # explicitly resolve from the plan's safe_zones so the reaction band is
-    # kept clear even after a /regenerate that resets the stored y_pct.
-    if _reaction_fit and caption_y is None:
-        _cp = clip.caption_plan if isinstance(clip.caption_plan, dict) else None
-        if _cp and not _cp.get("y_pct_manual"):
-            from services.clipper.captions import resolve_position
-            _, caption_y = resolve_position(str(_cp.get("position") or "bottom"), plan)
     # Resolved on every render, applied on none of them yet. In
     # `content_aware_shadow` this is the whole of R2: the profile becomes
     # observable beside every export while the delivered plan stays exactly what
@@ -457,6 +448,24 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
         cfg.get(caption_policy.SETTING))
     caption_face_placement = None
     if caption_policy_decision["action"] == caption_policy.BURN:
+        # Reaction fit: resolve inside the burn decision so a suppressed layer
+        # never triggers the placement helper. Pass drop spans so all-removed
+        # overlays return None rather than a stale position.
+        if _reaction_fit and caption_y is None:
+            _cp = clip.caption_plan if isinstance(clip.caption_plan, dict) else None
+            if _cp and not _cp.get("y_pct_manual"):
+                from services.clipper.reaction_captions import resolve_reaction_caption_y
+                _clip_dur = (float(clip.end_time or 0.)
+                             - float(clip.start_time or 0.))
+                try:
+                    _resolved = resolve_reaction_caption_y(
+                        plan, _cp, drop_spans=drop, clip_duration=_clip_dur)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"clip {clip.id}: reaction caption placement failed — {exc}"
+                    ) from exc
+                if _resolved is not None:
+                    caption_y = _resolved
         caption_y, caption_face_placement = _caption_faces(clip, project, dyn, caption_y)
 
     return {
