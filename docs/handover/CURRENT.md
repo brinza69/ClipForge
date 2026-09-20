@@ -6,6 +6,13 @@
 
 ## Actualizare Clipper, 20 septembrie 2026
 
+Încadrarea automată păstrează acum și extinderea verticală a observațiilor de
+față și poate lărgi stabil fereastra pentru mișcarea observată în interiorul ei.
+Probele reale arată îmbunătățiri pe Speed/Minecraft, dar și costuri de scară și
+cazuri încă ratate. 2.304 teste trec; detectorul implicit rămâne Haar, iar YuNet
+rămâne opțional. Rezultatele și următorul pas sunt în
+[handover-ul Clipper](areas/clipper/CURRENT.md).
+
 Subtitrarea automată a încadrării explicite de reacție caută acum spațiu și în
 afara materialului urmărit, în banda blurată disponibilă. Un spațiu insuficient
 cere ajustare manuală; straturile suprimate și textele nelivrate nu blochează

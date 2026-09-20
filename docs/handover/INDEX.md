@@ -28,6 +28,11 @@ Acesta este punctul de intrare pentru handover-urile aplicației. ClipForge nu e
 
 Handover-urile vechi sunt păstrate în arhivă și trebuie consultate ca istoric, nu ca sursă pentru starea actuală:
 
+- [Clipper: snapshot, R0–R3](archive/clipper/2026-09-20-current-history-1.md)
+- [Clipper: R4–R6 și corecții](archive/clipper/2026-09-20-current-history-2.md)
+- [Clipper: R7, review și gate vizual](archive/clipper/2026-09-20-current-history-3.md)
+- [Clipper: R8, S7–S8 și încadrarea pe faze](archive/clipper/2026-09-20-current-history-4.md)
+- [Clipper: puncte de reluare și limite istorice](archive/clipper/2026-09-20-current-history-5.md)
 - [`handoff-clipper-session-5.md`](archive/clipper/handoff-clipper-session-5.md)
 - [`handoff-clipper-session-4.md`](archive/clipper/handoff-clipper-session-4.md)
 - [`handoff-clipper-session-3.md`](archive/clipper/handoff-clipper-session-3.md)

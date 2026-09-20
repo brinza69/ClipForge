@@ -39,6 +39,8 @@ from services.clipper import dynamic_geometry
 from services.clipper import series
 from services.clipper import dynamic_subject as subject_mod
 from services.clipper.dynamic_face_framing import face_framing
+from services.clipper.dynamic_face_envelope import (elected_spans, compute_framing_span,
+                                                    local_proposals, widen_for_envelope)
 from services.clipper.dynamic_cameras import (   # noqa: F401  (re-exported)
     ASPECT,
     CAMERAS,
@@ -291,9 +293,12 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                   float(stable_track["cy"]) * src_h / float(ph),
                   float(stable_track.get("w") or 0.0) * src_w / float(pw))
 
+    sx, sy = src_w / float(pw), src_h / float(ph)
     samples, face = _dominant(
-        _face_samples(face_track, src_w / float(pw), src_h / float(ph), clip_start),
+        _face_samples(face_track, sx, sy, clip_start),
         src_w, src_h, anchor)
+    _spans = elected_spans(face_track, samples, sx, sy, clip_start)
+    fspan, fspan_basis = compute_framing_span(_spans, face["w"])
     if anchor:
         warnings.append(
             "Framing on the source's fixed subject rather than the largest face "
@@ -315,7 +320,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
     presence_hop = subject_mod._hop_of(
         [{"t": _f(f.get("t")) - clip_start} for f in (face_track or [])
          if isinstance(f, dict)])
-    cams = camera_rects(face, merged, src_w, src_h)
+    cams = camera_rects(face, merged, src_w, src_h, framing_span=fspan)
     fallback = (face["cx"], face["cy"])
 
     words = cand.get("words") or []
@@ -359,7 +364,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
     push_min = _f(merged.get("push_min_shot_s"), 0.95)
 
     max_run = max(1, int(merged.get("max_same_family") or 2))
-    shots: list[dict] = []
+    shots, envelopes = [], []
     previous: str | None = None
     run = 0
     for i, (t0, t1) in enumerate(spans):
@@ -400,6 +405,16 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                 rect, (cx, cy), face, CAMERAS[camera][1], src_w, src_h,
                 anchored=anchor is not None,
                 observed_centres=[(x, y) for t, x, y, _ in samples if t0 <= t < t1])
+            if anchor is None:
+                mult, headroom = CAMERAS[camera]
+                props, scope = local_proposals(_spans, t0, t1, mult, headroom,
+                                             fspan, src_w, src_h, clip_start, rect)
+                envelopes.append({"source_t0": clip_start+t0, "source_t1": clip_start+t1, **scope})
+                rect, env_fit, env_reason = widen_for_envelope(rect, props, src_w, src_h)
+                if env_reason:
+                    framing_fit = framing_fit or env_fit
+                    sep = "+" if framing_reason else ""
+                    framing_reason = (framing_reason or "") + sep + env_reason
         else:
             # Point the second camera at whatever actually moved in this shot,
             # falling back to the static action centre when nothing did.
@@ -468,10 +483,13 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
         "hits": _hits(audio.get("peaks") or [], rms, hop, clip_start, duration, merged),
         "cameras": cams,
         "style": merged,
-        "subject": {"samples": len(samples), "face": face},
+        "subject": {"samples": len(samples), "face": face,
+                    "framing_span": round(fspan, 2),
+                    "framing_span_basis": fspan_basis,
+                    "elected_proposals": len(_spans), "framing_windows": envelopes,
+                    "framing_scope": "observed_centres_inside_existing_camera"},
         "warnings": warnings,
     }, src_w, src_h)
-
 
 # Split out at the 500-line limit; re-exported so the worker, the tests and the
 # recipe keep one import for "the dynamic edit". Same pattern as

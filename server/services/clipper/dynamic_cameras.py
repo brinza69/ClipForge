@@ -324,24 +324,33 @@ def _rect(w: float, h: float, cx: float, cy: float, headroom: float,
 
 
 def camera_rects(face: dict[str, float], style: dict,
-                 src_w: int, src_h: int) -> dict[str, dict[str, int]]:
+                 src_w: int, src_h: int,
+                 framing_span: float | None = None) -> dict[str, dict[str, int]]:
     """The source rectangle for every camera, given where the facecam is.
 
     The gameplay cameras are pushed clear of BOTH the facecam and the chat
     strip: a "gameplay" shot that still contains the streamer's head is not a
     second camera, it is the first one with extra clutter.
+
+    `framing_span` is the editorial zoom scale derived from elected observation
+    extents (see dynamic_face_envelope.compute_framing_span). When absent the
+    observed face width is used unchanged, preserving legacy geometry exactly.
+    Only face-family cameras use this value; game bands are unaffected.
     """
     out: dict[str, dict[str, int]] = {}
-    fw = float(face.get("w") or src_w * 0.11)
+    # face_w drives game band geometry and subject identity — unchanged.
+    # face_fw is the editorial zoom scale for face cameras only.
+    face_w = float(face.get("w") or src_w * 0.11)
+    face_fw = float(framing_span if framing_span is not None else face_w)
     fcx, fcy = float(face["cx"]), float(face["cy"])
 
     for name in _FACE_CAMS:
         mult, headroom = CAMERAS[name]
-        out[name] = _rect(0, fw * mult, fcx, fcy, headroom, src_w, src_h)
+        out[name] = _rect(0, face_fw * mult, fcx, fcy, headroom, src_w, src_h)
 
     chat = src_w * (1.0 - _f(style.get("chat_margin_pct"), 0.09))
     # Everything to the right of the facecam, minus the chat strip.
-    band_lo = min(src_w * 0.75, fcx + fw * 1.2)
+    band_lo = min(src_w * 0.75, fcx + face_w * 1.2)
     band_hi = max(band_lo + src_w * 0.12, chat)
     action_cx = (band_lo + band_hi) / 2.0
 
