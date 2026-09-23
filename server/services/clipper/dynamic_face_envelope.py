@@ -193,6 +193,50 @@ def local_proposals(
     return proposals, {"seen": seen, "included": included, "excluded": excluded}
 
 
+def apply_local_envelope(
+    face_track,
+    spans: list,
+    t0: float,
+    t1: float,
+    mult: float,
+    headroom: float,
+    framing_span: float,
+    src_w: int,
+    src_h: int,
+    clip_start: float,
+    sx: float,
+    sy: float,
+    rect: dict,
+    framing_fit: bool,
+    framing_reason: str | None,
+) -> tuple[dict, bool, str | None, dict]:
+    """Combine raw local proposals + motion proposals, widen base rect, return envelope entry.
+
+    Extracts the 14-line block from dynamic_edit so dynamic_edit stays <=500 lines.
+    Preserves all scope fields; motion provenance survives in envelope entry.
+    Returns (rect, framing_fit, framing_reason, envelope_entry).
+    """
+    from services.clipper.face_gap_framing import motion_proposals
+
+    props, scope = local_proposals(spans, t0, t1, mult, headroom,
+                                   framing_span, src_w, src_h, clip_start, rect)
+    mot_props, mot_scope = motion_proposals(
+        face_track, spans, t0, t1, mult, headroom,
+        framing_span, src_w, src_h, clip_start, sx, sy, rect)
+    all_props = props + mot_props
+    envelope_entry = {
+        "source_t0": clip_start + t0, "source_t1": clip_start + t1,
+        **scope,
+        "motion": mot_scope,
+    }
+    new_rect, env_fit, env_reason = widen_for_envelope(rect, all_props, src_w, src_h)
+    if env_reason:
+        framing_fit = framing_fit or env_fit
+        sep = "+" if framing_reason else ""
+        framing_reason = (framing_reason or "") + sep + env_reason
+    return new_rect, framing_fit, framing_reason, envelope_entry
+
+
 def widen_for_envelope(base: dict, proposals: list[dict], src_w: int,
                        src_h: int) -> tuple[dict, bool, str | None]:
     """Retain every delivered footprint, including the original camera.

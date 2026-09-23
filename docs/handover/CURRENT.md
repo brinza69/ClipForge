@@ -4,6 +4,13 @@
 **Data hărții:** 3 septembrie 2026.
 **TikTok:** exclus din această hartă, conform cerinței proiectului.
 
+## Actualizare Clipper, 23 septembrie 2026
+
+Golurile scurte de detecție a feței sunt acoperite acum de propuneri de mișcare
+limitate, legate de o observație reală. În cadrele verificate la 15,7, 16,1 și
+16,6 s ale probei Speed, fața rămâne în cadru, cu prețul unei scări mai mici. 2.402 teste trec. Lotul acceptat, limitele și
+pașii rămași sunt în [handover-ul Clipper](areas/clipper/CURRENT.md).
+
 ## Actualizare Clipper, 20 septembrie 2026
 
 Încadrarea automată păstrează acum și extinderea verticală a observațiilor de

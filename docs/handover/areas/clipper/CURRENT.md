@@ -1,5 +1,20 @@
 # Handover — AI Stream Clipper
 
+## Actualizare 23 septembrie 2026 — continuitatea feței în goluri scurte
+
+Codex a acceptat lotul limitat. Golurile curate după o detecție unică primesc
+propuneri de mișcare separate (optical flow, buget de 2 s, necalibrat). Plannerul
+le folosește doar când sămânța este exact o observație aleasă, aflată în camera
+existentă. Datele brute, detecțiile pentru subtitrare și detectorul (Haar implicit)
+rămân neschimbate. În cadrele verificate la 15,7, 16,1 și 16,6 s ale probei Speed,
+fața rămâne în cadru. Costul: scară cu până la 40,6% mai mică și mai mult
+joc/chat/UI. Al doilea Speed (`6914b77525e4`) și dialogul (`c04e7960179b`) sunt
+identice byte cu byte. Rezultate: 2.402 teste trecute (2 TikTok excluse),
+390 de fișiere de export existente neschimbate,
+42/42 granițe identice, fără fit nou. Rămân deschise identitatea cu mai multe
+persoane, golurile lungi, salturile de scară și tăierea din dialog la 3,133 s.
+[Contract, probe și limite](../../../refs/clipper-face-continuity-2026-09-21.md).
+
 ## Actualizare 20 septembrie 2026 — protecția încadrării automate
 
 Lot implementat împreună cu Claude Code, verificat separat în MP4-uri. Scara

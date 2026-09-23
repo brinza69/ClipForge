@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from services.clipper.dynamic_cameras import action_band
+from services.clipper.face_gap import continue_gaps
 from services.clipper.ffmpeg_tools import ffmpeg_bin, video_info
 from services.clipper.signals import face_presence
 
@@ -245,6 +246,7 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
         times = [i * FACE_HOP_S for i in range(int(duration / FACE_HOP_S) + 1)]
         samples = (face_presence(str(window), times) if detector is None else
                    face_presence(str(window), times, detector=detector))
+        samples = continue_gaps(str(window), samples)
         # Pass through state metadata; frame_index and decoded_t name positions
         # in window.mp4, not the original source — adding start does not certify
         # a source timestamp because the re-encode shifts the clock.

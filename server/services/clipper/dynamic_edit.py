@@ -39,8 +39,8 @@ from services.clipper import dynamic_geometry
 from services.clipper import series
 from services.clipper import dynamic_subject as subject_mod
 from services.clipper.dynamic_face_framing import face_framing
-from services.clipper.dynamic_face_envelope import (elected_spans, compute_framing_span,
-                                                    local_proposals, widen_for_envelope)
+from services.clipper.dynamic_face_envelope import (apply_local_envelope, elected_spans,
+                                                    compute_framing_span)
 from services.clipper.dynamic_cameras import (   # noqa: F401  (re-exported)
     ASPECT,
     CAMERAS,
@@ -407,14 +407,11 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                 observed_centres=[(x, y) for t, x, y, _ in samples if t0 <= t < t1])
             if anchor is None:
                 mult, headroom = CAMERAS[camera]
-                props, scope = local_proposals(_spans, t0, t1, mult, headroom,
-                                             fspan, src_w, src_h, clip_start, rect)
-                envelopes.append({"source_t0": clip_start+t0, "source_t1": clip_start+t1, **scope})
-                rect, env_fit, env_reason = widen_for_envelope(rect, props, src_w, src_h)
-                if env_reason:
-                    framing_fit = framing_fit or env_fit
-                    sep = "+" if framing_reason else ""
-                    framing_reason = (framing_reason or "") + sep + env_reason
+                rect, framing_fit, framing_reason, env_entry = apply_local_envelope(
+                    face_track, _spans, t0, t1, mult, headroom,
+                    fspan, src_w, src_h, clip_start, sx, sy,
+                    rect, framing_fit, framing_reason)
+                envelopes.append(env_entry)
         else:
             # Point the second camera at whatever actually moved in this shot,
             # falling back to the static action centre when nothing did.
