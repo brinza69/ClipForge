@@ -50,9 +50,9 @@ router = APIRouter(prefix="/api/clipper", tags=["clipper"])
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _err(status: int, code: str, message: str) -> Any:
+def _err(status: int, code: str, message: str, **extra: Any) -> Any:
     from fastapi import HTTPException
-    return HTTPException(status, {"error": code, "message": message})
+    return HTTPException(status, {"error": code, "message": message, **extra})
 
 
 async def _load_clip_and_project(
@@ -367,12 +367,22 @@ async def put_reaction_layout(
         (project.clipper_settings or {}).get(cap_pol.SETTING)
     )["action"] == cap_pol.BURN)
     if _burn and new_caption_plan and not new_caption_plan.get("y_pct_manual"):
+        from services.clipper.reaction_captions import (
+            NoCaptionGap, caption_ready_height, resolve_reaction_caption_y)
         try:
-            from services.clipper.reaction_captions import resolve_reaction_caption_y
             new_y = resolve_reaction_caption_y(
                 plan, new_caption_plan, clip_duration=clip_end - clip_start)
             if new_y is not None:
                 new_caption_plan = {**new_caption_plan, "y_pct": new_y}
+        except NoCaptionGap as exc:
+            # Say WHICH box would pass; found by the same builder and resolver.
+            h = caption_ready_height(content_rect, face_rect, req_w, req_h,
+                                     new_caption_plan, face_pct=0.40,
+                                     clip_duration=clip_end - clip_start)
+            hint = (f" At this width ({content_rect['w']} px), a content height of at "
+                    f"most {h} px leaves room for automatic captions." if h else "")
+            raise _err(422, "caption_placement_failed", str(exc) + hint,
+                       max_content_height=h) from exc
         except ValueError as exc:
             raise _err(422, "caption_placement_failed", str(exc)) from exc
         except Exception as exc:

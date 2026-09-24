@@ -310,6 +310,7 @@ runs against a throwaway data directory (see `tests/conftest.py`).
 `test_clipper_reaction_binding_regressions.py` (independent source clock/pixels, invalid-window and malformed-plan refusals, recovery) ·
 `test_clipper_reaction_captions.py` (blur-gap placement, supported envelope, bypasses and refusal behavior) ·
 `test_clipper_reaction_gap_regressions.py` (suppressed/removed layers, actual preset style and ASS-control counterexamples) ·
+`test_clipper_reaction_caption_hint.py` (the no-gap refusal names the tallest content box that leaves a caption slot, found by the save's own builder and resolver) ·
 `test_clipper_story.py` (story engine, promises, callbacks) ·
 `test_clipper_atoms.py` · `test_clipper_threads.py` · `test_clipper_episodes.py` ·
 `test_clipper_dead_air.py` · `test_clipper_segment_type.py` ·

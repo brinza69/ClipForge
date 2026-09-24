@@ -32,6 +32,12 @@ _MAX_LINES = 2
 _MANUAL_SUFFIX = "Set the caption position manually."
 
 
+class NoCaptionGap(ValueError):
+    """The fitted content leaves no clear automatic caption slot. A ValueError,
+    so every existing `except ValueError` keeps catching it; style and text
+    envelope refusals stay plain ValueError."""
+
+
 def _finite(value: object, field: str) -> float:
     """Return float(value), refusing non-numeric and non-finite inputs."""
     try:
@@ -214,7 +220,7 @@ def resolve_reaction_caption_y(
         _norm_rect(rc, out_w, out_h) for rc in temp_keep_out
     ) if r is not None]
     if temp_rects and _overlap_area(y, temp_rects) > 0.0:
-        raise ValueError(
+        raise NoCaptionGap(
             "No clear caption position was found automatically in this reaction layout — "
             "the blur gap may be too narrow for the caption style. "
             "Set the caption position manually (editor → captions) "
@@ -222,3 +228,47 @@ def resolve_reaction_caption_y(
         )
 
     return y
+
+
+def caption_ready_height(
+    content_rect: dict,
+    face_rect: dict,
+    src_w: int,
+    src_h: int,
+    caption_plan: dict,
+    *,
+    face_pct: float,
+    clip_duration: float | None = None,
+) -> int | None:
+    """Largest even content height, at the same x, y and width, that leaves a slot.
+
+    Asked of the same builder and resolver the save uses, not of a formula:
+    the answer depends on the caption search grid. On 70ca a 1160×804 box
+    was refused and 1158×782 accepted, and neither number could have been
+    quoted from an aspect ratio. Shrinking the box only moves its bottom
+    edge up and widens the gap under it, so the answer is monotonic and a
+    binary search is exact. None when even the smallest box has no slot.
+    """
+    from services.clipper.reaction_layout import plan_reaction_layout
+
+    def fits(h: int) -> bool:
+        plan = plan_reaction_layout(content_rect={**content_rect, "h": h},
+                                    face_rect=face_rect, src_w=src_w,
+                                    src_h=src_h, face_pct=face_pct)
+        try:
+            resolve_reaction_caption_y(plan, caption_plan,
+                                       clip_duration=clip_duration)
+        except NoCaptionGap:
+            return False
+        return True
+
+    lo, hi = 1, int(content_rect["h"]) // 2       # heights are 2*k
+    if not fits(2 * lo):
+        return None
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits(2 * mid):
+            lo = mid
+        else:
+            hi = mid - 1
+    return 2 * lo
