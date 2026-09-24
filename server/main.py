@@ -148,6 +148,7 @@ app.include_router(doodle_router)
 
 if settings.clipper_enabled:
     from routers.clipper import router as clipper_router
+    from routers.clipper_caption_source import router as clipper_caption_source_router
     from routers.clipper_clips import router as clipper_clips_router
     from routers.clipper_reaction import router as clipper_reaction_router
     from routers.clipper_review import router as clipper_review_router
@@ -155,6 +156,7 @@ if settings.clipper_enabled:
 
     app.include_router(clipper_router)
     app.include_router(clipper_clips_router)
+    app.include_router(clipper_caption_source_router)
     app.include_router(clipper_reaction_router)
     app.include_router(clipper_runs_router)
     app.include_router(clipper_review_router)

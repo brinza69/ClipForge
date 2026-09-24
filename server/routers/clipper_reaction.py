@@ -364,7 +364,8 @@ async def put_reaction_layout(
     new_caption_plan = clip.caption_plan
     from services.clipper import caption_policy as cap_pol
     _burn = (cap_pol.decide(
-        (project.clipper_settings or {}).get(cap_pol.SETTING)
+        (project.clipper_settings or {}).get(cap_pol.SETTING),
+        clip_setting=clip.source_has_burned_captions,
     )["action"] == cap_pol.BURN)
     if _burn and new_caption_plan and not new_caption_plan.get("y_pct_manual"):
         from services.clipper.reaction_captions import (

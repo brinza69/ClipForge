@@ -291,6 +291,10 @@ export interface ClipperClip {
   layout_plan: LayoutPlan | null;
   caption_plan: CaptionPlan | null;
   caption_preset_id?: string | null;
+  /** A person's answer for THIS clip: the source already shows burned
+   * subtitles (true — ClipForge burns no layer of its own), it shows none
+   * (false), or nobody has said (null — the project's setting decides). */
+  source_has_burned_captions?: boolean | null;
   warnings: string[] | null;
   dedupe_group: string | null;
   is_alternative: boolean;

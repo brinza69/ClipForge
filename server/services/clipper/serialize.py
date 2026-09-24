@@ -119,6 +119,12 @@ def clip_to_dict(clip: ClipModel) -> dict[str, Any]:
         "warnings": clip.warnings or [],
         "dedupe_group": clip.dedupe_group,
         "is_alternative": _as_bool(clip.is_alternative),
+        # Tri-state: True/False are a person's answer, None is "nobody has
+        # said" — `_as_bool` would turn that into False and erase the
+        # difference between "declared none" and "never asked".
+        "source_has_burned_captions": (
+            None if clip.source_has_burned_captions is None
+            else bool(clip.source_has_burned_captions)),
         "rank_position": clip.rank_position,
         "selection_run_id": clip.selection_run_id,
         # Why this clip exists — anchor, payoff, required context, archetype,

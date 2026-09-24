@@ -352,6 +352,13 @@ class ClipModel(Base):
     layout_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Word-grouped caption chunks + resolved style.
     caption_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # A human's per-clip answer to whether the SOURCE already carries burned
+    # subtitles — see services/clipper/caption_policy.py. True suppresses
+    # ClipForge's own layer for this clip, False keeps it, NULL (default)
+    # follows the project's setting. A dedicated column rather than a key
+    # inside `caption_plan`: a caption rebuild replaces that dict and would
+    # silently resurrect a duplicate layer.
+    source_has_burned_captions: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # The optional context hook. Distinct from `hook_text` (legacy editor).
     headline_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)

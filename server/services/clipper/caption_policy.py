@@ -50,11 +50,14 @@ DECIDED_BY: tuple[str, ...] = (HUMAN, DEFAULT)
 SETTING = "source_has_burned_captions"
 
 
-def decide(setting: Any = None, detector: Any = None) -> dict:
+def decide(setting: Any = None, detector: Any = None, clip_setting: Any = None) -> dict:
     """`{"action", "why", "decided_by", "detector"}` — burn or suppress, and why.
 
     `setting` is the project's own three-valued answer; `detector` is a
-    `source_captions` verdict, recorded and never applied.
+    `source_captions` verdict, recorded and never applied. `clip_setting` is
+    the same three-valued answer for ONE clip; a real bool wins over
+    `setting` (`decided_by: human`, `scope: clip`) — `None` defers to the
+    project exactly as if `clip_setting` had never been passed.
     """
     from services.clipper import source_captions as scap
 
@@ -69,6 +72,18 @@ def decide(setting: Any = None, detector: Any = None) -> dict:
         # was calibrated, and a field nobody has to look up is the way to say it.
         "detector_calibrated": bool(calibrated) if calibrated is not None else None,
     }
+
+    # A clip's own answer beats the project's. `isinstance(x, bool)`, never
+    # `x in (True, False)` — `1 == True` would let an integer through as a
+    # verdict nobody gave.
+    if isinstance(clip_setting, bool):
+        if clip_setting:
+            out.update({"action": SUPPRESS, "decided_by": HUMAN, "scope": "clip",
+                        "why": "a_person_declared_this_clip_already_carries_captions"})
+        else:
+            out.update({"action": BURN, "decided_by": HUMAN, "scope": "clip",
+                        "why": "a_person_declared_this_clip_carries_none"})
+        return out
 
     if setting is True:
         out.update({"action": SUPPRESS, "decided_by": HUMAN,

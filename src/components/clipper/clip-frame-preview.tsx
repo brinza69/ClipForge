@@ -81,7 +81,7 @@ export function ClipFramePreview({ clipId, duration, revision, dirty }: {
         Render a video preview to check the movement and sound.
       </p>
       {frame?.captionsOff && <p className="text-[11px] text-muted-foreground">
-        Added captions are off for this project.
+        Added captions are off for this clip.
       </p>}
       {dirty && <p className="rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-500">
         Save your changes to update this frame.

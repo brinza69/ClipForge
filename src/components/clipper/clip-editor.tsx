@@ -217,7 +217,38 @@ export function ClipEditor({
     [clip, onSaved],
   );
 
+  // Saved on its own endpoint and at once, like the reaction framing: it is a
+  // declaration about the source, not part of the caption plan — a rebuild
+  // replaces the plan and must not bring a second layer back over the source's.
+  const saveCaptionSource = useCallback(
+    async (value: boolean | null) => {
+      if (!clip) return;
+      setBusy("caption-source");
+      setError(null);
+      try {
+        const r = await fetch(`${CLIPPER_API}/clips/${clip.id}/caption-source`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source_has_burned_captions: value }),
+        });
+        if (!r.ok) {
+          setError(errorDescription(
+            await readApiError(r, "Setarea subtitrării nu a putut fi salvată")));
+          return;
+        }
+        setFrameKey((k) => k + 1);
+        onSaved((await r.json()).clip);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [clip, onSaved],
+  );
+
   if (!clip) return null;
+  const sourceCaptions = clip.source_has_burned_captions ?? null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -275,6 +306,28 @@ export function ClipEditor({
                   {busy === "headline" ? "…" : "regenerate"}
                 </button>
               </div>
+            </Field>
+
+            <Field label="Subtitrarea din sursă">
+              <select
+                value={sourceCaptions === null ? "" : sourceCaptions ? "suppress" : "burn"}
+                onChange={(e) => saveCaptionSource(
+                  e.target.value === "" ? null : e.target.value === "suppress")}
+                disabled={busy !== null || dirty || clip.status === "exporting"}
+                title={dirty ? "Salvează mai întâi celelalte modificări" : ""}
+                className="w-full rounded border border-border/50 bg-transparent px-2 py-1.5 text-xs"
+              >
+                <option value="">Urmează proiectul</option>
+                <option value="burn">Arde subtitrarea ClipForge</option>
+                <option value="suppress">Nu arde — sursa are deja subtitrare</option>
+              </select>
+              <p className="text-[11px] text-muted-foreground">
+                {sourceCaptions === true
+                  ? "Exportul acestui clip nu primește subtitrarea ClipForge: textul ars în sursă rămâne singurul."
+                  : sourceCaptions === false
+                    ? "Subtitrarea ClipForge se arde în acest clip, oricum ar fi setat proiectul."
+                    : "Decide setarea proiectului; dacă nimeni n-a spus nimic, subtitrarea ClipForge se arde. Alege „Nu arde” când video-ul are deja subtitrare, ca să nu apară două rânduri de text."}
+              </p>
             </Field>
 
             <Field label="Caption preset">

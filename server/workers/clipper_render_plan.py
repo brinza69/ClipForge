@@ -438,14 +438,15 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     views = clipper_shadow_views.shadow_views(
         clip, dyn, mode=edit_mode, profile=profile["profile"])
 
-    # The detector's verdict is NOT consulted here, and that is the point: the
-    # project's own three-valued setting is the only thing that suppresses the
+    # The detector's verdict is NOT consulted here, and that is the point: a
+    # person's answer — the clip's, else the project's — alone suppresses the
     # layer. `source_captions` is `calibrated: false` on four sources, and an
     # uncalibrated detector removing somebody's captions fails invisibly — a
     # clip ships with no text at all and nothing reports it. When it is
     # calibrated, this call gains its second argument and nothing else moves.
     caption_policy_decision = caption_policy.decide(
-        cfg.get(caption_policy.SETTING))
+        cfg.get(caption_policy.SETTING),
+        clip_setting=getattr(clip, "source_has_burned_captions", None))
     caption_face_placement = None
     if caption_policy_decision["action"] == caption_policy.BURN:
         # Reaction fit: resolve inside the burn decision so a suppressed layer
