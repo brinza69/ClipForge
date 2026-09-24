@@ -76,6 +76,11 @@ def _candidate(clip: ClipModel) -> dict:
     }
 
 
+def _valid_pixel_dim(value: Any) -> bool:
+    """True for a non-bool int >= 2; bools/floats/strings/NaN/inf rejected without int() coercion."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 2
+
+
 def _plan_fits(plan: Any, src_w: int, src_h: int) -> bool:
     """Whether a stored plan's crops belong to THIS source's frame.
 
@@ -85,26 +90,19 @@ def _plan_fits(plan: Any, src_w: int, src_h: int) -> bool:
     CLEANLY while meaning something else entirely: measured, a plan built for
     854x480 and used against 1920x1080 cropped the top-left corner as the
     "facecam" and a narrow strip as the "gameplay", and nothing complained
-    because every rect was comfortably inside the frame.
-
-    So the plan carries the frame it was built for and this compares that. A
-    bounds check cannot do it — the wrong plan fits.
+    because every rect was comfortably inside the frame — a 02dea6f0a9e9-shaped
+    plan reads as fitting 1920x1080 by bounds alone. Only recorded identity
+    tells them apart, so a plan with no recorded dimensions is never reusable:
+    there is nothing to compare, and bounds already proved insufficient.
     """
-    if not isinstance(plan, dict) or src_w < 2 or src_h < 2:
+    if not isinstance(plan, dict):
         return False
-    plan_w, plan_h = int(plan.get("src_w") or 0), int(plan.get("src_h") or 0)
-    if plan_w >= 2 and plan_h >= 2:
-        return plan_w == src_w and plan_h == src_h
-    # Plans written before the frame was recorded: fall back to bounds, which
-    # at least catches a plan larger than the source it is being used on.
-    for key in ("face_rect", "game_rect", "chat_rect"):
-        rect = plan.get(key)
-        if not isinstance(rect, dict):
-            continue
-        if (rect.get("x", 0) + rect.get("w", 0) > src_w + 2
-                or rect.get("y", 0) + rect.get("h", 0) > src_h + 2):
-            return False
-    return True
+    if not _valid_pixel_dim(src_w) or not _valid_pixel_dim(src_h):
+        return False
+    plan_w, plan_h = plan.get("src_w"), plan.get("src_h")
+    if not _valid_pixel_dim(plan_w) or not _valid_pixel_dim(plan_h):
+        return False
+    return plan_w == src_w and plan_h == src_h
 
 
 def _regions_for(project_id: str, t: float) -> dict:
@@ -143,9 +141,11 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
         if _plan_fits(clip.layout_plan, src_w, src_h):
             return clip.layout_plan
         logger.warning(
-            "clip %s has a layout plan that does not fit a %dx%d source — "
-            "replanning. The source has probably been replaced since scoring.",
-            clip.id, src_w, src_h)
+            "clip %s has a layout plan with missing, invalid, or mismatched "
+            "recorded dimensions for a %dx%d source (plan src_w=%r src_h=%r) — "
+            "replanning.",
+            clip.id, src_w, src_h,
+            clip.layout_plan.get("src_w"), clip.layout_plan.get("src_h"))
     from services.clipper import layout as layout_mod
 
     regions = _regions_for(project.id, (float(clip.start_time or 0.0)

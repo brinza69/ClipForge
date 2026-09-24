@@ -191,18 +191,73 @@ def test_the_stored_corpus_is_not_touched_and_still_validates():
         import pytest
 
         pytest.skip("no stored corpus on this machine to check against")
-    checked = 0
+    checked, unreadable = 0, 0
     for path in stored:
+        before = path.read_bytes()
         try:
-            body = json.loads(path.read_text(encoding="utf-8"))
+            body = json.loads(before.decode("utf-8"))
         except Exception:
+            unreadable += 1
             continue
         if not isinstance(body, dict) or not body.get("input_fingerprint"):
             continue
         checked += 1
-        assert "fingerprint_schema" not in body, f"{path} was rewritten"
-        got = eq.fingerprint_verdict(body)
-        assert got["state"] in (eq.FINGERPRINT_VALID_V1, eq.FINGERPRINT_MISMATCH), (
-            f"{path}: {got['state']}")
-        assert got["assumed_legacy"] is True
+        _assert_dispatch_matches_contract(body, path)
+        # Verification is read-only: the bytes on disk did not move.
+        assert path.read_bytes() == before, f"{path} was rewritten"
     assert checked, "the corpus was found and nothing in it could be read"
+    assert checked + unreadable <= len(stored)
+
+
+def _assert_dispatch_matches_contract(body: dict, label) -> dict:
+    """Per-record dispatch exactly as declared_schema()/fingerprint_verdict()
+    define it: assumed_legacy is True ONLY for a MISSING fingerprint_schema
+    field. A declared v1 stays declared (assumed_legacy False), a declared v2
+    stays declared and never falls back to v1, and a schema this code does not
+    know is refused outright rather than tried against v1 or v2."""
+    from services.clipper.render_input import (FINGERPRINT_SCHEMA_V1,
+                                                FINGERPRINT_SCHEMA_V2)
+
+    got = eq.fingerprint_verdict(body)
+    declared = body.get("fingerprint_schema")
+    if declared is None:
+        assert got["assumed_legacy"] is True, f"{label}: {got}"
+        assert got["state"] in (eq.FINGERPRINT_VALID_V1, eq.FINGERPRINT_MISMATCH), (
+            f"{label}: {got['state']}")
+    elif declared == FINGERPRINT_SCHEMA_V1:
+        assert got["assumed_legacy"] is False, f"{label}: {got}"
+        assert got["state"] in (eq.FINGERPRINT_VALID_V1, eq.FINGERPRINT_MISMATCH), (
+            f"{label}: {got['state']}")
+    elif declared == FINGERPRINT_SCHEMA_V2:
+        assert got["assumed_legacy"] is False, f"{label}: {got}"
+        assert got["state"] in (eq.FINGERPRINT_VALID, eq.FINGERPRINT_MISMATCH), (
+            f"{label}: {got['state']}")
+    else:
+        assert got["assumed_legacy"] is False, f"{label}: {got}"
+        assert got["state"] == eq.FINGERPRINT_UNKNOWN_SCHEMA, f"{label}: {got['state']}"
+    return got
+
+
+def test_the_dispatch_helper_covers_missing_v1_v2_unknown_and_v2_mismatch():
+    """Deterministic coverage for the same dispatch the live-corpus probe
+    uses, so the contract is pinned independently of what happens to be on
+    disk on this machine."""
+    missing = _legacy()
+    v1 = _legacy(fingerprint_schema=ri.FINGERPRINT_SCHEMA_V1)
+    v1["input_fingerprint"] = ri.input_fingerprint(v1)
+    v2 = _v2()
+    unknown = _legacy(fingerprint_schema="clipper_render_input_v9")
+
+    _assert_dispatch_matches_contract(missing, "missing-schema")
+    _assert_dispatch_matches_contract(v1, "declared-v1")
+    _assert_dispatch_matches_contract(v2, "declared-v2")
+    _assert_dispatch_matches_contract(unknown, "unknown-schema")
+
+    tampered_v2 = {**_v2(),
+                   "caption_policy": {"action": "burn", "decided_by": "human"}}
+    got = _assert_dispatch_matches_contract(tampered_v2, "tampered-v2")
+    assert got["state"] == eq.FINGERPRINT_MISMATCH
+    # And the mismatch must not be rescued by re-reading it as v1.
+    as_v1 = dict(tampered_v2, fingerprint_schema=ri.FINGERPRINT_SCHEMA_V1)
+    as_v1["input_fingerprint"] = ri.input_fingerprint(as_v1)
+    assert eq.fingerprint_verdict(as_v1)["state"] == eq.FINGERPRINT_VALID_V1

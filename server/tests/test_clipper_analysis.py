@@ -375,13 +375,15 @@ def test_a_plan_records_the_frame_it_was_measured_in():
     assert plan["src_w"] == 1920 and plan["src_h"] == 1080
 
 
-def test_a_plan_from_before_the_frame_was_recorded_still_bounds_checks():
-    """Older stored plans carry no src_w/src_h; they must not all be thrown
-    away, but a plan larger than the source is still detectable."""
+def test_a_plan_from_before_the_frame_was_recorded_is_never_reused():
+    """Older stored plans carry no src_w/src_h. A bounds check cannot tell a
+    legacy 854x480 plan from a 1920x1080 one — every rect can sit comfortably
+    inside either frame — so a plan with no recorded dimensions is rejected
+    outright rather than trusted by geometry, on ANY source size."""
     from workers.clipper_render_jobs import _plan_fits
 
     legacy = {"game_rect": {"x": 492, "y": 0, "w": 934, "h": 1080}}
-    assert _plan_fits(legacy, 1920, 1080)
+    assert not _plan_fits(legacy, 1920, 1080)
     assert not _plan_fits(legacy, 854, 480)
 
 
