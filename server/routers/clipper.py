@@ -280,16 +280,11 @@ async def _load_project(session: AsyncSession, project_id: str) -> ProjectModel:
     return project
 
 
-@router.get("/projects/{project_id}")
-async def get_project(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    """Full project: candidates in rank order plus the job currently running,
-    which is everything the detail page needs to re-derive its state after a
-    reload."""
-    project = await _load_project(session, project_id)
-
+async def _board(session: AsyncSession, project: ProjectModel) -> list[dict]:
+    """The project's clips in board order, each with its effective caption policy."""
     clips = await session.execute(
         select(ClipModel)
-        .where(ClipModel.project_id == project_id)
+        .where(ClipModel.project_id == project.id)
         .order_by(
             # NULLs last so unranked candidates don't jump to the top.
             ClipModel.rank_position.is_(None),
@@ -297,6 +292,16 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_sessi
             ClipModel.start_time,
         )
     )
+    return [clip_to_dict(c, project) for c in clips.scalars().all()]
+
+
+@router.get("/projects/{project_id}")
+async def get_project(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    """Full project: candidates in rank order plus the job currently running,
+    which is everything the detail page needs to re-derive its state after a
+    reload."""
+    project = await _load_project(session, project_id)
+
     active = await session.execute(
         select(JobModel)
         .where(JobModel.project_id == project_id)
@@ -315,7 +320,7 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_sessi
     active_job = active.scalar_one_or_none()
 
     payload = project_to_dict(project)
-    payload["clips"] = [clip_to_dict(c) for c in clips.scalars().all()]
+    payload["clips"] = await _board(session, project)
     payload["active_job"] = job_to_dict(active_job) if active_job else None
     payload["error"] = failed_job.error if (failed_job and not active_job) else None
     return payload
@@ -329,23 +334,60 @@ async def patch_settings(
 
     The override is intentionally free of validation against detection: the
     user is always allowed to disagree with the classifier (brief §16).
+
+    `source_has_burned_captions` is classified apart from every other setting
+    (B2, PRPs/clipper-master-plan-2026-09-24.md §5): scoring never reads it, so
+    changing it alone queues no rescore, and the clips whose render it flips
+    are invalidated here, in the same transaction, or the request is refused
+    whole — see `apply_project_answer`.
     """
-    project = await _load_project(session, project_id)
+    from routers.clipper_caption_source import apply_project_answer
+    from services.clipper import caption_policy
+    from services.clipper.clip_mutations import begin_write
+
+    # B1's pattern (`clip_mutations.lock_clip`): SQLite's write lock BEFORE the
+    # read, so the `exporting` check on the affected clips sees the rows the
+    # write lands on — two backends share this DB, a claim can come from either.
+    # ONE BEGIN for the project and every inheriting clip (C4), never a
+    # `lock_clip` per clip; a lock held elsewhere is 503 `database_busy` (R4a).
+    await begin_write(session)
+    project = await session.get(ProjectModel, project_id, populate_existing=True)
+    if not project:
+        raise _err(404, "project_not_found", "That clip project no longer exists.")
 
     body = dict(payload or {})
+    scoring_changed = False
+    caption_source = {"changed": False, "affected_clip_ids": [],
+                      "invalidated_clip_ids": [], "export_cleared_clip_ids": []}
     if "settings" in body:
+        stored = project.clipper_settings or {}
         # Merged over what the project ALREADY has, not over the defaults. A
         # PATCH is allowed to be partial, and normalising the partial dict on
         # its own silently reverted every key it did not mention — including the
         # two whose whole design is that an unrelated edit must not move them.
         # The browser happens to post the entire object, which is why this went
         # unseen; a hand-rolled call is not obliged to.
-        body["clipper_settings"] = _normalise_settings(
-            {**(project.clipper_settings or {}), **dict(body.pop("settings") or {})})
+        new = _normalise_settings({**stored, **dict(body.pop("settings") or {})})
+        # The EFFECTIVE delta, both sides normalised: a stored dict that merely
+        # lacks a key the rig now defaults is not a change. One that no longer
+        # normalises (a mode since withdrawn) counts as every key changed —
+        # the rescore it used to get.
+        try:
+            old = _normalise_settings(stored)
+        except HTTPException:
+            old = {}
+        delta = {k for k in set(new) | set(old) if k not in old or old[k] != new.get(k)}
+        scoring_changed = bool(delta - {caption_policy.SETTING})
+        if delta:
+            body["clipper_settings"] = new
+            caption_source = await apply_project_answer(
+                session, project, stored.get(caption_policy.SETTING),
+                new[caption_policy.SETTING])
 
     changed = apply_patch(project, body, PROJECT_PATCHABLE, PROJECT_PATCHABLE_JSON)
-    if changed:
-        await session.commit()
+    # Unconditional: it also ends the write lock. With nothing changed it is an
+    # empty transaction and writes nothing.
+    await session.commit()
 
     # Overriding the content type has to actually change something. The profile
     # picks the scoring weights AND the default layout, both of which were
@@ -354,7 +396,7 @@ async def patch_settings(
     # reuses the cached transcript, signals and candidates: seconds on a short
     # source, a few minutes on a 6-hour one, and no re-download or re-transcribe.
     rescored_job: str | None = None
-    if "content_type_override" in changed or "clipper_settings" in changed:
+    if "content_type_override" in changed or scoring_changed:
         from services.clipper import storage
 
         has_analysis = storage.artifact_exists(project_id, "candidates")
@@ -375,6 +417,8 @@ async def patch_settings(
         "project": project_to_dict(project),
         "changed": changed,
         "rescore_job_id": rescored_job,
+        "caption_source": caption_source,
+        "clips": await _board(session, project),
     }
 
 

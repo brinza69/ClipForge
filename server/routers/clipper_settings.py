@@ -182,12 +182,16 @@ def _normalise_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         out["platform"] = "tiktok"
     if out.get("caption_position") not in {"bottom", "center", "top"}:
         out["caption_position"] = "bottom"
-    # Anything that is not a real answer becomes "nobody has said". A string
-    # "false" from a form would otherwise be truthy and suppress the captions of
-    # a project whose source has none.
-    if out.get("source_has_burned_captions") is not None and not isinstance(
-            out.get("source_has_burned_captions"), bool):
-        out["source_has_burned_captions"] = None
+    # REFUSED, not coerced (B2, PRPs/clipper-master-plan-2026-09-24.md §5). A
+    # string "false" from a form would be truthy and suppress the captions of a
+    # project whose source has none; turning it into None instead — what this
+    # did until B2 — answered 200 to a request whose answer was then dropped.
+    # `isinstance(x, bool)`, never `x in (True, False)`: `1 == True`.
+    caption_source = out.get("source_has_burned_captions")
+    if caption_source is not None and not isinstance(caption_source, bool):
+        raise HTTPException(422, {
+            "error": "invalid_value",
+            "message": "source_has_burned_captions must be true, false, or null."})
     if out.get("fps") not in {"source", 30, 60}:
         out["fps"] = settings.clipper_export_fps
     out["watermark_text"] = str(out.get("watermark_text") or "")[:80]

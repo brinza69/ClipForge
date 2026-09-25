@@ -141,6 +141,40 @@ def test_every_render_a_person_asked_for_is_stamped():
         assert "ORIGIN_MANUAL" in call, f"unstamped enqueue:\n{call}"
 
 
+@pytest.mark.parametrize("event,origin", [("metadata_changed", fb.ORIGIN_MANUAL),
+                                          ("metadata_changed", None),
+                                          ("export_invalidated", fb.ORIGIN_SYSTEM)])
+def test_the_b1r_events_are_not_labels(event, origin):
+    """`metadata_changed` keeps a corrected title or transcript through a
+    rescore; a corrected transcript is not an approval. `export_invalidated` is
+    the system noting that a project change voided a render — not a verdict.
+    Neither is in `_DECISIVE`, and neither displaces the last real verdict."""
+    assert event in fb.EVENT_TYPES and event not in fb._DECISIVE
+    assert fb.label_for_events([(event, origin)]) is None
+    assert fb.label_for_events(_m("rejected") + [(event, origin)]) == fb.LABEL_REJECTED
+
+
+@pytest.mark.asyncio
+async def test_a_clip_with_only_b1r_events_is_not_a_training_row():
+    import uuid
+
+    from database import async_session
+    from models import ClipModel
+
+    cid = "fbr-" + uuid.uuid4().hex[:8]
+    async with async_session() as s:
+        s.add(ClipModel(id=cid, project_id="fbr-proj", title="t", start_time=0.0,
+                        end_time=1.0, feature_vector={"hook": 1.0}))
+        await s.commit()
+        await fb.add(s, cid, "fbr-proj", "metadata_changed", {"field": "title"},
+                     origin=fb.ORIGIN_MANUAL)
+        await fb.add(s, cid, "fbr-proj", "export_invalidated", {"cause": "x"},
+                     origin=fb.ORIGIN_SYSTEM)
+        await s.commit()
+        rows = await fb.training_rows(s)
+    assert cid not in {r["clip_id"] for r in rows}
+
+
 def test_record_refuses_to_guess():
     """`origin` has no default. A caller that forgets it fails at the call, not
     silently in the append-only log the ranker trains on."""

@@ -18,15 +18,20 @@ export, and a stale .ass on disk would silently ship the pre-edit captions.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import shutil
+import uuid
 from pathlib import Path
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from config import settings
 from database import async_session
-from models import ClipModel, ClipStatus, ProjectModel
+from models import ClipModel, ClipStatus, JobModel, JobStatus, ProjectModel
 from services.clipper import storage
+from services.clipper.clip_mutations import begin_write
 from workers.clipper_render_output import _size_bytes  # noqa: F401 — compatibility
 
 # Re-exported, not just imported: `_decide_render` and friends were defined in
@@ -150,6 +155,49 @@ def _job_origin(metadata: object) -> str:
     return str(asked) if asked in feedback.ORIGINS else feedback.ORIGIN_SYSTEM
 
 
+async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, out: Path,
+                          review, ass: str | None = None) -> bool:
+    """Move this attempt's file, sidecar and burned `.ass` into place and mark the row
+    exported — only while it is the clip's CURRENT attempt (`export_job_id`),
+    the clip is still `exporting`, and the job still runs under THIS worker.
+
+    All under SQLite's write lock: a new submit (which moves `export_job_id`)
+    and every other publish take the same lock, so the check and the renames
+    cannot interleave with them. An UPDATE guarded the same way would not be
+    enough on its own — the file is replaced by a rename, not by the row.
+    A crash between the renames and the commit leaves THIS attempt's file with
+    an `exporting` row that fail/recovery then release; never an older file.
+    """
+    async with async_session() as session:
+        await begin_write(session)
+        current = await session.scalar(
+            select(ClipModel.id)
+            .join(JobModel, JobModel.id == ClipModel.export_job_id)
+            .where(ClipModel.id == clip_id, ClipModel.export_job_id == job_id,
+                   ClipModel.status == ClipStatus.exporting.value,
+                   JobModel.status == JobStatus.running.value, JobModel.worker_id == owner))
+        if current is None:
+            await session.rollback()
+            return False
+        os.replace(staged, out)
+        os.replace(staged.with_suffix(".json"), out.with_suffix(".json"))
+        # The `.ass` beside the export is read as "what was burned"
+        # (caption_corpus, rerender_pilots). Without captions the old one stays,
+        # as it always has.
+        if ass:
+            os.replace(ass, out.with_suffix(".ass"))
+        # The review goes on the row as well as the sidecar. Sidecar-only was
+        # how it shipped first, and nothing in the API or the UI could read a
+        # file on disk — which is this repo's oldest failure, a structure
+        # nobody reads, committed again on the day it was warned about.
+        await session.execute(
+            update(ClipModel)
+            .where(ClipModel.id == clip_id)
+            .values(status=ClipStatus.exported.value, export_path=str(out), review=review))
+        await session.commit()
+    return True
+
+
 async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Full-quality 1080x1920 deliverable."""
     from workers.clipper_render_output import render_export
@@ -159,75 +207,87 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
 
     clip, project = await _load(clip_id)
     src = _source_path(project)
-    paths = storage.paths(project_id)
 
     await queue.update_progress(job_id, 0.05, "Rendering export")
 
-    decision = await _decide_render(
-        clip, project, paths["exports_dir"],
-        on_stage=lambda p, m: queue.update_progress(job_id, p, m))
-    cfg = decision["cfg"]
-    dyn = decision["dyn"]
-    caption_y = decision["caption_y"]
-
-    # Pass D. It runs BEFORE the encode on purpose: a finding that arrives after
-    # a 12-24s render can only be reported, one that arrives before it can be
-    # acted on. Only the multi-shot path is reviewed, because that is the path
-    # that makes visual decisions nothing else checks.
-    review_result = None
-    if dyn:
-        await queue.update_progress(job_id, 0.15, "Reviewing the cut")
-        try:
-            review_result = await _review(clip, project, dyn, caption_y)
-            if review_result["findings"]:
-                logger.info("clip %s: review says %s — %s", clip.id,
-                            review_result["verdict"],
-                            "; ".join(f["detail"] for f in review_result["findings"][:3]))
-        except Exception:
-            # Advisory, and it stays advisory: a reviewer that crashes must not
-            # cost the export it was meant to improve.
-            logger.warning("clip %s: review failed", clip.id, exc_info=True)
-
-    async def review_rendered(out, review):
-        # Paid, advisory review stays a job concern. It sees the encoded file;
-        # a provider failure cannot erase the local findings or lose the export.
-        if review is not None and bool(
-                cfg.get("vision_review", settings.clipper_vision_review)):
-            try:
-                return await _vision_review(clip, cfg, out, review)
-            except Exception:
-                logger.warning("clip %s: vision review failed", clip.id, exc_info=True)
-        return review
-
     out = storage.export_path(project_id, clip.id)
+    # THIS attempt's own files (R4b). A cancel from the other backend or a lost
+    # lease does not stop an attempt already running, so two can be at work at
+    # once. Every file the encode reads or writes is this attempt's: the mp4 and
+    # sidecar at `staged`, the dynamic path's `.cmd.txt` beside it, and the
+    # caption `.ass` in the `scratch` directory — the decide writes `{clip}.ass`
+    # into whatever directory it is handed, and a shared one let a superseded
+    # attempt's late decide replace the captions the current one then burned
+    # (review F2). Only `_publish_export` moves them into place. A failed render
+    # no longer marks the clip here: fail/cancel do, and only for the current attempt.
+    staged = out.with_name(f".{out.stem}.{job_id}-{uuid.uuid4().hex[:8]}{out.suffix}")
+    scratch = staged.with_suffix("")
     try:
+        decision = await _decide_render(
+            clip, project, scratch,
+            on_stage=lambda p, m: queue.update_progress(job_id, p, m))
+        cfg = decision["cfg"]
+        dyn = decision["dyn"]
+        caption_y = decision["caption_y"]
+
+        # Pass D. It runs BEFORE the encode on purpose: a finding that arrives after
+        # a 12-24s render can only be reported, one that arrives before it can be
+        # acted on. Only the multi-shot path is reviewed, because that is the path
+        # that makes visual decisions nothing else checks.
+        review_result = None
+        if dyn:
+            await queue.update_progress(job_id, 0.15, "Reviewing the cut")
+            try:
+                review_result = await _review(clip, project, dyn, caption_y)
+                if review_result["findings"]:
+                    logger.info("clip %s: review says %s — %s", clip.id,
+                                review_result["verdict"],
+                                "; ".join(f["detail"] for f in review_result["findings"][:3]))
+            except Exception:
+                # Advisory, and it stays advisory: a reviewer that crashes must not
+                # cost the export it was meant to improve.
+                logger.warning("clip %s: review failed", clip.id, exc_info=True)
+
+        async def review_rendered(out, review):
+            # Paid, advisory review stays a job concern. It sees the encoded file;
+            # a provider failure cannot erase the local findings or lose the export.
+            if review is not None and bool(
+                    cfg.get("vision_review", settings.clipper_vision_review)):
+                try:
+                    return await _vision_review(clip, cfg, out, review)
+                except Exception:
+                    logger.warning("clip %s: vision review failed", clip.id, exc_info=True)
+            return review
+
         await queue.update_progress(job_id, 0.20, "Rendering export")
         result = await render_export(
-            clip, project, decision, out, src=src, review_result=review_result,
+            clip, project, decision, staged, src=src, review_result=review_result,
             after_render=review_rendered,
             on_progress=lambda p, m: queue.update_progress(job_id, 0.20 + 0.7 * p, m),
-            is_cancelled=lambda: queue.is_cancelled(job_id))
-    except Exception:
-        async with async_session() as session:
-            await session.execute(
-                update(ClipModel).where(ClipModel.id == clip.id).values(
-                    status=ClipStatus.failed.value))
-            await session.commit()
-        raise
-    review_result = result["sidecar"]["review"]
-
-    async with async_session() as session:
-        # The review goes on the row as well as the sidecar. Sidecar-only was
-        # how it shipped first, and nothing in the API or the UI could read a
-        # file on disk — which is this repo's oldest failure, a structure
-        # nobody reads, committed again on the day it was warned about.
-        await session.execute(
-            update(ClipModel)
-            .where(ClipModel.id == clip.id)
-            .values(status=ClipStatus.exported.value, export_path=str(out),
-                    review=review_result)
-        )
-        await session.commit()
+            is_cancelled=lambda: queue.is_cancelled(job_id), discard_on_cancel=True)
+        review_result = result["sidecar"]["review"]
+        ass = decision.get("ass_path")
+        if ass:
+            # The record names the file ffmpeg read: this attempt's scratch copy,
+            # gone once published. Name the published file instead — a rename, so
+            # `ass_sha256` still holds, and the shape every pre-R4b sidecar has.
+            # The scratch name is a detail of one run; `render_input` leaves it out.
+            side = json.loads(staged.with_suffix(".json").read_text(encoding="utf-8"))
+            record = side.get("render_record")
+            if isinstance(record, dict):
+                for key in ("ass_path", "ass_path_offered"):
+                    if record.get(key) and Path(record[key]).resolve() == Path(ass).resolve():
+                        record[key] = str(out.with_suffix(".ass"))
+                storage.atomic_write_json(staged.with_suffix(".json"), side, indent=2,
+                                          ensure_ascii=False, default=str)
+        if not await _publish_export(job_id, clip.id, queue.worker_id, staged, out,
+                                     review_result, ass):
+            raise RuntimeError(f"export {job_id} is no longer clip {clip.id}'s current "
+                               "export; its render was discarded")
+    finally:
+        for leftover in (staged, staged.with_suffix(".json"), staged.with_suffix(".cmd.txt")):
+            leftover.unlink(missing_ok=True)
+        shutil.rmtree(scratch, ignore_errors=True)
 
     from services.clipper import feedback
 

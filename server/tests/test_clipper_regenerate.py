@@ -172,13 +172,12 @@ async def test_only_one_caller_can_claim_a_clip_for_export():
     """
     import asyncio
 
-    from routers.clipper_clips import claim_for_export
+    from test_clipper_mutation_atomicity import _claim    # the whole submit, R4b
 
     await _clip("conc-p", "conc-c")
 
     async def attempt() -> bool:
-        async with async_session() as session:
-            return await claim_for_export(session, "conc-c")
+        return await _claim("conc-c")
 
     results = await asyncio.gather(*(attempt() for _ in range(8)))
     assert sum(results) == 1, f"{sum(results)} callers thought they had the clip"
@@ -201,15 +200,46 @@ async def test_status_cannot_be_written_through_the_generic_patch(client):
     """The whitelist used to include `status` as a bare `str`, which let a
     client write any value AND walk past the export guard by setting the state
     the guard wanted to see. A whitelist containing the field the guards read
-    is not a whitelist."""
+    is not a whitelist.
+
+    Split in two by Codex's Bfix verdict (Q1): this half is the whitelist; the
+    title that rode along is now refused on an exporting clip (R2, below)."""
     await _clip("patch-p", "patch-c", status="exporting")
 
-    r = await client.patch("/api/clipper/clips/patch-c",
+    r = await client.patch("/api/clipper/clips/patch-c", json={"status": "candidate"})
+    assert r.status_code == 200, r.text
+    assert r.json()["changed"] == []
+    assert await _status_of("patch-c") == "exporting"
+
+
+@pytest.mark.asyncio
+async def test_a_status_riding_on_a_real_edit_does_not_get_past_the_export_guard(client):
+    """The combination that tried the bypass: status plus an effective change.
+    R2 refuses any change to an exporting clip, title included — the export
+    sidecar reads it — so nothing moves and nothing is logged."""
+    await _clip("patch2-p", "patch2-c", status="exporting")
+
+    r = await client.patch("/api/clipper/clips/patch2-c",
+                           json={"status": "candidate", "title": "not now"})
+    assert r.status_code == 409, r.text
+    assert "export_in_progress" in r.text
+    async with async_session() as session:
+        clip = await session.get(ClipModel, "patch2-c")
+        assert (clip.status, clip.title) == ("exporting", "Untitled Clip")   # the default
+    events = (await client.get("/api/clipper/clips/patch2-c/events")).json()["events"]
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_an_editable_clip_takes_the_title_and_still_ignores_the_status(client):
+    await _clip("patch3-p", "patch3-c", status="approved")
+
+    r = await client.patch("/api/clipper/clips/patch3-c",
                            json={"status": "candidate", "title": "still allowed"})
     assert r.status_code == 200, r.text
-    assert "status" not in r.json()["changed"]
-    assert await _status_of("patch-c") == "exporting"
+    assert r.json()["changed"] == ["title"]
     assert r.json()["clip"]["title"] == "still allowed"
+    assert await _status_of("patch3-c") == "approved"
 
 
 @pytest.mark.asyncio

@@ -84,6 +84,29 @@ async def record(
     on. Making it required moves that mistake from runtime to the first time
     anyone runs the code.
     """
+    new_id = await add(session, clip_id, project_id, event_type, payload, origin=origin)
+    await session.commit()
+    logger.debug(f"clipper feedback {event_type} clip={clip_id} id={new_id}")
+    return new_id
+
+
+async def add(
+    session: AsyncSession,
+    clip_id: str,
+    project_id: str | None,
+    event_type: str,
+    payload: dict | None = None,
+    *,
+    origin: str,
+) -> str:
+    """`record()` without the commit: the event joins the caller's transaction.
+
+    For an edit whose event is what protects it from a rescore (see
+    `clipper_finalize._kept_clips`). Committing them separately left a window in
+    which a rescore saw the edit without its event and deleted the clip; and a
+    commit hidden in here would reopen that window inside the caller's
+    transaction. Same validation as `record()`.
+    """
     if event_type not in EVENT_TYPES:
         raise ValueError(f"unknown clipper event type: {event_type!r}")
     if origin not in ORIGINS:
@@ -102,10 +125,7 @@ async def record(
     # Flush before commit so the Python-side uuid default is assigned while the
     # instance is guaranteed live, whatever expire_on_commit is set to.
     await session.flush()
-    new_id = row.id
-    await session.commit()
-    logger.debug(f"clipper feedback {event_type} clip={clip_id} id={new_id}")
-    return new_id
+    return row.id
 
 
 # ── Reading ──────────────────────────────────────────────────────────────────
@@ -133,6 +153,27 @@ async def events_for_clip(session: AsyncSession, clip_id: str) -> list[dict]:
         .order_by(ClipFeedbackModel.created_at, ClipFeedbackModel.id)
     )
     return [_event_dict(r) for r in result.scalars().all()]
+
+
+async def current_reject_reason(session: AsyncSession, clip_id: str) -> Any:
+    """The reason of the clip's CURRENT rejection: the last `rejected` event's,
+    as corrected by the `metadata_changed` `reject_reason` edits after it.
+
+    A new approved->rejected cycle writes a new `rejected`, which starts over,
+    so a correction from the previous rejection is not inherited."""
+    rows = await session.execute(
+        select(ClipFeedbackModel.event_type, ClipFeedbackModel.payload)
+        .where(ClipFeedbackModel.clip_id == clip_id)
+        .order_by(ClipFeedbackModel.created_at, ClipFeedbackModel.id)
+    )
+    reason = None
+    for event_type, payload in rows.all():
+        payload = payload if isinstance(payload, dict) else {}
+        if event_type == "rejected":
+            reason = payload.get("reason") or None
+        elif event_type == "metadata_changed" and payload.get("field") == "reject_reason":
+            reason = payload.get("new")
+    return reason
 
 
 # ── Labelling ────────────────────────────────────────────────────────────────

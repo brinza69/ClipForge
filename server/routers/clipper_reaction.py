@@ -10,7 +10,8 @@ All mutations:
   - reject an exporting clip BEFORE committing
   - invalidate the old render reference (clear export/preview paths)
   - record manual feedback
-  - return {clip: clip_to_dict(clip)}
+  - return {clip: clip_to_dict(clip, project)} — with the project, so the
+    clip carries its real `effective_caption_policy` (C3)
 
 clipper_clips.py already has 499 lines; nothing touches it.
 """
@@ -30,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_session
 from models import ClipModel, ClipStatus, ProjectModel
 from services.clipper import feedback as feedback_mod
+from services.clipper.clip_mutations import lock_clip
 from services.clipper.reaction_edit import (
     BINDING_SCHEMA,
     compute_source_version,
@@ -56,9 +58,11 @@ def _err(status: int, code: str, message: str, **extra: Any) -> Any:
 
 
 async def _load_clip_and_project(
-    session: AsyncSession, clip_id: str
+    session: AsyncSession, clip_id: str, *, lock: bool = False
 ) -> tuple[ClipModel, ProjectModel]:
-    clip = await session.get(ClipModel, clip_id)
+    # `lock=True` for a mutation: the exporting check must see the row the write
+    # lands on, not one a claim changed after it was read (`lock_clip`).
+    clip = await (lock_clip(session, clip_id) if lock else session.get(ClipModel, clip_id))
     if not clip:
         raise _err(404, "clip_not_found", "That clip no longer exists.")
     project = await session.get(ProjectModel, clip.project_id)
@@ -269,7 +273,7 @@ async def put_reaction_layout(
     identity, face aspect. Refuses an exporting clip. For automatic captions,
     resolves y_pct using the new plan safe_zones (manual captions are kept).
     """
-    clip, project = await _load_clip_and_project(session, clip_id)
+    clip, project = await _load_clip_and_project(session, clip_id, lock=True)
     _reject_exporting(clip)
 
     src = _source_path(project)
@@ -392,19 +396,24 @@ async def put_reaction_layout(
                        "Try again or set caption position manually.") from exc
 
     # --- commit ------------------------------------------------------------
+    # Saving the framing already on the clip changes nothing: no event, and the
+    # render made from it stays valid.
+    if plan == clip.layout_plan and new_caption_plan == clip.caption_plan:
+        return {"clip": clip_to_dict(clip, project)}
     clip.layout_plan = plan
     if new_caption_plan is not clip.caption_plan:
         clip.caption_plan = new_caption_plan
     _invalidate_render(clip)
 
-    await feedback_mod.record(
+    # `add`, not `record`: the event and the edit are one commit (B1).
+    await feedback_mod.add(
         session, clip_id, clip.project_id,
         "layout_changed",
         payload={"reaction_layout": True, "by": "human"},
         origin=feedback_mod.ORIGIN_MANUAL,
     )
     await session.commit()
-    return {"clip": clip_to_dict(clip)}
+    return {"clip": clip_to_dict(clip, project)}
 
 
 # ---------------------------------------------------------------------------
@@ -424,23 +433,23 @@ async def delete_reaction_layout(
     If no such plan exists, no mutation is performed.
     Does not delete files or change project settings.
     """
-    clip, project = await _load_clip_and_project(session, clip_id)
+    clip, project = await _load_clip_and_project(session, clip_id, lock=True)
 
     plan = clip.layout_plan
     has_reaction = isinstance(plan, dict) and plan.get("game_content_fit") is True
     if not has_reaction:
-        return {"clip": clip_to_dict(clip)}
+        return {"clip": clip_to_dict(clip, project)}
 
     _reject_exporting(clip)
 
     clip.layout_plan = None
     _invalidate_render(clip)
 
-    await feedback_mod.record(
+    await feedback_mod.add(
         session, clip_id, clip.project_id,
         "layout_changed",
         payload={"reaction_layout_cleared": True, "by": "human"},
         origin=feedback_mod.ORIGIN_MANUAL,
     )
     await session.commit()
-    return {"clip": clip_to_dict(clip)}
+    return {"clip": clip_to_dict(clip, project)}

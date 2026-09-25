@@ -13,10 +13,11 @@ from pathlib import Path
 import shutil
 
 import pytest
+from sqlalchemy import update
 
 from config import settings
 from database import async_session
-from models import ClipModel, ProjectModel
+from models import ClipModel, JobModel, ProjectModel
 from services.clipper import dynamic_render, output_identity, render_input
 from services.clipper import render as static_render
 from services.clipper.ffmpeg_tools import ffmpeg_bin, run, video_info
@@ -104,6 +105,8 @@ def _ass(path: Path):
 
 
 class _Queue:
+    worker_id = "test-worker"
+
     async def update_progress(self, *_):
         pass
 
@@ -156,6 +159,16 @@ async def test_normal_export_and_replan_produce_the_same_actual_file(
     normal = normal_dir / f"{clip.id}.mp4"
     monkeypatch.setattr(jobs.storage, "paths", lambda _: {"exports_dir": normal_dir})
     monkeypatch.setattr(jobs.storage, "export_path", lambda *_: normal)
+
+    # Since R4b only the clip's current, running, owned attempt publishes; set
+    # one up the way Export and the queue's claim would.
+    async with async_session() as session:
+        await session.merge(JobModel(id="shared-test", project_id=project.id, clip_id=clip.id,
+                                     type="clipper_export", status="running",
+                                     worker_id="test-worker"))
+        await session.execute(update(ClipModel).where(ClipModel.id == clip.id)
+                              .values(status="exporting", export_job_id="shared-test"))
+        await session.commit()
 
     await jobs.handle_export("shared-test", project.id, clip.id, {}, _Queue())
     normal_bytes = normal.read_bytes()

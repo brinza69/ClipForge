@@ -11,6 +11,7 @@ A recipe match describes the recorded inputs, not visual/editorial quality.
 from __future__ import annotations
 
 import asyncio
+import threading
 from copy import deepcopy
 from pathlib import Path
 
@@ -35,12 +36,18 @@ def _size_bytes(path: str | Path) -> int | None:
 
 async def render_export(clip, project, decision: dict, out: str | Path, *,
                         src: str, review_result=None, after_render=None,
-                        on_progress=None, is_cancelled=None) -> dict:
+                        on_progress=None, is_cancelled=None,
+                        discard_on_cancel=False) -> dict:
     """Execute a resolved decision, then atomically write its v2 sidecar.
 
     `after_render` lets the job attach its advisory review of the actual file;
     the callback owns review policy and failures. Probes omit it. Neither path
     writes a sidecar for a failed encode. The caller owns DB state and feedback.
+
+    `discard_on_cancel`: for a caller whose `out` is its own staging name. A
+    cancel stops this coroutine, not the dynamic encoder's thread, which then
+    creates `out` after the caller's cleanup ran; the thread removes it itself.
+    Off by default — probes and the re-render scripts write the real path.
     """
     from services.clipper import dynamic_render, render as static_render
 
@@ -65,17 +72,35 @@ async def render_export(clip, project, decision: dict, out: str | Path, *,
     # passed to the encoder and stored; no caller builds a second command.
     render.update(decision.get("render") or {})
     if dyn:
-        result = await asyncio.to_thread(
-            dynamic_render.render_dynamic_clip,
-            src, dyn, str(out), start=float(clip.start_time or 0.0),
-            work_dir=out.parent, ass_path=decision["ass_path"],
-            src_w=int(project.width or 1920),
-            src_h=int(project.height or 1080),
-            watermark=render["watermark"], drop_spans=decision["drop"],
-            has_audio=static_render._has_audio(src),
-            is_cancelled=is_cancelled,
-            fps=render["fps"], crf=render["crf"], preset=render["preset"],
-            out_w=render["out_w"], out_h=render["out_h"])
+        abandoned = threading.Event()
+
+        def encode(render_dynamic_clip, *args, **kwargs):
+            try:
+                return render_dynamic_clip(*args, **kwargs)
+            finally:
+                # Set only after the await was cancelled; a file finished
+                # before that is still there for the caller's own cleanup.
+                if abandoned.is_set():
+                    # `render_dynamic_clip` names its sendcmd `{work_dir}/{stem}.cmd.txt`.
+                    for path in (out, out.with_suffix(".cmd.txt")):
+                        path.unlink(missing_ok=True)
+
+        try:
+            result = await asyncio.to_thread(
+                encode, dynamic_render.render_dynamic_clip,
+                src, dyn, str(out), start=float(clip.start_time or 0.0),
+                work_dir=out.parent, ass_path=decision["ass_path"],
+                src_w=int(project.width or 1920),
+                src_h=int(project.height or 1080),
+                watermark=render["watermark"], drop_spans=decision["drop"],
+                has_audio=static_render._has_audio(src),
+                is_cancelled=is_cancelled,
+                fps=render["fps"], crf=render["crf"], preset=render["preset"],
+                out_w=render["out_w"], out_h=render["out_h"])
+        except asyncio.CancelledError:
+            if discard_on_cancel:
+                abandoned.set()
+            raise
     else:
         from workers.clipper_render_plan import _candidate
 

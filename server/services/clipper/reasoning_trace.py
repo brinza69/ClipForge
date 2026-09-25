@@ -42,6 +42,9 @@ from typing import Any
 
 RUN_TRACE_VERSION = "reasoning_run_v1"
 SELECTION_TRACE_VERSION = "selection_trace_v1"
+# Versions the `shadow_selection` block alone (`selection_trace_v1` readers keep
+# working). A trace without it predates it: "not recorded", never "no board".
+SHADOW_SELECTION_VERSION = "shadow_selection_v1"
 
 # How a candidate ended up where it did. A closed list so they can be counted
 # rather than read one at a time.
@@ -401,9 +404,13 @@ def build_selection_trace(candidates: list[dict], *, mode: str,
     # every one of its members, and neither depends on who came first.
     bases = [_variant_id(c) for c in (candidates or [])]
     collides = {b for b in bases if bases.count(b) > 1}
+    shadow_of: dict[int, dict] = {}
     for index, cand in enumerate(candidates or []):
         story = cand.get("story") if isinstance(cand.get("story"), dict) else {}
         base = bases[index]
+        if cand.get("shadow_rank") is not None:
+            shadow_of[index] = {"shadow_rank": cand.get("shadow_rank"),
+                                "shadow_run_id": cand.get("shadow_run_id")}
         entries.append({
             "variant_id": (f"{base}+{_disambiguate(cand)}"
                            if base in collides else base),
@@ -441,15 +448,27 @@ def build_selection_trace(candidates: list[dict], *, mode: str,
     # are genuine duplicates, and nothing about their content can separate them
     # — so they fall back to order, which is at least stable within a run.
     used: dict[str, int] = {}
+    shadow_by_entry: dict[int, dict] = {}
     for entry in entries:
         vid = entry["variant_id"]
         used[vid] = used.get(vid, 0) + 1
         if used[vid] > 1:
             entry["variant_id"] = f"{vid}~{used[vid]}"
+        if entry["_index"] in shadow_of:
+            shadow_by_entry[id(entry)] = shadow_of[entry["_index"]]
         entry.pop("_index", None)
 
     entries.sort(key=lambda e: (e["start"] if e["start"] is not None else 0.0,
                                 e["variant_id"]))
+    # WHICH candidates the shadow board took, as the build stamped them — from
+    # the candidates in memory, never from the clip rows a review then checks
+    # against it. Before this block `shadow_rank` lived only on the rows, so a
+    # review could prove the shadow board's SIZE and nothing about its members:
+    # another candidate of the same pool given the same rank passed (Codex B3).
+    shadow_picks = [{**shadow_by_entry[id(e)], "variant_id": e["variant_id"],
+                     "start": e["start"], "end": e["end"],
+                     "eliminated_by": e["eliminated_by"]}
+                    for e in entries if id(e) in shadow_by_entry]
 
     winners = [e for e in entries if e["rank_position"]]
     story_entries = [e for e in entries if e["is_story"]]
@@ -474,4 +493,7 @@ def build_selection_trace(candidates: list[dict], *, mode: str,
         "structure_fingerprint": fingerprint(
             [e["variant_id"] for e in entries]),
         "entries": entries,
+        # On every trace this writer produces; `picks` is [] without a shadow board.
+        "shadow_selection": {"version": SHADOW_SELECTION_VERSION,
+                             "picks": shadow_picks},
     }

@@ -132,6 +132,16 @@ class ClipperEvent(str, enum.Enum):
     # ranker reading it as approval is how training_rows() once returned 43
     # rows every one of which was labelled 1.0.
     reviewed = "reviewed"
+    # A person's persistent edit of a field with no semantic event of its own
+    # (title, transcript text, sub-scores, warnings); `field` in the payload.
+    # Keeps the edit through a rescore. NOT a verdict: correcting a transcript
+    # is not approving the clip (codex-verdict-wave1.md, answer 3).
+    metadata_changed = "metadata_changed"
+    # SYSTEM fact: a project-level change (the caption-source answer) voided an
+    # existing export; payload names the cause and the previous export. Keeps
+    # the row a rescore would otherwise delete once `invalidate_render` moved it
+    # exported -> approved. Not a human edit, not a verdict (C1).
+    export_invalidated = "export_invalidated"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -359,6 +369,13 @@ class ClipModel(Base):
     # inside `caption_plan`: a caption rebuild replaces that dict and would
     # silently resurrect a duplicate layer.
     source_has_burned_captions: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # The export attempt that owns this clip's claim (R4b): the job id written in
+    # the SAME commit as `status = exporting` and the job row. Fail, cancel,
+    # recovery and the render's own publish move the clip only for this job; an
+    # older attempt's encode that finishes late publishes nothing. NULL for
+    # historical orphans too — their identity is not reconstructed
+    # (scripts/release_stuck_exports.py).
+    export_job_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
     # The optional context hook. Distinct from `hook_text` (legacy editor).
     headline_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)

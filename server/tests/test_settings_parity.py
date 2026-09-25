@@ -151,6 +151,28 @@ def test_the_parser_reads_the_real_file():
         assert known in keys, f"{known} missing — the parser has drifted"
 
 
+@pytest.mark.parametrize("value", [True, False, None])
+def test_the_caption_source_answer_survives_as_given(value):
+    from routers.clipper import _normalise_settings
+
+    assert _normalise_settings({"source_has_burned_captions": value})[
+        "source_has_burned_captions"] is value
+
+
+@pytest.mark.parametrize("bad", [1, 0, "true", "false", "yes", "", [], {}])
+def test_the_caption_source_answer_is_refused_rather_than_coerced(bad):
+    """Until B2 these became None in silence: a 200 for a request whose answer
+    was then dropped. `1 == True`, so this also pins the isinstance check."""
+    from fastapi import HTTPException
+
+    from routers.clipper import _normalise_settings
+
+    with pytest.raises(HTTPException) as exc:
+        _normalise_settings({"source_has_burned_captions": bad})
+    assert exc.value.status_code == 422
+    assert exc.value.detail["error"] == "invalid_value"
+
+
 @pytest.mark.parametrize("key", ["auto_export", "vision_review"])
 def test_the_two_that_were_actually_dropped(key: str):
     """Named rather than left to the set comparison, so the failure message

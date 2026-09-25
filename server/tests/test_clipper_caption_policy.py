@@ -16,6 +16,8 @@ text at all and nothing reports it.
 
 from __future__ import annotations
 
+import pytest
+
 from services.clipper import caption_policy as cp
 from services.clipper import publish_corpus as pcorp
 from services.clipper import source_captions as scap
@@ -118,6 +120,46 @@ def test_the_duplicate_check_clears_when_our_layer_was_suppressed():
                         own_layer=False)
     assert got["state"] == pf.UNAVAILABLE
     assert pcap.TWO_LAYERS not in got["why"], "the duplicate finding is gone"
+
+
+# --- what the editor is shown (B2, PRPs/clipper-master-plan-2026-09-24.md §5) ---
+
+
+@pytest.mark.parametrize("clip", [True, False, None])
+@pytest.mark.parametrize("project", [True, False, None])
+def test_the_effective_policy_is_decide_with_a_scope(project, clip):
+    """Every clip x project combination: a clip's answer wins, then the
+    project's, then the default — and the action is `decide()`'s own."""
+    got = cp.effective(project, clip)
+    want = cp.decide(project, clip_setting=clip)
+    assert set(got) == {"action", "scope", "decided_by", "why"}
+    assert (got["action"], got["decided_by"], got["why"]) == (
+        want["action"], want["decided_by"], want["why"])
+    if clip is not None:
+        assert got["scope"] == "clip" and got["decided_by"] == cp.HUMAN
+        assert got["action"] == (cp.SUPPRESS if clip else cp.BURN)
+    elif project is not None:
+        assert got["scope"] == "project" and got["decided_by"] == cp.HUMAN
+        assert got["action"] == (cp.SUPPRESS if project else cp.BURN)
+    else:
+        assert got == {"action": cp.BURN, "scope": "default", "decided_by": cp.DEFAULT,
+                       "why": "nobody_has_declared_the_source"}
+
+
+@pytest.mark.parametrize("bad", ["true", 1, 0, [], {}])
+def test_a_value_that_is_not_an_answer_reads_as_nobody_having_said(bad):
+    """The render's reading of stored garbage, shown as it will render."""
+    assert cp.effective(bad, None)["scope"] == "default"
+    assert cp.effective(None, bad)["scope"] == "default"
+    assert cp.effective(True, bad)["scope"] == "project"
+
+
+def test_the_sidecar_dict_did_not_gain_a_scope():
+    """`decide()` is written into export sidecars; the presentation scope must
+    not leak into a project-level decision there."""
+    for project in (True, False, None):
+        assert "scope" not in cp.decide(project)
+        assert "scope" not in cp.decide(project, clip_setting=None)
 
 
 def _readable():

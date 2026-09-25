@@ -27,9 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_session
-from models import ClipModel, ClipperEvent
+from models import ClipModel, ClipperEvent, ProjectModel
 from services.clipper import feedback as feedback_mod
 from services.clipper import blind_review as review_mod
+from services.clipper import review_cohorts
 from services.clipper import review_media
 from services.clipper import review_lock
 from services.clipper import storage
@@ -72,6 +73,9 @@ def _save(session: dict) -> None:
 class NewSession(BaseModel):
     project_ids: list[str]
     seed: int | None = None
+    # B3: {project_id: selection_run_id, or None for the unknown/legacy cohort}.
+    # Absent keeps the pre-B3 behaviour, 409 on a mixed board included.
+    selection_runs: dict[str, str | None] | None = None
 
 
 class Answer(BaseModel):
@@ -103,18 +107,104 @@ async def get_rubric() -> dict:
     }
 
 
+def _board_rows(project_ids):
+    return (select(ClipModel)
+            .where(ClipModel.project_id.in_(project_ids))
+            .where(ClipModel.rank_position.is_not(None)
+                   | ClipModel.shadow_rank.is_not(None)))
+
+
+def _row(clip) -> dict:
+    return {"clip_id": clip.id, "project_id": clip.project_id,
+            "rank_position": clip.rank_position, "shadow_rank": clip.shadow_rank,
+            "shadow_run_id": clip.shadow_run_id, "selection_run_id": clip.selection_run_id,
+            "export_path": clip.export_path, "start_time": clip.start_time,
+            "end_time": clip.end_time, "duration": clip.duration,
+            "transcript_text": clip.transcript_text}
+
+
+def _artifact(project_id: str, name: str):
+    try:
+        return storage.read_artifact(project_id, name)
+    except ValueError:  # an id `storage` will not build a path from has no trace
+        return None
+
+
+async def _cohort(project_id: str, run_id: str | None, group) -> tuple[dict, dict]:
+    """One run's report and the media snapshots taken while checking it.
+
+    Read per request, never cached: the next rescore overwrites both traces,
+    and a proof read before it would still vouch for a run it no longer names.
+    """
+    members = [_row(c) for c in group if c.selection_run_id == run_id]
+    foreign = sum(1 for c in group if run_id is not None
+                  and c.selection_run_id != run_id and c.shadow_run_id == run_id)
+    return await asyncio.to_thread(
+        review_cohorts.evaluate, run_id, members, foreign,
+        _artifact(project_id, "selection_trace"), _artifact(project_id, "reasoning_run"),
+        review_media.capture, review_media.MediaChanged)
+
+
+@router.get("/cohorts")
+async def list_cohorts(project_id: str,
+                       session: AsyncSession = Depends(get_session)) -> dict:
+    """Every run on this project's board and whether it can be reviewed alone.
+
+    Counts and reasons only, no clip ids: which clip sits on which board is the
+    membership the session hides. Sorted by id so the list is stable — the order
+    is not a recommendation, and nothing here picks a run for the person.
+    """
+    if await session.get(ProjectModel, project_id) is None:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    group = (await session.execute(_board_rows([project_id]))).scalars().all()
+    runs = sorted({c.selection_run_id for c in group}, key=lambda r: (r is None, r or ""))
+    cohorts = [(await _cohort(project_id, run, group))[0] for run in runs]
+    return {"project_id": project_id, "board_rows": len(group), "cohorts": cohorts}
+
+
+async def _explicit_cohorts(body: NewSession, clips) -> tuple[list[dict], dict]:
+    """The rows of exactly the runs the person named, or a 4xx naming what is missing.
+
+    Nothing is relabelled and no other run is borrowed to fill a gap: a kept
+    clip of another run stays out of this session, whatever its rank says.
+    """
+    named, wanted = set(body.selection_runs), set(body.project_ids)
+    if named != wanted:
+        raise HTTPException(status_code=400, detail={
+            "error": "selection_runs_must_name_exactly_the_requested_projects",
+            "unnamed": sorted(wanted - named), "unrequested": sorted(named - wanted)})
+    for run_id in body.selection_runs.values():
+        if run_id is not None and (not run_id or run_id != run_id.strip() or len(run_id) > 64):
+            raise HTTPException(status_code=400, detail="invalid_selection_run_id")
+    refused, picked, chosen = [], [], {}
+    for project_id in sorted(wanted):
+        run_id = body.selection_runs[project_id]
+        group = [c for c in clips if c.project_id == project_id]
+        if not any(c.selection_run_id == run_id for c in group):
+            refused.append({"project_id": project_id, "selection_run_id": run_id,
+                            "missing": ["run_not_in_project"]})
+            continue
+        report, snapshots = await _cohort(project_id, run_id, group)
+        if not report["eligible"]:
+            refused.append({"project_id": project_id, "selection_run_id": run_id,
+                            "missing": report["missing"]})
+            continue
+        chosen[project_id] = report["membership"]
+        picked += [{**_row(c), "media": snapshots[c.id]}
+                   for c in group if c.selection_run_id == run_id]
+    if refused:
+        raise HTTPException(status_code=409, detail={"error": "cohort_not_eligible",
+                                                     "cohorts": refused})
+    return picked, chosen
+
+
 @router.post("")
 async def start_session(body: NewSession,
                         session: AsyncSession = Depends(get_session)) -> dict:
     if not body.project_ids:
         raise HTTPException(status_code=400, detail="pick at least one project")
 
-    rows = await session.execute(
-        select(ClipModel)
-        .where(ClipModel.project_id.in_(body.project_ids))
-        .where(ClipModel.rank_position.is_not(None)
-               | ClipModel.shadow_rank.is_not(None))
-    )
+    rows = await session.execute(_board_rows(body.project_ids))
     clips = rows.scalars().all()
     if not clips:
         raise HTTPException(
@@ -124,6 +214,10 @@ async def start_session(body: NewSession,
     missing = sorted(set(body.project_ids) - {c.project_id for c in clips})
     if missing:
         raise HTTPException(status_code=409, detail={"projects_without_board": missing})
+    if body.selection_runs is not None:
+        picked, chosen = await _explicit_cohorts(body, clips)
+        return _open(body, picked, {"selection_runs": dict(body.selection_runs),
+                                    "cohort_membership": chosen})
     # A preserved export can carry an older rank. Do not compare boards that
     # never coexisted; all-unknown historical runs stay explicitly unknown.
     for project_id in set(body.project_ids):
@@ -137,23 +231,25 @@ async def start_session(body: NewSession,
             raise HTTPException(status_code=409, detail="board_contains_different_selection_runs")
     picked = []
     for clip in clips:
-        row = {"clip_id": clip.id, "project_id": clip.project_id,
-               "rank_position": clip.rank_position, "shadow_rank": clip.shadow_rank,
-               "shadow_run_id": clip.shadow_run_id, "selection_run_id": clip.selection_run_id,
-               "export_path": clip.export_path, "start_time": clip.start_time,
-               "end_time": clip.end_time, "duration": clip.duration,
-               "transcript_text": clip.transcript_text}
+        row = _row(clip)
         try:
             row["media"] = await asyncio.to_thread(review_media.capture, row)
         except review_media.MediaChanged as exc:
             raise HTTPException(status_code=409, detail=f"review_not_ready: {exc}") from exc
         picked.append(row)
+    return _open(body, picked, {})
+
+
+def _open(body: NewSession, picked: list[dict], cohort: dict) -> dict:
     out = review_mod.create(uuid.uuid4().hex[:16], picked, seed=body.seed)
+    # Kept in the session file for the result; never sent by /next or /video.
+    out.update(cohort)
     _save(out)
     logger.info("clipper review %s: %d items over %d projects",
                 out["session_id"], len(out["order"]), len(body.project_ids))
     return {"session_id": out["session_id"],
             "rubric_version": out["rubric_version"],
+            **({"selection_runs": cohort["selection_runs"]} if cohort else {}),
             **review_mod.progress(out)}
 
 
@@ -307,6 +403,9 @@ async def get_result(session_id: str) -> dict:
             "blinding_policy": state.get("blinding_policy"),
             "rubric_version": state.get("rubric_version"),
             "seed": state.get("seed"),
+            # None on a session started without `selection_runs`: not "all runs".
+            "selection_runs": state.get("selection_runs"),
+            "cohort_membership": state.get("cohort_membership"),
             **review_mod.progress(state),
             "tally": review_mod.tally(state),
             "items": items}

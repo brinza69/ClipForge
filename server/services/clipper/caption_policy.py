@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["BURN", "SUPPRESS", "DECIDED_BY", "SETTING", "decide"]
+__all__ = ["BURN", "SUPPRESS", "DECIDED_BY", "SETTING", "decide", "effective"]
 
 #: What the render does with ClipForge's own caption layer.
 BURN = "burn"
@@ -102,3 +102,18 @@ def decide(setting: Any = None, detector: Any = None, clip_setting: Any = None) 
                         "has_confirmed_it")
                 if state == scap.PRESENT else "nobody_has_declared_the_source"})
     return out
+
+
+def effective(setting: Any = None, clip_setting: Any = None) -> dict:
+    """`{"action", "scope", "decided_by", "why"}` for the editor to SHOW.
+
+    Read off `decide()` with the same two arguments the render passes it (the
+    render consults no detector either), so the two cannot disagree. A separate
+    dict rather than a `scope` added to `decide()`'s project branches: that dict
+    is written into export sidecars, and a project-level answer's sidecar must
+    stay byte-identical to what it was before a clip could have one.
+    """
+    got = decide(setting, clip_setting=clip_setting)
+    scope = got.get("scope") or ("project" if got["decided_by"] == HUMAN else "default")
+    return {"action": got["action"], "scope": scope,
+            "decided_by": got["decided_by"], "why": got["why"]}

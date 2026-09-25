@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from models import ClipModel, ClipStatus, ProjectModel
-from services.clipper import edit_profiles
+from services.clipper import caption_policy, edit_profiles
 
 
 def invalidate_render(clip: ClipModel) -> None:
@@ -91,8 +91,13 @@ def _as_bool(value: Any) -> bool:
     return bool(value) if value is not None else False
 
 
-def clip_to_dict(clip: ClipModel) -> dict[str, Any]:
-    """One candidate, shaped exactly like `ClipperClip` in src/types/clipper.ts."""
+def clip_to_dict(clip: ClipModel, project: ProjectModel | None = None) -> dict[str, Any]:
+    """One candidate, shaped exactly like `ClipperClip` in src/types/clipper.ts.
+
+    `effective_caption_policy` needs the project's answer, so it is `None` when
+    the caller did not pass the project: "not computed here", never a default
+    that would read as "nobody has said".
+    """
     return {
         "id": clip.id,
         "project_id": clip.project_id,
@@ -125,6 +130,11 @@ def clip_to_dict(clip: ClipModel) -> dict[str, Any]:
         "source_has_burned_captions": (
             None if clip.source_has_burned_captions is None
             else bool(clip.source_has_burned_captions)),
+        # What the next render will do with our caption layer, and whose answer
+        # that is (clip / project / default). Presentation only.
+        "effective_caption_policy": caption_policy.effective(
+            (project.clipper_settings or {}).get(caption_policy.SETTING),
+            clip.source_has_burned_captions) if project is not None else None,
         "rank_position": clip.rank_position,
         "selection_run_id": clip.selection_run_id,
         # Why this clip exists — anchor, payoff, required context, archetype,

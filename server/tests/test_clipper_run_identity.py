@@ -6,12 +6,13 @@ from workers import clipper_render_output as output
 
 import inspect
 import json
+from pathlib import Path
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from database import async_session
-from models import ClipModel, ClipStatus, ProjectModel
+from models import ClipModel, ClipStatus, JobModel, ProjectModel
 from services.clipper import render_input
 from services.clipper.serialize import clip_to_dict
 from workers import clipper_build
@@ -156,11 +157,14 @@ async def test_the_export_handler_writes_the_rows_identity_without_backfill(
                 "layout_policy": {"regions": "two_regions",
                                   "decided_by": "default"}}
 
-    async def encode(*_args, **_kwargs):
-        output.write_bytes(b"encoded stub")
-        return {"size": output.stat().st_size}
+    async def encode(*args, **_kwargs):
+        rendered = Path(args[4])       # this attempt's own path; published after
+        rendered.write_bytes(b"encoded stub")
+        return {"size": rendered.stat().st_size}
 
     class Queue:
+        worker_id = "test-worker"
+
         async def update_progress(self, *_args):
             pass
 
@@ -173,6 +177,16 @@ async def test_the_export_handler_writes_the_rows_identity_without_backfill(
                         lambda _p: {"exports_dir": tmp_path})
     monkeypatch.setattr(clipper_render_jobs.storage, "export_path", lambda *_a: output)
     monkeypatch.setattr(render, "render_clip", encode)
+
+    # Since R4b only the clip's current, running, owned attempt publishes; set
+    # one up the way Export and the queue's claim would.
+    async with async_session() as session:
+        await session.merge(JobModel(id="test-export", project_id=project_id, clip_id=clip.id,
+                                     type="clipper_export", status="running",
+                                     worker_id="test-worker"))
+        await session.execute(update(ClipModel).where(ClipModel.id == clip.id)
+                              .values(status="exporting", export_job_id="test-export"))
+        await session.commit()
 
     await clipper_render_jobs.handle_export("test-export", project_id, clip.id,
                                              {}, Queue())

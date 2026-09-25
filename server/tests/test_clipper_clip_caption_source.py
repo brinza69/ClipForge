@@ -450,10 +450,6 @@ async def test_review_turning_the_layer_back_on_over_a_no_gap_layout(client, tmp
     assert decision["caption_policy"]["action"] == cp.BURN
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "the declaration lives only on the clip row: the PUT demotes an exported clip "
-    "to approved, and a rescore (_write_clips) deletes every non-exported row and "
-    "re-inserts the same moment with source_has_burned_captions NULL -> burns again"))
 async def test_review_a_rescore_keeps_the_declaration(client):
     from sqlalchemy import select
     from database import async_session

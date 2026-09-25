@@ -50,6 +50,38 @@ DOODLE_LANE_TYPES = frozenset(
     }
 )
 DOODLE_LANE_LIMIT = 2
+# Jobs about ONE clip. Their failure or cancel never writes the project row.
+_CLIP_SCOPED_TYPES = frozenset({"clipper_preview", "clipper_export"})
+
+
+def new_job_row(project_id: str, job_type: str, clip_id: Optional[str] = None,
+                metadata: Optional[dict] = None, idempotency_key: Optional[str] = None,
+                job_id: Optional[str] = None) -> JobModel:
+    """The ONE place a queued job row is built. `enqueue` commits it in its own
+    session; `add_job` puts it in the caller's transaction, which is how a
+    Clipper export's claim and its job row commit together (R4b)."""
+    job = JobModel(
+        project_id=project_id,
+        clip_id=clip_id,
+        type=job_type,
+        status=JobStatus.queued.value,
+        attempt_count=0,
+        cancellation_requested=False,
+        idempotency_key=str(idempotency_key) if idempotency_key else None,
+        metadata_json=json.dumps(metadata) if metadata else None,
+    )
+    if job_id is not None:
+        job.id = job_id
+    return job
+
+
+async def add_job(session: AsyncSession, **kwargs) -> JobModel:
+    """`new_job_row` added and flushed in the caller's session. No commit, no
+    refresh: the caller's transaction owns it."""
+    job = new_job_row(**kwargs)
+    session.add(job)
+    await session.flush()
+    return job
 
 
 class JobQueue:
@@ -104,16 +136,7 @@ class JobQueue:
                 )
                 if existing:
                     return existing
-            job = JobModel(
-                project_id=project_id,
-                clip_id=clip_id,
-                type=job_type,
-                status=JobStatus.queued.value,
-                attempt_count=0,
-                cancellation_requested=False,
-                idempotency_key=key,
-                metadata_json=json.dumps(metadata) if metadata else None,
-            )
+            job = new_job_row(project_id, job_type, clip_id, metadata, key)
             session.add(job)
             try:
                 await session.commit()
@@ -197,7 +220,8 @@ class JobQueue:
         owner_id: Optional[str] = None,
     ):
         """Mark a job as failed."""
-        from models import ProjectStatus, ClipModel, ClipStatus
+        from models import ProjectStatus
+        from services.clipper.clip_mutations import release_export_claim
         error_text = str(error)[:800]
         async with async_session() as session:
             query = update(JobModel).where(JobModel.id == job_id)
@@ -221,16 +245,18 @@ class JobQueue:
 
             job = await session.get(JobModel, job_id) if result.rowcount == 1 else None
             if job:
-                if job.project_id:
+                # A clip-scoped job speaks for its clip, not its project: recovery
+                # reads a failed project as terminal and would fail another clip's
+                # live export (R4b review F1). Pipeline and other jobs as before.
+                if job.project_id and job.type not in _CLIP_SCOPED_TYPES:
                     project = await session.get(ProjectModel, job.project_id)
                     if project:
                         project.status = ProjectStatus.failed.value
                         project.description = f"[{job.type} failed] {error_text[:200]}"
-                
-                if job.clip_id:
-                    clip = await session.get(ClipModel, job.clip_id)
-                    if clip:
-                        clip.status = ClipStatus.failed.value
+
+                # Only the clip's CURRENT export attempt frees it (R4b): a failed
+                # preview, or an export another attempt superseded, leaves it.
+                await release_export_claim(session, job)
 
             await session.commit()
         self._running_jobs.pop(job_id, None)
@@ -258,7 +284,8 @@ class JobQueue:
             self._running_types.pop(job_id, None)
 
         async with async_session() as session:
-            from models import ProjectStatus, ClipModel, ClipStatus
+            from models import ProjectStatus
+            from services.clipper.clip_mutations import release_export_claim
 
             query = (
                 update(JobModel)
@@ -287,16 +314,14 @@ class JobQueue:
             # Keep parent project state consistent with the user's cancellation.
             job = await session.get(JobModel, job_id)
             transitioned = result.rowcount == 1
-            if transitioned and job and job.project_id:
+            if transitioned and job and job.project_id and job.type not in _CLIP_SCOPED_TYPES:
                 project = await session.get(ProjectModel, job.project_id)
                 if project and project.status not in (ProjectStatus.failed.value, ProjectStatus.cancelled.value):
                     project.status = ProjectStatus.cancelled.value
 
-            # Best-effort clip state update (mainly for export jobs).
-            if transitioned and job and job.clip_id:
-                clip = await session.get(ClipModel, job.clip_id)
-                if clip and clip.status not in (ClipStatus.exported.value, ClipStatus.failed.value, ClipStatus.rejected.value):
-                    clip.status = ClipStatus.failed.value
+            # The clip moves only for its current export attempt (R4b), as in fail_job.
+            if transitioned and job:
+                await release_export_claim(session, job)
 
             await session.commit()
         if transitioned:
@@ -434,6 +459,7 @@ class JobQueue:
         with an explicit retry message instead of being executed twice.
         """
         from models import ProjectStatus
+        from services.clipper.clip_mutations import release_export_claim
 
         now = datetime.utcnow()
 
@@ -490,6 +516,8 @@ class JobQueue:
                         )
                     )
                     failed += result.rowcount == 1
+                    if result.rowcount == 1:        # only a transition this run won
+                        await release_export_claim(session, job)
                     continue
 
                 project = await session.get(ProjectModel, job.project_id)
@@ -520,6 +548,8 @@ class JobQueue:
                         )
                     )
                     failed += result.rowcount == 1
+                    if result.rowcount == 1:
+                        await release_export_claim(session, job)
                     continue
 
                 result = await session.execute(

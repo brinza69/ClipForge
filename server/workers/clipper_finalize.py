@@ -17,15 +17,18 @@ import logging
 from typing import Any
 
 from sqlalchemy import delete as sql_delete
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import or_, select
 
 from config import settings
 from database import async_session
 from job_queue import JobCancelledError
-from models import ClipModel, ClipStatus, JobType, ProjectModel
+from models import (ClipFeedbackModel, ClipModel, ClipperEvent, ClipStatus, _uuid,
+                    ProjectModel)
 from services.clipper import edit_profiles
 from services.clipper import feedback as feedback_mod
 from services.clipper import reasoning_trace, storage
+from services.clipper.clip_mutations import export_attempt
 
 logger = logging.getLogger("clipforge.clipper.build")
 
@@ -75,6 +78,10 @@ async def _auto_export(project_id: str, cfg: dict, queue) -> int:
 
     Alternatives are excluded. They exist so a human can compare two cuts of one
     moment, and rendering both is exactly the duplication dedupe just removed.
+
+    So is a clip a person worked on. A rescore now keeps it (`_kept_clips`), with
+    its old run's score, and it must not take an unattended render slot from
+    this run's picks: before rescores kept such clips, none could be here.
     """
     try:
         want = int(cfg.get("auto_export", settings.clipper_auto_export) or 0)
@@ -88,24 +95,41 @@ async def _auto_export(project_id: str, cfg: dict, queue) -> int:
             select(ClipModel.id)
             .where(ClipModel.project_id == project_id,
                    ClipModel.is_alternative.is_not(True),
-                   ClipModel.status == ClipStatus.candidate.value)
+                   ClipModel.status == ClipStatus.candidate.value,
+                   ClipModel.id.notin_(_touched_clip_ids()))
             .order_by(ClipModel.overall_score.desc())
             .limit(want)
         )
         clip_ids = [r[0] for r in rows]
 
+    queued = 0
     for clip_id in clip_ids:
+        # Claimed like a manual export, with the SELECT's conditions repeated in
+        # the claim: an edit that committed since takes the clip out of this
+        # batch, and an unattended render is `exporting`, which a later rescore
+        # keeps. It used to stay `candidate`, and the next rescore deleted the
+        # row its own job was rendering (B1).
         # One job each rather than one job for the batch: the export lane is
         # bounded, a failed render should cost its own clip and not the rest,
         # and the board fills in as they land instead of all at the end.
         # The job carries WHO asked for it. Without this the export handler
         # cannot tell an unattended render from one a person clicked, and every
         # auto-exported clip lands in the training set as approval.
-        await queue.enqueue(project_id=project_id,
-                            job_type=JobType.clipper_export.value,
-                            clip_id=clip_id,
-                            metadata={"origin": feedback_mod.ORIGIN_AUTO})
-    return len(clip_ids)
+        # The SAME submit as a manual Export (R4b): claim, `export_job_id` and job
+        # row in one commit, reconciled by job id if that commit raised. So the
+        # job row is written here, not through `queue.enqueue`.
+        try:
+            got = await export_attempt(
+                clip_id, job_id=_uuid(), origin=feedback_mod.ORIGIN_AUTO,
+                also=(ClipModel.status == ClipStatus.candidate.value,
+                      ClipModel.id.notin_(_touched_clip_ids())))
+        except HTTPException:           # the write lock stayed busy; nothing written
+            logger.warning("auto-export of clip %s skipped: database busy", clip_id)
+            continue
+        if got["outcome"] == "unknown":
+            logger.warning("auto-export of clip %s: could not confirm it was queued", clip_id)
+        queued += got["outcome"] in ("queued", "existing")
+    return queued
 
 
 async def _attach_headlines(winners: list[dict], cfg: dict, queue, job_id: str) -> None:
@@ -137,22 +161,93 @@ async def _attach_headlines(winners: list[dict], cfg: dict, queue, job_id: str) 
             cand["headline"] = ""
 
 
+# What a person did TO a clip. A clip carrying any of these survives a rescore:
+# `_write_clips` used to delete every non-exported row, and every edit of an
+# exported clip demotes it to `approved` (`invalidate_render`), so the edit
+# itself made the clip deletable — trims, headline, caption, a hand-drawn
+# reaction framing and the caption-source declaration all went with it.
+# Rejected clips are kept ON PURPOSE: a rescore that re-proposes a moment a
+# person rejected makes the rejection disappear. To reverse that, drop
+# `rejected` from this tuple.
+# Not here: generated/previewed/deleted/exported/posted/performance_recorded
+# and `reviewed` (a blind-review answer), which are not edits of the clip or are
+# already covered by the `exported` status. `metadata_changed` IS here: a
+# corrected title or transcript is a person's work (B1-r R3), just not a label.
+HUMAN_WORK_EVENTS: tuple[str, ...] = tuple(e.value for e in (
+    ClipperEvent.approved, ClipperEvent.rejected,
+    ClipperEvent.start_changed, ClipperEvent.end_changed,
+    ClipperEvent.crop_changed, ClipperEvent.layout_changed,
+    ClipperEvent.caption_changed, ClipperEvent.headline_changed,
+    ClipperEvent.score_overridden, ClipperEvent.metadata_changed,
+))
+
+
+def _touched_clip_ids():
+    """Ids of clips a person worked on: a HUMAN_WORK_EVENTS row, origin manual or
+    NULL (see `_kept_clips`). `clip_id` is NOT NULL, so a NOT IN over this is safe."""
+    return (
+        select(ClipFeedbackModel.clip_id)
+        .where(ClipFeedbackModel.event_type.in_(HUMAN_WORK_EVENTS))
+        .where(or_(ClipFeedbackModel.origin == feedback_mod.ORIGIN_MANUAL,
+                   ClipFeedbackModel.origin.is_(None)))
+    )
+
+
+def _keeps():
+    """The condition inside `_kept_clips`, alone, so `_write_clips`'s DELETE can
+    negate the very same expression rather than a copy of it.
+
+    Also kept: a clip whose export a project change voided (system
+    `export_invalidated`, C1). `invalidate_render` had moved it exported ->
+    approved, so an export nobody had touched (auto, or legacy with no events)
+    fell out of the status test and was deleted with its history."""
+    return or_(ClipModel.status.in_((ClipStatus.exported.value,
+                                     ClipStatus.exporting.value)),
+               ClipModel.id.in_(_touched_clip_ids()),
+               ClipModel.id.in_(
+                   select(ClipFeedbackModel.clip_id)
+                   .where(ClipFeedbackModel.event_type
+                          == ClipperEvent.export_invalidated.value,
+                          ClipFeedbackModel.origin == feedback_mod.ORIGIN_SYSTEM)))
+
+
+def _kept_clips(project_id: str):
+    """The ONE predicate for "this clip survives a rescore", used by both the
+    pre-dedupe filter (`_exported_spans`) and `_write_clips`'s keep set — they
+    must agree, see the dedupe comment in clipper_build.handle_score.
+
+    Kept = exported, being exported (`exporting`: a render job is writing it,
+    and deleting the row under the job loses the render — a claimed candidate
+    carries no event yet, B1), or a person worked on it (HUMAN_WORK_EVENTS). Origin NULL
+    counts as a person's: those rows predate the column, and an origin nobody
+    can read must not decide an edit is deletable — a clip kept by mistake stays
+    visible, an edit deleted by mistake is gone without a trace. `auto` and
+    `system` are a machine's actions, not a person's work.
+
+    Matched on this project's clip ids, not on `clip_feedback.project_id`,
+    which `feedback.record()` allows to be NULL. One statement per project.
+    """
+    return (
+        select(ClipModel.id, ClipModel.start_time, ClipModel.end_time)
+        .where(ClipModel.project_id == project_id)
+        .where(_keeps())
+    )
+
+
 async def _exported_spans(project_id: str) -> list[dict]:
-    """Spans of clips the user already exported — real deliverables, preserved
-    across a re-analysis, and therefore moments the new set must not re-propose."""
+    """Spans of clips a rescore keeps — exports (real deliverables) and clips a
+    person worked on (`_kept_clips`) — and therefore moments the new set must
+    not re-propose. The name predates the second half of that rule."""
     async with async_session() as session:
-        rows = await session.execute(
-            select(ClipModel.start_time, ClipModel.end_time)
-            .where(ClipModel.project_id == project_id)
-            .where(ClipModel.status == ClipStatus.exported.value)
-        )
+        rows = await session.execute(_kept_clips(project_id))
     return [{"start": float(a or 0.0), "end": float(b or 0.0)}
-            for a, b in rows.all()]
+            for _id, a, b in rows.all()]
 
 
 def drop_moments_already_exported(ranked: list[dict], kept_spans: list[dict],
                                   threshold: float) -> list[dict]:
-    """Candidates whose moment is not already on the board as an export.
+    """Candidates whose moment is not already on the board as a kept clip — an
+    export or a clip a person worked on (see `_kept_clips`).
 
     A preserved export still occupies its moment, but dedupe only ever sees the
     fresh candidates, so nothing else stops the new set proposing it again.
@@ -214,7 +309,8 @@ async def _write_clips(
     """Replace this project's candidates with the new set.
 
     A re-analysis should not leave the previous run's clips behind, but clips
-    the user already exported are real deliverables — those are preserved.
+    the user already exported are real deliverables — those are preserved, and
+    so is every clip a person worked on (`_kept_clips`), whole and untouched.
 
     A preserved clip still occupies its moment, so the new set must not propose
     that moment again: dedupe only ever sees the fresh candidates, and without
@@ -243,20 +339,20 @@ async def _write_clips(
     winner_ids = {id(c) for c in winners}
 
     async with async_session() as session:
-        keep = await session.execute(
-            select(ClipModel.id, ClipModel.start_time, ClipModel.end_time)
+        # THE DELETE IS THE CHECK. Reading the keep set and then deleting the
+        # rest by id was two statements: an edit and its event, or a claim, that
+        # committed between them was deleted anyway (B1 reproduced both). The
+        # DELETE evaluates `_keeps()` itself and takes the write lock doing it,
+        # so the spans read back below, in the same transaction, are exactly
+        # what it left.
+        await session.execute(
+            sql_delete(ClipModel)
             .where(ClipModel.project_id == project_id)
-            .where(ClipModel.status == ClipStatus.exported.value)
-        )
-        kept = keep.all()
-        keep_ids = {row[0] for row in kept}
+            .where(~_keeps())
+            .execution_options(synchronize_session=False))
+        kept = (await session.execute(_kept_clips(project_id))).all()
         kept_spans = [{"start": float(row[1] or 0.0), "end": float(row[2] or 0.0)}
                       for row in kept]
-
-        stmt = sql_delete(ClipModel).where(ClipModel.project_id == project_id)
-        if keep_ids:
-            stmt = stmt.where(ClipModel.id.notin_(keep_ids))
-        await session.execute(stmt)
 
         # Belt and braces: handle_score already filtered these out before
         # dedupe, but _write_clips is the only thing guarding the table.

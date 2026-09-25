@@ -243,6 +243,43 @@ async def test_replacement_blocks_video_and_answer_and_leaves_session_untouched(
     assert clipper_review._load(sid)["answers"] == {}
 
 
+async def test_a_named_cohort_stays_sealed_and_never_falls_back_to_another_export(
+        client, review_root, tmp_path):
+    """B3: the session a named run opens is sealed like any other — a replaced
+    MP4 is refused even when the row now points at a different, valid export."""
+    from routers import clipper_review
+    from services.clipper.reasoning_trace import RunTrace
+    from workers.clipper_finalize import _write_traces
+
+    row = await _seed(tmp_path)
+    for name in ("kept", "other"):
+        (tmp_path / name).mkdir()
+    await _seed(tmp_path / "kept", project_id=row["project_id"], run="older")
+    trace = RunTrace(row["project_id"], mode="story_v2_shadow")
+    trace.run_id = "run123"
+    trace.note_stage("board_v2", "would", "1 winners, 0 backfilled, 0 differ from legacy")
+    _write_traces(row["project_id"], trace,
+                  [{"start": 1.0, "end": 6.0, "rank_position": 1,
+                    "shadow_rank": 1, "shadow_run_id": "run123"}], "story_v2_shadow")
+    response = await client.post("/api/clipper/review", json={
+        "project_ids": [row["project_id"]], "selection_runs": {row["project_id"]: "run123"}})
+    assert response.status_code == 200, response.text
+    sid = response.json()["session_id"]
+    handle = clipper_review._load(sid)["order"][0]
+
+    (tmp_path / f"{row['clip_id']}.mp4").write_bytes(b"y" * 2048)
+    other = _media(tmp_path / "other", clip_id=row["clip_id"], project_id=row["project_id"])
+    async with async_session() as session:
+        await session.execute(update(ClipModel).where(ClipModel.id == row["clip_id"])
+                              .values(export_path=other["export_path"]))
+        await session.commit()
+    for endpoint in ("next", f"item/{handle}/video"):
+        assert (await client.get(f"/api/clipper/review/{sid}/{endpoint}")).status_code == 409
+    answer = await client.post(f"/api/clipper/review/{sid}/answer", json=_answer(handle))
+    assert answer.status_code == 409
+    assert clipper_review._load(sid)["answers"] == {}
+
+
 async def test_answer_persists_the_presented_hashes_in_session_and_feedback(
         client, review_root, tmp_path):
     from routers import clipper_review

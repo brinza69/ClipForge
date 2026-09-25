@@ -18,15 +18,17 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import settings
 from database import get_session
 from job_queue import job_queue
-from models import ClipModel, ClipStatus, JobType, ProjectModel, TranscriptModel
+from models import ClipModel, ClipStatus, JobType, ProjectModel
 from services.clipper import feedback as feedback_mod
 from services.clipper import storage
+from services.clipper.clip_mutations import (
+    _headline_inputs, _project_transcript, attempt_job_id, export_attempt, export_response,
+    lock_clip)
 from services.clipper.serialize import (
     can_transition,
     CLIP_PATCHABLE,
@@ -40,8 +42,10 @@ logger = logging.getLogger("clipforge.clipper.clips")
 
 router = APIRouter(prefix="/api/clipper", tags=["clipper"])
 
-# Which patched field maps to which feedback event. Anything not listed still
-# saves, it just isn't a training signal.
+# Which patched field maps to which feedback event. Every PATCH-able field has
+# one: the event is what keeps the edit through a rescore. `metadata_changed` is
+# for a person's edit with no semantic event of its own — not a training signal
+# (B1-r R3; test_clipper_metadata_r.py fails when a PATCH-able field is added).
 _FIELD_EVENTS = {
     "start_time": "start_changed",
     "end_time": "end_changed",
@@ -49,6 +53,10 @@ _FIELD_EVENTS = {
     "caption_plan": "caption_changed",
     "caption_preset_id": "caption_changed",
     "headline_text": "headline_changed",
+    "title": "metadata_changed",
+    "transcript_text": "metadata_changed",
+    "sub_scores": "metadata_changed",
+    "warnings": "metadata_changed",
 }
 
 
@@ -56,43 +64,31 @@ def _err(status: int, code: str, message: str, details: str = "") -> HTTPExcepti
     return HTTPException(status, {"error": code, "message": message, "details": details})
 
 
-async def _project_transcript(session: AsyncSession, project_id: str) -> dict:
-    """The project's transcript, in the shape the scorer passed at build time.
-
-    THE CANONICAL SOURCE FOR A CLIP'S WORDS, and until 2026-08-17 the editor
-    used a different one: both regeneration paths read
-    `clip.transcript_segments`, a column that exists on the model and that
-    NOTHING in the clipper has ever written. So rebuilding captions produced an
-    empty plan and rebuilding a headline gave the model no words to work from —
-    silently, because an empty transcript is a legitimate state for a clip with
-    no speech.
-
-    Returns the WHOLE transcript rather than a slice: `build_caption_plan` and
-    `_clip_words` both take the candidate window and cut it themselves, and
-    handing them a pre-cut one would be a second place for the window
-    arithmetic to disagree.
-    """
-    row = (await session.execute(
-        select(TranscriptModel)
-        .where(TranscriptModel.project_id == project_id)
-        .limit(1)
-    )).scalar_one_or_none()
-    if not row or not row.segments:
-        return {"segments": []}
-    return {"language": row.language, "segments": row.segments,
-            "full_text": row.full_text}
+# `_project_transcript` and `_headline_inputs` (the snapshot a regenerated
+# headline is compared against under the lock) live in
+# services/clipper/clip_mutations.py, moved for the 500-line limit; imported
+# above under the same names.
 
 
-async def _load_clip(session: AsyncSession, clip_id: str) -> ClipModel:
-    clip = await session.get(ClipModel, clip_id)
+async def _load_clip(session: AsyncSession, clip_id: str, *, lock: bool = False) -> ClipModel:
+    """`lock=True` for an edit: the row as it is under the write lock (`lock_clip`)."""
+    clip = await (lock_clip(session, clip_id) if lock else session.get(ClipModel, clip_id))
     if not clip:
         raise _err(404, "clip_not_found", "That clip no longer exists.")
     return clip
 
 
+async def _project_of(session: AsyncSession, clip: ClipModel) -> ProjectModel | None:
+    """The clip's project as it is now (under the lock, when one is held): what
+    `effective_caption_policy` is computed from in every clip dict returned here
+    (C3), and the settings a regeneration reads."""
+    return await session.get(ProjectModel, clip.project_id, populate_existing=True)
+
+
 @router.get("/clips/{clip_id}")
 async def get_clip(clip_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    return clip_to_dict(await _load_clip(session, clip_id))
+    clip = await _load_clip(session, clip_id)
+    return clip_to_dict(clip, await _project_of(session, clip))
 
 
 @router.patch("/clips/{clip_id}")
@@ -103,7 +99,7 @@ async def patch_clip(
     the derived duration and the feedback events."""
     from services.clipper import feedback
 
-    clip = await _load_clip(session, clip_id)
+    clip = await _load_clip(session, clip_id, lock=True)
     before = {"start_time": clip.start_time, "end_time": clip.end_time}
 
     # The ASS reads the plan's style, not the separate preset preference used
@@ -120,13 +116,18 @@ async def patch_clip(
             payload["caption_plan"] = {**caption_plan, "preset_id": preset,
                                        "style": dict(DEFAULT_PRESETS[preset])}
     changed = apply_patch(clip, payload or {}, CLIP_PATCHABLE, CLIP_PATCHABLE_JSON)
+    project = await _project_of(session, clip)
+
+    # Every field, not only the render's: the export and its sidecar read the
+    # row as it was claimed, and no edit lands on a clip being rendered (R2).
+    if changed and clip.status == ClipStatus.exporting.value:
+        raise _err(409, "export_in_progress", "Wait for this export to finish before editing.")
 
     if "start_time" in changed or "end_time" in changed:
         start = max(0.0, float(clip.start_time or 0.0))
         end = float(clip.end_time or 0.0)
         if end <= start:
             raise _err(400, "invalid_range", "The clip's end must come after its start.")
-        project = await session.get(ProjectModel, clip.project_id)
         if project and project.duration and end > float(project.duration):
             raise _err(
                 400,
@@ -137,12 +138,11 @@ async def patch_clip(
         clip.duration = round(end - start, 3)
 
     if set(changed) & {"start_time", "end_time", "caption_plan", "caption_preset_id", "layout_plan"}:
-        if clip.status == ClipStatus.exporting.value:
-            raise _err(409, "export_in_progress", "Wait for this export to finish before editing.")
         _invalidate_render(clip)
 
     if changed:
-        await session.commit()
+        # One commit for the edit and its events: a rescore reads the events to
+        # decide what to keep, so an edit committed alone was deletable.
         for field in changed:
             event = _FIELD_EVENTS.get(field)
             if not event:
@@ -150,28 +150,46 @@ async def patch_clip(
             payload_out: dict[str, Any] = {"field": field}
             if field in before:
                 payload_out |= {"old": before[field], "new": getattr(clip, field)}
-            await feedback.record(session, clip.id, clip.project_id, event, payload_out,
-                                  origin=feedback.ORIGIN_MANUAL)
+            await feedback.add(session, clip.id, clip.project_id, event, payload_out,
+                               origin=feedback.ORIGIN_MANUAL)
+        await session.commit()
 
-    return {"clip": clip_to_dict(clip), "changed": changed}
+    return {"clip": clip_to_dict(clip, project), "changed": changed}
+
+
+_OMITTED = object()     # a reject request that did not mention a reason
 
 
 async def _set_status(
-    session: AsyncSession, clip_id: str, status: str, event: str, payload: dict | None = None
+    session: AsyncSession, clip_id: str, status: str, event: str, payload: dict | None = None,
+    *, reason: Any = _OMITTED,
 ) -> dict:
     from services.clipper import feedback
 
-    clip = await _load_clip(session, clip_id)
+    clip = await _load_clip(session, clip_id, lock=True)
     if not can_transition(clip.status, status):
         raise _err(409, "illegal_transition",
                    f"A {clip.status} clip cannot become {status}.",
                    "Wait for the render to finish first."
                    if clip.status == ClipStatus.exporting.value else "")
-    clip.status = status
-    await session.commit()
-    await feedback.record(session, clip.id, clip.project_id, event, payload,
-                          origin=feedback.ORIGIN_MANUAL)
-    return clip_to_dict(clip)
+    # Approving an approved clip is a double-click: success, and no second
+    # verdict in the log the ranker trains on (R3).
+    if clip.status != status:
+        clip.status = status
+        await feedback.add(session, clip.id, clip.project_id, event, payload,
+                           origin=feedback.ORIGIN_MANUAL)
+        await session.commit()
+    elif reason is not _OMITTED:
+        # Rejecting a rejected clip with a different reason is an edit of the
+        # reason, not a second verdict (Codex Bfix Q3): no `rejected`, no label
+        # change, compared with the CURRENT rejection's effective reason.
+        old = await feedback.current_reject_reason(session, clip.id)
+        if reason != old:
+            await feedback.add(session, clip.id, clip.project_id, "metadata_changed",
+                               {"field": "reject_reason", "old": old, "new": reason},
+                               origin=feedback.ORIGIN_MANUAL)
+            await session.commit()
+    return clip_to_dict(clip, await _project_of(session, clip))
 
 
 @router.post("/clips/{clip_id}/approve")
@@ -184,14 +202,19 @@ async def reject_clip(
     clip_id: str, payload: dict | None = None, session: AsyncSession = Depends(get_session)
 ) -> dict:
     """A reject reason, when given, is the highest-signal feedback we get —
-    it is stored verbatim on the event."""
-    reason = (payload or {}).get("reason")
+    it is stored verbatim on the event.
+
+    Normalisation: no `reason` key leaves the reason as it is; `null` or `""`
+    means "no reason" — on a clip already rejected, that clears it."""
+    body = payload or {}
+    reason = (body["reason"] or None) if "reason" in body else _OMITTED
     return await _set_status(
         session,
         clip_id,
         ClipStatus.rejected.value,
         "rejected",
-        {"reason": reason} if reason else None,
+        {"reason": reason} if reason not in (_OMITTED, None) else None,
+        reason=reason,
     )
 
 
@@ -224,38 +247,42 @@ async def regenerate(
     if what == "headline":
         from services.clipper.headline import generate_headline
 
-        from services.clipper.captions import _clip_words
-
-        transcript = await _project_transcript(session, clip.project_id)
-        cand = {
-            "start": clip.start_time,
-            "end": clip.end_time,
-            "text": clip.transcript_text or "",
-            # The same slicer `build_caption_plan` uses, so a regenerated
-            # headline sees exactly the words a regenerated caption would.
-            # `generate_headline` wants a LIST of word dicts; this used to hand
-            # it `clip.transcript_segments`, a column nothing writes, guarded by
-            # an isinstance check that made the empty case look deliberate.
-            "words": _clip_words({"start": clip.start_time, "end": clip.end_time},
-                                 transcript),
-        }
-        result = await generate_headline(
-            cand,
-            engine=settings.clipper_llm_engine or None,
-            language=cfg.get("language") or "auto",
-        )
-        clip.headline_text = result.get("text") or clip.headline_text
-        await session.commit()
-        return {"clip": clip_to_dict(clip), "source": result.get("source")}
+        if clip.status == ClipStatus.exporting.value:      # no model call for nothing
+            raise _err(409, "export_in_progress", "Wait for this export to finish before editing.")
+        seen = await _headline_inputs(session, clip, project)
+        result = await generate_headline(seen["cand"], engine=seen["engine"],
+                                         language=seen["language"])
+        # The model call ran unlocked. Its words are for the snapshot it was
+        # given: the target it replaces, the window, the text, the words and the
+        # settings that reached the model. Any of them moved -> refuse (R1).
+        clip = await _load_clip(session, clip_id, lock=True)
+        project = await _project_of(session, clip)
+        if clip.status == ClipStatus.exporting.value:
+            raise _err(409, "export_in_progress", "Wait for this export to finish before editing.")
+        if project is None or await _headline_inputs(session, clip, project) != seen:
+            raise _err(409, "clip_changed", "The clip changed while its headline was written.",
+                       "Regenerate the headline again.")
+        new_text = result.get("text") or clip.headline_text
+        if new_text != clip.headline_text:
+            clip.headline_text = new_text
+            await feedback_mod.add(session, clip.id, clip.project_id, "headline_changed",
+                                   {"field": "headline_text", "regenerated": True},
+                                   origin=feedback_mod.ORIGIN_MANUAL)
+            await session.commit()
+        return {"clip": clip_to_dict(clip, project), "source": result.get("source")}
 
     if what == "captions":
         from services.clipper.captions import build_caption_plan
 
+        clip = await _load_clip(session, clip_id, lock=True)
         if clip.status == ClipStatus.exporting.value:
             raise _err(409, "export_in_progress", "Wait for this export to finish before editing.")
+        # The settings as they are under the lock, not as read before it.
+        project = await _project_of(session, clip)
+        cfg = (project.clipper_settings if project else None) or {}
         transcript = await _project_transcript(session, clip.project_id)
         try:
-            clip.caption_plan = build_caption_plan(
+            plan = build_caption_plan(
                 {"start": clip.start_time, "end": clip.end_time, "text": clip.transcript_text or ""},
                 transcript,
                 preset_id=clip.caption_preset_id or cfg.get("caption_preset_id") or "bold_impact",
@@ -263,12 +290,17 @@ async def regenerate(
                 position=cfg.get("caption_position") or "bottom",
                 layout=clip.layout_plan or {},
             )
-            _invalidate_render(clip)
-            await session.commit()
+            if plan != clip.caption_plan:        # an identical rebuild is not an edit
+                clip.caption_plan = plan
+                _invalidate_render(clip)
+                await feedback_mod.add(session, clip.id, clip.project_id, "caption_changed",
+                                       {"field": "caption_plan", "regenerated": True},
+                                       origin=feedback_mod.ORIGIN_MANUAL)
+                await session.commit()
         except Exception as exc:
             logger.exception("caption regeneration failed")
             raise _err(500, "caption_failed", "Could not rebuild the captions.", str(exc)[:200])
-        return {"clip": clip_to_dict(clip)}
+        return {"clip": clip_to_dict(clip, project)}
 
     raise _err(400, "unknown_regenerate_target", f"Cannot regenerate '{what}'.")
 
@@ -335,53 +367,15 @@ async def export_file(clip_id: str, session: AsyncSession = Depends(get_session)
     )
 
 
-# States an export may be STARTED from. Deliberately not the strict machine an
-# audit would draw, and the difference is the product rather than laziness:
-#
-#   `candidate` stays legal because the documented flow is review the board,
-#   then Export — the runbook says so and `auto_export` enqueues candidates
-#   directly, bypassing this endpoint entirely.
-#
-#   `exported` and `failed` stay legal because re-rendering after an edit is
-#   what the clip editor is FOR. Requiring a separate re-render endpoint would
-#   make the ordinary case the awkward one.
-#
-# What is refused is the pair that can only be a mistake: a clip already
-# rendering (two jobs writing one file, progress oscillating between them) and
-# one that was rejected on purpose.
-_EXPORTABLE_FROM = (
-    ClipStatus.candidate.value,
-    ClipStatus.approved.value,
-    ClipStatus.exported.value,
-    ClipStatus.failed.value,
-)
-
-
-async def claim_for_export(session: AsyncSession, clip_id: str) -> bool:
-    """Take a clip for rendering. True only for the caller that actually got it.
-
-    THE CONDITIONAL UPDATE IS THE LOCK, and it is a named function so it can be
-    tested the way the job queue's claim is — through the endpoint, eight
-    gathered requests do not interleave enough to catch anything, and a test
-    that cannot fail against the old read-then-write code proves nothing.
-
-    `exporting` is deliberately absent from the source states: a second export
-    on a running one is two jobs writing one file, with progress oscillating
-    between two writers.
-    """
-    result = await session.execute(
-        update(ClipModel)
-        .where(ClipModel.id == clip_id)
-        .where(ClipModel.status.in_(_EXPORTABLE_FROM))
-        .values(status=ClipStatus.exporting.value)
-    )
-    await session.commit()
-    return result.rowcount == 1
+# `_EXPORTABLE_FROM` and `claim_for_export` (the conditional UPDATE that is the
+# export lock) live in services/clipper/clip_mutations.py, moved for the
+# 500-line limit, with the submit that commits the claim with its job (R4b).
 
 
 @router.post("/clips/{clip_id}/export")
-async def export_clip(clip_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    """Claim the clip and queue one render.
+async def export_clip(clip_id: str, payload: dict | None = None) -> dict:
+    """Claim the clip and queue one render: the claim, `export_job_id` and the
+    job row are ONE commit (R4b, `clip_mutations.submit_export`).
 
     THE CLAIM IS THE UPDATE. Reading the status and then writing it is two
     statements, so two requests can both read `candidate` before either commits
@@ -389,24 +383,13 @@ async def export_clip(clip_id: str, session: AsyncSession = Depends(get_session)
     oscillating between them. This is the same fix the job queue got on
     2026-08-17 and it was left undone here on the same day, which is how a
     lesson gets applied in one place and not the other.
+
+    Optional `{"attempt_id": "<12 hex>"}` IS the job id: a retry after a lost
+    response sends the same one and gets that job back with its real status.
     """
-    clip = await _load_clip(session, clip_id)          # 404s on an unknown id
-    if not await claim_for_export(session, clip_id):
-        if clip.status == ClipStatus.exporting.value:
-            raise _err(409, "already_exporting",
-                       "That clip is already rendering.",
-                       "Wait for the running export to finish, or cancel its job.")
-        raise _err(409, "not_exportable",
-                   f"A {clip.status} clip cannot be exported.",
-                   "Approve it first if you want it rendered.")
-    await session.refresh(clip)
-    job_id = await job_queue.enqueue(
-        project_id=clip.project_id,
-        job_type=JobType.clipper_export.value,
-        clip_id=clip.id,
-        metadata={"origin": feedback_mod.ORIGIN_MANUAL},
-    )
-    return {"job_id": job_id, "clip_id": clip.id}
+    job_id = attempt_job_id(payload)
+    got = await export_attempt(clip_id, job_id=job_id, origin=feedback_mod.ORIGIN_MANUAL)
+    return export_response(clip_id, job_id, got)
 
 
 @router.post("/clips/{clip_id}/feedback")
@@ -495,5 +478,7 @@ async def list_clips(
         wanted = [s.strip() for s in status.split(",") if s.strip()]
         if wanted:
             query = query.where(ClipModel.status.in_(wanted))
-    result = await session.execute(query.limit(500))
-    return [clip_to_dict(c) for c in result.scalars().all()]
+    clips = (await session.execute(query.limit(500))).scalars().all()
+    projects = {p.id: p for p in (await session.execute(select(ProjectModel).where(
+        ProjectModel.id.in_({c.project_id for c in clips})))).scalars()}
+    return [clip_to_dict(c, projects.get(c.project_id)) for c in clips]
