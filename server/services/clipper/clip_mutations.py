@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import async_session
+from job_rows import add_job
 from models import (ClipModel, ClipStatus, JobModel, JobStatus, JobType, ProjectModel,
                     TranscriptModel, _uuid)
 
@@ -168,8 +169,6 @@ async def submit_export(session: AsyncSession, clip_id: str, *, job_id: str, ori
     with its REAL status), or a conflict when it names another clip's or another
     kind of job. A refusal is decided under the same lock and rolled back.
     """
-    from job_queue import add_job
-
     await begin_write(session)
     job = await session.get(JobModel, job_id, populate_existing=True)
     if job is not None:
