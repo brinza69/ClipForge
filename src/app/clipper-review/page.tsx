@@ -17,6 +17,7 @@ import { Eye } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ReviewCohortPicker } from "@/components/clipper/review-cohort-picker";
 import { ReviewItemCard, type Answers } from "@/components/clipper/review-item";
 import { readApiError, errorDescription } from "@/lib/api-error";
 import { CLIPPER_API, type ClipperProjectSummary } from "@/types/clipper";
@@ -32,6 +33,9 @@ const SESSION_KEY = "clipforge.review.session";
 export default function ClipperReviewPage() {
   const [projects, setProjects] = useState<ClipperProjectSummary[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
+  // The run chosen per project (A3). Sent only when EVERY picked project has
+  // one: the API refuses a partial map, and without it keeps the old behaviour.
+  const [runs, setRuns] = useState<Record<string, string | null>>({});
   const [rubric, setRubric] = useState<ReviewRubric | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [next, setNext] = useState<ReviewNext | null>(null);
@@ -93,7 +97,9 @@ export default function ClipperReviewPage() {
       const r = await fetch(REVIEW_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project_ids: picked }),
+        body: JSON.stringify(picked.every((id) => id in runs)
+          ? { project_ids: picked, selection_runs: Object.fromEntries(picked.map((id) => [id, runs[id]])) }
+          : { project_ids: picked }),
       });
       if (!r.ok) {
         const e = await readApiError(r, "Nu am putut porni sesiunea");
@@ -202,6 +208,14 @@ export default function ClipperReviewPage() {
                 </Button>
               ))}
             </div>
+          )}
+          {picked.length > 0 && (
+            <ReviewCohortPicker
+              projects={picked.map((id) => ({
+                id, title: projects.find((p) => p.id === id)?.title || id }))}
+              value={runs}
+              onChange={setRuns}
+            />
           )}
           <Button disabled={picked.length === 0 || busy} onClick={start}>
             Pornește sesiunea

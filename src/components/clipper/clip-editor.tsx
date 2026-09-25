@@ -328,6 +328,21 @@ export function ClipEditor({
                     ? "Subtitrarea ClipForge se arde în acest clip, oricum ar fi setat proiectul."
                     : "Decide setarea proiectului; dacă nimeni n-a spus nimic, subtitrarea ClipForge se arde. Alege „Nu arde” când video-ul are deja subtitrare, ca să nu apară două rânduri de text."}
               </p>
+              {clip.effective_caption_policy === null && (
+                // A response that did not compute it: say so rather than keep
+                // showing the previous clip's decision as the current one.
+                <p className="text-[11px] text-muted-foreground">Efectiv: necalculat în acest răspuns.</p>
+              )}
+              {clip.effective_caption_policy && (
+                // Computed by the backend with the render's own function, so
+                // "follow the project" shows what the project actually decides.
+                <p className="text-[11px] font-medium text-foreground/80">
+                  Efectiv: {clip.effective_caption_policy.action === "suppress" ? "nu se arde" : "se arde"}
+                  {" — "}
+                  {{ clip: "decis pentru acest clip", project: "decis de proiect",
+                     default: "implicit, nimeni n-a declarat" }[clip.effective_caption_policy.scope]}
+                </p>
+              )}
             </Field>
 
             <Field label="Caption preset">

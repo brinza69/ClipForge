@@ -266,6 +266,12 @@ export type {
   ClipReview,
 } from "./clipper-reasoning";
 
+/** The render's own caption decision (`caption_policy.decide`), for display only. */
+export interface EffectiveCaptionPolicy {
+  action: "burn" | "suppress"; scope: "clip" | "project" | "default";
+  decided_by: "human" | "default"; why: string;
+}
+
 export interface ClipperClip {
   id: string;
   project_id: string;
@@ -295,6 +301,7 @@ export interface ClipperClip {
    * subtitles (true — ClipForge burns no layer of its own), it shows none
    * (false), or nobody has said (null — the project's setting decides). */
   source_has_burned_captions?: boolean | null;
+  effective_caption_policy?: EffectiveCaptionPolicy | null;
   warnings: string[] | null;
   dedupe_group: string | null;
   is_alternative: boolean;

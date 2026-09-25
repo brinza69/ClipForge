@@ -63,6 +63,29 @@ export type ReviewResult = ReviewProgress & {
   }[];
 };
 
+// One selection run on a project's board, as GET /review/cohorts reports it.
+// Counts only: which clip sits on which board is exactly what the review hides.
+export type ReviewCohort = {
+  selection_run_id: string | null;
+  members: number;
+  legacy_members: number;
+  shadow_members: number;
+  membership: { status: string; reason: string | null };
+  media: { checked: number; valid: number; problems: Record<string, number> };
+  eligible: boolean;
+  missing: string[];
+};
+
+export type ReviewCohorts = { project_id: string; board_rows: number; cohorts: ReviewCohort[] };
+
+export const MISSING_LABELS: Record<string, string> = {
+  no_shadow_board: "fără board shadow",
+  membership_unprovable: "componența rulării nu poate fi dovedită",
+  media_invalid: "media lipsă sau schimbată",
+  incomplete_board: "board incomplet",
+  shadow_run_mismatch: "shadow-ul aparține altei rulări",
+};
+
 // The labels the reviewer reads. The API speaks the keys; only this map speaks
 // Romanian, so a rubric change is a server change and a wording change is not.
 export const QUESTION_LABELS: Record<string, string> = {

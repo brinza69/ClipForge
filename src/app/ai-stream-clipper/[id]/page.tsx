@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnalysisProgress } from "@/components/clipper/analysis-progress";
 import { CandidateGrid } from "@/components/clipper/candidate-grid";
+import { ProjectCaptionSource } from "@/components/clipper/project-caption-source";
 import { errorDescription, readApiError } from "@/lib/api-error";
 import {
   CLIPPER_API,
@@ -222,6 +223,12 @@ export default function ClipperProjectPage() {
           </select>
         </div>
       </Card>
+
+      <ProjectCaptionSource
+        projectId={projectId}
+        value={project.clipper_settings?.source_has_burned_captions ?? null}
+        onSaved={() => void loadProject()}
+      />
 
       {project.error && !project.active_job && (
         <Card className="space-y-3 border-destructive/40 p-4">
