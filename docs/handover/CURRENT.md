@@ -1,8 +1,79 @@
 # ClipForge — Current Application Handover
 
+## Clipper — planul master Codex (în curs)
+
+Lucrul la Clipper urmează acum `PRPs/clipper-master-plan-2026-09-24.md`: patru valuri, fiecare cu un
+lot A pentru Claude desktop și un lot B pentru Claude CLI pe contul 2, iar Codex validează. Valul 1:
+A1 e acceptat. Stare la 25 sept.:
+- editările, politica de subtitrare a proiectului și exportul atomic (R4b + corecturile r2) sunt
+  implementate;
+- revizia blind pe o singură rulare (B3r/A3) e acceptată în browser;
+- fluxul complet din UI e verificat pe o instanță izolată (`A/release-browser.md`). Au rămas două
+  constatări pentru utilizator: UI-ul nu oferă descărcarea exportului, iar o alternativă exportată
+  iese fără subtitrare.
+Codex e fără limită până pe 30 sept., 12:41; revizii Opus independente țin locul validării lui.
+Codul e comis: `cc9921b` (jobs), `f4c0e88` (backend și teste), `1267a13` (UI) și `172242c`
+(spargerea `job_queue.py`), apoi documentația. Suita completă a rulat o dată, pe arborele final:
+2792 passed, exit 0. Stare detaliată: [handover-ul Clipper](areas/clipper/CURRENT.md).
+
+## Clipper, 24 septembrie 2026, noaptea
+
+Comis: `08c6781` (refuzul editorului de reacție spune ce înălțime trece) și `37537b4`: subtitrarea
+dublă se poate opri acum PER CLIP, din
+editor („Subtitrarea din sursă”). Lotul aduce endpoint-ul nou `PUT /clips/{id}/caption-source` și
+coloana `clips.source_has_burned_captions`, deja adăugată în DB-ul real, cu NULL peste tot. Backend-ul
+e implementat de Claude Code pe contul 2 (Sonnet 5) și revizuit independent tot pe contul 2 (Opus 5.5).
+Suita: 2483 passed. Limita de atunci (o rescorare pierdea răspunsul) e rezolvată de lotul
+următor, comis în `f4c0e88`: o rescorare păstrează acum orice clip la care a lucrat o persoană, întreg, iar
+auto-exportul nu-l mai randează din oficiu (`PRPs/clipper-rescore-keeps-human-edits-2026-09-24.md`;
+implementat de Claude Code pe contul 2, pe Opus 5.5; suita 2502 passed). Detalii:
+[handover-ul Clipper](areas/clipper/CURRENT.md).
+
+## Clipper, 24 septembrie 2026, seara
+
+Lotul „legacy layout dimensions” e **comis (`43aaff0`)**. Cele 3 exporturi defecte din
+`slice4h00test` sunt reparate: dea939, apoi 02dea6f0a9e9 și 3e42c5a399c2, acestea două prin
+instanța Claude Code de pe al doilea cont. Vechile exporturi sunt păstrate în
+`data/claude-reaction-editor/`. Apoi: editorul de reacție spune acum, la refuz, ce înălțime a
+materialului ar trece (`PRPs/clipper-reaction-caption-hint-2026-09-24.md`; comis `08c6781`).
+Detalii: [handover-ul Clipper](areas/clipper/CURRENT.md).
+
+## Clipper, 24 septembrie 2026 — legacy layout dimensions (comis `43aaff0`)
+
+`_plan_fits` nu mai acceptă un plan static fără `src_w`/`src_h` explicite și valide (întreg,
+non-bool, ≥2) egale cu dimensiunile sursei curente — vechiul fallback pe bounds a fost
+eliminat (`server/workers/clipper_render_plan.py`). Un plan legacy/nevalid trece acum pe calea
+existentă de replanificare din `_layout_plan`; mesajul de warning descrie dimensiuni
+lipsă/nevalide/nepotrivite, fără presupunere cauzală. Test corpus fixat separat: testul de
+fingerprint pe corpusul viu (`test_clipper_fingerprint_v2.py`) trata implicit toate exporturile
+ca v1-legacy; acum distinge per-înregistrare v1 asumat vs. v2 declarat (70ca/9d2a/dea939 sunt
+v2 legitime, autorizate manual, dinainte de acest lot), fără mutare de bytes pe disc. Proba
+pereche (Claude B): pe calea statică remedierea se vede în pixeli; pe calea implicită (dinamică)
+exportul e identic byte cu byte. Fișierul adus la 499 linii de o instanță CLI; **suita completă:
+2441 passed, 2 deselected, exit 0** (`data/claude-legacy-layout/review/final-suite.txt`). Lot
+acceptat de coordonator (`data/claude-legacy-layout/VERDICT.md`); comis ca `43aaff0`. MP4-urile vechi
+02dea6f0a9e9 și 3e42c5a399c2 rămân defecte până la reexport — vezi
+[handover-ul Clipper](areas/clipper/CURRENT.md).
+
+
 **Scope:** aplicația întreagă, nu doar AI Stream Clipper.  
 **Data hărții:** 3 septembrie 2026.
 **TikTok:** exclus din această hartă, conform cerinței proiectului.
+
+## Clipper, 23–24 septembrie 2026 — stare necomisă
+
+Corecția ceasului mișcării era verificată matematic, dar respinsă editorial; **24 sept.: cele
+4 fișiere de cod au fost restaurate exact la HEAD-ul dinainte (`29a4441`), izolată complet în
+arhivă cu hash-uri verificate — nu mai e activă în working tree.** Filtrul raport vârf/medie e
+în carantină; webcam-urile măsurate lipsesc din editorul dinamic; proba spatial_only e
+inspectată: bună pe co-stream, Moist și Minecraft solo, dar pe un layout cu webcam decupat
+lasă o fâșie din webcam, fiindcă webcam-urile măsurate nu sunt geometrie de pixeli. Observația
+locală (Lot 2) nu dă niciun candidat pentru integrare
+(`data/claude-game-region/local-observation/RESULT.md`). Plan:
+`PRPs/clipper-framing-next-steps-2026-09-24.md`. Suita pe arborele restaurat: 2.402 teste trec, exit 0
+(`data/claude-motion-clock/quarantine-20260924/RESULT.md`). Cifra 2.424 aparține lotului de ceas
+arhivat. Nimic comis.
+Detalii și linkuri: [handover-ul Clipper](areas/clipper/CURRENT.md).
 
 ## Actualizare Clipper, 23 septembrie 2026
 

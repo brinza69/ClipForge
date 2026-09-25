@@ -120,7 +120,12 @@ clipforge/
 ├── server/
 │   ├── models.py                    ← SQLAlchemy ORM + JobType enum
 │   ├── database.py                  ← DB setup + init_db() column migrations
-│   ├── job_queue.py                 ← JobQueue: register_handler/update_progress, 2 lanes
+│   ├── job_queue.py                 ← JobQueue: register_handler/update_progress, 2 lanes,
+│   │                                  enqueue/_claim/_process_next, fail/cancel/complete
+│   ├── job_rows.py                  ← new_job_row/add_job: the ONE place a job row is built
+│   │                                  (add_job = in the caller's transaction; re-exported by job_queue)
+│   ├── job_recovery.py              ← lease lifecycle: recover_stuck_jobs, heartbeats, stop,
+│   │                                  _requeue_owned_job, _cleanup_workspace (JobQueue delegates here)
 │   ├── routers/                     ← jobs, utilities, doodle, remix, parallel,
 │   │                                  clipper, clipper_clips (tiktok PLANNED)
 │   ├── services/
@@ -220,4 +225,10 @@ clipforge/
 #           so an integer passes as a verdict. Use `is None or isinstance(x, bool)`.
 # CRITICAL: transcriber._clean_text strips ALL punctuation and lowercases. Pass
 #           keep_punctuation=True when you need sentence boundaries (the clipper does).
+# CRITICAL: every file a Clipper export attempt reads or writes is that attempt's own (mp4, sidecar,
+#           .cmd.txt, and the .ass in its scratch dir); only _publish_export moves them into place. A
+#           shared path let a superseded attempt hand the current one its captions (R4b review F2).
+# CRITICAL: a clip-scoped job (clipper_preview, clipper_export) never writes project.status on
+#           fail/cancel: recovery reads a failed project as terminal and would fail another clip's
+#           live export (R4b review F1, job_queue._CLIP_SCOPED_TYPES).
 ```
