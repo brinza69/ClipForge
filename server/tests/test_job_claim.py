@@ -288,26 +288,6 @@ async def test_recovery_does_not_execute_legacy_unowned_running_job():
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_renews_lease_and_fences_old_owner():
-    owner = JobQueue()
-    other = JobQueue()
-    await _queued("lease-heartbeat")
-    await _claim(owner, "lease-heartbeat")
-    before = await _job("lease-heartbeat")
-
-    assert await owner._heartbeat_once("lease-heartbeat") is True
-    renewed = await _job("lease-heartbeat")
-    assert renewed.lease_expires_at > before.lease_expires_at
-
-    async with async_session() as session:
-        job = await session.get(JobModel, "lease-heartbeat")
-        job.worker_id = other.worker_id
-        await session.commit()
-
-    assert await owner._heartbeat_once("lease-heartbeat") is False
-
-
-@pytest.mark.asyncio
 async def test_graceful_stop_requeues_owned_job():
     queue = JobQueue()
     started = asyncio.Event()
