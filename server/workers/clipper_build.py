@@ -46,6 +46,7 @@ from workers.clipper_cache import (  # noqa: F401
     _episodes_stamp, _promises_stamp, _reasoning_mode, _segment_types,
     _threads_stamp,
 )
+from workers.clipper_boundary_pass import _record_completeness, refine_off_loop
 logger = logging.getLogger("clipforge.clipper.build")
 
 async def _fetch_transcript(project_id: str) -> dict[str, Any]:
@@ -62,25 +63,6 @@ async def _fetch_transcript(project_id: str) -> dict[str, Any]:
 def _guard(queue, job_id: str) -> None:
     if queue.is_cancelled(job_id):
         raise JobCancelledError("Cancelled by user.")
-
-
-def _record_completeness(refined: list[dict], transcript: dict, *,
-                         max_s: float, duration: float) -> None:
-    """Record R5's `boundary_view` on every candidate. Never fails the run.
-
-    The work is `boundary_completion.attach`, not a second implementation of it:
-    the audit script runs the SAME function over historical windows, and two
-    copies would let the artefact and the gate describe different measurements.
-    """
-    from services.clipper import boundary_completion
-    from services.clipper.candidate_terms import _words_for
-
-    try:
-        boundary_completion.attach(refined, _words_for({}, transcript),
-                                   max_s=max_s, duration=duration)
-    except Exception:
-        # An observability field must never cost the run it describes.
-        logger.warning("boundary completeness failed", exc_info=True)
 
 
 async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
@@ -278,17 +260,13 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
                 keep_overlaps=reasoning_mode.uses_story(mode))
         _guard(queue, job_id)
 
-    refined = []
-    for cand in raw:
-        try:
-            refined.append(
-                cand_mod.refine_boundaries(cand, transcript, sig, min_s=min_s,
-                                           max_s=max_s, atoms=atoms)
-            )
-        except Exception:
-            # One bad window must not sink the run — keep the unrefined form.
-            logger.warning("boundary refinement failed for a candidate", exc_info=True)
-            refined.append(cand)
+    # The ends are settled on what speech.wav shows (end_acoustics). A missing
+    # or unreadable file reads as `unavailable` on each candidate and leaves
+    # every end where the transcript rules put it. Off the event loop (EN2 R3):
+    # the heartbeat shares it, and reading the audio takes minutes on a long VOD.
+    refined = await refine_off_loop(
+        raw, transcript, sig, min_s=min_s, max_s=max_s, atoms=atoms,
+        audio_path=storage.paths(project_id)["audio"], queue=queue, job_id=job_id)
     _guard(queue, job_id)
 
     # R5, recorded and applied to nothing: is each window a COMPLETE thought,

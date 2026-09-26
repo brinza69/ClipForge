@@ -17,6 +17,7 @@ import copy
 import logging
 from typing import Sequence
 
+from services.clipper import end_acoustics
 from services.clipper.candidate_terms import (
     DANGLE_PAUSE_S, GRID_S, LEAD_IN_MAX_S, PAUSE_KEEP_S, PAYOFF_WINDOW_S,
     REACTION_MAX_S, RELEASE_GAP_S, SENTENCE_END_REACH_S, SNAP_TOLERANCE_S,
@@ -303,12 +304,16 @@ def _context_floor(cand: dict) -> float | None:
 
 def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
                       min_s: float, max_s: float,
-                      atoms: Sequence[dict] | None = None) -> dict:
+                      atoms: Sequence[dict] | None = None,
+                      audio=None) -> dict:
     """Return a NEW candidate with human-quality in and out points.
 
     Order matters: open on a sentence, add a lead-in only if the opening line
     dangles, keep the reaction after the payoff, keep a question with its
     answer, then trim dead air. Every step re-checks [min_s, max_s].
+
+    `audio` (an `end_acoustics.SpeechAudio`) lets the end be settled on what
+    the audio shows; None is exactly the transcript-only behaviour.
     """
     cand = cand or {}
     lo, hi = _bounds(min_s, max_s)
@@ -384,7 +389,11 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
             _add(reasons, "end_on_sentence")
 
     dropped = _drop_dangling_tail(end, words, start, lo)
+    orphan = None
     if dropped < end - 0.05:
+        # Kept for the audio step below: dropped from the text, still a
+        # possible onset in the sound.
+        orphan = [w for w in words if _num(w["end"]) <= end + _EPS][-1]
         end = dropped
         _add(reasons, "dangling_tail_dropped")
 
@@ -397,6 +406,17 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
         _add(reasons, "release_kept")
 
     start, end = _fit(start, end, words, lo, hi, floor, ceiling)
+    # After `_fit`, because its end-snap works on Whisper boxes and would push
+    # an end the audio placed inside a stretched box (1204's one-second "so")
+    # out to the box's end, putting the dropped word back. Bounded by the same
+    # maximum and media end; it only ever moves the end later.
+    end_evidence = None
+    if audio is not None:
+        end, end_evidence = end_acoustics.settle_end(
+            start, end, words, audio=audio, limit=min(start + hi, ceiling), lo=lo,
+            dropped=orphan)
+        for code in end_evidence["reasons"]:
+            _add(reasons, code)
     inside, _before, _after = _neighbourhood(words, start, end)
 
     out = dict(cand)  # a NEW dict; the caller's candidate is never touched
@@ -404,6 +424,8 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
                 "text": _text_of(inside) or str(cand.get("text") or ""),
                 "words": list(inside), "reasons": reasons,
                 "alternatives": _rank_alternatives(alternatives, words, start, end, lo, hi)})
+    if end_evidence is not None:
+        out["end_evidence"] = end_evidence
     # `dict(cand)` copies the story block, metrics and all, and everything above
     # this line can move BOTH edges. Measured before this call existed: on the
     # four-hour source, 20 story candidates ended up with required context
