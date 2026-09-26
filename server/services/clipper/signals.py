@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 import wave
 from pathlib import Path
 from types import ModuleType
@@ -33,7 +32,8 @@ from services.clipper.face_detector import (  # re-exported; callers import from
     FACE_MIN_NEIGHBOURS, FACE_MIN_SIZE, FACE_SCALE_FACTOR,
     detect_faces, face_cascades, face_presence,
 )
-from services.clipper.ffmpeg_tools import FFmpegError, ffmpeg_bin, run, video_info
+from services.clipper import scene_address
+from services.clipper.ffmpeg_tools import FFmpegError, video_info
 
 logger = logging.getLogger("clipforge.clipper.signals")
 
@@ -70,8 +70,6 @@ UI_LUM_MIN, UI_LUM_MAX = 110, 215
 FACE_HOP_S = 2.0
 MAX_FACE_SAMPLES = 2000      # caps Haar cost regardless of VOD length
 MAX_MOTION_SAMPLES = 200_000  # ~27 h at the default hop; guards a broken decoder
-
-_PTS_RE = re.compile(r"pts_time:([0-9]+\.?[0-9]*)")
 
 
 # --------------------------------------------------------------------------
@@ -288,27 +286,10 @@ def audio_timeline(wav_path: str, *, hop_s: float = 0.25) -> dict[str, Any]:
 
 
 def scene_timeline(proxy_path: str, *, threshold: float = 0.30) -> list[float]:
-    """Scene-change timestamps (seconds) from one ffmpeg pass over the proxy."""
-    if not proxy_path or not Path(proxy_path).exists():
-        logger.warning("scene_timeline: missing proxy %s", proxy_path)
-        return []
-    cmd = [
-        ffmpeg_bin(), "-hide_banner", "-nostdin",
-        "-i", str(proxy_path),
-        "-an",
-        "-vf", f"select='gt(scene,{threshold:.4f})',metadata=print:file=-",
-        "-f", "null", "-",
-    ]
-    try:
-        # The whole proxy still has to be decoded, so the default 600 s ceiling
-        # is too tight for a multi-hour VOD.
-        out = run(cmd, timeout=3600, what="scene detect")
-    except FFmpegError as exc:
-        logger.warning("scene_timeline: %s", exc)
-        return []
+    """Scene-change timestamps (seconds) from one ffmpeg pass over the proxy.
 
-    times = sorted({round(float(m), 3) for m in _PTS_RE.findall(out or "")})
-    return [t for t in times if t > 0]
+    The pass, and the integer PTS it now keeps, live in scene_address."""
+    return scene_address.scene_pass(proxy_path, threshold=threshold)["times"]
 
 
 def _cv2() -> ModuleType | None:
@@ -400,7 +381,12 @@ def build_signals(
 ) -> dict[str, Any]:
     """Run all of Pass A, persist analysis/signals.json, return the signals."""
     audio = audio_timeline(wav_path)
-    scenes = scene_timeline(proxy_path)
+    # Provenance is read before the decode used as evidence, and again (inside
+    # address_scenes) after the whole step.
+    before = scene_address.provenance_now(project_id, proxy_path)
+    scene = scene_address.scene_pass(proxy_path)
+    scenes = scene["times"]
+    scenes_addressed = scene_address.address_scenes(project_id, proxy_path, scene, before)
     motion = motion_timeline(proxy_path)
 
     width = height = 0
@@ -433,6 +419,8 @@ def build_signals(
         "peaks": audio["peaks"],
         "silence": audio["silence"],
         "speech": audio["speech"],
+        # Parallel to `scenes`, read by no consumer (scene_address).
+        "scenes_addressed": scenes_addressed,
     }
 
     # Imported here so the analysis functions above stay usable (and testable)
