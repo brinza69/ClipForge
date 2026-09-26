@@ -1,0 +1,257 @@
+"""Offset lot: a decoder whose frame<->PTS correspondence is PROVEN, plus the matching helpers.
+
+`decode()` runs ffmpeg with two showinfo instances: one on the decoded frame (its PTS), one on
+the exact bytes written to stdout (their Adler-32). Output is `-fps_mode passthrough`, so the
+muxer can neither duplicate nor drop. A frame is accepted only when its raw bytes hash to the
+checksum showinfo printed for the frame with the same index; any mismatch, short read or
+non-increasing PTS makes the whole decode `unverified` (its own state, never a pass).
+
+Nothing here edits a production file. `server/` is imported read-only (gatelog puts it on
+sys.path) for the ffmpeg binary only.
+"""
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+import zlib
+from fractions import Fraction
+from pathlib import Path
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+import gatelog  # noqa: E402
+
+FFMPEG = gatelog.ffmpeg_bin()
+FFPROBE = str(Path(FFMPEG).with_name("ffprobe.exe" if FFMPEG.endswith(".exe") else "ffprobe"))
+
+_CFG = re.compile(r"\[(Parsed_showinfo_\d+) @ [0-9a-fA-Fx]+\] config in time_base: (\d+)/(\d+)")
+_LINE = re.compile(r"\[(Parsed_showinfo_\d+) @ [0-9a-fA-Fx]+\] n:\s*(\d+) pts:\s*(-?\d+) .*?"
+                   r"checksum:([0-9A-F]{8})")
+
+
+def parse_showinfo(stderr: str) -> dict[str, dict]:
+    """{instance: {"tb": Fraction, "frames": [{"n", "pts", "t", "checksum"}]}} in log order."""
+    out: dict[str, dict] = {}
+    for m in _CFG.finditer(stderr):
+        out.setdefault(m.group(1), {"tb": Fraction(int(m.group(2)), int(m.group(3))), "frames": []})
+    for m in _LINE.finditer(stderr):
+        inst = out.setdefault(m.group(1), {"tb": None, "frames": []})
+        pts = int(m.group(3))
+        tb = inst["tb"]
+        inst["frames"].append({"n": int(m.group(2)), "pts": pts,
+                               "t": float(pts * tb) if tb else None,
+                               "checksum": int(m.group(4), 16)})
+    return out
+
+
+def showinfo_checksum(buf: bytes) -> int:
+    """showinfo's checksum: Adler-32 SEEDED WITH 0 (vf_showinfo starts `checksum = 0`), not zlib's 1.
+    The first run of instrument_check used the default seed and refused all 64 decodes."""
+    return zlib.adler32(buf, 0)
+
+
+def verify(raw: bytes, w: int, h: int, ch: int, first: dict, last: dict, want: int | None) -> dict:
+    """Prove that raw frame i IS the frame showinfo reported as n == i.
+
+    `first`: the showinfo instance on decoded frames (PTS). `last`: the instance on the output
+    bytes (checksum). Both must list the same frames in the same order (their n and pts agree).
+    """
+    size = w * h * ch
+    problems: list[str] = []
+    if size <= 0 or len(raw) % size:
+        problems.append(f"stdout {len(raw)} B is not a whole number of {size}-B frames")
+    n_out = len(raw) // size if size > 0 else 0
+    fa, fb = first["frames"], last["frames"]
+    if want is not None and n_out != want:
+        problems.append(f"{n_out} frames written, {want} requested")
+    # showinfo sees one frame more than -frames:v lets through (the muxer stops after it)
+    for name, fr in (("decoded", fa), ("output", fb)):
+        if not (n_out <= len(fr) <= n_out + 1):
+            problems.append(f"{name} showinfo lines {len(fr)} vs {n_out} frames written")
+    for i in range(min(n_out, len(fa), len(fb))):
+        if fa[i]["n"] != i or fb[i]["n"] != i:
+            problems.append(f"frame {i}: showinfo n {fa[i]['n']}/{fb[i]['n']}")
+            break
+        if fa[i]["t"] is None or fb[i]["t"] is None or abs(fa[i]["t"] - fb[i]["t"]) > 1e-9:
+            problems.append(f"frame {i}: pts differ between instances ({fa[i]['t']} vs {fb[i]['t']})")
+            break
+        if showinfo_checksum(raw[i * size:(i + 1) * size]) != fb[i]["checksum"]:
+            problems.append(f"frame {i}: bytes do not hash to showinfo checksum")
+            break
+    ts = [f["t"] for f in fa[:n_out]]
+    if any(b <= a for a, b in zip(ts, ts[1:])):
+        problems.append("PTS not strictly increasing (duplicate or reordered frame)")
+    return {"state": "verified" if not problems else "unverified", "problems": problems,
+            "frames_written": n_out, "pts": ts,
+            "steps": sorted({round(b - a, 6) for a, b in zip(ts, ts[1:])})}
+
+
+def decode(media: str | Path, ss: float | None, nframes: int | None, w: int, h: int, *,
+           copyts: bool = True, pix: str = "gray", until: float | None = None,
+           scale_flags: str = "area", lavfi: bool = False,
+           trim: tuple[float, float] | None = None) -> dict:
+    """Decode `nframes` frames (or up to input time `until`) from `ss`, scaled to w x h.
+
+    Returns {"state", "problems", "pts", "frames" (n,h,w[,3]) uint8, "cmd"}.
+    `ss=None` decodes from the first frame with no seek at all (a true sequential read).
+    """
+    ch = 1 if pix == "gray" else 3
+    cmd = [FFMPEG, "-hide_banner", "-nostdin", "-v", "info"]
+    if ss is not None:
+        cmd += ["-ss", f"{ss:.6f}"]
+    if copyts:
+        cmd += ["-copyts"]
+    if until is not None:
+        cmd += ["-to", f"{until:.6f}"]
+    cmd += (["-f", "lavfi"] if lavfi else []) + ["-i", str(media)]
+    if nframes is not None:
+        cmd += ["-frames:v", str(nframes)]
+    pre = f"trim=start={trim[0]:.6f}:end={trim[1]:.6f}," if trim else ""
+    cmd += ["-an", "-sn", "-dn", "-vf",
+            f"{pre}showinfo,scale={w}:{h}:flags={scale_flags},format={pix},showinfo",
+            "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", pix, "-"]
+    r = subprocess.run(cmd, capture_output=True)
+    err = r.stderr.decode("utf-8", "replace")
+    inst = parse_showinfo(err)
+    names = sorted(inst, key=lambda s: int(s.rsplit("_", 1)[1]))
+    if r.returncode or len(names) != 2:
+        return {"state": "unavailable", "problems": [f"rc {r.returncode}", err[-300:]],
+                "pts": [], "frames": None, "cmd": cmd}
+    v = verify(r.stdout, w, h, ch, inst[names[0]], inst[names[1]],
+               nframes if until is None else None)
+    n = v["frames_written"]
+    arr = np.frombuffer(r.stdout[:n * w * h * ch], np.uint8)
+    arr = arr.reshape((n, h, w) if ch == 1 else (n, h, w, ch))
+    return {"state": v["state"], "problems": v["problems"], "pts": v["pts"], "steps": v["steps"],
+            "frames": arr, "cmd": cmd}
+
+
+def probe(media: str | Path) -> dict:
+    r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,time_base,"
+                        "start_pts,start_time,duration,nb_frames:format=start_time,duration",
+                        "-of", "json", str(media)], capture_output=True, text=True)
+    import json
+    d = json.loads(r.stdout or "{}")
+    s = (d.get("streams") or [{}])[0]
+    return {"stream": s, "format": d.get("format", {}), "rc": r.returncode}
+
+
+# --------------------------------------------------------------------------- matching
+
+def mad_curve(target: np.ndarray, cands: np.ndarray) -> np.ndarray:
+    """Unrounded mean absolute difference of `target` (h,w) against each of `cands` (n,h,w)."""
+    t = target.astype(np.float32)
+    return np.array([float(np.abs(c.astype(np.float32) - t).mean()) for c in cands], np.float64)
+
+
+def ambiguity(offsets: list[int], mads: np.ndarray, delta: float) -> dict:
+    """The offsets whose MAD is within `delta` of the minimum.
+
+    A single member is an exact match; a run of members is an interval, reported as such;
+    members that are not contiguous are flagged (`contiguous: False`) rather than merged.
+    """
+    mads = np.asarray(mads, np.float64)
+    if len(mads) == 0 or not np.all(np.isfinite(mads)):
+        return {"state": "unavailable"}
+    best = int(np.argmin(mads))
+    mem = [o for o, m in zip(offsets, mads) if m <= mads[best] + delta]
+    contiguous = all(b - a == 1 for a, b in zip(mem, mem[1:]))
+    at_edge = mem[0] == offsets[0] or mem[-1] == offsets[-1]
+    return {"state": "exact" if len(mem) == 1 else "ambiguous", "argmin": offsets[best],
+            "min": float(mads[best]), "lo": mem[0], "hi": mem[-1], "n": len(mem),
+            "contiguous": contiguous, "at_window_edge": at_edge}
+
+
+# --------------------------------------------------------------------------- the -r model
+
+def cfr_pick(src_times: list[float], src_durs: list[float], out_fps: float) -> list[int | None]:
+    """Which input frame the ffmpeg CFR output (-r out_fps) puts in each output slot.
+
+    A model of fftools' video_sync_process VSYNC_CFR, written down so it can be CHECKED
+    against a real encode (it is not used to correct anything):
+      delta0 = ipts - next_pts; delta = delta0 + duration   (both in output-frame units)
+      delta < -1.1  -> drop;   delta > 1.1 -> emit round(delta) copies
+      (and round(delta0 - 0.6) of the previous frame first when delta0 > 1.1);
+      otherwise emit once. Each emitted copy takes slot next_pts, then next_pts += 1.
+    Returns, per output slot, the index of the input frame shown there.
+    """
+    slots: list[int | None] = []
+    next_pts = 0
+    prev = None
+    for i, (t, d) in enumerate(zip(src_times, src_durs)):
+        ipts = t * out_fps
+        dur = d * out_fps
+        delta0 = ipts - next_pts
+        delta = delta0 + dur
+        # -1e-9: an exact tie (delta == -1.1, e.g. 59.94 fps frame 5399 ending at 90.09 = 90.2 - 0.11)
+        # is KEPT by ffmpeg; in float the tie lands just below -1.1. Found as 3 mismatches in 6002 slots.
+        if delta < -1.1 - 1e-9:
+            nb, nb_prev = 0, 0
+        elif delta > 1.1:
+            nb = int(np.rint(delta))
+            nb_prev = int(np.rint(delta0 - 0.6)) if delta0 > 1.1 else 0
+        else:
+            nb, nb_prev = 1, 0
+        for _ in range(min(nb_prev, nb)):
+            slots.append(prev)
+            next_pts += 1
+        for _ in range(nb - min(nb_prev, nb)):
+            slots.append(i)
+            next_pts += 1
+        prev = i
+    return slots
+
+
+def local_pick(slot_t: float, src_pts: list[float], src_durs: list[float], out_fps: float = 10.0) -> int | None:
+    """Steady-state form of cfr_pick for one slot: the first input frame i whose END
+    (t_i + d_i) is at or after slot_t - 1.1 / out_fps. Returns an index into src_pts, or None
+    when the window does not reach back far enough to decide (the first frame already qualifies
+    and nothing earlier was decoded)."""
+    edge = slot_t - 1.1 / out_fps
+    for i, (t, d) in enumerate(zip(src_pts, src_durs)):
+        if t + d >= edge - 1e-9:
+            return None if i == 0 else i
+    return None
+
+
+# --------------------------------------------------------------------------- synthetic barcode
+
+BITS_X, BITS_Y = 6, 4          # 24 cells: 22 data bits + 2 fixed markers (one black, one white)
+DATA_BITS = BITS_X * BITS_Y - 2
+
+
+def cell_of(bit: int) -> tuple[int, int]:
+    return bit % BITS_X, bit // BITS_X
+
+
+def read_barcode(gray: np.ndarray, margin: float = 0.3, sure: float = 60.0) -> dict:
+    """Frame index from a barcode frame, or `unreadable` when any cell is not clearly black/white
+    or the two marker cells are wrong. Never guesses."""
+    h, w = gray.shape
+    cw, chh = w / BITS_X, h / BITS_Y
+    vals = []
+    for b in range(BITS_X * BITS_Y):
+        cx, cy = cell_of(b)
+        x0, x1 = int(cx * cw + margin * cw), int((cx + 1) * cw - margin * cw)
+        y0, y1 = int(cy * chh + margin * chh), int((cy + 1) * chh - margin * chh)
+        vals.append(float(gray[y0:y1, x0:x1].mean()))
+    if any(abs(v - 127.5) < sure for v in vals):
+        return {"state": "unreadable", "why": "a cell is not clearly black or white"}
+    bits = [1 if v > 127.5 else 0 for v in vals]
+    if bits[-2] != 0 or bits[-1] != 1:
+        return {"state": "unreadable", "why": "marker cells wrong"}
+    return {"state": "read", "index": sum(bit << k for k, bit in enumerate(bits[:DATA_BITS]))}
+
+
+def geq_barcode_expr(w: int, h: int) -> str:
+    """lavfi `geq` luma expression drawing frame number N as the barcode read_barcode() reads."""
+    cw, chh = w // BITS_X, h // BITS_Y
+    b = f"(floor(X/{cw})+{BITS_X}*floor(Y/{chh}))"
+    data = f"mod(floor(N/pow(2,{b})),2)"
+    # cell DATA_BITS -> 0 (black marker), cell DATA_BITS+1 -> 1 (white marker)
+    expr = f"255*if(lt({b},{DATA_BITS}),{data},if(eq({b},{DATA_BITS}),0,1))"
+    return expr

@@ -126,6 +126,9 @@ async def handle_ingest(job_id: str, project_id: str, clip_id, metadata, queue) 
         info["video_path"],
         width=settings.clipper_proxy_width,
         fps=settings.clipper_proxy_fps,
+        # The proxy owns 60%→85%; its file verification reports inside that.
+        on_progress=lambda f, m: queue.update_progress(job_id, 0.60 + 0.25 * f, m),
+        is_cancelled=lambda: queue.is_cancelled(job_id),
     )
     _guard(queue, job_id)
 

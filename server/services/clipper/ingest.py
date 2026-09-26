@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 from config import settings
 from services import downloader
-from services.clipper import storage
+from services.clipper import proxy_provenance, storage
 from services.clipper.ffmpeg_tools import even, ffmpeg_bin, run, video_info
 from services.clipper.urlguard import UrlRejected, check_url
 
@@ -316,11 +316,17 @@ def _cleanup_download_dir(directory: Path) -> None:
 
 # ── Derived media ────────────────────────────────────────────────────────────
 
-async def build_proxy(project_id: str, video_path: str, *, width: int = 480, fps: int = 10) -> str:
+async def build_proxy(project_id: str, video_path: str, *, width: int = 480, fps: int = 10,
+                      on_progress: ProgressFn | None = None,
+                      is_cancelled: CancelFn | None = None) -> str:
     """Encode the analysis proxy and return its path.
 
     Small, keyframe-dense and audio-less: every Pass-A/B pass seeks around this
     file repeatedly, so decode cost here is multiplied by every later stage.
+
+    on_progress(fraction of this stage, message) is called once, when the
+    files start being verified; is_cancelled stops that verification between
+    two hash blocks.
     """
     storage.ensure_dirs(project_id)
     out = storage.paths(project_id)["proxy"]
@@ -336,24 +342,32 @@ async def build_proxy(project_id: str, video_path: str, *, width: int = 480, fps
         target_fps = min(target_fps, src_fps)  # -r above source fps only duplicates frames
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        ffmpeg_bin(), "-y", "-loglevel", "error",
-        "-i", str(video_path),
-        "-an", "-sn", "-dn",
-        # -2 keeps the aspect ratio and lands on an even height, which H.264
-        # requires; even() already guarantees the width.
-        "-vf", f"scale={target_w}:-2:flags=bilinear",
-        "-r", f"{target_fps:g}",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
-        "-pix_fmt", "yuv420p",
-        # Short GOP + faststart: the analysis passes seek constantly, and a
-        # 250-frame GOP would make every seek decode from far behind.
-        "-g", f"{max(1, int(round(target_fps)))}",
-        "-movflags", "+faststart",
-        str(out),
-    ]
+    # The tokens and their reasons live in proxy_provenance.PROXY_RECIPE, which
+    # is also what gets recorded as this proxy's recipe.
+    argv, recipe = proxy_provenance.proxy_recipe(str(video_path), str(out), target_w, target_fps)
+    # The executable is resolved ONCE and identified before it runs: the record
+    # must name the build that made this proxy, not whatever is installed later.
+    exe = ffmpeg_bin()
+    cmd = [exe, *argv]
+    # The record describes the proxy this encode is about to overwrite. Its
+    # source hash may be reused below; the record itself must not survive.
+    previous = proxy_provenance.read_raw(project_id)
+    proxy_provenance.forget(project_id)
+    try:
+        build = await _in_thread(lambda: proxy_provenance.ffmpeg_build(exe))
+    except Exception:
+        build = None
+        logger.warning("clipper ffmpeg build not identified for %s", project_id, exc_info=True)
     await _ffmpeg(cmd, timeout=_encode_timeout(info.get("duration") or 0.0), what="proxy encode")
     logger.info(f"clipper proxy built: {out} ({target_w}px @{target_fps:g}fps)")
+    if build is None:
+        return str(out)
+    # Hashes both files in full, once, off the loop and with no DB session open.
+    # A failure is logged and leaves no record; a cancellation stops the job.
+    await _report(on_progress, 0.5, "Verifying source and proxy (sha256)")
+    await _in_thread(lambda: proxy_provenance.record_unless_failed(
+        project_id, video_path, out, recipe, previous, build=build,
+        check=lambda: _raise_if_cancelled(is_cancelled)))
     return str(out)
 
 
@@ -424,38 +438,61 @@ async def sample_frames(project_id: str, proxy_path: str, times: list[float]) ->
 
     # One executor hop for the whole batch: N short ffmpeg runs, sequential, so a
     # 400-frame grid does not spawn 400 threads or 400 concurrent decoders.
-    return await _in_thread(lambda: _sample_frames_sync(proxy_path, frames_dir, wanted))
+    return await _in_thread(lambda: _sample_frames_sync(project_id, proxy_path, frames_dir, wanted))
 
 
-def _sample_frames_sync(proxy_path: str, frames_dir: Path, times: list[float]) -> list[str]:
+def _sample_frames_sync(project_id: str, proxy_path: str, frames_dir: Path,
+                        times: list[float]) -> list[str]:
     written: list[str] = []
+    # One row per REQUESTED time, failures included: frames_pts.json's
+    # denominator is what was asked for, not what came back.
+    rows: list[dict] = []
     failures = 0
     for i, t in enumerate(times):
         out = frames_dir / f"frame_{i:05d}.jpg"
         try:
-            run(_frame_cmd(proxy_path, t, out, quality=4), timeout=60, what="frame sample")
-        except RuntimeError:
+            got = proxy_provenance.run_showinfo(
+                _frame_cmd(proxy_path, t, out, quality=4, decoded_pts=True),
+                timeout=60, what="frame sample")
+        except RuntimeError as exc:
             failures += 1
+            rows.append(proxy_provenance.frame_row(out.name, t, "failed", reason=str(exc)[-200:]))
             continue
         if out.exists() and out.stat().st_size > 0:
             written.append(str(out))
+            rows.append(proxy_provenance.frame_row(
+                out.name, t, "decoded" if got else "pts_unknown", got,
+                None if got else "showinfo did not report exactly one frame"))
         else:
             failures += 1
+            rows.append(proxy_provenance.frame_row(out.name, t, "failed", reason="no frame written"))
     if failures:
         logger.warning(f"clipper frame sampling skipped {failures}/{len(times)} timestamps")
+    try:
+        proxy_provenance.record_frames(project_id, proxy_path, rows)
+    except Exception:
+        logger.warning("clipper frames_pts not recorded for %s", project_id, exc_info=True)
     return written
 
 
-def _frame_cmd(video_path: str, t: float, out: Path, *, quality: int) -> list[str]:
+def _frame_cmd(video_path: str, t: float, out: Path, *, quality: int,
+               decoded_pts: bool = False) -> list[str]:
     """Single-frame grab. -ss before -i seeks on the container instead of
     decoding from zero, which is the difference between a 20 ms and a 30 s grab
-    two hours into a stream."""
+    two hours into a stream.
+
+    decoded_pts: also report WHICH frame was grabbed. -copyts keeps the file's
+    own timestamps and showinfo prints the decoded frame's integer PTS. M0 v2
+    measured the JPEG byte-identical to the plain grab on 202 stored frames, so
+    frames grabbed either way stay comparable."""
     return [
-        ffmpeg_bin(), "-y", "-loglevel", "error",
+        ffmpeg_bin(), "-y", "-loglevel", "info" if decoded_pts else "error",
         "-ss", f"{t:.3f}",
+        *(["-copyts"] if decoded_pts else []),
         "-i", str(video_path),
         "-frames:v", "1",
         "-an", "-sn", "-dn",
         "-q:v", str(quality),
+        *(["-vf", "showinfo"] if decoded_pts else []),
         str(out),
     ]

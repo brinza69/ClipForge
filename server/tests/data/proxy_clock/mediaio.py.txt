@@ -1,0 +1,88 @@
+"""ffprobe readers returning EXACT integers (pts, duration in the stream time_base), never floats.
+
+`packets()` reads the demuxer's packet list for the whole file (no decode); `frames()` DECODES an
+interval and returns the frames' best_effort_timestamp (what ffmpeg_dec.c:401 hands the filter graph)
+and duration. A field ffprobe prints as N/A makes the row `None`, and the caller refuses it.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "offset"))
+import offlib  # noqa: E402  (FFMPEG/FFPROBE paths, verified decode; read-only import)
+
+FFMPEG, FFPROBE = offlib.FFMPEG, offlib.FFPROBE
+
+
+def _int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def probe(media) -> dict:
+    """offlib.probe plus codec/format fields used for provenance."""
+    r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=codec_name,profile,pix_fmt,width,height,r_frame_rate,avg_frame_rate,time_base,"
+                        "start_pts,start_time,duration,duration_ts,nb_frames,has_b_frames"
+                        ":format=format_name,start_time,duration,size:format_tags=encoder,major_brand",
+                        "-of", "json", str(media)], capture_output=True, text=True)
+    d = json.loads(r.stdout or "{}")
+    return {"stream": (d.get("streams") or [{}])[0], "format": d.get("format", {}), "rc": r.returncode}
+
+
+def packets(media) -> dict:
+    """Every video packet's pts and duration, sorted by pts (presentation order)."""
+    r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "packet=pts,duration", "-of", "csv=p=0", str(media)], capture_output=True, text=True)
+    pts, dur, bad = [], [], 0
+    for line in r.stdout.splitlines():
+        a = line.strip().rstrip(",").split(",")
+        if len(a) < 2 or _int(a[0]) is None or _int(a[1]) is None:
+            bad += 1
+            continue
+        pts.append(int(a[0]))
+        dur.append(int(a[1]))
+    order = sorted(range(len(pts)), key=pts.__getitem__)
+    return {"rc": r.returncode, "unparsed": bad, "pts": [pts[i] for i in order],
+            "dur": [dur[i] for i in order], "err": r.stderr[-300:]}
+
+
+def frames(media, t0: float, t1: float) -> dict:
+    """DECODED frames whose timestamps fall in [t0, t1] (ffprobe -read_intervals, which seeks to the
+    keyframe before t0 and decodes forward). Returns (pts, duration) integers in presentation order."""
+    r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0", "-read_intervals",
+                        f"{max(0.0, t0):.6f}%{t1:.6f}", "-show_entries",
+                        "frame=pts,best_effort_timestamp,duration", "-of", "json", str(media)],
+                       capture_output=True, text=True)
+    rows = (json.loads(r.stdout or "{}").get("frames") or [])
+    out, problems = [], []
+    for f in rows:
+        p, b, d = _int(f.get("pts")), _int(f.get("best_effort_timestamp")), _int(f.get("duration"))
+        if b is None or d is None:
+            problems.append(f"frame without timestamp/duration: {f}")
+            continue
+        if p is not None and p != b:
+            problems.append(f"pts {p} != best_effort {b}")
+        out.append((b, d))
+    out.sort()
+    if any(b[0] <= a[0] for a, b in zip(out, out[1:])):
+        problems.append("decoded PTS not strictly increasing")
+    return {"rc": r.returncode, "frames": out, "problems": problems}
+
+
+def sha256_file(path, chunk: int = 1 << 22) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            b = fh.read(chunk)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()

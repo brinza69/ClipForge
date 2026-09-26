@@ -1,0 +1,223 @@
+﻿"""Part 2.2 (synthetic) - drift and quantization through the EXACT build_proxy command, 10 min.
+
+    server/.venv/Scripts/python.exe data/claude-master-20260924/B/gates/offset/synthetic_long.py
+
+Per source rate (60, 30 required; 25 and 60000/1001 added for quantization):
+  1. lavfi `geq` writes the frame number N as a 22-bit barcode (offlib.read_barcode), 192x108,
+     upscaled x5 (neighbour) to 960x540, lossless x264. The SOURCE is then decoded in full and
+     every frame must read back as its own index at PTS index/fps (self-check).
+  2. the proxy is built with build_proxy's argument list, copied from ingest.py and checked
+     against the file's text at run time (a drifted copy is a refusal, not a result).
+  3. the whole proxy is decoded sequentially (verified), every slot's barcode read: lag =
+     proxy PTS - shown index / fps. Compared slot by slot with offlib.cfr_pick (the model).
+  4. readers on the proxy with known content: the `_frame_cmd` seek (sample_frames) and OpenCV
+     POS_MSEC seek + read (motion_timeline / face_presence) at times on and off the 0.1 s grid.
+Media go to gates/offset/_synth/ and are deleted at the end (json kept). Exit 1 on any refusal.
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+import shutil
+import subprocess
+import sys
+from fractions import Fraction
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import offlib  # noqa: E402
+
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+
+ROOT = offlib.gatelog.ROOT
+INGEST = ROOT / "server/services/clipper/ingest.py"
+DUR = 600
+RATES = [("60", Fraction(60)), ("30", Fraction(30)), ("25", Fraction(25)),
+         ("59.94", Fraction(60000, 1001))]
+GW, GH, UP = 192, 108, 5
+RW, RH = 96, 54                     # read size (barcode cells stay > 10 px)
+WORK = HERE / "_synth"
+
+
+def build_proxy_cmd(src: Path, out: Path, src_w: int, src_fps: float,
+                    width: int = 480, fps: int = 10) -> list[str]:
+    """ingest.build_proxy lines 329-354, with the same arithmetic."""
+    from services.clipper.ffmpeg_tools import even  # the production helper, read-only
+    target_w = even(min(int(width), src_w) if src_w > 0 else int(width))
+    target_fps = float(fps) if fps and fps > 0 else 10.0
+    if src_fps > 0:
+        target_fps = min(target_fps, src_fps)
+    return [offlib.FFMPEG, "-y", "-loglevel", "error", "-i", str(src), "-an", "-sn", "-dn",
+            "-vf", f"scale={target_w}:-2:flags=bilinear", "-r", f"{target_fps:g}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p",
+            "-g", f"{max(1, int(round(target_fps)))}", "-movflags", "+faststart", str(out)]
+
+
+def check_copy_matches_ingest() -> list[str]:
+    """Every argument token of the copy must appear in build_proxy's source text."""
+    text = INGEST.read_text(encoding="utf-8")
+    body = text[text.index("async def build_proxy"):text.index("async def extract_audio")]
+    need = ['"-y", "-loglevel", "error"', '"-i", str(video_path)', '"-an", "-sn", "-dn"',
+            '"-vf", f"scale={target_w}:-2:flags=bilinear"', '"-r", f"{target_fps:g}"',
+            '"-c:v", "libx264", "-preset", "veryfast", "-crf", "30"', '"-pix_fmt", "yuv420p"',
+            '"-g", f"{max(1, int(round(target_fps)))}"', '"-movflags", "+faststart"',
+            "target_fps = min(target_fps, src_fps)"]
+    missing = [n for n in need if n not in body]
+    # and nothing else between cmd = [ and ] that the copy lacks
+    cmd = body[body.index("cmd = ["):body.index("]", body.index("str(out)"))]
+    toks = re.findall(r'"(-[a-z:]+)"', cmd)
+    extra = [t for t in toks if t not in ("-y", "-loglevel", "-i", "-an", "-sn", "-dn", "-vf", "-r",
+                                          "-c:v", "-preset", "-crf", "-pix_fmt", "-g", "-movflags")]
+    return missing + [f"unexpected option {t}" for t in extra]
+
+
+def read_all(frames: np.ndarray) -> list[dict]:
+    return [offlib.read_barcode(f) for f in frames]
+
+
+def run_rate(name: str, fps: Fraction) -> dict:
+    src, prx = WORK / f"src_{name}.mp4", WORK / f"proxy_{name}.mp4"
+    out: dict = {"rate": name, "fps": str(fps), "duration_s": DUR}
+    gen = [offlib.FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+           f"color=c=black:s={GW}x{GH}:r={fps.numerator}/{fps.denominator}:d={DUR}",
+           "-vf", f"geq=lum='{offlib.geq_barcode_expr(GW, GH)}':cb=128:cr=128,"
+                  f"scale={GW * UP}:{GH * UP}:flags=neighbor",
+           "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", "-pix_fmt", "yuv420p", str(src)]
+    r = subprocess.run(gen, capture_output=True, text=True)
+    if r.returncode:
+        return {**out, "state": "source_not_built", "why": r.stderr[-300:]}
+    out["source_probe"] = offlib.probe(src)
+    # 1. source self-check, decoded in full
+    d = offlib.decode(src, None, None, RW, RH, copyts=True)
+    if d["state"] != "verified":
+        return {**out, "state": "source_unverified", "why": d["problems"]}
+    reads = read_all(d["frames"])
+    unread = sum(1 for x in reads if x["state"] != "read")
+    wrong = sum(1 for i, x in enumerate(reads) if x["state"] == "read" and x["index"] != i)
+    pts_wrong = sum(1 for i, t in enumerate(d["pts"]) if abs(t - float(i / fps)) > 1e-6)
+    out["source_check"] = {"frames": len(reads), "expected": math.ceil(DUR * fps), "unreadable": unread,
+                           "index_not_position": wrong, "pts_not_index_over_fps": pts_wrong}
+    if unread or wrong or pts_wrong or len(reads) != math.ceil(DUR * fps):
+        return {**out, "state": "source_self_check_failed"}
+    del d, reads
+    # 2. the proxy, with build_proxy's arguments
+    cmd = build_proxy_cmd(src, prx, GW * UP, float(fps))
+    out["proxy_cmd"] = cmd[1:]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode:
+        return {**out, "state": "proxy_not_built", "why": r.stderr[-300:]}
+    out["proxy_probe"] = offlib.probe(prx)
+    # 3. every proxy slot, sequentially
+    d = offlib.decode(prx, None, None, RW, RH, copyts=True)
+    if d["state"] != "verified":
+        return {**out, "state": "proxy_unverified", "why": d["problems"]}
+    reads = read_all(d["frames"])
+    pts = d["pts"]
+    n_src = math.ceil(DUR * fps)
+    model = offlib.cfr_pick([float(i / fps) for i in range(n_src)], [float(1 / fps)] * n_src, 10.0)
+    slots = []
+    for k, (t, x) in enumerate(zip(pts, reads)):
+        row = {"slot": k, "pts": round(t, 6), "state": x["state"]}
+        if x["state"] == "read":
+            row["shown"] = x["index"]
+            row["lag_s"] = round(t - float(x["index"] / fps), 6)
+            row["model"] = model[k] if k < len(model) else None
+        slots.append(row)
+    readable = [s for s in slots if s["state"] == "read"]
+    grid_bad = sum(1 for s in slots if abs(s["pts"] - s["slot"] / 10) > 1e-6)
+    in_model = [s for s in readable if s["model"] is not None]
+    mism = [s for s in in_model if s["shown"] != s["model"]]
+    steady = [s for s in readable if 2 <= s["slot"] < len(model)]
+    thirds = {}
+    for lab, a, b in (("begin", 0, DUR / 3), ("middle", DUR / 3, 2 * DUR / 3), ("end", 2 * DUR / 3, DUR + 1)):
+        seg = [s["lag_s"] for s in steady if a <= s["pts"] < b]
+        thirds[lab] = {"n": len(seg), "min": min(seg), "max": max(seg), "mean": round(float(np.mean(seg)), 6),
+                       "values": sorted({round(v, 4) for v in seg})} if seg else {"n": 0}
+    x = np.array([s["pts"] for s in steady])
+    y = np.array([s["lag_s"] for s in steady])
+    slope = float(np.polyfit(x, y, 1)[0]) if len(x) > 2 else None
+    out.update(state="read", proxy_slots=len(slots), proxy_slots_unreadable=len(slots) - len(readable),
+               proxy_pts_off_grid=grid_bad, model_slots=len(model), compared_with_model=len(in_model),
+               model_mismatches=len(mism), model_mismatch_examples=mism[:5],
+               first_slots=slots[:4], tail_slots=[s for s in slots if s["slot"] >= len(model)],
+               lag_by_third=thirds, lag_slope_s_per_hour=None if slope is None else round(slope * 3600, 9),
+               lag_values_steady=sorted({round(v, 4) for v in y.tolist()}))
+    # 4. readers with known content
+    out["readers"] = readers(prx, fps, len(slots))
+    return out
+
+
+def readers(prx: Path, fps: Fraction, n_slots: int) -> dict:
+    """Which slot does each production reader return for a requested time?"""
+    times = []
+    for base in (2.0, 300.0, 590.0):
+        for dt in (0.0, 0.001, 0.02, 0.05, 0.0499, 0.0501, 0.08, 0.099):
+            times.append(round(base + dt, 4))
+    res = {"requested": len(times), "frame_cmd": [], "cv2_pos_msec": []}
+    tmp = WORK / "_one.png"
+    for t in times:
+        # ingest._frame_cmd (JPEG there; PNG here so the barcode is not re-quantised)
+        tmp.unlink(missing_ok=True)
+        r = subprocess.run([offlib.FFMPEG, "-y", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(prx),
+                            "-frames:v", "1", "-an", "-sn", "-dn", str(tmp)], capture_output=True)
+        img = cv2.imread(str(tmp), 0) if r.returncode == 0 and tmp.exists() else None
+        rec = {"t": t, "state": "unavailable"}
+        if img is not None:
+            x = offlib.read_barcode(cv2.resize(img, (RW, RH), interpolation=cv2.INTER_AREA))
+            rec = {"t": t, **x}
+        res["frame_cmd"].append(rec)
+        cap = cv2.VideoCapture(str(prx))
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
+        ok, fr = cap.read()
+        msec = cap.get(cv2.CAP_PROP_POS_MSEC)
+        cap.release()
+        rec2 = {"t": t, "state": "unavailable"}
+        if ok and fr is not None:
+            g = cv2.resize(cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY), (RW, RH), interpolation=cv2.INTER_AREA)
+            rec2 = {"t": t, "decoded_t": round(msec / 1000.0, 6), **offlib.read_barcode(g)}
+        res["cv2_pos_msec"].append(rec2)
+    tmp.unlink(missing_ok=True)
+    # translate a shown source index into the proxy slot that shows it (unique in steady state)
+    return res
+
+
+def main() -> int:
+    WORK.mkdir(exist_ok=True)
+    problems = check_copy_matches_ingest()
+    print("build_proxy copy vs ingest.py:", "matches" if not problems else problems)
+    if problems:
+        return 1
+    results, bad = [], 0
+    which = sys.argv[1:] or [n for n, _ in RATES]
+    for name, fps in RATES:
+        if name not in which:
+            continue
+        res = run_rate(name, fps)
+        results.append(res)
+        (HERE / (f"synthetic_long_{'_'.join(sys.argv[1:])}.json" if sys.argv[1:] else "synthetic_long.json")).write_text(json.dumps(results, indent=1, default=str))
+        if res["state"] != "read":
+            bad += 1
+            print(f"{name} fps: {res['state']} {res.get('why', '')}")
+            continue
+        print(f"\n{name} fps: source {res['source_check']}; proxy slots {res['proxy_slots']} "
+              f"(unreadable {res['proxy_slots_unreadable']}, PTS off 0.1 grid {res['proxy_pts_off_grid']})")
+        print(f"  model slots {res['model_slots']}, compared {res['compared_with_model']}, "
+              f"mismatches {res['model_mismatches']}; tail slots {[(s['slot'], s.get('shown')) for s in res['tail_slots']]}")
+        print(f"  first slots {[(s['pts'], s.get('shown')) for s in res['first_slots']]}")
+        for lab, v in res["lag_by_third"].items():
+            print(f"  {lab}: n {v['n']} lag s min {v.get('min')} max {v.get('max')} values {v.get('values')}")
+        print(f"  lag slope {res['lag_slope_s_per_hour']} s/hour; steady lag values {res['lag_values_steady']}")
+        for rd in ("frame_cmd", "cv2_pos_msec"):
+            rows = res["readers"][rd]
+            print(f"  reader {rd}: " + "; ".join(
+                f"{x['t']}->{x.get('index', x['state'])}"
+                + (f"@{x['decoded_t']}" if 'decoded_t' in x else '') for x in rows))
+    shutil.rmtree(WORK, ignore_errors=True)
+    return 1 if bad or not results else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
