@@ -7,9 +7,9 @@
 // cannot interrogate is a number they cannot overrule.
 
 import { useState } from "react";
-import { Check, Download, Film, Loader2, Play, X } from "lucide-react";
+import { Check, Clapperboard, Download, Film, Loader2, Play, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   CLIPPER_API,
@@ -215,9 +215,25 @@ export function CandidateCard({
           {busy === "export" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Download className="h-3.5 w-3.5" />
+            <Clapperboard className="h-3.5 w-3.5" />
           )}
         </Button>
+        {/* A plain GET of the file the server holds as this clip's current
+            export: no job, no render. Offered only while the clip IS exported —
+            during a render, after a failure or after an invalidation the file on
+            disk is not the current export, and the route refuses it too. The
+            render button used to carry this icon, and was the only way to the
+            file: there was none (A4 release-browser.md, D1). */}
+        {clip.status === "exported" && (
+          <a
+            href={`${CLIPPER_API}/clips/${clip.id}/export-file`}
+            download
+            title="Download the exported file"
+            className={buttonVariants({ variant: "secondary", size: "sm" })}
+          >
+            <Download className="h-3.5 w-3.5" />
+          </a>
+        )}
       </div>
     </Card>
   );
