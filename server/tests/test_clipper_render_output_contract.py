@@ -194,11 +194,14 @@ def test_the_sidecar_keeps_the_stored_caption_plan_and_the_height_separately():
     """Not a pre-merged "effective" plan. Merging here would put a second copy
     of `_write_ass`'s rule in the worker, and the merged result cannot be taken
     apart again by anything that needs to know what was decided at score time
-    and what was decided at render time."""
+    and what was decided at render time. Since D2 an alternative with no stored
+    plan records the one built for the render, unmerged, and
+    `caption_plan_state.origin` says `built` rather than `stored`."""
     import inspect
 
     src = inspect.getsource(output._write_sidecar)
-    assert '"caption_plan": clip.caption_plan' in src
+    assert '"caption_plan": decision.get("caption_plan", clip.caption_plan)' in src
+    assert '"caption_plan_state": decision.get("caption_plan_state")' in src
     assert '"caption_y": caption_y' in src
 
 

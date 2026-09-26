@@ -230,22 +230,50 @@ export default function ClipperProjectPage() {
         onSaved={() => void loadProject()}
       />
 
-      {project.error && !project.active_job && (
+      {/* `error` is the latest ANALYSIS attempt's, never a clip job's (D2r-3), so
+          a running preview or export no longer hides a real failure. Retry is
+          offered only where the endpoint would accept it: on a ready project the
+          failure stays visible, but rebuilding the board is the rescore, not a
+          recovery (codex-verdict-closure-4). */}
+      {project.error && (
         <Card className="space-y-3 border-destructive/40 p-4">
           <div className="flex items-start gap-2 text-sm text-destructive">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <div className="min-w-0 break-words">{project.error}</div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Retry resumes from the last stage whose files are still on disk — a completed
-            download is not fetched twice.
-          </p>
-          <Button variant="outline" onClick={() => void retry()} disabled={retrying}>
-            {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-            Retry
-          </Button>
+          {project.retry_allowed !== false && (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Retry resumes from the last stage whose files are still on disk — a completed
+                download is not fetched twice.
+              </p>
+              <Button variant="outline" onClick={() => void retry()} disabled={retrying}>
+                {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                Retry
+              </Button>
+            </>
+          )}
         </Card>
       )}
+
+      {/* A cancelled analysis is not a failure, but it is resumable, and the
+          failure panel above used to be the only way back to /retry — through a
+          stale error (D2r-3). The resume stays an explicit click;
+          `retry_allowed` is the predicate the endpoint itself applies. */}
+      {project.analysis_attempt?.status === "cancelled" &&
+        project.retry_allowed && (
+          <Card className="space-y-3 border-border/40 p-4">
+            <p className="text-sm">The analysis was cancelled.</p>
+            <p className="text-xs text-muted-foreground">
+              Resume picks up from the last stage whose files are still on disk — a completed
+              download is not fetched twice.
+            </p>
+            <Button variant="outline" onClick={() => void retry()} disabled={retrying}>
+              {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+              Resume analysis
+            </Button>
+          </Card>
+        )}
 
       {project.active_job && (
         <AnalysisProgress job={project.active_job} onFinished={() => void loadProject()} />

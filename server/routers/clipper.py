@@ -38,7 +38,6 @@ from services.clipper.serialize import (
     PROJECT_PATCHABLE,
     PROJECT_PATCHABLE_JSON,
     apply_patch,
-    clip_to_dict,
     job_to_dict,
     project_to_dict,
 )
@@ -281,7 +280,10 @@ async def _load_project(session: AsyncSession, project_id: str) -> ProjectModel:
 
 
 async def _board(session: AsyncSession, project: ProjectModel) -> list[dict]:
-    """The project's clips in board order, each with its effective caption policy."""
+    """The project's clips in board order, each with its effective caption policy
+    and its `last_preview` (one query for the board, D2r-3)."""
+    from services.clipper.project_attempts import clip_cards
+
     clips = await session.execute(
         select(ClipModel)
         .where(ClipModel.project_id == project.id)
@@ -292,14 +294,22 @@ async def _board(session: AsyncSession, project: ProjectModel) -> list[dict]:
             ClipModel.start_time,
         )
     )
-    return [clip_to_dict(c, project) for c in clips.scalars().all()]
+    return await clip_cards(session, list(clips.scalars().all()), project)
 
 
 @router.get("/projects/{project_id}")
 async def get_project(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     """Full project: candidates in rank order plus the job currently running,
     which is everything the detail page needs to re-derive its state after a
-    reload."""
+    reload.
+
+    `error` is the latest ANALYSIS attempt's, never a clip job's, and
+    `retry_allowed` is the predicate `/retry` refuses by — both from
+    `project_attempts.analysis_state` (D2r-3). It used to be the latest failed
+    job of any type, so a discarded preview offered a rescore of a ready project.
+    """
+    from services.clipper.project_attempts import analysis_state
+
     project = await _load_project(session, project_id)
 
     active = await session.execute(
@@ -309,20 +319,12 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_sessi
         .order_by(JobModel.created_at.desc())
         .limit(1)
     )
-    last_failed = await session.execute(
-        select(JobModel)
-        .where(JobModel.project_id == project_id)
-        .where(JobModel.status == JobStatus.failed.value)
-        .order_by(JobModel.created_at.desc())
-        .limit(1)
-    )
-    failed_job = last_failed.scalar_one_or_none()
     active_job = active.scalar_one_or_none()
 
     payload = project_to_dict(project)
     payload["clips"] = await _board(session, project)
     payload["active_job"] = job_to_dict(active_job) if active_job else None
-    payload["error"] = failed_job.error if (failed_job and not active_job) else None
+    payload.update(await analysis_state(session, project))
     return payload
 
 

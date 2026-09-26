@@ -18,6 +18,15 @@ import {
   formatTimecode,
   type ClipperClip,
 } from "@/types/clipper";
+import type { PreviewAttempt } from "@/types/clipper-attempts";
+
+function previewFailure(attempt: PreviewAttempt): string {
+  if (attempt.discarded === "inputs_changed")
+    return "Preview discarded: the clip was edited while it rendered. Run Preview again.";
+  if (attempt.discarded === "newer_export")
+    return "Preview discarded: an export was published while it rendered.";
+  return `Preview failed: ${attempt.error ?? "the render did not finish"}`;
+}
 
 function scoreTone(score: number): string {
   if (score >= 70) return "border-emerald-500/40 bg-emerald-500/10 text-emerald-400";
@@ -125,6 +134,15 @@ export function CandidateCard({
             <p className="mt-1 text-[11px] text-muted-foreground">No preview rendered yet</p>
           </div>
         </div>
+      )}
+
+      {/* The NEWEST preview attempt, read off its job row: a failed or discarded
+          render says so beside its own clip. It used to surface as the project's
+          analysis failure, whose Retry rescored the whole source (D2r-3,
+          codex-verdict-closure-4). A later successful preview replaces it — this
+          is the latest attempt, not the last failure. */}
+      {clip.last_preview?.status === "failed" && (
+        <p className="text-[10px] text-rose-400/90">⚠ {previewFailure(clip.last_preview)}</p>
       )}
 
       <div className="flex flex-wrap gap-1.5">

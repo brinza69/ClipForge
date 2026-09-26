@@ -161,7 +161,13 @@ def _write_sidecar(clip, project, decision, out, *, src, dyn, render,
         # copy of `_write_ass`'s rule in this file, and the merged result cannot
         # be taken apart again by anything that needs to know what was decided
         # at score time and what was decided at render time.
-        "caption_plan": clip.caption_plan,
+        # Since D2 an alternative's plan may be BUILT for this render and never
+        # stored; the decision carries it, and `caption_plan_state.origin` says
+        # which it was. Callers that decide without it fall back to the row.
+        "caption_plan": decision.get("caption_plan", clip.caption_plan),
+        # How the render came by that plan, and — for `unavailable` — why a
+        # burn produced no captions (`reason`). Labels only, not fingerprinted.
+        "caption_plan_state": decision.get("caption_plan_state"),
         # The height actually burned after UI/face placement; `null` when the
         # stored position stood.
         "caption_y": caption_y,

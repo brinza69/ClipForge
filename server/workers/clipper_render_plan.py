@@ -35,6 +35,8 @@ from workers.clipper_captions import (  # noqa: F401
     _caption_faces,
     _caption_y,
     _clip_words,
+    _place_burned,
+    _plan_for_render,
     _write_ass,
 )
 # The three proposals every render records and none of it applies. Split out in
@@ -409,6 +411,22 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
                            "the static layout", clip.id, exc_info=True)
             dyn = None
 
+    # The detector's verdict is NOT consulted here, and that is the point: a
+    # person's answer — the clip's, else the project's — alone suppresses the
+    # layer. `source_captions` is `calibrated: false` on four sources, and an
+    # uncalibrated detector removing somebody's captions fails invisibly — a
+    # clip ships with no text at all and nothing reports it. When it is
+    # calibrated, this call gains its second argument and nothing else moves.
+    caption_policy_decision = caption_policy.decide(
+        cfg.get(caption_policy.SETTING),
+        clip_setting=getattr(clip, "source_has_burned_captions", None))
+    # D2: an alternative has no stored plan; under burn one is built for this
+    # render (never stored), and a burn that cannot be built is reported. Built
+    # AFTER `_dynamic_plan`: an alternative's cut grid does not get these words as
+    # timing hints, as a winner's does. Not editorially equivalent (U2, open).
+    clip, caption_plan_state = await _plan_for_render(
+        clip, project, plan, caption_policy_decision["action"])
+
     # Resolved once and given to BOTH the .ass and the review. Computing it
     # twice, or letting the review read the stored plan, means Pass D judging a
     # caption position the render did not use — it would go on reporting a
@@ -438,36 +456,10 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     views = clipper_shadow_views.shadow_views(
         clip, dyn, mode=edit_mode, profile=profile["profile"])
 
-    # The detector's verdict is NOT consulted here, and that is the point: a
-    # person's answer — the clip's, else the project's — alone suppresses the
-    # layer. `source_captions` is `calibrated: false` on four sources, and an
-    # uncalibrated detector removing somebody's captions fails invisibly — a
-    # clip ships with no text at all and nothing reports it. When it is
-    # calibrated, this call gains its second argument and nothing else moves.
-    caption_policy_decision = caption_policy.decide(
-        cfg.get(caption_policy.SETTING),
-        clip_setting=getattr(clip, "source_has_burned_captions", None))
     caption_face_placement = None
     if caption_policy_decision["action"] == caption_policy.BURN:
-        # Reaction fit: resolve inside the burn decision so a suppressed layer
-        # never triggers the placement helper. Pass drop spans so all-removed
-        # overlays return None rather than a stale position.
-        if _reaction_fit and caption_y is None:
-            _cp = clip.caption_plan if isinstance(clip.caption_plan, dict) else None
-            if _cp and not _cp.get("y_pct_manual"):
-                from services.clipper.reaction_captions import resolve_reaction_caption_y
-                _clip_dur = (float(clip.end_time or 0.)
-                             - float(clip.start_time or 0.))
-                try:
-                    _resolved = resolve_reaction_caption_y(
-                        plan, _cp, drop_spans=drop, clip_duration=_clip_dur)
-                except ValueError as exc:
-                    raise RuntimeError(
-                        f"clip {clip.id}: reaction caption placement failed — {exc}"
-                    ) from exc
-                if _resolved is not None:
-                    caption_y = _resolved
-        caption_y, caption_face_placement = _caption_faces(clip, project, dyn, caption_y)
+        caption_y, caption_face_placement = _place_burned(
+            clip, project, plan, dyn, drop, caption_y, _reaction_fit)
 
     return {
         "cfg": cfg,
@@ -488,12 +480,17 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
         # human confirmed on 4 of 4 watched. The switch is a person's; the
         # detector's verdict rides along and applies to nothing.
         "caption_policy": caption_policy_decision,
+        # The plan the .ass was written from (stored or built for this render)
+        # and where it came from (`_plan_for_render`); `_write_ass` below sets
+        # the effective outcome in this same dict when it burns nothing.
+        "caption_plan": clip.caption_plan,
+        "caption_plan_state": caption_plan_state,
         # WHAT THE SOURCE HAS IN IT, on the sidecar so a later reader can tell a
         # clip planned with one camera from one planned with two — the shot
         # list alone cannot, because a plan that never chose the second camera
         # and a source that never had one look identical.
         "layout_policy": layout_decision,
-        "ass_path": (_write_ass(clip, out_dir, drop, caption_y)
+        "ass_path": (_write_ass(clip, out_dir, drop, caption_y, caption_plan_state)
                      if caption_policy_decision["action"] == caption_policy.BURN
                      else None),
         "watermark": str(cfg.get("watermark_text") or ""),

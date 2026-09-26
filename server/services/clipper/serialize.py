@@ -13,10 +13,13 @@ column from silently leaking into the API.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from models import ClipModel, ClipStatus, ProjectModel
 from services.clipper import caption_policy, edit_profiles
+
+logger = logging.getLogger("clipforge.clipper.serialize")
 
 
 def invalidate_render(clip: ClipModel) -> None:
@@ -91,6 +94,23 @@ def _as_bool(value: Any) -> bool:
     return bool(value) if value is not None else False
 
 
+def _warnings(clip: ClipModel) -> list[str]:
+    """`clip.warnings` as the `string[]` the card maps over, or `[]` (D2r-2 K8).
+
+    A legacy dict, string or list with a non-str element is answered as `[]`
+    and logged; the stored value is not touched. A string would crash the card
+    at `.slice().map`, and converting any of them would invent warning text.
+    """
+    value = clip.warnings
+    if value is None:
+        return []
+    if isinstance(value, list) and all(isinstance(w, str) for w in value):
+        return value
+    logger.warning("clip %s: warnings are a %s, not a list of text; answered as []",
+                   clip.id, type(value).__name__)
+    return []
+
+
 def clip_to_dict(clip: ClipModel, project: ProjectModel | None = None) -> dict[str, Any]:
     """One candidate, shaped exactly like `ClipperClip` in src/types/clipper.ts.
 
@@ -121,7 +141,7 @@ def clip_to_dict(clip: ClipModel, project: ProjectModel | None = None) -> dict[s
         "layout_plan": clip.layout_plan,
         "caption_plan": clip.caption_plan,
         "caption_preset_id": clip.caption_preset_id,
-        "warnings": clip.warnings or [],
+        "warnings": _warnings(clip),
         "dedupe_group": clip.dedupe_group,
         "is_alternative": _as_bool(clip.is_alternative),
         # Tri-state: True/False are a person's answer, None is "nobody has

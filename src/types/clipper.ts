@@ -257,6 +257,7 @@ export interface SourceMetadata {
 // Split out at the 500-line limit and re-exported, so every existing
 // `from "@/types/clipper"` keeps working. See clipper-reasoning.ts.
 import type { ClipReasoning, ClipReview } from "./clipper-reasoning";
+import type { ClipAttemptFields, ProjectAttemptFields } from "./clipper-attempts";
 
 export type {
   ClipStory,
@@ -272,7 +273,7 @@ export interface EffectiveCaptionPolicy {
   decided_by: "human" | "default"; why: string;
 }
 
-export interface ClipperClip {
+export interface ClipperClip extends ClipAttemptFields {
   id: string;
   project_id: string;
   title: string;
@@ -316,7 +317,7 @@ export interface ClipperClip {
   thumbnail_path: string | null;
 }
 
-export interface ClipperProject {
+export interface ClipperProject extends ProjectAttemptFields {
   id: string;
   title: string;
   source_url: string | null;

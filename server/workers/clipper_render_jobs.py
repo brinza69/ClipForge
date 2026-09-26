@@ -32,6 +32,8 @@ from database import async_session
 from models import ClipModel, ClipStatus, JobModel, JobStatus, ProjectModel
 from services.clipper import storage
 from services.clipper.clip_mutations import begin_write
+from services.clipper.project_attempts import DISCARD_INPUTS_CHANGED, DISCARD_NEWER_EXPORT
+from workers.clipper_captions import _caption_inputs, _caption_warnings
 from workers.clipper_render_output import _size_bytes  # noqa: F401 — compatibility
 
 # Re-exported, not just imported: `_decide_render` and friends were defined in
@@ -55,7 +57,7 @@ from workers.clipper_render_plan import (  # noqa: F401
 logger = logging.getLogger("clipforge.clipper.render")
 
 async def _review(clip: ClipModel, project: ProjectModel, plan: dict,
-                  caption_y: float | None = None) -> dict:
+                  caption_y: float | None = None, caption_plan: dict | None = None) -> dict:
     """Pass D over the planned cut. Advisory: it reports, it does not block.
 
     Whether a REJECT should stop an export is a product decision nobody has
@@ -68,7 +70,8 @@ async def _review(clip: ClipModel, project: ProjectModel, plan: dict,
     from services.clipper import review as review_mod
 
     paths = storage.paths(project.id)
-    caption_plan = clip.caption_plan
+    # The plan the render burns, which for an alternative is built (D2).
+    caption_plan = clip.caption_plan if caption_plan is None else caption_plan
     if caption_y is not None and caption_plan:
         caption_plan = {**caption_plan, "y_pct": caption_y}
     loop = asyncio.get_event_loop()
@@ -156,7 +159,8 @@ def _job_origin(metadata: object) -> str:
 
 
 async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, out: Path,
-                          review, ass: str | None = None) -> bool:
+                          review, ass: str | None = None,
+                          caption_state: dict | None = None) -> bool:
     """Move this attempt's file, sidecar and burned `.ass` into place and mark the row
     exported — only while it is the clip's CURRENT attempt (`export_job_id`),
     the clip is still `exporting`, and the job still runs under THIS worker.
@@ -177,6 +181,10 @@ async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, o
     with `export_path` still naming this file. So `/export-file`, which serves
     only an `exported` clip, answers 409 `export_not_current` for that mixed
     set until a later attempt publishes all three (R4c; test_clipper_export_current_r).
+
+    `caption_state` is applied to the warnings the row has NOW, read under the
+    lock, not to the list the export loaded (D2r K3): a list written meanwhile
+    keeps everything but this module's own caption report.
     """
     async with async_session() as session:
         await begin_write(session)
@@ -197,6 +205,12 @@ async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, o
         # `caption_filter` is False (R4c).
         if ass:
             os.replace(ass, out.with_suffix(".ass"))
+        values = {}
+        if caption_state is not None:
+            row = await session.get(ClipModel, clip_id, populate_existing=True)
+            warnings = _caption_warnings(row.warnings, caption_state, "export")
+            if warnings is not None:
+                values["warnings"] = warnings
         # The review goes on the row as well as the sidecar. Sidecar-only was
         # how it shipped first, and nothing in the API or the UI could read a
         # file on disk — which is this repo's oldest failure, a structure
@@ -204,7 +218,8 @@ async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, o
         await session.execute(
             update(ClipModel)
             .where(ClipModel.id == clip_id)
-            .values(status=ClipStatus.exported.value, export_path=str(out), review=review))
+            .values(status=ClipStatus.exported.value, export_path=str(out), review=review,
+                    **values))
         await session.commit()
     return True
 
@@ -249,7 +264,8 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         if dyn:
             await queue.update_progress(job_id, 0.15, "Reviewing the cut")
             try:
-                review_result = await _review(clip, project, dyn, caption_y)
+                review_result = await _review(clip, project, dyn, caption_y,
+                                              decision.get("caption_plan"))
                 if review_result["findings"]:
                     logger.info("clip %s: review says %s — %s", clip.id,
                                 review_result["verdict"],
@@ -297,8 +313,10 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
                                           ensure_ascii=False, default=str)
             else:
                 ass = None
+        # D2: a burn with no plan to burn says so on the card, not only in logs.
         if not await _publish_export(job_id, clip.id, queue.worker_id, staged, out,
-                                     review_result, ass):
+                                     review_result, ass,
+                                     caption_state=decision.get("caption_plan_state")):
             raise RuntimeError(f"export {job_id} is no longer clip {clip.id}'s current "
                                "export; its render was discarded")
     finally:
@@ -319,6 +337,76 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     logger.info(f"clipper export {clip.id}: {result.get('size', 0) // 1024} KB → {out.name}")
 
 
+def _preview_inputs(clip, project) -> tuple:
+    """Everything the preview's PICTURE was decided from (D2r-2 K7).
+
+    The caption inputs — window, transcript text, caption plan and preset, the
+    burned-captions answer, the layout plan, and the project's whole
+    `clipper_settings` (trim, dynamic edit, layout and caption policy, preset,
+    position, watermark, layout mode, face size, chat) — plus what
+    `_layout_plan`, `_dynamic_plan` and the renderer read besides: the clip's
+    content type and the project's dimensions, source file and content type.
+    Left out, with the reasons in D2r2-result.md: the analysis artefacts and the
+    transcript row (immutable after analysis, K9), `headline_text` (carried by
+    `_candidate`, drawn by nothing), `project.fps` (a preview renders at
+    PREVIEW_FPS) and the content confidence/origin (shadow profile only).
+    """
+    return (_caption_inputs(clip, project), clip.content_type,
+            project.width, project.height, project.video_path,
+            project.content_type, project.content_type_override)
+
+
+async def _publish_preview(clip: ClipModel, seen: tuple, attempt: Path, out: Path,
+                           state: dict | None, job_id: str) -> str | None:
+    """Move this preview's own file into place and point the row at it — only
+    while the inputs it rendered from are still the row's, and no export
+    published after it loaded (D2r-2 K7). Otherwise NOTHING moves: not the
+    published file, not `preview_path`, not `warnings`.
+
+    Returns None when it published, else the refusal's cause, which is also
+    written on the job row as `metadata.discarded` in the same transaction as the
+    decision (D2r-3): the card's `last_preview.discarded` reads that marker, never
+    the error text. `fail_job` writes only status and error, so it survives.
+
+    Rendering takes seconds, and a PATCH, a newer preview or an export can land
+    meanwhile; stopping only the UPDATE (D2r) still let the old file overwrite
+    the newer one. All of it runs under the write lock a PATCH
+    (`_load_clip(lock=True)`) and `_publish_export` take, so the check, the
+    rename and the row cannot interleave with them. Whether it may publish is
+    decided here alone: `_caption_warnings` answering None (a legacy value)
+    only means the list is left as it is. As in `_publish_export`, the rename
+    and the commit are not atomic: a crash between them leaves THIS attempt's
+    file — rendered from inputs that were current — under the old row.
+    """
+    async with async_session() as session:
+        await begin_write(session)
+        row = await session.get(ClipModel, clip.id, populate_existing=True)
+        project = await session.get(ProjectModel, clip.project_id, populate_existing=True)
+        cause = None
+        if row is None or project is None or _preview_inputs(row, project) != seen:
+            cause = DISCARD_INPUTS_CHANGED
+        elif row.status == ClipStatus.exported.value and (
+                row.status, row.export_job_id, row.export_path) != (
+                clip.status, clip.export_job_id, clip.export_path):
+            cause = DISCARD_NEWER_EXPORT
+        if cause is not None:
+            job = await session.get(JobModel, job_id)
+            if job is not None:
+                job.metadata_json = json.dumps(
+                    {**json.loads(job.metadata_json or "{}"), "discarded": cause})
+            await session.commit()
+            return cause
+        os.replace(attempt, out)
+        values = {"preview_path": str(out)}
+        warnings = _caption_warnings(row.warnings, state, "preview")
+        if warnings is not None:
+            values["warnings"] = warnings
+        await session.execute(
+            update(ClipModel).where(ClipModel.id == clip.id).values(**values))
+        await session.commit()
+    return None
+
+
 async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Fast, low-resolution proxy render for the editor.
 
@@ -334,47 +422,60 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
         raise RuntimeError("preview job started without a clip id")
 
     clip, project = await _load(clip_id)
+    seen = _preview_inputs(clip, project)
     src = _source_path(project)
     paths = storage.paths(project_id)
 
     await queue.update_progress(job_id, 0.10, "Generating previews")
 
-    # The SAME decision the export will make. It used to take the static
-    # renderer unconditionally, so with `dynamic_edit` on — the default since
-    # 2026-08-17 — the editor showed a fixed split screen for a clip that ships
-    # with a dozen cuts, and ignored the trim, the watermark and the resolved
-    # caption height as well.
-    decision = await _decide_render(clip, project, paths["previews_dir"])
     out = storage.preview_path(project_id, clip.id)
+    # THIS attempt's own files, the export's pattern (R4b, D2r-2 K7): the mp4 at
+    # `attempt`, the dynamic path's `.cmd.txt` beside it, and the caption `.ass`
+    # in `scratch` — the decide writes `{clip}.ass` into the directory it is
+    # handed, and the per-clip `previews_dir` let an old preview's decide replace
+    # the captions a newer one burned. Only `_publish_preview` moves the mp4 into
+    # place; the `.ass` of a preview is never published.
+    attempt = out.with_name(f".{out.stem}.{job_id}-{uuid.uuid4().hex[:8]}{out.suffix}")
+    scratch = attempt.with_suffix("")
+    try:
+        # The SAME decision the export will make. It used to take the static
+        # renderer unconditionally, so with `dynamic_edit` on — the default since
+        # 2026-08-17 — the editor showed a fixed split screen for a clip that ships
+        # with a dozen cuts, and ignored the trim, the watermark and the resolved
+        # caption height as well.
+        decision = await _decide_render(clip, project, scratch)
 
-    if decision["dyn"]:
-        from services.clipper import dynamic_render
+        if decision["dyn"]:
+            from services.clipper import dynamic_render
 
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: dynamic_render.render_dynamic_preview(
-                src, decision["dyn"], str(out),
-                start=float(clip.start_time or 0.0),
-                work_dir=paths["previews_dir"], ass_path=decision["ass_path"],
-                src_w=int(project.width or 1920),
-                src_h=int(project.height or 1080),
-                watermark=decision["watermark"],
-                drop_spans=decision["drop"],
-                has_audio=_has_audio(src),
-                is_cancelled=lambda: queue.is_cancelled(job_id)),
-        )
-    else:
-        await render_preview(src, _candidate(clip), decision["plan"],
-                             decision["ass_path"], str(out),
-                             watermark=decision["watermark"],
-                             drop_spans=decision["drop"])
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: dynamic_render.render_dynamic_preview(
+                    src, decision["dyn"], str(attempt),
+                    start=float(clip.start_time or 0.0),
+                    work_dir=paths["previews_dir"], ass_path=decision["ass_path"],
+                    src_w=int(project.width or 1920),
+                    src_h=int(project.height or 1080),
+                    watermark=decision["watermark"],
+                    drop_spans=decision["drop"],
+                    has_audio=_has_audio(src),
+                    is_cancelled=lambda: queue.is_cancelled(job_id)),
+            )
+        else:
+            await render_preview(src, _candidate(clip), decision["plan"],
+                                 decision["ass_path"], str(attempt),
+                                 watermark=decision["watermark"],
+                                 drop_spans=decision["drop"])
 
-    async with async_session() as session:
-        await session.execute(
-            update(ClipModel).where(ClipModel.id == clip.id).values(preview_path=str(out))
-        )
-        await session.commit()
+        if await _publish_preview(clip, seen, attempt, out,
+                                  decision.get("caption_plan_state"), job_id):
+            raise RuntimeError(f"preview {job_id}: clip {clip.id} changed while it rendered "
+                               "or a newer export published; its render was discarded")
+    finally:
+        for leftover in (attempt, attempt.with_suffix(".cmd.txt")):
+            leftover.unlink(missing_ok=True)
+        shutil.rmtree(scratch, ignore_errors=True)
 
     from services.clipper import feedback
 

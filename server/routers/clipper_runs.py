@@ -80,10 +80,24 @@ async def retry_analysis(project_id: str, session: AsyncSession = Depends(get_se
 
     Re-downloading a 4 GB VOD because scoring crashed would be indefensible, so
     each completed stage's output on disk acts as a checkpoint.
+
+    Only a failed or cancelled analysis is resumed, by the predicate the page's
+    `retry_allowed` is (`project_attempts.analysis_state`). A ready project or a
+    running analysis is 409 with no job and no status change (D2r-3): this
+    resumes at `clipper_score` once the candidates exist, so a stale button or a
+    direct call used to rescore a ready project. Rescoring is the settings action.
     """
     from services.clipper import storage
+    from services.clipper.project_attempts import analysis_state
 
     project = await _load_project(session, project_id)
+    state = await analysis_state(session, project)
+    if not state["retry_allowed"]:
+        attempt = state["analysis_attempt"] or {}
+        raise _err(409, "retry_not_applicable",
+                   "There is no failed or cancelled analysis to resume.",
+                   f"project {project.status}; latest analysis attempt "
+                   f"{attempt.get('status') or 'none'}")
 
     paths = storage.paths(project_id)
 

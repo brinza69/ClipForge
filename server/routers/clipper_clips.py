@@ -87,8 +87,9 @@ async def _project_of(session: AsyncSession, clip: ClipModel) -> ProjectModel | 
 
 @router.get("/clips/{clip_id}")
 async def get_clip(clip_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    from services.clipper.project_attempts import clip_cards  # + last_preview (D2r-3)
     clip = await _load_clip(session, clip_id)
-    return clip_to_dict(clip, await _project_of(session, clip))
+    return (await clip_cards(session, [clip], await _project_of(session, clip)))[0]
 
 
 @router.patch("/clips/{clip_id}")
@@ -105,6 +106,10 @@ async def patch_clip(
     # The ASS reads the plan's style, not the separate preset preference used
     # by rebuild. Saving the selector used to change only that preference.
     payload = dict(payload or {})
+    # A list of lines, or null; a dict/string would be read as keys/characters (D2r K4).
+    warn = payload.get("warnings")
+    if warn is not None and not (isinstance(warn, list) and all(isinstance(x, str) for x in warn)):
+        raise _err(400, "invalid_warnings", "Warnings must be a list of text lines.")
     if payload.get("caption_preset_id"):
         from services.captioner_presets import DEFAULT_PRESETS
 
