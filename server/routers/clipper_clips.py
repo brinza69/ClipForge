@@ -355,11 +355,21 @@ async def preview_file(clip_id: str, session: AsyncSession = Depends(get_session
 
 @router.get("/clips/{clip_id}/export-file")
 async def export_file(clip_id: str, session: AsyncSession = Depends(get_session)):
-    """Download the final render."""
+    """Download the final render — only while the clip is `exported`.
+
+    `export_path` survives a re-export, a failure and recovery, and the files at
+    it can be a half-published set (`_publish_export`'s docstring). Only the
+    status says all three were published and committed together (R4c).
+    """
     from fastapi.responses import FileResponse
 
     clip = await _load_clip(session, clip_id)
-    if not clip.export_path or not storage.is_usable_output(clip.export_path):
+    if not clip.export_path:
+        raise _err(404, "no_export", "This clip has not been exported yet.")
+    if clip.status != ClipStatus.exported.value:
+        raise _err(409, "export_not_current",
+                   f"This clip is {clip.status}; its last export is not the current one.")
+    if not storage.is_usable_output(clip.export_path):
         raise _err(404, "no_export", "This clip has not been exported yet.")
     safe = "".join(c for c in (clip.title or clip.id) if c.isalnum() or c in " -_")[:60].strip()
     return FileResponse(

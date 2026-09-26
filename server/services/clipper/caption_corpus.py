@@ -359,7 +359,14 @@ def measure(path: Path) -> dict:
     # THE DELIVERED POSITION, from the file that burned it. `y_pct` is the
     # preset the plan asked for and differs from the `.ass` on 46 of 99 clips.
     planned = caption.get("y_pct")
-    burned, source = _burned_y_pct(path.with_suffix(".ass"), 1920)
+    # BUT NOT A FILE THE ENCODE DID NOT READ. A render with no caption filter
+    # leaves any older `.ass` beside it, and that file describes a layer this
+    # mp4 does not carry; the argv record is what says so (Codex Q2, R4c).
+    record = side.get("render_record")
+    if isinstance(record, dict) and record.get("caption_filter") is False:
+        burned, source = None, "the_encode_had_no_caption_filter"
+    else:
+        burned, source = _burned_y_pct(path.with_suffix(".ass"), 1920)
     y_pct = burned if burned is not None else planned
     row["caption_y_source"] = source if burned is not None else "caption_plan"
     row["caption_y_planned"] = planned

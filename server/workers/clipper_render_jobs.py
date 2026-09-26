@@ -167,6 +167,16 @@ async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, o
     enough on its own — the file is replaced by a rename, not by the row.
     A crash between the renames and the commit leaves THIS attempt's file with
     an `exporting` row that fail/recovery then release; never an older file.
+
+    THE THREE RENAMES ARE NOT ATOMIC WITH EACH OTHER OR WITH THE COMMIT, and no
+    transaction spans the filesystem and SQLite. A failure or crash after the
+    first can leave, beside the export: a new mp4 with the previous sidecar and
+    `.ass`, or a new mp4 and sidecar with the previous `.ass`. The row then
+    still reads `exporting` (nothing committed), and fail/cancel/recovery move
+    it to `failed` or keep it `exporting` for a retry — never to `exported`,
+    with `export_path` still naming this file. So `/export-file`, which serves
+    only an `exported` clip, answers 409 `export_not_current` for that mixed
+    set until a later attempt publishes all three (R4c; test_clipper_export_current_r).
     """
     async with async_session() as session:
         await begin_write(session)
@@ -183,7 +193,8 @@ async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, o
         os.replace(staged.with_suffix(".json"), out.with_suffix(".json"))
         # The `.ass` beside the export is read as "what was burned"
         # (caption_corpus, rerender_pilots). Without captions the old one stays,
-        # as it always has.
+        # as it always has; `caption_corpus` skips it when the record's
+        # `caption_filter` is False (R4c).
         if ass:
             os.replace(ass, out.with_suffix(".ass"))
         # The review goes on the row as well as the sidecar. Sidecar-only was
@@ -268,18 +279,24 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
         review_result = result["sidecar"]["review"]
         ass = decision.get("ass_path")
         if ass:
-            # The record names the file ffmpeg read: this attempt's scratch copy,
-            # gone once published. Name the published file instead — a rename, so
-            # `ass_sha256` still holds, and the shape every pre-R4b sidecar has.
-            # The scratch name is a detail of one run; `render_input` leaves it out.
+            # `ass_path` / `ass_path_offered` stay what the encode EXECUTED: this
+            # attempt's scratch copy, which no longer exists once published — that
+            # is expected, not a missing file (Codex Q3 rejected renaming them).
+            # The published file is a SEPARATE key, written only when the argv
+            # really read this attempt's `.ass`; the publish is a rename, so the
+            # record's `ass_sha256` is the digest of both. A render whose argv has
+            # no filter, or names another file, consumed no `.ass` of ours: none
+            # is claimed and none is published beside it (R4c).
             side = json.loads(staged.with_suffix(".json").read_text(encoding="utf-8"))
             record = side.get("render_record")
-            if isinstance(record, dict):
-                for key in ("ass_path", "ass_path_offered"):
-                    if record.get(key) and Path(record[key]).resolve() == Path(ass).resolve():
-                        record[key] = str(out.with_suffix(".ass"))
+            if (isinstance(record, dict) and record.get("caption_filter") is True
+                    and record.get("ass_path")
+                    and Path(record["ass_path"]).resolve() == Path(ass).resolve()):
+                record["ass_published_path"] = str(out.with_suffix(".ass"))
                 storage.atomic_write_json(staged.with_suffix(".json"), side, indent=2,
                                           ensure_ascii=False, default=str)
+            else:
+                ass = None
         if not await _publish_export(job_id, clip.id, queue.worker_id, staged, out,
                                      review_result, ass):
             raise RuntimeError(f"export {job_id} is no longer clip {clip.id}'s current "

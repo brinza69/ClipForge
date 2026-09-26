@@ -13,6 +13,9 @@ same lock and check as the mp4 and the sidecar.
 F3/F6: no hidden per-attempt file stays beside the export — on success, on a
 refused publish, and after an in-process cancel whose encode thread finishes
 later.
+
+R4c (Codex Q3): the record keeps the scratch path the encode read; the
+published `.ass` is a separate key bound to it by `ass_sha256`.
 """
 from __future__ import annotations
 
@@ -145,7 +148,12 @@ class _Stubs:
         burned = Path(decision["ass_path"]).read_text(encoding="utf-8")   # ffmpeg reads it
         out = Path(out)
         out.write_bytes(burned.encode())
-        out.with_suffix(".json").write_text(json.dumps({"attempt": label}), encoding="utf-8")
+        # As both real encoders do: the record of the argv that read the `.ass`.
+        record = render_record.record(
+            ["ffmpeg", "-vf", f"subtitles=filename='{escape_filter_path(decision['ass_path'])}'"],
+            ass_path=decision["ass_path"])
+        out.with_suffix(".json").write_text(
+            json.dumps({"attempt": label, "render_record": record}), encoding="utf-8")
         return {"size": out.stat().st_size, "sidecar": {"review": {"attempt": label}}}
 
 
@@ -274,11 +282,17 @@ async def test_the_published_captions_are_the_bytes_the_sidecar_names(api, tmp_p
     side = json.loads((exports / f"{cid}.json").read_text(encoding="utf-8"))
     rec = side["render_record"]
     assert rec["caption_filter"] is True and rec["ass_refused"] is None
-    assert rec["ass_sha256"] == hashlib.sha256(published.read_bytes()).hexdigest()
-    # The record names the file that exists, not the attempt's scratch copy.
-    assert Path(rec["ass_path"]).resolve() == published.resolve()
-    assert Path(rec["ass_path_offered"]).resolve() == published.resolve()
+    # The record keeps what the encode EXECUTED: the attempt's scratch copy,
+    # which is gone once published (Codex Q3 rejected the r2 rewrite) ...
+    scratch = Path(rec["ass_path"])
+    assert (scratch.name, scratch.parent.name[:len(cid) + len(job) + 3]) == (
+        f"{cid}.ass", f".{cid}.{job}-")
+    assert not scratch.exists()
+    assert Path(rec["ass_path_offered"]).resolve() == scratch.resolve()
     assert rec["offered_matches_used"] is True
+    # ... and, beside it, the published file, bound to it by the same hash.
+    assert Path(rec["ass_published_path"]).resolve() == published.resolve() != scratch.resolve()
+    assert rec["ass_sha256"] == hashlib.sha256(published.read_bytes()).hexdigest()
     assert (exports / f"{cid}.mp4").read_bytes() == b"mp4 burning " + published.read_bytes()
     assert sorted(p.name for p in exports.iterdir()) == [f"{cid}.ass", f"{cid}.json",
                                                         f"{cid}.mp4"]
