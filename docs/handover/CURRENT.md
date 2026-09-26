@@ -4,17 +4,17 @@
 
 Lucrul la Clipper urmează acum `PRPs/clipper-master-plan-2026-09-24.md`: patru valuri, fiecare cu un
 lot A pentru Claude desktop și un lot B pentru Claude CLI pe contul 2, iar Codex validează. Valul 1:
-A1 e acceptat. Stare la 25 sept.:
-- editările, politica de subtitrare a proiectului și exportul atomic (R4b + corecturile r2) sunt
-  implementate;
-- revizia blind pe o singură rulare (B3r/A3) e acceptată în browser;
-- fluxul complet din UI e verificat pe o instanță izolată (`A/release-browser.md`). Au rămas două
-  constatări pentru utilizator: UI-ul nu oferă descărcarea exportului, iar o alternativă exportată
-  iese fără subtitrare.
-Codex e fără limită până pe 30 sept., 12:41; revizii Opus independente țin locul validării lui.
-Codul e comis: `cc9921b` (jobs), `f4c0e88` (backend și teste), `1267a13` (UI) și `172242c`
-(spargerea `job_queue.py`), apoi documentația. Suita completă a rulat o dată, pe arborele final:
-2792 passed, exit 0. Stare detaliată: [handover-ul Clipper](areas/clipper/CURRENT.md).
+A1 e acceptat. Stare la 26 sept.:
+- editările, politica de subtitrare a proiectului, exportul atomic (R4b + R4c) și revizia blind
+  (B3r/A3) sunt închise;
+- descărcarea exportului (D1), panoul de randare al unui clip (O1) și subtitrarea alternativelor (D2,
+  cu D2r, D2r-2, D2r-3) sunt închise de Codex și comise: `d0f397a`, `d01dd6e`, `c4e8db3`. Integrarea
+  pe arborele final dă 2894 passed, exit 0;
+- backend-ul A (8420) e repornit pe codul nou: migrarea a adăugat `clips.export_job_id`, iar
+  `release_stuck_exports.py` nu găsește niciun export blocat.
+Rămân: verdictul editorial al utilizatorului (pagina `A/editorial-review/review.html`), lotul
+subtitrărilor suprapuse (71/100 exporturi) și încadrarea automată (M0 v2 înghețat). Codex rulează pe
+contul nou, în aplicația ChatGPT. Stare detaliată: [handover-ul Clipper](areas/clipper/CURRENT.md).
 
 ## Clipper, 24 septembrie 2026, noaptea
 

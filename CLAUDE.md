@@ -228,7 +228,16 @@ clipforge/
 # CRITICAL: every file a Clipper export attempt reads or writes is that attempt's own (mp4, sidecar,
 #           .cmd.txt, and the .ass in its scratch dir); only _publish_export moves them into place. A
 #           shared path let a superseded attempt hand the current one its captions (R4b review F2).
+#           render_record.ass_path is the path the encode READ (that scratch file, gone after the
+#           job); the published sibling is render_record.ass_published_path, bound by ass_sha256.
+#           /export-file serves only an `exported` clip: the three publish renames are not atomic (R4c).
 # CRITICAL: a clip-scoped job (clipper_preview, clipper_export) never writes project.status on
 #           fail/cancel: recovery reads a failed project as terminal and would fail another clip's
 #           live export (R4b review F1, job_queue._CLIP_SCOPED_TYPES).
+# CRITICAL: a preview publishes like an export: its own attempt files, then ONE check-and-rename
+#           under the write lock (_publish_preview, D2r-2). Guarding only the row UPDATE still let an
+#           old job overwrite a newer preview's file. And a project's `error` is its latest ANALYSIS
+#           attempt's (project_attempts.analysis_state: ingest/transcribe/analyze/score by created_at),
+#           never "the last failed job of any type" — that showed a discarded preview as an analysis
+#           failure whose Retry rescored a ready project (D2r-3).
 ```

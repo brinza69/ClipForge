@@ -1,5 +1,53 @@
 # Handover — AI Stream Clipper
 
+## 26 septembrie 2026 — D2 închis și comis; backend-ul repornit; M0 v2 înghețat
+
+- **Commit-uri, cu acordul utilizatorului:**
+  - `d0f397a` R4c;
+  - `d01dd6e` D1 + O1;
+  - `c4e8db3` D2, cu corecturile D2r, D2r-2, D2r-3, UI-ul lor și rândurile din hartă.
+- **Integrarea finală, pe arborele înghețat:** 2894 passed, 2 deselected (TikTok), exit 0; tsc 0; eslint
+  cu 4 erori preexistente, în fișiere neatinse (`A/full-suite-final/RESULT.md`).
+- **Verdictele Codex:** `codex-verdict-closure-2.md` … `-closure-4.md`.
+  - Regula de temporizare a fost corectată pe date reale. `end > start` refuza 50% din alternative
+    (3.417 din 6.813 ferestre), numai din cauza cuvintelor punctuale ale lui whisper. Acum e
+    `end >= start` (`A/d2r-check/timing_census.txt`).
+  - Un preview publică acum ca un export, iar eroarea proiectului e a ultimei încercări de ANALIZĂ.
+    Înainte, un preview aruncat apărea ca eșec de analiză, cu un Retry care rescora proiectul.
+- **Acceptarea în browser** pe sondă: traseele din closure-4 (`A/d2r-check/d2r3_live.txt`).
+- **Operațional:**
+  - backend-ul A (8420) e repornit pe codul nou, printr-o configurație `clipforge-backend-a` în
+    `.claude/launch.json` (aceleași variabile ca `start_all.ps1`); există un singur GPU, deci nu există
+    backend B;
+  - copia de siguranță a DB e în `data/db/backup-2026-09-26-pre-restart/`;
+  - migrarea a adăugat `clips.export_job_id`;
+  - `release_stuck_exports.py` (listare) a găsit 0.
+- **Lotul subtitrărilor suprapuse**, aprobat separat (closure-3 §1 B), are linia de bază:
+  - 71 din 100 de exporturi livrate au evenimente ASS suprapuse pe aceeași ancoră;
+  - 41 dintre ele au suprapuneri de 50–120 ms;
+  - 299 de perechi au interval identic, adică rafale comprimate;
+  - vezi `A/d2r-check/BUILDER-BASELINE.md`.
+- **Încadrarea:**
+  - `codex-verdict-framing-4.md` a aprobat M0 v2 și a ales un contract de adresare versionat.
+  - SPEC v2 e fixat înaintea predicțiilor: 70ca keyed trece la diagnostic separat, iar ținta
+    inset-ului e `camera_picture` (`A/verification-lot/SPEC-v2.md`, `insets-v2.json`).
+  - M0 v2 e înghețat (`B/M0v2-result.md`): o replică exactă a vsync CFR din ffmpeg 8.1.1. Pe lotul de
+    dezvoltare nu s-a mișcat nimic.
+  - Tabelul de adrese al lotului de verificare are 178/178 cadre adresate. Jensen are 23,976 fps, iar
+    −7 ar fi greșit toate cele 80 de cadre ale lui.
+  - Constatare: ordinea căsuțelor la Haar depinde de fire și schimbă încrederea regiunii lui Kai.
+  - Addendumul pentru lotul 1 de producție e în `B/addressing-lot1-addendum.md`, doar document.
+- **Rămâne:**
+  - Utilizatorul: verdictul editorial pe cele 9 exporturi, în pagina
+    `A/editorial-review/review.html`, servită local de `clipforge-editorial` pe portul 8778.
+  - Încadrarea:
+    - A adnotează cadrele sursă adresate (`B/gates/m0v2/address_table.json`), fără predicții;
+    - B rulează apoi M0 v2 înghețat pe lot;
+    - urmează gate-ul limitelor, apoi loturile de producție pentru adresare.
+  - Lotul subtitrărilor suprapuse (builder), apoi plasarea subtitrării peste overlay-urile stream-ului.
+  - Mărunțișuri UI: O2–O4 și cardul „Ready to analyse”, care arată „undefined–undefineds” fără setări
+    de lungime (preexistent).
+
 ## Planul master Codex, 24 septembrie 2026 — cod comis (`cc9921b`, `f4c0e88`, `1267a13`, `172242c`)
 
 Planul curent e **`PRPs/clipper-master-plan-2026-09-24.md`**, scris de Codex la cererea
@@ -72,19 +120,47 @@ fișiere disjuncte. Codex validează. Dovezile sunt în `data/claude-master-2026
       Ambele așteaptă decizia utilizatorului.
     - `A/b23c-watch/EVALUATION.md`: momentul cu ceasul, evaluat fără promovare. A pierdut doar la
       scorul euristic (57,6 față de 64,2), cu 0 judecați. Exportul lui așteaptă verdictul uman.
-- **Rămâne (25 sept.):**
-  - Decizii ale utilizatorului:
-    - D1, un link de descărcare în UI;
-    - D2, alternativele exportate fără subtitrare;
-    - verdictul editorial în `A/editorial-review.md`, inclusiv b23c.
-  - Codex, după 30 sept.: închiderea formală și Q1–Q4 din `B/R4b-r2-result.md`.
+- **25 sept., noaptea — Codex pe contul nou; lucrul pe verdictele lui. Nimic comis după `2ed0e4b`:**
+  - Istoricul Codex e exportat local, doar text, în `data/codex-export/`, cu brief-ul de pornire
+    `CODEX-BRIEF.md`.
+  - Verdictele noi: `codex-verdict-closure.md`, `-framing.md`, `-framing-2.md` și `-framing-3.md`.
+    R5 și B3/B3r sunt închise.
+  - **R4c** (`B/R4c-result.md`):
+    - `render_record.ass_path` rămâne calea executată; `ass_published_path` e separat, legat prin hash;
+    - `caption_corpus` ignoră un `.ass` vechi când nu a existat filtru;
+    - `/export-file` dă 409 `export_not_current` dacă clipul nu e `exported`.
+  - **D1 + O1** (`A/D1-result.md`): butoanele Render și Download sunt separate, iar panoul de progres al
+    unui clip nu mai arată etapele analizei.
+  - **D2** (`B/D2-result.md`): alternativele primesc planul de subtitrare construit la fiecare randare,
+    fără să fie salvat; `caption_plan_state` apare pe sidecar, iar `unavailable` ajunge pe card.
+  - Toate sunt verificate în browser și pe exporturi reale. **Integrare cu arborele înghețat: 2813
+    passed** (`A/full-suite-2/`).
+  - **Încadrare** (hardest-first), totul privat, fără cod de producție:
+    - adevărul A pentru 70ca (v2, cu evenimente), c04e și 9d2a, plus un eșantion 6053, cu cadre de
+      verificare rezervate și nevăzute (`A/framing-truth/RESULT.md`);
+    - diagnozele de poartă B (`B/F-gates-result.md`);
+    - **M0** (`B/F-M0-result.md`): YuNet pe sursă, ca seed pentru `_find_webcams`, îi recuperează pe Kai
+      și pe Moist fără regiuni false. Codex l-a acceptat ca candidat de dezvoltare înghețat, nu ca
+      integrare;
+    - **decalaj proxy/sursă**: proxy-ul arată sursa cu −7 cadre (0,117 s) în urmă, din `-r 10` în
+      `ingest.build_proxy`, reprodus sintetic (`A/proxy-offset/RESULT.md`). Lotul de validare a
+      ceasurilor rulează la B (`F-offset`);
+    - verificarea independentă M0 e fixată înaintea rezultatelor (`A/verification-lot/SPEC.md`, cu
+      hash).
+- **Rămâne (25 sept., noaptea) — înlocuit de secțiunea din 26 sept., de sus:**
+  - Utilizatorul: verdictul editorial în `A/editorial-review.md`, inclusiv b23c. D1 și D2 sunt
+    făcute, dar necomise.
+  - Codex: închiderea R4b integrală, acceptarea D1/D2 și U1–U6 din `B/D2-result.md`
+    (`codex-verdict-closure-2.md`).
   - Operațional:
     - repornirea AMBELOR backend-uri pe codul nou; migrarea adaugă `clips.export_job_id`;
     - apoi `server/scripts/release_stuck_exports.py`, întâi doar listare.
-  - Încadrarea automată: 70ca (umărul și apelul Discord), 9d2a, 65a9, c04e la 3,133 s, textul sursei
-    mai lat decât cropul. Până atunci, editorul manual de reacție e calea utilizabilă.
+  - Încadrarea automată, cu pașii următori ai lui Codex: validarea ceasurilor (`F-offset`), apoi
+    verificarea independentă M0 pe lotul fixat, apoi gate-ul pentru limitele regiunilor (`_snap_edge`,
+    Kai îngust), apoi M3/M4/M1+M2. Umărul și apelul Discord de la 70ca se rezolvă împreună. Până
+    atunci, editorul manual de reacție e calea utilizabilă.
   - Comparația v2 față de legacy cere un LLM (Ollama) și răspunsuri umane.
-  - Mărunțișuri UI: O1–O4 din `A/release-browser.md`.
+  - Mărunțișuri UI: O2–O4 din `A/release-browser.md` (O1 e rezolvat).
   - Fișiere la limita de 500 de linii: `clipper_render_plan.py`, `reasoning_trace.py`,
     `clipper_build.py`.
 
