@@ -19,12 +19,16 @@ import {
   type ClipperClip,
 } from "@/types/clipper";
 import type { PreviewAttempt } from "@/types/clipper-attempts";
+import { visibleWarnings } from "./caption-display";
+import { CaptionDisplayNote } from "./caption-display-note";
 
 function previewFailure(attempt: PreviewAttempt): string {
   if (attempt.discarded === "inputs_changed")
     return "Preview discarded: the clip was edited while it rendered. Run Preview again.";
   if (attempt.discarded === "newer_export")
     return "Preview discarded: an export was published while it rendered.";
+  if (attempt.discarded === "newer_preview")
+    return "Preview discarded: a newer preview was already published.";
   return `Preview failed: ${attempt.error ?? "the render did not finish"}`;
 }
 
@@ -196,15 +200,17 @@ export function CandidateCard({
         </p>
       )}
 
-      {(clip.warnings?.length ?? 0) > 0 && (
+      {visibleWarnings(clip.warnings, clip.caption_display).length > 0 && (
         <div className="space-y-1">
-          {clip.warnings!.slice(0, 2).map((w) => (
+          {visibleWarnings(clip.warnings, clip.caption_display).slice(0, 2).map((w) => (
             <p key={w} className="text-[10px] text-amber-400/90">
               ⚠ {w}
             </p>
           ))}
         </div>
       )}
+
+      <CaptionDisplayNote view={clip.caption_display} compact />
 
       <div className="mt-auto flex flex-wrap gap-1.5">
         <Button

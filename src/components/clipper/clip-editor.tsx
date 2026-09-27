@@ -20,6 +20,7 @@ import { rangeTooLong } from "@/components/clipper/range-limit";
 import { CLIPPER_API, type ClipperClip } from "@/types/clipper";
 import { ClipFramePreview } from "./clip-frame-preview";
 import { ReactionFraming } from "./reaction-framing";
+import { CaptionDisplayNote } from "./caption-display-note";
 
 interface Preset {
   id: string;
@@ -358,6 +359,7 @@ export function ClipEditor({
                      default: "implicit, nimeni n-a declarat" }[clip.effective_caption_policy.scope]}
                 </p>
               )}
+              <CaptionDisplayNote view={clip.caption_display} />
             </Field>
 
             <Field label="Caption preset">

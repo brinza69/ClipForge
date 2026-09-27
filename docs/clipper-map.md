@@ -288,13 +288,16 @@ leaves no caption slot, zero writes on refusal) and writes a system `export_inva
 | `src/components/clipper/clip-editor.tsx` | trim, headline, caption preset and height, over a server-rendered still; the per-clip "source already has subtitles" declaration, saved at once on its own endpoint; shows the effective decision and where it comes from (clip / project / default) |
 | `src/components/clipper/project-caption-source.tsx` | the project's answer to "does the source already carry burned subtitles", bound to the server's value; shows 422 blocking clips with their maximum content height and 409 while exporting (master plan A2) |
 | `src/components/clipper/reaction-framing.tsx` | manual content/reaction selection on source frames, interval-bound save, and return to automatic framing |
+| `src/components/clipper/caption-display.ts` | BURST UI: the caption note from `caption_display_v1`. `cardCaptionNote` speaks only for a warning on the card; `editorCaptionNote` explains every level in the editor ("Caption check unavailable" when unknown; overlaps, empty events, an unsettled plan, a missing mp4); `visibleWarnings` stops `no_card_representable` repeating the note. Tests: `caption-display.test.mjs` (`node --test`) |
+| `src/components/clipper/caption-display-note.tsx` | the note itself: compact on the card, full in the editor |
 | `src/components/clipper/reaction-selection.ts` | original-pixel rectangle quantization, reaction aspect lock and source-frame metadata validation; `reaction-selection.test.mjs` runs via Node's test runner |
 | `src/types/clipper-reaction.ts` | the saved reaction source/window binding, not a visual coverage certificate |
 | `src/components/clipper/clip-frame-preview.tsx` | Saved-edit still with export framing, output-clock slider, loading/error states and a suppression notice. Debounces requests and releases temporary image URLs. |
 | `src/components/clipper/score-breakdown.tsx` | the 16 sub-scores behind the number |
 | `src/components/clipper/reasoning-panel.tsx` | why this clip — anchor, payoff, verdicts (§34), and since R2 the editing grammar it resolved to, with the reason in words. Displays what the backend resolved; the type-to-profile map is NOT repeated in TypeScript |
 | `src/types/clipper.ts` | the clip, the project and the settings. No longer every clipper type: R2 took it to the 500-line limit and three groups moved out. It re-exports all of them, so `from "@/types/clipper"` still works everywhere |
-| `src/types/clipper-attempts.ts` | `PreviewAttempt`, `AnalysisAttempt` and the two `*AttemptFields` interfaces `ClipperClip` / `ClipperProject` extend (D2r-3), split out at clipper.ts's 500-line limit |
+| `src/types/clipper-caption-display.ts` | BURST UI: the `caption_display_v1` block types, with `why` and `policy` |
+| `src/types/clipper-attempts.ts` | BURST UI: `caption_display` on a card; `PreviewDiscard` gains `newer_preview`. `PreviewAttempt`, `AnalysisAttempt` and the two `*AttemptFields` interfaces `ClipperClip` / `ClipperProject` extend (D2r-3), split out at clipper.ts's 500-line limit |
 | `src/types/clipper-reasoning.ts` | what the engine DECIDED and what Pass D thought: `ClipStory`, `ClipVerdict`, `ClipReasoning`, `ClipFinding`, `ClipReview` |
 | `src/types/clipper-captions.ts` | `CaptionChunk` and `CaptionPlan` |
 | `src/types/clipper-editing.ts` | `EditMode` and `EditProfile` — the editing decision, not the clip |

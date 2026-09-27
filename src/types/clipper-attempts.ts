@@ -1,4 +1,5 @@
 import type { JobStatus } from "./clipper";
+import type { CaptionDisplayView } from "./clipper-caption-display";
 
 // What the backend reads off its own job rows about the latest attempts (D2r-3,
 // codex-verdict-closure-4). Split out at clipper.ts's 500-line limit; the two
@@ -6,7 +7,7 @@ import type { JobStatus } from "./clipper";
 
 /** Why `_publish_preview` refused a finished render: the clip was edited while
  * it rendered, or an export published after the preview started. */
-export type PreviewDiscard = "inputs_changed" | "newer_export";
+export type PreviewDiscard = "inputs_changed" | "newer_export" | "newer_preview";
 
 /** The NEWEST `clipper_preview` job of a clip — never "the last failed", so a
  * later successful preview replaces an earlier failure on the card. */
@@ -45,6 +46,9 @@ export interface ClipAttemptFields {
   /** False when a rescore kept this clip from an earlier selection run: its
    * rank belongs to that run, so the card must not show it as a second "#1" (O2). */
   from_current_run?: boolean;
+  /** How the captions of the current plan / export / preview are displayed (BURST). Absent on an
+   * older server: that is "not reported", never "clean". */
+  caption_display?: CaptionDisplayView | null;
 }
 
 export interface ProjectAttemptFields {
