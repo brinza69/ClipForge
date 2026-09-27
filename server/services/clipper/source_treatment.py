@@ -94,6 +94,9 @@ REASONS: tuple[str, ...] = (
     "manifest_missing", "manifest_hash_mismatch", "manifest_invalid",
     "manifest_of_another_attempt", "manifest_mask_mismatch", "manifest_params_mismatch",
     "manifest_frames_mismatch", "patch_missing", "patch_hash_mismatch",
+    # SC batch 2 — the executor, the destination guard and the render record
+    "treatment_inputs_missing", "decision_mask_mismatch", "patch_build_failed",
+    "record_not_corroborated", "treated_export_not_promoted", "destination_not_versioned",
 )
 
 

@@ -37,10 +37,16 @@ async def render_frame(clip, project, offset: float) -> dict:
 
 
 def _render_frame(clip, project, decision, src, work: Path, at: float) -> bytes:
+    from services.clipper import render_record, source_treatment_render
+
     out = work / "frame.png"
+    # The same source-caption gate as `render_export`, on the decision about to
+    # be drawn: the still shows the treatment the export would execute, or
+    # refuses — it never shows the untouched source text instead.
+    patch = source_treatment_render.prepare(clip, project, decision, src=src, scratch_root=work)
     kwargs = dict(fps=decision["fps"], crf=18, preset="medium",
                   out_w=1080, out_h=1920, watermark=decision["watermark"],
-                  drop_spans=decision["drop"], has_audio=False)
+                  drop_spans=decision["drop"], has_audio=False, source_patch=patch)
     dyn = decision["dyn"]
     if dyn:
         w, h = int(project.width or 1920), int(project.height or 1080)
@@ -66,5 +72,19 @@ def _render_frame(clip, project, decision, src, work: Path, at: float) -> bytes:
     cmd[map_index] = "[vframe]"
     cmd += ["-frames:v", "1", "-an", "-fps_mode", "passthrough",
             "-c:v", "png", "-f", "image2", str(out)]
+    # Refused exactly as the export is (codex-verdict-next-22 §1): the FINAL argv — after the frame
+    # selection above — is corroborated against the manifest before it runs, and the patch is
+    # hashed again after it ran, before any byte of the image is returned. `prepare` alone did not
+    # catch a patch replaced after its manifest was written (next22-check/editor-patch-result.json).
+    record = None
+    if patch is not None:
+        record = render_record.record(cmd, ass_path=decision["ass_path"], treatment_manifest=patch)
+        render_record.require_corroborated(record)
     run(cmd, timeout=render.PREVIEW_TIMEOUT, what="clip editor frame")
+    if record is not None:
+        try:
+            render_record.confirm_patch(record)
+        except Exception:
+            out.unlink(missing_ok=True)
+            raise
     return out.read_bytes()

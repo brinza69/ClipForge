@@ -223,6 +223,9 @@ def main() -> int:
     # not a failure — the 58 pilot exports predate the key — but a stamped one
     # that disagrees with its own plan is.
     mismatched = macro["fingerprints"].get(eq.FINGERPRINT_MISMATCH, 0)
+    # A v3 record whose source-treatment identity cannot be read is not "no
+    # treatment": it fails the gate on its own row (SC-addendum-v2 §5).
+    mismatched += macro["fingerprints"].get(eq.FINGERPRINT_TREATMENT_UNREADABLE, 0)
     # A gap is a structurally invalid edit — shots that do not join — and it
     # used to pass the gate because it is a metric rather than a "defect". An
     # UNDECIDABLE boundary is different and deliberately does NOT fail: a plan

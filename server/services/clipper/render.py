@@ -254,6 +254,7 @@ def build_render_cmd(
     watermark: str = "",
     drop_spans: Sequence[tuple[float, float]] | None = None,
     has_audio: bool = True,
+    source_patch: dict | None = None,
 ) -> list[str]:
     """One ffmpeg argv list for one clip. Pure — builds, runs nothing.
 
@@ -268,6 +269,11 @@ def build_render_cmd(
     command is exactly what it was before the option existed: audio is mapped
     straight from the input and never touches the graph.
     """
+    if source_patch is not None:
+        # SC lot 1 treats the source's burned text on the dynamic path only.
+        from services.clipper.source_treatment import SourceTreatmentRefused
+
+        raise SourceTreatmentRefused("static_path_unsupported", "the static renderer takes no patch")
     out_w, out_h = even(out_w), even(out_h)
     start, duration = _window(cand)
     graph, vlabel = _filter_complex(
@@ -350,6 +356,7 @@ async def render_clip(
     drop_spans: Sequence[tuple[float, float]] | None = None,
     on_progress: ProgressFn | None = None,
     is_cancelled: CancelFn | None = None,
+    source_patch: dict | None = None,
 ) -> dict[str, Any]:
     """Render one clip at full resolution. Returns {path, size, duration}."""
     _raise_if_cancelled(is_cancelled)
@@ -362,6 +369,7 @@ async def render_clip(
         out_w=out_w, out_h=out_h,
         drop_spans=drop_spans,
         has_audio=bool(_has_audio(src)),
+        source_patch=source_patch,
     )
     # Capture the argv that is about to run on the static path too. Inferring
     # this afterwards from caption_policy or an ASS filename loses whether the
@@ -400,6 +408,7 @@ async def render_preview(
     max_seconds: float = 12.0,
     watermark: str = "",
     drop_spans: Sequence[tuple[float, float]] | None = None,
+    source_patch: dict | None = None,
 ) -> dict[str, Any]:
     """Render a short, low-res proxy of the same graph for the editor.
 
@@ -431,6 +440,7 @@ async def render_preview(
         # way the export will be. Judging a quiet draft of a loud deliverable
         # is judging the wrong file.
         has_audio=bool(_has_audio(src)),
+        source_patch=source_patch,          # refused here: the static path takes none (SCB2)
     )
     try:
         final.parent.mkdir(parents=True, exist_ok=True)

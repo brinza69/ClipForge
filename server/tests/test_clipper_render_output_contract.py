@@ -169,7 +169,7 @@ def test_the_fingerprint_is_computed_through_the_audits_own_projection():
     """Not a payload built by hand here. Two definitions drift, and then the
     check passes for a file whose plan has changed underneath it.
 
-    AND IT IS WRITTEN AS v2, with the schema declared beside it. A record with
+    AND IT IS WRITTEN AS v3 (SC batch 2, codex-verdict-next-22 Q1), with the schema declared beside it. A record with
     no schema field is read under an assumption; the writing path has no reason
     to need one, and `render_input`'s contract forbids rescuing a v2 mismatch
     with the v1 formula, which only works if new exports say what they are."""
@@ -177,8 +177,8 @@ def test_the_fingerprint_is_computed_through_the_audits_own_projection():
 
     src = inspect.getsource(output._write_sidecar)
     assert "edit_quality.input_fingerprint(" in src
-    assert "schema=render_input.FINGERPRINT_SCHEMA_V2" in src
-    assert 'body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V2' in src
+    assert "schema=render_input.FINGERPRINT_SCHEMA_V3" in src
+    assert 'body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V3' in src
 
 
 def test_the_sidecar_records_the_seconds_the_render_removed():

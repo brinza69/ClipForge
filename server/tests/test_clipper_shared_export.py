@@ -184,7 +184,7 @@ async def test_normal_export_and_replan_produce_the_same_actual_file(
     assert normal.with_suffix(".json").read_bytes() == original_sidecar
     assert a["input_fingerprint"] == b["input_fingerprint"]
     for body, path in ((a, normal), (b, probe)):
-        assert body["fingerprint_schema"] == render_input.FINGERPRINT_SCHEMA_V2
+        assert body["fingerprint_schema"] == render_input.FINGERPRINT_SCHEMA_V3
         assert body["input_fingerprint"] == render_input.input_fingerprint(
             body, schema=body["fingerprint_schema"])
         assert output_identity.matches(body["output_identity"], path) == (True, None)

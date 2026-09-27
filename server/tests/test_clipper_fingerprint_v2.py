@@ -166,17 +166,18 @@ def test_a_v2_mismatch_is_not_rescued_by_the_v1_formula():
     assert eq.fingerprint_verdict(tampered)["state"] == eq.FINGERPRINT_MISMATCH
 
 
-def test_every_path_that_writes_a_fingerprint_writes_v2():
+def test_every_path_that_writes_a_fingerprint_writes_v3():
     """Probe four, read off the source rather than asserted about it: a writer
     left on v1 produces records that can never answer the policy question, and
-    nothing downstream would report that as a regression."""
+    nothing downstream would report that as a regression. SC batch 2 moved the
+    writer to v3 (codex-verdict-next-22 Q1); v1/v2 stay readable, above."""
     import inspect
 
     from workers import clipper_render_jobs as jobs
 
     src = inspect.getsource(output._write_sidecar)
-    assert 'body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V2' in src
-    assert "schema=render_input.FINGERPRINT_SCHEMA_V2" in src
+    assert 'body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V3' in src
+    assert "schema=render_input.FINGERPRINT_SCHEMA_V3" in src
 
 
 def test_the_stored_corpus_is_not_touched_and_still_validates():

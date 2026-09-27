@@ -5,7 +5,7 @@ render decision comes here; both renderer branches use the SAME options that
 are recorded beside the resulting file. Probe callers choose another output
 directory, never another implementation of the export recipe.
 
-Legacy sidecars remain untouched. New runs explicitly declare fingerprint v2.
+Legacy sidecars remain untouched. New runs explicitly declare fingerprint v3.
 A recipe match describes the recorded inputs, not visual/editorial quality.
 """
 from __future__ import annotations
@@ -37,8 +37,14 @@ def _size_bytes(path: str | Path) -> int | None:
 async def render_export(clip, project, decision: dict, out: str | Path, *,
                         src: str, review_result=None, after_render=None,
                         on_progress=None, is_cancelled=None,
-                        discard_on_cancel=False) -> dict:
-    """Execute a resolved decision, then atomically write its v2 sidecar.
+                        discard_on_cancel=False, destination=None, attempt=None) -> dict:
+    """Execute a resolved decision, then atomically write its v3 sidecar.
+
+    The source-caption gate runs on the decision about to be encoded, whatever
+    the caller (SC-addendum-v2 §4): a treatment is executed from the mask loaded
+    now, into `out` only when `destination="versioned"` and never over an
+    export, or refused before the encode. `attempt` (`{job_id, nonce}`) names
+    this attempt's patch and manifest; a fresh nonce when omitted.
 
     `after_render` lets the job attach its advisory review of the actual file;
     the callback owns review policy and failures. Probes omit it. Neither path
@@ -71,6 +77,12 @@ async def render_export(clip, project, decision: dict, out: str | Path, *,
     # jobs/probes use the defaults above. In both cases this SAME dictionary is
     # passed to the encoder and stored; no caller builds a second command.
     render.update(decision.get("render") or {})
+    from services.clipper import source_treatment_render as treat
+
+    # None, THIS attempt's verified patch, or a refusal before any encode. Only
+    # the dynamic path can hold a patch: the gate refuses a static treatment.
+    patch = await asyncio.to_thread(treat.prepare, clip, project, decision, src=src, out=out,
+                                    destination=destination, attempt=attempt)
     if dyn:
         abandoned = threading.Event()
 
@@ -78,6 +90,7 @@ async def render_export(clip, project, decision: dict, out: str | Path, *,
             try:
                 return render_dynamic_clip(*args, **kwargs)
             finally:
+                treat.discard(patch)
                 # Set only after the await was cancelled; a file finished
                 # before that is still there for the caller's own cleanup.
                 if abandoned.is_set():
@@ -96,7 +109,7 @@ async def render_export(clip, project, decision: dict, out: str | Path, *,
                 has_audio=static_render._has_audio(src),
                 is_cancelled=is_cancelled,
                 fps=render["fps"], crf=render["crf"], preset=render["preset"],
-                out_w=render["out_w"], out_h=render["out_h"])
+                out_w=render["out_w"], out_h=render["out_h"], source_patch=patch)
         except asyncio.CancelledError:
             if discard_on_cancel:
                 abandoned.set()
@@ -109,18 +122,20 @@ async def render_export(clip, project, decision: dict, out: str | Path, *,
             fps=render["fps"], crf=render["crf"], preset=render["preset"],
             out_w=render["out_w"], out_h=render["out_h"],
             watermark=render["watermark"], drop_spans=decision["drop"],
-            on_progress=on_progress, is_cancelled=is_cancelled)
+            on_progress=on_progress, is_cancelled=is_cancelled, source_patch=patch)
     if after_render is not None:
         review_result = await after_render(out, review_result)
     body = _write_sidecar(clip, project, decision, out, src=src, dyn=dyn,
-                          render=render, result=result, review_result=review_result)
+                          render=render, result=result, review_result=review_result,
+                          patch=patch)
     return {**result, "sidecar": body}
 
 
 def _write_sidecar(clip, project, decision, out, *, src, dyn, render,
-                   result, review_result):
+                   result, review_result, patch=None):
     from services.clipper import (dynamic_render, edit_quality, output_identity,
-                                  render as static_render, render_input)
+                                  render as static_render, render_input,
+                                  source_treatment_render)
 
     plan, drop, caption_y = decision["plan"], decision["drop"], decision["caption_y"]
     source = {"path": src, "url": project.source_url, "size_bytes": _size_bytes(src)}
@@ -222,12 +237,18 @@ def _write_sidecar(clip, project, decision, out, *, src, dyn, render,
     # same recipe write the subtitle file to two temporary names and must still
     # fingerprint the same.
     body["render_record"] = (result or {}).get("render_record")
+    # WHAT WAS DONE TO THE SOURCE'S OWN TEXT. The label (who decided) is not
+    # fingerprinted; the identity is, and it comes from the record — what the
+    # encode consumed — never from the decision (SC-addendum-v2 §5–§6).
+    body["source_treatment"] = source_treatment_render.label(decision)
+    body["source_treatment_identity"] = source_treatment_render.sidecar_identity(
+        body["render_record"], patch)
     # AND THE SCHEMA IS DECLARED. A record with no such field is read with the
     # v1 formula under an assumption that is reported; from here the assumption
-    # is not needed, and a v2 mismatch may never be rescued by v1.
-    body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V2
+    # is not needed, and a v3 mismatch may never be rescued by v2 or v1.
+    body["fingerprint_schema"] = render_input.FINGERPRINT_SCHEMA_V3
     body["input_fingerprint"] = edit_quality.input_fingerprint(
-        body, schema=render_input.FINGERPRINT_SCHEMA_V2)
+        body, schema=render_input.FINGERPRINT_SCHEMA_V3)
     # AND THE OTHER HALF, which the recipe cannot reach. `input_fingerprint`
     # proves the plan was not edited after the render; it never touches the mp4,
     # so `provenance_complete` had no route to a pass at all. This measures what

@@ -20,6 +20,9 @@ CONTENT of the `.ass` that was burned, because both change the image.
                                                             policy NOT covered
     v1 declared                  the v1 formula only        the same limit
     v2 declared                  the v2 formula only        the v2 fields hold
+    v3 declared                  the v3 formula only        v2 + the source-caption
+                                                            treatment; an unreadable
+                                                            identity is its own state
     anything else                refused                    no other version
 
 THE RULES THAT MAKE THAT A CONTRACT RATHER THAN A LIST. A v2 mismatch stays a
@@ -49,9 +52,11 @@ from typing import Any
 from services.clipper import reasoning_trace
 
 __all__ = ["FINGERPRINT_SCHEMA", "FINGERPRINT_SCHEMA_V1", "FINGERPRINT_SCHEMA_V2",
-           "FINGERPRINT_KEYS", "FINGERPRINT_KEYS_V1", "FINGERPRINT_KEYS_V2",
+           "FINGERPRINT_SCHEMA_V3", "FINGERPRINT_KEYS", "FINGERPRINT_KEYS_V1",
+           "FINGERPRINT_KEYS_V2", "FINGERPRINT_KEYS_V3",
            "SCHEMAS", "LEGACY", "declared_schema", "render_input",
-           "input_fingerprint", "caption_identity"]
+           "input_fingerprint", "caption_identity", "treatment_identity_state",
+           "compare_recipes"]
 
 #: What the render fingerprint is taken over. The recipe — everything the
 #: export was made FROM — and nothing that only labels the result: no title, no
@@ -75,7 +80,15 @@ FINGERPRINT_KEYS_V1: tuple[str, ...] = (
 FINGERPRINT_SCHEMA_V2 = "clipper_render_input_v2"
 FINGERPRINT_KEYS_V2: tuple[str, ...] = FINGERPRINT_KEYS_V1 + ("caption_identity",)
 
-SCHEMAS: tuple[str, ...] = (FINGERPRINT_SCHEMA_V1, FINGERPRINT_SCHEMA_V2)
+#: v2 plus what was done to the SOURCE's own burned text (SC-addendum-v2 §5).
+#: `source_treatment_identity` is `source_treatment_manifest.fingerprint_identity`
+#: — the semantic projection, never the manifest file's hash, which names its
+#: attempt and paths (codex-verdict-next-10 §1). Every sidecar written from SC
+#: batch 2 on declares v3, with or without a treatment.
+FINGERPRINT_SCHEMA_V3 = "clipper_render_input_v3"
+FINGERPRINT_KEYS_V3: tuple[str, ...] = FINGERPRINT_KEYS_V2 + ("source_treatment_identity",)
+
+SCHEMAS: tuple[str, ...] = (FINGERPRINT_SCHEMA_V1, FINGERPRINT_SCHEMA_V2, FINGERPRINT_SCHEMA_V3)
 #: A record with no `fingerprint_schema` field. It is an ASSUMPTION and it is
 #: reported as one — every sidecar written before 2026-09-05 is one of these.
 LEGACY = "legacy_v1"
@@ -88,7 +101,54 @@ FINGERPRINT_KEYS = FINGERPRINT_KEYS_V1
 _KEYS_FOR: dict[str, tuple[str, ...]] = {
     FINGERPRINT_SCHEMA_V1: FINGERPRINT_KEYS_V1,
     FINGERPRINT_SCHEMA_V2: FINGERPRINT_KEYS_V2,
+    FINGERPRINT_SCHEMA_V3: FINGERPRINT_KEYS_V3,
 }
+
+TREATMENT_NONE, TREATMENT_ACTIVE, TREATMENT_UNREADABLE = "none", "active", "unreadable"
+_ACTIVE_IDENTITY_KEYS = frozenset({"schema", "treatment", "per_line", "source", "mask_sha256",
+                                   "glyphs", "params", "window", "pts_offset", "frames",
+                                   "overlay_filter", "patch"})
+
+
+def treatment_identity_state(sidecar: Any) -> str:
+    """`none`, `active` or `unreadable` — for a v3 record's treatment identity.
+
+    `none` is EXACTLY `{"schema": clipper_source_treatment_v1, "treatment":
+    "none"}`: an extra key, a null, a missing field is `unreadable`, never
+    `none` and never a pass (SC-addendum-v2 §5). A state, not `None`, so no
+    `if not x` can turn a record nobody could read into "no treatment"."""
+    from services.clipper.source_treatment import IDENTITY_SCHEMA, TREATMENTS
+
+    ident = sidecar.get("source_treatment_identity") if isinstance(sidecar, dict) else None
+    if not isinstance(ident, dict) or ident.get("schema") != IDENTITY_SCHEMA:
+        return TREATMENT_UNREADABLE
+    if ident == {"schema": IDENTITY_SCHEMA, "treatment": "none"}:
+        return TREATMENT_NONE
+    patch = ident.get("patch")
+    if (set(ident) == _ACTIVE_IDENTITY_KEYS and ident["treatment"] in TREATMENTS
+            and isinstance(ident["per_line"], list) and ident["per_line"]
+            and isinstance(ident["mask_sha256"], str) and len(ident["mask_sha256"]) == 64
+            and isinstance(patch, dict) and isinstance(patch.get("sha256"), str)
+            and len(patch["sha256"]) == 64):
+        return TREATMENT_ACTIVE
+    return TREATMENT_UNREADABLE
+
+
+def compare_recipes(a: Any, b: Any) -> dict:
+    """Two sidecars: `schema_differs` FIRST and nothing after it — a "recipe
+    changed" verdict is only given within one schema (SC-addendum-v2 §5). Each
+    side is recomputed with its own declared formula only; nothing retries v2
+    or v1 on a v3 mismatch."""
+    sa, sb = declared_schema(a)[0], declared_schema(b)[0]
+    if sa is None or sb is None:
+        return {"verdict": "unknown_schema", "from": sa, "to": sb}
+    if sa != sb:
+        return {"verdict": "schema_differs", "from": sa, "to": sb}
+    if sa == FINGERPRINT_SCHEMA_V3 and TREATMENT_UNREADABLE in (
+            treatment_identity_state(a), treatment_identity_state(b)):
+        return {"verdict": "source_treatment_unreadable", "schema": sa}
+    same = input_fingerprint(a, schema=sa) == input_fingerprint(b, schema=sb)
+    return {"verdict": "same_recipe" if same else "recipe_changed", "schema": sa}
 
 
 def declared_schema(sidecar: Any) -> tuple[str | None, bool]:

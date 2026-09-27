@@ -418,7 +418,7 @@ def test_render_preserves_foreground_proportions(tmp_path):
     asyncio.run(render_export(clip, project, decision, out, src=src))
     stored = json.loads(Path(out).with_suffix(".json").read_text(encoding="utf-8"))
     assert stored["layout_plan"] == plan
-    assert stored["fingerprint_schema"] == render_input.FINGERPRINT_SCHEMA_V2
+    assert stored["fingerprint_schema"] == render_input.FINGERPRINT_SCHEMA_V3
     assert stored["render_record"]["caption_filter"] is False
     assert output_identity.matches(stored["output_identity"], out)[0] is True
     digest = render_input.input_fingerprint(stored, schema=stored["fingerprint_schema"])

@@ -289,7 +289,7 @@ async def test_render_export_full_with_caption_and_preview(
     assert lp.get("reaction_binding", {}).get("schema") == "clipper_reaction_binding_v1"
 
     from services.clipper import render_input
-    assert sidecar["fingerprint_schema"] == render_input.FINGERPRINT_SCHEMA_V2
+    assert sidecar["fingerprint_schema"] == render_input.FINGERPRINT_SCHEMA_V3
     assert sidecar["input_fingerprint"] == render_input.input_fingerprint(
         sidecar, schema=sidecar["fingerprint_schema"])
     assert sidecar["render_record"]["caption_filter"] is True

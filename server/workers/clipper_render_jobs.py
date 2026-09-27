@@ -32,6 +32,7 @@ from database import async_session
 from models import ClipModel, ClipStatus, JobModel, JobStatus, ProjectModel
 from services.clipper import storage
 from services.clipper.clip_mutations import begin_write
+from services.clipper.source_treatment_render import refuse_treated_publish
 from workers.clipper_captions import _caption_warnings
 # Moved out when BURST R1 grew them, re-exported for callers and tests (codex-verdict-next-23).
 from workers.clipper_preview_publish import (  # noqa: F401
@@ -199,6 +200,11 @@ async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, o
         if current is None:
             await session.rollback()
             return False
+        try:  # a treated file never renames over the original (SC-addendum-v2 §4)
+            refuse_treated_publish(staged.with_suffix(".json"))
+        except Exception:
+            await session.rollback()
+            raise
         os.replace(staged, out)
         os.replace(staged.with_suffix(".json"), out.with_suffix(".json"))
         # The `.ass` beside the export is read as "what was burned"
@@ -384,6 +390,16 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
         # with a dozen cuts, and ignored the trim, the watermark and the resolved
         # caption height as well.
         decision = await _decide_render(clip, project, scratch)
+        # The export's source-caption gate, on THIS decision (SCB2, codex-verdict-next-24 §2). The video
+        # preview called the renderers directly, with no `prepare` and no `source_patch`: a treated clip
+        # previewed its untouched source text (next24-check/probe_sc_video_preview.py). `prepare` refuses
+        # or builds this attempt's patch inside its own scratch; the dynamic renderer checks the final
+        # argv before the encode and the patch after it; the static one refuses any patch.
+        from services.clipper import source_treatment_render
+
+        patch = await asyncio.to_thread(
+            source_treatment_render.prepare, clip, project, decision, src=src, scratch_root=scratch,
+            attempt={"job_id": job_id, "nonce": uuid.uuid4().hex})
 
         if decision["dyn"]:
             from services.clipper import dynamic_render
@@ -400,13 +416,14 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
                     watermark=decision["watermark"],
                     drop_spans=decision["drop"],
                     has_audio=_has_audio(src),
-                    is_cancelled=lambda: queue.is_cancelled(job_id)),
+                    is_cancelled=lambda: queue.is_cancelled(job_id),
+                    source_patch=patch),
             )
         else:
             await render_preview(src, _candidate(clip), decision["plan"],
                                  decision["ass_path"], str(attempt),
                                  watermark=decision["watermark"],
-                                 drop_spans=decision["drop"])
+                                 drop_spans=decision["drop"], source_patch=patch)
 
         cause = await _publish_preview(clip, seen, attempt, out,
                                        decision.get("caption_plan_state"), ident)

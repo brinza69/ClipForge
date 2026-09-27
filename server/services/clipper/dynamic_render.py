@@ -243,7 +243,8 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
                       out_h: int = 1920, loudness: bool = True,
                       watermark: str = "",
                       drop_spans: Sequence[tuple[float, float]] | None = None,
-                      has_audio: bool = True) -> list[str]:
+                      has_audio: bool = True,
+                      source_patch: dict | None = None) -> list[str]:
     """One ffmpeg argv list for one dynamically-edited clip. Pure.
 
     `-ss` before `-i` so the seek is by keyframe index; on a 6-hour VOD that is
@@ -262,6 +263,13 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
     graph, vlabel = build_dynamic_filtergraph(
         plan, cmd_path, None if drop_spans else ass_path,
         src_w=src_w, src_h=src_h, out_w=out_w, out_h=out_h)
+    if source_patch is not None:
+        # The source's own burned text is treated on the SOURCE frame, ahead of
+        # `split=2`: pad/sendcmd/crop/scale, the backdrop, `select` and the fps
+        # grid all see treated pixels (SC-addendum §4). The patch is input #2.
+        from services.clipper import source_treatment_render
+
+        graph = source_treatment_render.prefixed(graph, source_patch["overlay_filter"])
 
     if watermark and watermark.strip():
         # Imported from the static renderer rather than reimplemented: the two
@@ -328,6 +336,10 @@ def build_dynamic_cmd(src: str, plan: dict, cmd_path: str, ass_path: str | None,
         "-map", vlabel,
         "-map", alabel,
     ]
+    if source_patch is not None:
+        # Before `-t`, which must stay an OUTPUT option: after the patch's `-i`
+        # it would become an input option of the patch.
+        cmd[cmd.index("-t"):cmd.index("-t")] = source_treatment_render.patch_input_args(source_patch)
     cmd += af
     cmd += [
         "-c:v", "libx264",
@@ -429,11 +441,16 @@ def render_dynamic_clip(src: str, plan: dict, out: str, *, start: float,
     # filtergraph is what ffmpeg gets.
     from services.clipper import render_record
 
-    record = render_record.record(cmd, ass_path=ass_path)
+    patch = kwargs.get("source_patch")
+    record = render_record.record(cmd, ass_path=ass_path, treatment_manifest=patch)
 
     try:
         final.parent.mkdir(parents=True, exist_ok=True)
+        if patch is not None:
+            render_record.require_corroborated(record)
         run(cmd, timeout=RENDER_TIMEOUT, what="dynamic clip render")
+        if patch is not None:
+            render_record.confirm_patch(record)
 
         size = temp.stat().st_size if temp.is_file() else 0
         if size <= MIN_OUTPUT_BYTES:

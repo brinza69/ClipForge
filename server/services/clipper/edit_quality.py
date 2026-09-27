@@ -50,6 +50,17 @@ from services.clipper.render_input import (  # noqa: F401
     input_fingerprint,
     render_input,
 )
+# The fingerprint verdict, split out at 500 lines the same way and re-exported (SCB2r,
+# codex-verdict-next-22 Q2).
+from services.clipper.fingerprint_verdict import (  # noqa: F401
+    FINGERPRINT_MISMATCH,
+    FINGERPRINT_TREATMENT_UNREADABLE,
+    FINGERPRINT_UNKNOWN_SCHEMA,
+    FINGERPRINT_VALID,
+    FINGERPRINT_VALID_V1,
+    fingerprint_status,
+    fingerprint_verdict,
+)
 
 # Absence, spelled one way everywhere. A plain string so it survives a round
 # trip through JSON and can be compared with `==`.
@@ -69,71 +80,6 @@ LEAD_IN_EPS = 0.001
 # threshold, not a repair — R5 owns the repair.
 TAIL_TIGHT_S = 0.050
 
-FINGERPRINT_VALID = "valid"
-FINGERPRINT_MISMATCH = "mismatch"
-#: The digest recomputes under v1, which does not cover the caption policy. It
-#: is a real result and a bounded one, and it needs its own name: calling it
-#: `valid` would let a record that cannot answer the policy question stand in
-#: for one that can.
-FINGERPRINT_VALID_V1 = "valid_v1_policy_not_covered"
-#: The record declares a schema this code does not implement. No other version
-#: is tried — "try them all and take whichever matches" is a route around the
-#: policy check for anything that claims to be something else.
-FINGERPRINT_UNKNOWN_SCHEMA = "unknown_fingerprint_schema"
-
-
-def fingerprint_verdict(sidecar: Any) -> dict:
-    """`{state, schema, assumed_legacy, covers_caption_policy}`.
-
-    THE CONTRACT, and each row of it exists because the obvious shortcut is
-    wrong in a way that hides:
-
-      * a record with no `fingerprint_schema` is read with the v1 formula
-        exactly, and `assumed_legacy` says so — an assumption applied silently
-        makes a green row unreadable;
-      * a declared v1 is read with v1 and carries the same limit;
-      * a declared v2 is read with v2 and ONLY v2. A v2 mismatch stays a
-        mismatch even where the v1 formula would match, because a fallback is
-        exactly the route by which the policy check gets skipped;
-      * a schema nobody implements is refused. Not tried against the versions
-        that do exist.
-
-    Recomputing is what makes any of it a check: copying the stored digest into
-    the report would let a plan edited after the render carry a stale
-    fingerprint and pass.
-    """
-    from services.clipper.render_input import (FINGERPRINT_SCHEMA_V2,
-                                               declared_schema)
-
-    out = {"state": UNAVAILABLE, "schema": None, "assumed_legacy": False,
-           "covers_caption_policy": False}
-    if not isinstance(sidecar, dict):
-        return out
-    schema, assumed = declared_schema(sidecar)
-    out["schema"], out["assumed_legacy"] = schema, assumed
-    if schema is None:
-        out["state"] = FINGERPRINT_UNKNOWN_SCHEMA
-        out["declared"] = sidecar.get("fingerprint_schema")
-        return out
-    out["covers_caption_policy"] = schema == FINGERPRINT_SCHEMA_V2
-    stored = sidecar.get("input_fingerprint")
-    if not isinstance(stored, str) or not stored:
-        return out
-    if stored != input_fingerprint(sidecar, schema=schema):
-        out["state"] = FINGERPRINT_MISMATCH
-        return out
-    out["state"] = (FINGERPRINT_VALID if out["covers_caption_policy"]
-                    else FINGERPRINT_VALID_V1)
-    return out
-
-
-def fingerprint_status(sidecar: dict) -> str:
-    """`fingerprint_verdict`'s state alone, for the reports that print one word.
-
-    Kept because six call sites want a string, and pointed at the verdict so
-    there is one implementation of the contract rather than two.
-    """
-    return fingerprint_verdict(sidecar)["state"]
 
 def _num(value: Any) -> float | None:
     """A finite float, or None when the value cannot be one. Never raises: this

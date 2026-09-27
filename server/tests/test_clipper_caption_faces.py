@@ -172,7 +172,7 @@ async def test_decision_reaches_the_burned_pixels_and_sidecar(
     body = result["sidecar"]
     assert body["caption_face_placement"] == decision["caption_face_placement"]
     assert not [k for k in body["dynamic_plan"] if k.startswith("_")]
-    schema = render_input.FINGERPRINT_SCHEMA_V2
+    schema = render_input.FINGERPRINT_SCHEMA_V3
     assert body["input_fingerprint"] == render_input.input_fingerprint(body, schema=schema)
     changed = {**body, "caption_y": .51 if moved else .75}
     assert render_input.input_fingerprint(changed, schema=schema) != body["input_fingerprint"]
