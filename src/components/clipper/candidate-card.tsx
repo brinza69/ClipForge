@@ -59,6 +59,9 @@ export function CandidateCard({
   };
 
   const score = Math.round(clip.overall_score ?? 0);
+  // A person's cancel leaves the clip `failed` so Export stays available (R4b);
+  // the latest export job says it was a cancel, not a failure (O3).
+  const exportCancelled = clip.status === "failed" && clip.last_export?.status === "cancelled";
   const previewUrl = clip.preview_path
     ? `${CLIPPER_API}/clips/${clip.id}/preview-file`
     : null;
@@ -68,7 +71,18 @@ export function CandidateCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            {clip.rank_position != null && (
+            {/* A clip a rescore kept keeps the rank of the run that made it; showing
+                that as "#1" beside the new board's #1 read as two winners (O2). */}
+            {clip.from_current_run === false ? (
+              <span
+                className="text-[11px] font-semibold text-muted-foreground"
+                title={clip.rank_position != null
+                  ? `Kept from an earlier run, where it ranked #${clip.rank_position}`
+                  : "Kept from an earlier run"}
+              >
+                kept
+              </span>
+            ) : clip.rank_position != null && (
               <span className="text-[11px] font-semibold text-muted-foreground">
                 #{clip.rank_position}
               </span>
@@ -166,10 +180,12 @@ export function CandidateCard({
                 ? "bg-emerald-500/15 text-emerald-400"
                 : clip.status === "rejected"
                   ? "bg-rose-500/15 text-rose-400"
-                  : ""
+                  : exportCancelled
+                    ? "bg-gray-500/15 text-gray-400"
+                    : ""
             }`}
           >
-            {clip.status}
+            {exportCancelled ? "export cancelled" : clip.status}
           </Badge>
         )}
       </div>

@@ -1,9 +1,10 @@
 """
 ClipForge — AI Stream Clipper: what the job rows say about the latest attempts.
 
-Two readings, both taken from the EXISTING job rows (D2r-3, closure-4 §2): the
-project's latest analysis attempt, and each clip's latest preview. Nothing new is
-stored for either, and neither relaunches anything.
+Readings taken from the EXISTING rows (D2r-3, closure-4 §2): the project's latest
+analysis attempt, each clip's latest preview and latest export (O3), and whether a
+clip belongs to the project's current selection run (O2). Nothing new is stored
+for any of them, and none relaunches anything.
 
 `get_project` used to put the latest FAILED job of ANY type into `error`, and the
 page offered a Retry on it that resumes the analysis — at `clipper_score` once
@@ -92,23 +93,56 @@ def _last_preview(job: JobModel) -> dict[str, Any]:
             "created_at": _when(job)}
 
 
+def _last_export(job: JobModel) -> dict[str, Any]:
+    return {"job_id": job.id, "status": job.status, "error": job.error, "created_at": _when(job)}
+
+
+async def _latest_jobs(session: AsyncSession, job_type: str, ids: list[str]) -> dict[str, JobModel]:
+    """Each clip's latest job of one type by `created_at` — ONE query for the list."""
+    if not ids:
+        return {}
+    ranked = (
+        select(JobModel.id, func.row_number().over(
+            partition_by=JobModel.clip_id,
+            order_by=JobModel.created_at.desc()).label("n"))
+        .where(JobModel.type == job_type, JobModel.clip_id.in_(ids))
+        .subquery())
+    return {job.clip_id: job for job in await session.scalars(
+        select(JobModel).join(ranked, ranked.c.id == JobModel.id).where(ranked.c.n == 1))}
+
+
 async def clip_cards(session: AsyncSession, clips: list[ClipModel],
                      project: ProjectModel | None) -> list[dict[str, Any]]:
-    """`clip_to_dict` for each clip plus `last_preview`: its latest
-    `clipper_preview` job by `created_at`, or None — from ONE query for the
-    whole list. The latest, not the latest failed: a later successful preview is
-    what replaces an earlier failure on the card."""
+    """`clip_to_dict` for each clip plus:
+
+    - `last_preview` / `last_export`: its latest `clipper_preview` / `clipper_export`
+      job by `created_at`, or None. The latest, not the latest failed: a later
+      success is what replaces an earlier failure on the card. `last_export` lets a
+      card say an export was CANCELLED — the clip itself is `failed` then (R4b), so
+      Export stays available, and the status alone cannot tell the two apart (O3).
+    - `from_current_run`: whether the clip's `selection_run_id` is the project's
+      current run, i.e. the run of its NEWEST clip. A rescore keeps a person's
+      edited or exported clips with the run that created them, rank included, so
+      two cards could both say "#1" (O2); a card from an earlier run is labelled
+      as kept instead. True when the project's newest clip has no run id (legacy).
+      LIMIT (codex-verdict-next-15 §1): this is the latest cohort still ON THE
+      BOARD, not proof of the latest scoring — a run that added no clip, or whose
+      clips were all deleted, leaves an older run's newest clip as "current". It is
+      a display label: never use it for cohort provenance or export acceptance, and
+      the legacy True is display compatibility, not a confirmed membership.
+    """
     ids = [c.id for c in clips]
-    previews: dict[str, dict[str, Any]] = {}
-    if ids:
-        ranked = (
-            select(JobModel.id, func.row_number().over(
-                partition_by=JobModel.clip_id,
-                order_by=JobModel.created_at.desc()).label("n"))
-            .where(JobModel.type == JobType.clipper_preview.value, JobModel.clip_id.in_(ids))
-            .subquery())
-        for job in await session.scalars(
-                select(JobModel).join(ranked, ranked.c.id == JobModel.id)
-                .where(ranked.c.n == 1)):
-            previews[job.clip_id] = _last_preview(job)
-    return [{**clip_to_dict(c, project), "last_preview": previews.get(c.id)} for c in clips]
+    previews = await _latest_jobs(session, JobType.clipper_preview.value, ids)
+    exports = await _latest_jobs(session, JobType.clipper_export.value, ids)
+    current = None
+    if clips:
+        current = await session.scalar(
+            select(ClipModel.selection_run_id)
+            .where(ClipModel.project_id == clips[0].project_id)
+            .order_by(ClipModel.created_at.desc(), ClipModel.id.desc())
+            .limit(1))
+    return [{**clip_to_dict(c, project),
+             "last_preview": _last_preview(previews[c.id]) if c.id in previews else None,
+             "last_export": _last_export(exports[c.id]) if c.id in exports else None,
+             "from_current_run": current is None or c.selection_run_id == current}
+            for c in clips]

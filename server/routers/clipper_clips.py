@@ -28,7 +28,7 @@ from services.clipper import feedback as feedback_mod
 from services.clipper import storage
 from services.clipper.clip_mutations import (
     _headline_inputs, _project_transcript, attempt_job_id, export_attempt, export_response,
-    lock_clip)
+    lock_clip, range_refusal)
 from services.clipper.serialize import (
     can_transition,
     CLIP_PATCHABLE,
@@ -131,14 +131,9 @@ async def patch_clip(
     if "start_time" in changed or "end_time" in changed:
         start = max(0.0, float(clip.start_time or 0.0))
         end = float(clip.end_time or 0.0)
-        if end <= start:
-            raise _err(400, "invalid_range", "The clip's end must come after its start.")
-        if project and project.duration and end > float(project.duration):
-            raise _err(
-                400,
-                "range_past_source",
-                "That end time is past the end of the source video.",
-            )
+        refusal = range_refusal(project, (before["start_time"], before["end_time"]), start, end)
+        if refusal:
+            raise _err(400, *refusal)
         clip.start_time, clip.end_time = start, end
         clip.duration = round(end - start, 3)
 

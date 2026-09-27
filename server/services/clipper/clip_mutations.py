@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from database import async_session
 from job_rows import add_job
+from services.clipper.serialize import effective_max_clip_s
 from models import (ClipModel, ClipStatus, JobModel, JobStatus, JobType, ProjectModel,
                     TranscriptModel, _uuid)
 
@@ -255,6 +256,29 @@ async def release_export_claim(session: AsyncSession, job: JobModel) -> int:
 
 
 _ATTEMPT_ID = re.compile(r"[0-9a-f]{12}")
+
+
+def range_refusal(project: ProjectModel | None, before: tuple[float, float],
+                  start: float, end: float) -> tuple[str, str] | None:
+    """Why a PATCH may not set this [start, end], as (code, message), or None.
+
+    Moved out of the router for the 500-line rule, with the two older checks in
+    their order. O4: the editor accepted 517.9 s, and only the source's end
+    refused it. A range longer than the project's maximum clip length is refused
+    unless it is no longer than the clip already was: trimming a clip that
+    predates a lower maximum stays allowed.
+    """
+    if end <= start:
+        return "invalid_range", "The clip's end must come after its start."
+    if project and project.duration and end > float(project.duration):
+        return "range_past_source", "That end time is past the end of the source video."
+    limit = effective_max_clip_s(project)
+    was = max(0.0, float(before[1] or 0.0) - float(before[0] or 0.0))
+    if end - start > float(limit) + 1e-6 and end - start > was + 1e-6:
+        return "range_too_long", (
+            f"Clips in this project can be at most {float(limit):g} s long, and that range is "
+            f"{end - start:.1f} s. Raise the maximum clip length in the project settings to go longer.")
+    return None
 
 
 def attempt_job_id(payload: dict | None) -> str:

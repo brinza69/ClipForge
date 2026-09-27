@@ -41,6 +41,18 @@ const SELECT_CLASS =
   "h-8 rounded-lg border border-border bg-background px-2 text-sm text-foreground " +
   "outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
+/** "15–90s" from the project's own settings. A side the project does not set reads
+ * "default" (never an invented number), and an explicit side stays visible: a partial
+ * dict made the card read "undefined–undefineds" (codex-verdict-next-15 §1). */
+function lengthRange(s: { min_clip_s?: unknown; max_clip_s?: unknown } | null | undefined): string {
+  const ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const min = s && ok(s.min_clip_s) ? s.min_clip_s : null;
+  const max = s && ok(s.max_clip_s) ? s.max_clip_s : null;
+  if (min !== null && max !== null) return `${min}–${max}s`;
+  if (min === null && max === null) return "default";
+  return `${min !== null ? `${min}s` : "default"}–${max !== null ? `${max}s` : "default"}`;
+}
+
 export default function ClipperProjectPage() {
   const params = useParams<{ id: string }>();
   const projectId = params.id;
@@ -298,9 +310,7 @@ export default function ClipperProjectPage() {
             <div>
               Length range
               <div className="font-medium text-foreground">
-                {project.clipper_settings
-                  ? `${project.clipper_settings.min_clip_s}–${project.clipper_settings.max_clip_s}s`
-                  : "—"}
+                {lengthRange(project.clipper_settings)}
               </div>
             </div>
             <div>

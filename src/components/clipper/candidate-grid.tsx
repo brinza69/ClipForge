@@ -221,6 +221,7 @@ export function CandidateGrid({
       <ClipEditor
         clip={editClip}
         open={editClip !== null}
+        maxClipS={project.max_clip_s_effective}
         onOpenChange={(v) => !v && setEditClip(null)}
         // The board re-derives from the server, never from local state: a trim
         // changes the duration and drops the preview path, and both come back

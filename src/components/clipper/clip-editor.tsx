@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { errorDescription, readApiError } from "@/lib/api-error";
+import { rangeTooLong } from "@/components/clipper/range-limit";
 import { CLIPPER_API, type ClipperClip } from "@/types/clipper";
 import { ClipFramePreview } from "./clip-frame-preview";
 import { ReactionFraming } from "./reaction-framing";
@@ -100,11 +101,15 @@ export function ClipEditor({
   open,
   onOpenChange,
   onSaved,
+  maxClipS,
 }: {
   clip: ClipperClip | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onSaved: (clip?: ClipperClip) => void;
+  /** The server's effective maximum clip length (`max_clip_s_effective`); the server
+   * refuses longer ranges (O4). Undefined: no local refusal, the server decides. */
+  maxClipS?: number;
 }) {
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(0);
@@ -137,6 +142,9 @@ export function ClipEditor({
   }, [open]);
 
   const duration = Math.max(0, end - start);
+  // The server's rule (O4), from the same endpoints and the server's own limit.
+  const tooLong = clip != null
+    && rangeTooLong({ start: clip.start_time, end: clip.end_time }, start, end, maxClipS);
   const trimmed = clip ? start !== clip.start_time || end !== clip.end_time : false;
   const dirty = useMemo(() => {
     if (!clip) return false;
@@ -281,6 +289,13 @@ export function ClipEditor({
                   The end has to come after the start.
                 </p>
               )}
+              {tooLong && (
+                <p className="text-[11px] text-rose-500">
+                  Clips in this project can be at most {maxClipS}s, and this range is{" "}
+                  {duration.toFixed(1)}s. Raise the maximum clip length in the project settings to
+                  go longer.
+                </p>
+              )}
               {trimmed && (
                 <p className="text-[11px] text-muted-foreground">
                   Saving a new range drops the rendered preview — a stale render
@@ -411,7 +426,7 @@ export function ClipEditor({
               <button
                 type="button"
                 onClick={save}
-                disabled={busy !== null || !dirty || end <= start}
+                disabled={busy !== null || !dirty || end <= start || tooLong}
                 className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {busy === "save" ? "saving…" : "save"}

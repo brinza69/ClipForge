@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from config import settings
 from models import ClipModel, ClipStatus, ProjectModel
 from services.clipper import caption_policy, edit_profiles
 
@@ -172,6 +173,18 @@ def clip_to_dict(clip: ClipModel, project: ProjectModel | None = None) -> dict[s
     }
 
 
+def effective_max_clip_s(project: ProjectModel | None) -> float:
+    """The maximum clip length the server applies to this project (O4): its own
+    `max_clip_s` when that is a positive number (a bool is not one), else the config
+    default. `clip_mutations.range_refusal` refuses by it and `project_to_dict` shows
+    it, so the editor never applies a limit of its own (codex-verdict-next-15 R1)."""
+    cfg = (project.clipper_settings if project else None) or {}
+    v = cfg.get("max_clip_s")
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not v > 0:
+        return float(settings.clipper_max_clip_s)
+    return float(v)
+
+
 def project_to_dict(project: ProjectModel) -> dict[str, Any]:
     """One project, shaped like `ClipperProject`. Clips/active_job are added by
     the detail endpoint — the list endpoint deliberately omits them so a page
@@ -196,6 +209,7 @@ def project_to_dict(project: ProjectModel) -> dict[str, Any]:
         "clipper_settings": project.clipper_settings,
         "analysis_version": project.analysis_version,
         "created_at": project.created_at.isoformat() if project.created_at else None,
+        "max_clip_s_effective": effective_max_clip_s(project),
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,
     }
 
