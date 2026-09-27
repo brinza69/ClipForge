@@ -17,7 +17,7 @@ import copy
 import logging
 from typing import Sequence
 
-from services.clipper import end_acoustics
+from services.clipper import end_acoustics, end_tail
 from services.clipper.candidate_terms import (
     DANGLE_PAUSE_S, GRID_S, LEAD_IN_MAX_S, PAUSE_KEEP_S, PAYOFF_WINDOW_S,
     REACTION_MAX_S, RELEASE_GAP_S, SENTENCE_END_REACH_S, SNAP_TOLERANCE_S,
@@ -417,6 +417,16 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
             dropped=orphan)
         for code in end_evidence["reasons"]:
             _add(reasons, code)
+        # EN3: the pause after the last word, off unless configured (end_tail.py).
+        from config import settings
+
+        end, tail = end_tail.extend_tail(end, words, end_evidence, audio=audio,
+                                         limit=min(start + hi, ceiling),
+                                         target_s=settings.clipper_end_tail_s)
+        if tail is not None:
+            end_evidence["tail"] = tail
+            if tail["state"] == "moved":
+                _add(reasons, "end_tail_extended")
     inside, _before, _after = _neighbourhood(words, start, end)
 
     out = dict(cand)  # a NEW dict; the caller's candidate is never touched

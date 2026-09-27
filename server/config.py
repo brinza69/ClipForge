@@ -210,6 +210,15 @@ class Settings(BaseSettings):
     # `scenes_addressed.state` says `not_requested`: neither a refusal nor empty.
     clipper_scene_addressing: bool = False
 
+    # EN3 (`end_tail.extend_tail`): the TARGET end, in seconds after the last
+    # word's acoustic (vocal) end, under EN1's guards — not seconds added on top
+    # of EN1's end (EN1 sits at vocal + 0.1 s, so 0.4 extends by ~0.3 s). 0 = off,
+    # today's EN1 end. Evidence: blind round 3 with the corrected procedure
+    # (3/4 new pairs chose it, 0 chose EN1, both null pairs "no difference");
+    # rounds 1-2 had procedural faults and are not the same evidence. Turning it
+    # on is a separate, reversible activation (codex-verdict-next-14/18).
+    clipper_end_tail_s: float = 0.0
+
     # 0 = never auto-purge project artifacts.
     clipper_retention_days: int = 0
 
