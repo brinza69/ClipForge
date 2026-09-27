@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -37,7 +38,13 @@ STATE_EMPTY = "empty"                # frame read OK; detector found 0 boxes
 STATE_UNREADABLE = "unreadable"      # file / capture / seek / read failed
 STATE_UNAVAILABLE = "detector_unavailable"  # cv2 / cascades / detection failed
 
-_FACE_CASCADES: list[Any] | None = None
+# Each thread detects with its OWN cascade instances (FD1). Threads detecting on
+# the SAME instances at once do not get a single run's answer. Measured (ND0):
+# two analyses in one process disagreed with the single run on 20–26 of 166
+# frames, and a thread that arrived during the old process-wide lazy load read
+# the half-built list as no cascades — its whole window came back
+# cascades_unavailable. Why OpenCV diverges is not measured; that it does is.
+_LOCAL = threading.local()
 
 
 def _cv2() -> ModuleType | None:
@@ -66,7 +73,7 @@ def _merge_boxes(boxes: list[list[int]]) -> list[list[int]]:
 
 
 def face_cascades() -> list[Any]:
-    """The tuned cascade set, loaded once.
+    """The tuned cascade set, loaded once per thread.
 
     Two cascades, not one: a co-stream has a facecam per person and they are
     rarely both facing the lens. Measured over 40 frames, the frontal cascade
@@ -75,20 +82,20 @@ def face_cascades() -> list[Any]:
     produced a false positive at 1.05/5, the best of six combinations tried —
     1.15 missed almost everything, minNeighbors=3 let nine into the gameplay.
     """
-    global _FACE_CASCADES
-    if _FACE_CASCADES is not None:
-        return _FACE_CASCADES
-    _FACE_CASCADES = []
+    cascades = getattr(_LOCAL, "cascades", None)
+    if cascades is not None:
+        return cascades
+    loaded: list[Any] = []
     cv2 = _cv2()
-    if cv2 is None:
-        return _FACE_CASCADES
-    for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"):
-        c = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / name))
-        if not c.empty():
-            _FACE_CASCADES.append(c)
-        else:
-            logger.warning("face_cascades: could not load cascade %s", name)
-    return _FACE_CASCADES
+    if cv2 is not None:
+        for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"):
+            c = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / name))
+            if not c.empty():
+                loaded.append(c)
+            else:
+                logger.warning("face_cascades: could not load cascade %s", name)
+    _LOCAL.cascades = loaded        # stored whole, never half-built
+    return loaded
 
 
 def detect_faces(grey: Any) -> list[list[int]]:

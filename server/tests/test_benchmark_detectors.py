@@ -155,7 +155,7 @@ def test_null_faces_refused_no_crash(tmp_path):
 def test_haar_missing_cascades_returns_unavailable():
     """Empty cascade list → detector_unavailable (not empty)."""
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES", []):
+    with patch.object(face_detector._LOCAL, "cascades", [], create=True):
         r = run_haar(np.zeros((32, 32, 3), dtype=np.uint8))
     assert r["state"] == "detector_unavailable"
     assert r["reason"] == "cascades_unavailable"
@@ -164,7 +164,7 @@ def test_haar_missing_cascades_returns_unavailable():
 def test_haar_single_cascade_returns_unavailable():
     """One cascade (instead of both) → detector_unavailable."""
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES", [_MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades", [_MockCascade()], create=True):
         r = run_haar(np.zeros((32, 32, 3), dtype=np.uint8))
     assert r["state"] == "detector_unavailable"
     assert r["reason"] == "cascades_unavailable"
@@ -182,8 +182,8 @@ def test_inference_unavailable_exits_nonzero_and_scores_null(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector", lambda _, **kw: _UnavailYuNet()):
             with pytest.raises(SystemExit) as exc:
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
@@ -250,8 +250,8 @@ def test_mixed_confirmed_uncertain_exits_two(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit) as exc:
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
@@ -293,8 +293,8 @@ def test_f1_zero_not_null_when_denominator_nonzero(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit) as exc:
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
@@ -316,8 +316,8 @@ def test_yunet_model_identity_always_present_in_row(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit):
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])
@@ -342,8 +342,8 @@ def test_frame_identity_fields_preserved_in_result(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector", lambda _, **kw: _NoopDetector()):
             with pytest.raises(SystemExit):
                 main(["--manifest", str(m), "--model", "stub", "--out", str(out)])

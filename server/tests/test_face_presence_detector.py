@@ -89,8 +89,8 @@ def test_no_detector_still_uses_haar(tmp_path, monkeypatch):
     proxy = _make_video_mp4(tmp_path)
     mock_cascade = MagicMock()
     mock_cascade.detectMultiScale.return_value = []
-    monkeypatch.setattr(face_detector, "_FACE_CASCADES",
-                        [mock_cascade, mock_cascade])
+    monkeypatch.setattr(face_detector._LOCAL, "cascades",
+                        [mock_cascade, mock_cascade], raising=False)
     results = face_presence(str(proxy), [0.0])
     # Haar was consulted (detectMultiScale called at least once)
     assert mock_cascade.detectMultiScale.call_count >= 1
@@ -158,8 +158,8 @@ def test_no_detector_no_detector_meta_key(tmp_path, monkeypatch):
     proxy = _make_video_mp4(tmp_path)
     mock_cascade = MagicMock()
     mock_cascade.detectMultiScale.return_value = []
-    monkeypatch.setattr(face_detector, "_FACE_CASCADES",
-                        [mock_cascade, mock_cascade])
+    monkeypatch.setattr(face_detector._LOCAL, "cascades",
+                        [mock_cascade, mock_cascade], raising=False)
     results = face_presence(str(proxy), [0.0])
     assert "detector_meta" not in results[0]
 
@@ -216,8 +216,8 @@ def test_decoded_address_fields_present_in_both_paths(tmp_path, monkeypatch):
     # Haar path
     mock_cascade = MagicMock()
     mock_cascade.detectMultiScale.return_value = []
-    monkeypatch.setattr(face_detector, "_FACE_CASCADES",
-                        [mock_cascade, mock_cascade])
+    monkeypatch.setattr(face_detector._LOCAL, "cascades",
+                        [mock_cascade, mock_cascade], raising=False)
     haar_results = face_presence(str(proxy), [0.0])
 
     # detector path

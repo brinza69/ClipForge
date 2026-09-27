@@ -95,8 +95,8 @@ def test_default_profile_is_native_v1(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector",
                           lambda path, profile="native_v1": _make_yunet_mock(
                               score_thresh=0.9, profile=profile)):
@@ -119,8 +119,8 @@ def test_profile_native_v1_score_thresh_09(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector",
                           lambda path, profile="native_v1": _make_yunet_mock(
                               score_thresh=0.9, profile=profile)):
@@ -144,8 +144,8 @@ def test_profile_small_faces_v1_score_thresh_075(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector",
                           lambda path, profile="native_v1": _make_yunet_mock(
                               score_thresh=0.75 if profile == "small_faces_v1" else 0.9,
@@ -172,8 +172,8 @@ def test_native_v1_scale_is_10(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector",
                           lambda path, profile="native_v1": _make_yunet_mock(
                               score_thresh=0.9, profile=profile)):
@@ -193,8 +193,8 @@ def test_small_faces_v1_scale_is_20(tmp_path):
 
     import benchmark_face_detectors as bench
     from services.clipper import face_detector
-    with patch.object(face_detector, "_FACE_CASCADES",
-                      [_MockCascade(), _MockCascade()]):
+    with patch.object(face_detector._LOCAL, "cascades",
+                      [_MockCascade(), _MockCascade()], create=True):
         with patch.object(bench, "YuNetDetector",
                           lambda path, profile="native_v1": _make_yunet_mock(
                               score_thresh=0.75 if profile == "small_faces_v1" else 0.9,
