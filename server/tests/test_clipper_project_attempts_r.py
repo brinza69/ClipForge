@@ -22,6 +22,7 @@ import pytest
 from sqlalchemy import event, func, select, update
 
 from database import async_session, engine
+from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
 from job_queue import job_queue
 from models import ClipModel, JobModel, ProjectModel, TranscriptModel
 from workers import clipper_render_jobs as jobs
@@ -304,9 +305,13 @@ async def _preview_run(monkeypatch, ident, how):
         await session.commit()
     await _job(ident, f"{ident}j", "clipper_preview", "running", 1, clip=clip)
     async with async_session() as session:
+        # Claimed as the queue claims it — a worker AND a live lease — which a preview's
+        # publication now checks (BURST R1, codex-verdict-next-24 §3).
         await session.execute(update(JobModel).where(JobModel.id == f"{ident}j")
-                              .values(worker_id=_Queue.worker_id))
+                              .values(worker_id=_Queue.worker_id, attempt_count=1,
+                                      lease_expires_at=datetime.utcnow() + timedelta(minutes=10)))
         await session.commit()
+    CLAIMED_ATTEMPT.set(ClaimedAttempt(f"{ident}j", 1, _Queue.worker_id))   # and its identity (R1c)
 
     async def render(_src, _cand, _plan, _ass, out, **_kw):
         if how == "render_fails":

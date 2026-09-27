@@ -98,7 +98,7 @@ _REQUIRED_MIGRATED_COLUMNS = {
         "caption_plan", "headline_text", "content_type", "warnings",
         "dedupe_group", "is_alternative", "rank_position", "feature_vector",
         "reasoning", "review", "ranker_version", "preview_path",
-        "selection_run_id", "source_has_burned_captions", "export_job_id",
+        "selection_run_id", "source_has_burned_captions", "export_job_id", "preview_record",
     },
 }
 
@@ -328,6 +328,7 @@ async def init_db() -> None:
             ("preview_path", "TEXT"),
             ("source_has_burned_captions", "BOOLEAN"),
             ("export_job_id", "VARCHAR(12)"),
+            ("preview_record", "TEXT"),
         ]
         for col, col_type in _clipper_clip_migrations:
             try:

@@ -37,6 +37,7 @@ _NOT_BURNED_WHY = {
     "unreadable_plan": "the stored caption plan is not a plan",
     "overlays_failed": "the caption plan could not be turned into caption events",
     "all_captions_in_removed_time": "every caption fell in the dead air this render cut",
+    "no_card_representable": "no caption card kept any display time on the subtitle clock (1/100 s)",
 }
 
 
@@ -154,7 +155,8 @@ def _write_ass(clip: ClipModel, out_dir: Path,
     intended one and the state says the effective result: `empty_after_remap`
     when the dead-air remap removed every event (some removed is still `burn`),
     `empty` when the chunks carry no text, `unavailable` when they could not be
-    turned into events.
+    turned into events, or (`no_card_representable`) when no card with text
+    has any display time — in the plan (`no_time`) or on the .ass clock.
 
     `drop_spans` are the dead seconds the render is about to remove. The
     overlays have to move with them: libass positions against absolute times,
@@ -187,22 +189,49 @@ def _write_ass(clip: ClipModel, out_dir: Path,
         logger.warning("could not turn the caption plan into overlays", exc_info=True)
         settled("unavailable", "overlays_failed")
         return None
+    from services.clipper import caption_display
+    from services.clipper.captions import MIN_CHUNK_S
+
     if not overlays:
-        settled("empty", "no_caption_text")
+        # No text, or text whose every card `settle` gave no time: not the same answer (codex
+        # next-20 §1). The second names its cards like any card the file could not hold.
+        report = caption_display.effective_report([], [], [], plan, MIN_CHUNK_S)
+        if not report.get("unshown_cards"):
+            settled("empty", "no_caption_text")
+            return None
+        if state is not None:
+            state["display"] = report
+        settled("unavailable", "no_card_representable")
         return None
     if drop_spans:
         from services.clipper.dead_air import remap_overlays
 
         overlays = remap_overlays(overlays, drop_spans)
+
+    # An interval the .ass clock cannot hold is never handed to the writer, whose fallback would
+    # draw it for a second over the next card (next-17 R2); it is reported below instead.
+    drawn, unshown = caption_display.drawable(overlays)
+    ass_path = out_dir / f"{clip.id}.ass"
+    if drawn:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # The ASS canvas is the OUTPUT canvas: libass positions against PlayRes, and
+        # the plan's x_pct/y_pct were resolved against 1080x1920 safe zones.
+        build_overlays_ass(drawn, 1080, 1920, str(ass_path))
+    if state is not None:
+        # BURST1: measured on the FILE just written (after the remap and the highlight spans). A
+        # stored plan is never re-timed here — whoever wrote it — so its overlaps are reported.
+        # Written whenever a card survived the remap: `{}` is "measured, nothing to report"; no key
+        # is a render from before the report, never read as clean (B/BURST-UI-contract.md).
+        events = caption_display.ass_events(ass_path) if drawn else []
+        report = caption_display.effective_report(events, drawn, unshown, plan, MIN_CHUNK_S)
+        if report or overlays:
+            state["display"] = report
     if not overlays:
         settled("empty_after_remap", "all_captions_in_removed_time")
         return None
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ass_path = out_dir / f"{clip.id}.ass"
-    # The ASS canvas is the OUTPUT canvas: libass positions against PlayRes, and
-    # the plan's x_pct/y_pct were resolved against 1080x1920 safe zones.
-    build_overlays_ass(overlays, 1080, 1920, str(ass_path))
+    if not drawn:
+        settled("unavailable", "no_card_representable")
+        return None
     return str(ass_path)
 
 
@@ -320,7 +349,8 @@ async def _plan_for_render(clip, project, layout: dict, action: str):
       outcome "burn" | "empty" (a stored plan with no chunks — an answer, not
               a gap) | "suppressed" (policy; nothing built) | "unavailable"
               (burn asked for, no plan could be had — `reason` says why)
-              | "empty_after_remap", set later by `_write_ass` (D2r K2)
+              | "empty_after_remap", set later by `_write_ass` (D2r K2), as is
+              "unavailable" / "no_card_representable" (BURST1r R2)
     A stored plan of any shape is never replaced, whoever wrote it.
     """
     stored = clip.caption_plan

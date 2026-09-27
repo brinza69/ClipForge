@@ -124,6 +124,8 @@ clipforge/
 │   │                                  enqueue/_claim/_process_next, fail/cancel/complete
 │   ├── job_rows.py                  ← new_job_row/add_job: the ONE place a job row is built
 │   │                                  (add_job = in the caller's transaction; re-exported by job_queue)
+│   ├── job_attempt.py               ← ClaimedAttempt + CLAIMED_ATTEMPT: the attempt a handler runs as,
+│   │                                  fixed at the claim (R1c), never re-read from the job row
 │   ├── job_recovery.py              ← lease lifecycle: recover_stuck_jobs, heartbeats, stop,
 │   │                                  _requeue_owned_job, _cleanup_workspace (JobQueue delegates here)
 │   ├── routers/                     ← jobs, utilities, doodle, remix, parallel,

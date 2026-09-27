@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import ClipModel, JobModel, JobStatus, JobType, ProjectModel, ProjectStatus
-from services.clipper.serialize import clip_to_dict
+from services.clipper.serialize import caption_display_view, clip_to_dict
 
 # The analysis, by explicit allowlist. Excluding preview/export instead would let
 # the next job type that lands on a project decide the project's error.
@@ -35,7 +35,9 @@ PIPELINE_TYPES = frozenset({
 # handler, read here. Never inferred from the error text.
 DISCARD_INPUTS_CHANGED = "inputs_changed"
 DISCARD_NEWER_EXPORT = "newer_export"
-DISCARD_CAUSES = frozenset({DISCARD_INPUTS_CHANGED, DISCARD_NEWER_EXPORT})
+# An attempt older than the one whose file is already in place (BURST R1, codex-verdict-next-23).
+DISCARD_NEWER_PREVIEW = "newer_preview"
+DISCARD_CAUSES = frozenset({DISCARD_INPUTS_CHANGED, DISCARD_NEWER_EXPORT, DISCARD_NEWER_PREVIEW})
 
 _ACTIVE = (JobStatus.queued.value, JobStatus.running.value)
 _RESUMABLE = (JobStatus.failed.value, JobStatus.cancelled.value)
@@ -144,5 +146,7 @@ async def clip_cards(session: AsyncSession, clips: list[ClipModel],
     return [{**clip_to_dict(c, project),
              "last_preview": _last_preview(previews[c.id]) if c.id in previews else None,
              "last_export": _last_export(exports[c.id]) if c.id in exports else None,
-             "from_current_run": current is None or c.selection_run_id == current}
+             "from_current_run": current is None or c.selection_run_id == current,
+             # The caption warning's facts (B/BURST-UI-contract.md): plan, export, preview.
+             "caption_display": caption_display_view(c, project)}
             for c in clips]

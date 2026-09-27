@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import update
 
 from database import async_session
+from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
 from models import ClipModel, JobModel, ProjectModel, TranscriptModel
 from services.clipper import captions as cap_mod
 from workers import clipper_captions as captions
@@ -135,7 +136,7 @@ async def test_k1_a_stored_plan_is_never_checked_or_rebuilt(tmp_path):
     clip, project = await _seed("d2rstored", caption_plan=stored,
                                 segments=[{"start": 1.0, "end": 3.0, "text": "untimed"}])
     decision = await planning._decide_render(clip, project, tmp_path)
-    assert decision["caption_plan_state"] == BURN
+    assert decision["caption_plan_state"] == {**BURN, "display": {}}   # measured, nothing to report
     assert decision["caption_plan"] == stored and "SAVED" in _texts(decision)
 
 
@@ -168,7 +169,7 @@ def test_k2_some_events_removed_is_still_burn(tmp_path):
     clip = SimpleNamespace(id="k2some",
                            caption_plan=_stored(("GONE", 0.2, 0.8), ("KEPT", 1.2, 1.8)))
     ass = captions._write_ass(clip, tmp_path, [(0.0, 1.0)], None, state)
-    assert ass is not None and state == BURN
+    assert ass is not None and state == {**BURN, "display": {}}   # measured, nothing to report
     text = Path(ass).read_text(encoding="utf-8")
     assert "KEPT" in text and "GONE" not in text
     assert captions._caption_warnings(["x"], state) == ["x"]
@@ -194,6 +195,20 @@ async def test_k2_through_the_decision(tmp_path, monkeypatch, drop, outcome):
 
 
 # ── K3: the current row, not the snapshot ─────────────────────────────────────
+
+async def _claim_preview(job, project_id, clip_id, worker):
+    """The row as the queue leaves it when it claims a job: publication checks it (BURST R1),
+    and the claim's identity in this task, which the handler runs as (R1c)."""
+    from datetime import datetime, timedelta
+
+    async with async_session() as session:
+        session.add(JobModel(id=job, project_id=project_id, clip_id=clip_id, type="clipper_preview",
+                             status="running", worker_id=worker, attempt_count=1,
+                             lease_expires_at=datetime.utcnow() + timedelta(minutes=10),
+                             metadata_json="{}"))
+        await session.commit()
+    CLAIMED_ATTEMPT.set(ClaimedAttempt(job, 1, worker))
+
 
 class _Queue:
     worker_id = "d2r-worker"
@@ -221,6 +236,7 @@ async def _suspended_preview(monkeypatch, ident):
 
     monkeypatch.setattr(static_render, "render_preview", held)
     monkeypatch.setattr(jobs, "_source_path", lambda _: "unused.mp4")
+    await _claim_preview(f"{ident}-p", ident, ident, _Queue.worker_id)
     task = asyncio.create_task(jobs.handle_preview(f"{ident}-p", ident, ident, {}, _Queue()))
     await asyncio.wait_for(rendering.wait(), 30)
     return task, go

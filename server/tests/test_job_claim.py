@@ -65,7 +65,7 @@ async def _set_status(job_id: str, status: str, progress: float = 0.0) -> None:
 
 async def _claim(queue: JobQueue, job_id: str) -> None:
     async with async_session() as session:
-        assert await queue._claim(session, job_id) is True
+        assert await queue._claim(session, job_id) is not None
 
 
 async def _job(job_id: str) -> JobModel:
@@ -79,9 +79,9 @@ async def test_the_second_claim_of_one_job_fails():
     await _queued("claim-twice")
 
     async with async_session() as a:
-        assert await queue._claim(a, "claim-twice") is True
+        assert await queue._claim(a, "claim-twice") is not None
     async with async_session() as b:
-        assert await queue._claim(b, "claim-twice") is False, (
+        assert await queue._claim(b, "claim-twice") is None, (
             "a job already running was claimed a second time")
     assert await _status("claim-twice") == "running"
 
@@ -97,7 +97,7 @@ async def test_claiming_a_job_that_is_not_queued_fails():
         await session.commit()
 
     async with async_session() as session:
-        assert await queue._claim(session, "claim-cancelled") is False
+        assert await queue._claim(session, "claim-cancelled") is None
 
 
 @pytest.mark.asyncio
@@ -315,12 +315,13 @@ async def test_concurrent_claims_in_one_process_produce_one_winner():
     queue = JobQueue()
     await _queued("claim-gather")
 
-    async def attempt() -> bool:
+    async def attempt():
         async with async_session() as session:
             return await queue._claim(session, "claim-gather")
 
     results = await asyncio.gather(*(attempt() for _ in range(8)))
-    assert sum(results) == 1, f"{sum(results)} workers thought they had the job"
+    won = sum(r is not None for r in results)
+    assert won == 1, f"{won} workers thought they had the job"
 
 
 _CHILD = textwrap.dedent("""

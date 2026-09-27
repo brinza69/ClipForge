@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, update
 
 from database import async_session
+from job_attempt import ClaimedAttempt
 from models import JobModel, JobStatus, ProjectModel
 
 logger = logging.getLogger("clipforge.queue")
@@ -62,6 +63,38 @@ async def _cleanup_workspace(queue, job_id: str):
             )
     except Exception:
         logger.exception(f"workspace cleanup for {job_id} failed")
+
+
+async def _claim(queue, session, job_id: str) -> ClaimedAttempt | None:
+    """Take a queued job. Its attempt only for the caller that actually got it, else None.
+
+    The conditional UPDATE is the lock. `WHERE status = 'queued'` means the
+    second writer matches no rows, whatever order the two processes arrived in.
+    RETURNING gives the attempt number THIS update wrote: the handler's identity
+    (BURST R1c), where reading the row again later could return a newer attempt's.
+    Moved here from `JobQueue` with R1c, which took job_queue.py past 500 lines.
+    """
+    now = datetime.utcnow()
+    worker = queue.worker_id
+    result = await session.execute(
+        update(JobModel)
+        .where(JobModel.id == job_id)
+        .where(JobModel.status == JobStatus.queued.value)
+        .where(JobModel.cancellation_requested.is_(False))
+        .values(
+            status=JobStatus.running.value,
+            worker_id=worker,
+            lease_expires_at=now + timedelta(seconds=queue.LEASE_SECONDS),
+            last_heartbeat=now,
+            attempt_count=func.coalesce(JobModel.attempt_count, 0) + 1,
+            cancellation_requested=False,
+            updated_at=now,
+        )
+        .returning(JobModel.attempt_count)
+    )
+    attempt = result.scalar_one_or_none()
+    await session.commit()
+    return None if attempt is None else ClaimedAttempt(job_id, int(attempt), worker)
 
 
 async def _heartbeat_once(queue, job_id: str) -> bool:

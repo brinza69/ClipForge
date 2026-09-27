@@ -173,6 +173,167 @@ def clip_to_dict(clip: ClipModel, project: ProjectModel | None = None) -> dict[s
     }
 
 
+# ── caption display: the UI warning's facts (B/BURST-UI-contract.md) ─────────
+
+# The outcomes that SAY no caption was burned (`clipper_captions._plan_for_render` / `_write_ass`).
+# Anything else without `burn` - a missing, `{}` or unknown outcome - is not that answer (BURST R2).
+_NOT_BURNED = frozenset({"suppressed", "empty", "unavailable", "empty_after_remap"})
+
+
+def _render_facts(state: Any, drop_spans: Any = None, record: Any = None) -> dict[str, Any]:
+    """One render's `caption_plan_state` as the warning reads it. No state, `display` absent or an
+    outcome nobody wrote = `not_measured` (never clean, never "burned nothing on purpose"); a state
+    that is not a dict = `unreadable`; `{}` as `display` = measured with nothing to report.
+    `record` is the export's `render_record`; a preview has none, and is not asked for one."""
+    blank = {"outcome": None, "reason": None, "missing": None, "facts": None}
+    if state is None:
+        return {**blank, "state": "not_measured"}
+    if not isinstance(state, dict):
+        return {**blank, "state": "unreadable"}
+    outcome, reason = state.get("outcome"), state.get("reason")
+    out = {"outcome": outcome, "reason": reason, "missing": None, "facts": None}
+    if outcome != "burn" and reason != "no_card_representable":
+        return {**out, "state": "not_burned" if outcome in _NOT_BURNED else "not_measured"}
+    if "display" not in state:
+        return {**out, "state": "not_measured"}
+    report = state["display"]
+    if not isinstance(report, dict):
+        return {**out, "state": "unreadable"}
+    # Burn evidence is asked of an export that drew something: with no card representable no .ass
+    # was written, and its encode rightly carried no subtitles filter.
+    burned = (record is None or reason == "no_card_representable"
+              or (isinstance(record, dict) and record.get("caption_filter") is True))
+    if not report:
+        return {**out, "state": "verified" if burned else "unverified", "missing": "none"}
+    from services.clipper.dead_air import remap_time
+
+    spans = drop_spans if isinstance(drop_spans, list) else None
+    try:
+        unshown = []
+        for c in report.get("unshown_cards") or []:
+            plan_clock = c.get("why") == "no_time"
+            unshown.append({**c, "clock": "plan" if plan_clock else "export",
+                            "export_at": ((remap_time(float(c["start"]), spans) if spans is not None
+                                           else None) if plan_clock else c.get("start"))})
+        short = report.get("short_intervals")
+        facts = {"short_count": report.get("short_cards"),
+                 "short_cards": None if short is None else [{**c, "clock": "export"} for c in short],
+                 "unshown_cards": unshown, "ass_agrees": report.get("ass_agrees"),
+                 "overlapping_pairs": report.get("overlapping_pairs"),
+                 "empty_events": report.get("empty_events"),
+                 "plan_limits": report.get("plan_limits"),
+                 "plan_settled": report.get("plan_settled")}
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return {**out, "state": "unreadable"}
+    agrees = report.get("ass_agrees") is True and burned
+    return {**out, "state": "limited" if agrees else "unverified", "facts": facts,
+            "missing": ("all" if reason == "no_card_representable" else "some" if unshown else "none")}
+
+
+def _stale(block: dict[str, Any], why: str) -> dict[str, Any]:
+    return {**block, "state": "stale", "found_state": block["state"], "current": False,
+            "stale_reason": why}
+
+
+def _export_view(clip: ClipModel) -> dict[str, Any]:
+    """The export whose sidecar sits at `export_path` (or, after an edit cleared it, the clip's
+    export slot). CURRENT only while the clip is `exported` — the R4c rule `/export-file` serves
+    by — and the plan it burned is still the clip's plan."""
+    import json
+    from pathlib import Path
+
+    from services.clipper import storage
+
+    mp4 = Path(clip.export_path) if clip.export_path else storage.export_path(
+        clip.project_id, clip.id)
+    side_path = mp4.with_suffix(".json")
+    exported = clip.status == ClipStatus.exported.value and bool(clip.export_path)
+    blank = {"outcome": None, "reason": None, "missing": None, "facts": None,
+             "identity": {"attempt_job_id": clip.export_job_id}, "current": True,
+             "stale_reason": None}
+    # The DB says a render exists: its missing file or report is never "no render" (BURST R2).
+    if exported and not mp4.is_file():
+        return {**blank, "state": "unreadable", "why": "mp4_missing"}
+    if not side_path.is_file():
+        return ({**blank, "state": "not_measured", "why": "sidecar_missing"} if exported
+                else {"state": "none", "current": False})
+    try:
+        side = json.loads(side_path.read_text(encoding="utf-8"))
+        if not isinstance(side, dict) or side.get("clip_id") != clip.id:
+            raise ValueError("not this clip's sidecar")
+    except (OSError, ValueError):
+        block = {"state": "unreadable", "outcome": None, "reason": None, "missing": None,
+                 "facts": None, "identity": None}
+        return (block | {"current": True, "stale_reason": None}
+                if clip.status == ClipStatus.exported.value and clip.export_path
+                else _stale(block, "clip_not_exported"))
+    record = side.get("render_record") if isinstance(side.get("render_record"), dict) else {}
+    state = side.get("caption_plan_state")
+    block = _render_facts(state, side.get("drop_spans"), record)
+    block["identity"] = {"attempt_job_id": None, "ass_sha256": record.get("ass_sha256"),
+                         "caption_filter": record.get("caption_filter")}
+    if clip.status != ClipStatus.exported.value or not clip.export_path:
+        return _stale(block, "clip_not_exported")
+    origin = state.get("origin") if isinstance(state, dict) else None
+    if ((origin == "stored" and side.get("caption_plan") != clip.caption_plan)
+            or (origin == "built" and clip.caption_plan is not None)):
+        return _stale(block, "plan_changed")
+    block["identity"]["attempt_job_id"] = clip.export_job_id
+    return {**block, "current": True, "stale_reason": None}
+
+
+def _preview_view(clip: ClipModel) -> dict[str, Any]:
+    """The preview at `preview_path` — current while it is set, since an edit clears it — read from
+    `clip.preview_record`: the attempt whose file is selected and ITS report, written with
+    `preview_path` in one transaction (BURST R1, codex-verdict-next-23/24), never a job looked up
+    beside it. No record (a legacy preview) or one without a report: `not_measured`, known to exist,
+    not known to be clean."""
+    rec = clip.preview_record if isinstance(clip.preview_record, dict) else None
+    published = rec is not None and "caption_plan_state" in rec
+    block = _render_facts(rec.get("caption_plan_state") if published else None)
+    block["identity"] = ({"job_id": rec.get("job_id"), "attempt": rec.get("attempt")} if published
+                         else {"job_id": None})
+    if not clip.preview_path:
+        return _stale(block, "preview_cleared") if published else {"state": "none", "current": False}
+    if not published:
+        return {**block, "state": "not_measured", "current": True, "stale_reason": None}
+    return {**block, "current": True, "stale_reason": None}
+
+
+def caption_display_view(clip: ClipModel, project: ProjectModel | None = None) -> dict[str, Any]:
+    """`caption_display` on a card: the CURRENT PLAN's facts, the export's and the SELECTED preview
+    attempt's (`clip.preview_record`), and `level` — the one answer the warning shows (contract §5):
+    "unverified" > "limited" > "unknown" > "verified" > "not_burned" > "not_rendered".
+
+    While OUR caption layer is suppressed by the effective policy (the render's own
+    `caption_policy.effective`: clip, project or default), the plan's limits stay in `plan` for
+    the editor but never raise the level: the layer is off on purpose (BURST R3). That says nothing
+    about how legible the SOURCE's own captions are."""
+    from services.clipper import caption_display
+    from services.clipper.captions import MIN_CHUNK_S
+
+    plan = caption_display.plan_facts(clip.caption_plan, MIN_CHUNK_S)
+    policy = (caption_policy.effective((project.clipper_settings or {}).get(caption_policy.SETTING),
+                                       clip.source_has_burned_captions)
+              if project is not None else None)
+    plan_counts = not (isinstance(policy, dict) and policy.get("action") == "suppress")
+    export, preview = _export_view(clip), _preview_view(clip)
+    # A block that is not current reads "stale" or "none", which no level below matches.
+    live = [("export", export), ("preview", preview)]
+    level, source = "not_rendered", None
+    for want in ("unverified", "unreadable", "limited", "not_measured", "verified", "not_burned"):
+        hit = next((n for n, b in live if b["state"] == want), None)
+        if hit is None and want == "limited" and plan["state"] == "limited" and plan_counts:
+            hit = "plan"
+        if hit is not None:
+            level = {"unreadable": "unverified", "not_measured": "unknown"}.get(want, want)
+            source = hit
+            break
+    return {"schema": "caption_display_v1", "min_chunk_s": MIN_CHUNK_S, "level": level,
+            "level_from": source, "policy": policy, "plan": plan, "export": export,
+            "preview": preview}
+
+
 def effective_max_clip_s(project: ProjectModel | None) -> float:
     """The maximum clip length the server applies to this project (O4): its own
     `max_clip_s` when that is a positive number (a bool is not one), else the config

@@ -32,8 +32,10 @@ from database import async_session
 from models import ClipModel, ClipStatus, JobModel, JobStatus, ProjectModel
 from services.clipper import storage
 from services.clipper.clip_mutations import begin_write
-from services.clipper.project_attempts import DISCARD_INPUTS_CHANGED, DISCARD_NEWER_EXPORT
-from workers.clipper_captions import _caption_inputs, _caption_warnings
+from workers.clipper_captions import _caption_warnings
+# Moved out when BURST R1 grew them, re-exported for callers and tests (codex-verdict-next-23).
+from workers.clipper_preview_publish import (  # noqa: F401
+    LOST_ATTEMPT, _preview_inputs, _publish_preview, attempt_path, capture_attempt, selected_path)
 from workers.clipper_render_output import _size_bytes  # noqa: F401 — compatibility
 
 # Re-exported, not just imported: `_decide_render` and friends were defined in
@@ -337,76 +339,6 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
     logger.info(f"clipper export {clip.id}: {result.get('size', 0) // 1024} KB → {out.name}")
 
 
-def _preview_inputs(clip, project) -> tuple:
-    """Everything the preview's PICTURE was decided from (D2r-2 K7).
-
-    The caption inputs — window, transcript text, caption plan and preset, the
-    burned-captions answer, the layout plan, and the project's whole
-    `clipper_settings` (trim, dynamic edit, layout and caption policy, preset,
-    position, watermark, layout mode, face size, chat) — plus what
-    `_layout_plan`, `_dynamic_plan` and the renderer read besides: the clip's
-    content type and the project's dimensions, source file and content type.
-    Left out, with the reasons in D2r2-result.md: the analysis artefacts and the
-    transcript row (immutable after analysis, K9), `headline_text` (carried by
-    `_candidate`, drawn by nothing), `project.fps` (a preview renders at
-    PREVIEW_FPS) and the content confidence/origin (shadow profile only).
-    """
-    return (_caption_inputs(clip, project), clip.content_type,
-            project.width, project.height, project.video_path,
-            project.content_type, project.content_type_override)
-
-
-async def _publish_preview(clip: ClipModel, seen: tuple, attempt: Path, out: Path,
-                           state: dict | None, job_id: str) -> str | None:
-    """Move this preview's own file into place and point the row at it — only
-    while the inputs it rendered from are still the row's, and no export
-    published after it loaded (D2r-2 K7). Otherwise NOTHING moves: not the
-    published file, not `preview_path`, not `warnings`.
-
-    Returns None when it published, else the refusal's cause, which is also
-    written on the job row as `metadata.discarded` in the same transaction as the
-    decision (D2r-3): the card's `last_preview.discarded` reads that marker, never
-    the error text. `fail_job` writes only status and error, so it survives.
-
-    Rendering takes seconds, and a PATCH, a newer preview or an export can land
-    meanwhile; stopping only the UPDATE (D2r) still let the old file overwrite
-    the newer one. All of it runs under the write lock a PATCH
-    (`_load_clip(lock=True)`) and `_publish_export` take, so the check, the
-    rename and the row cannot interleave with them. Whether it may publish is
-    decided here alone: `_caption_warnings` answering None (a legacy value)
-    only means the list is left as it is. As in `_publish_export`, the rename
-    and the commit are not atomic: a crash between them leaves THIS attempt's
-    file — rendered from inputs that were current — under the old row.
-    """
-    async with async_session() as session:
-        await begin_write(session)
-        row = await session.get(ClipModel, clip.id, populate_existing=True)
-        project = await session.get(ProjectModel, clip.project_id, populate_existing=True)
-        cause = None
-        if row is None or project is None or _preview_inputs(row, project) != seen:
-            cause = DISCARD_INPUTS_CHANGED
-        elif row.status == ClipStatus.exported.value and (
-                row.status, row.export_job_id, row.export_path) != (
-                clip.status, clip.export_job_id, clip.export_path):
-            cause = DISCARD_NEWER_EXPORT
-        if cause is not None:
-            job = await session.get(JobModel, job_id)
-            if job is not None:
-                job.metadata_json = json.dumps(
-                    {**json.loads(job.metadata_json or "{}"), "discarded": cause})
-            await session.commit()
-            return cause
-        os.replace(attempt, out)
-        values = {"preview_path": str(out)}
-        warnings = _caption_warnings(row.warnings, state, "preview")
-        if warnings is not None:
-            values["warnings"] = warnings
-        await session.execute(
-            update(ClipModel).where(ClipModel.id == clip.id).values(**values))
-        await session.commit()
-    return None
-
-
 async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue) -> None:
     """Fast, low-resolution proxy render for the editor.
 
@@ -425,10 +357,17 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
     seen = _preview_inputs(clip, project)
     src = _source_path(project)
     paths = storage.paths(project_id)
+    # WHICH attempt this is: the one the queue claimed for THIS invocation, never the row now — a
+    # recovered job runs again as another attempt, only the attempt still owning the row may select its
+    # file, and a row read here may already be the newer attempt's (BURST R1/R1c, next-24 §3, next-25 §1).
+    ident = capture_attempt(job_id)
+    if ident is None:
+        raise RuntimeError(f"preview {job_id}: no claimed attempt runs this job; nothing would be selected")
 
     await queue.update_progress(job_id, 0.10, "Generating previews")
 
-    out = storage.preview_path(project_id, clip.id)
+    # An immutable per-attempt file: publication selects it, it never replaces a selected one.
+    out = attempt_path(storage.preview_path(project_id, clip.id), ident)
     # THIS attempt's own files, the export's pattern (R4b, D2r-2 K7): the mp4 at
     # `attempt`, the dynamic path's `.cmd.txt` beside it, and the caption `.ass`
     # in `scratch` — the decide writes `{clip}.ass` into the directory it is
@@ -437,6 +376,7 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
     # place; the `.ass` of a preview is never published.
     attempt = out.with_name(f".{out.stem}.{job_id}-{uuid.uuid4().hex[:8]}{out.suffix}")
     scratch = attempt.with_suffix("")
+    published = False
     try:
         # The SAME decision the export will make. It used to take the static
         # renderer unconditionally, so with `dynamic_edit` on — the default since
@@ -468,13 +408,26 @@ async def handle_preview(job_id: str, project_id: str, clip_id, metadata, queue)
                                  watermark=decision["watermark"],
                                  drop_spans=decision["drop"])
 
-        if await _publish_preview(clip, seen, attempt, out,
-                                  decision.get("caption_plan_state"), job_id):
+        cause = await _publish_preview(clip, seen, attempt, out,
+                                       decision.get("caption_plan_state"), ident)
+        if cause == LOST_ATTEMPT:
+            raise RuntimeError(f"preview {job_id}: attempt {ident['attempt']} no longer owns the job; "
+                               "its render was not published")
+        if cause:
             raise RuntimeError(f"preview {job_id}: clip {clip.id} changed while it rendered "
                                "or a newer export published; its render was discarded")
+        published = True
     finally:
         for leftover in (attempt, attempt.with_suffix(".cmd.txt")):
             leftover.unlink(missing_ok=True)
+        # This attempt's own file, only when it is NOT the selected one (a failed commit). Unknown
+        # (the DB unreachable): kept — an orphan file is recoverable, a deleted selected one is not.
+        if not published:
+            try:
+                if await selected_path(clip.id) != str(out):
+                    out.unlink(missing_ok=True)
+            except Exception:
+                logger.warning("preview %s: could not tell whether %s is selected; kept", job_id, out)
         shutil.rmtree(scratch, ignore_errors=True)
 
     from services.clipper import feedback

@@ -376,6 +376,12 @@ class ClipModel(Base):
     # historical orphans too — their identity is not reconstructed
     # (scripts/release_stuck_exports.py).
     export_job_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    # The preview ATTEMPT whose file `preview_path` selects, and that attempt's caption report:
+    # `{job_id, attempt, worker, caption_plan_state}` (BURST R1, codex-verdict-next-23/24). Written in the
+    # SAME transaction as `preview_path`, which names an immutable per-attempt file: a failed commit
+    # leaves the previous file AND its report selected, never a new file under an old report. A job id
+    # alone is not an attempt — a recovered job publishes again under another `attempt`. NULL = legacy.
+    preview_record: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # The optional context hook. Distinct from `hook_text` (legacy editor).
     headline_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)

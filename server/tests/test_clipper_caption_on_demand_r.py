@@ -21,6 +21,7 @@ from sqlalchemy import select, update
 
 from config import settings
 from database import async_session
+from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
 from models import ClipFeedbackModel, ClipModel, JobModel, ProjectModel, TranscriptModel
 from services.clipper.ffmpeg_tools import ffmpeg_bin, run
 from services.clipper.serialize import clip_to_dict
@@ -77,7 +78,7 @@ async def test_alternative_with_speech_and_burn_gets_captions(tmp_path):
 
     assert decision["caption_policy"]["action"] == "burn"
     assert decision["caption_plan_state"] == {"origin": "built", "outcome": "burn",
-                                              "reason": None}
+                                              "reason": None, "display": {}}
     assert decision["caption_plan"]["chunks"], "the built plan has no chunks"
     ass = _ass_text(decision)
     assert "HELLO" in ass and "BACK" in ass
@@ -113,7 +114,7 @@ async def test_a_manual_plan_is_kept_and_never_rebuilt(tmp_path, monkeypatch):
     decision = await planning._decide_render(clip, project, tmp_path)
 
     assert decision["caption_plan_state"] == {"origin": "stored", "outcome": "burn",
-                                              "reason": None}
+                                              "reason": None, "display": {}}
     assert decision["caption_plan"] == manual
     ass = _ass_text(decision)
     assert "MANUAL EDIT" in ass and "HELLO" not in ass
@@ -168,13 +169,14 @@ async def test_preview_and_export_decide_the_same_captions(tmp_path, monkeypatch
     monkeypatch.setattr(jobs, "_decide_render", spy)
     monkeypatch.setattr(jobs, "_source_path", lambda _: "unused.mp4")
     monkeypatch.setattr(static_render, "render_preview", fake_preview)
+    await _claim_preview("d2p", project.id, clip.id, _Queue.worker_id)
     await jobs.handle_preview("d2p", project.id, clip.id, {}, _Queue())
     # The export's decision, through the same entry point and the same inputs.
     await spy(clip, project, tmp_path / "export")
 
     (a, ass_a), (b, ass_b) = seen
     assert a["caption_plan_state"] == b["caption_plan_state"] == {
-        "origin": "built", "outcome": "burn", "reason": None}
+        "origin": "built", "outcome": "burn", "reason": None, "display": {}}
     assert a["caption_plan"] == b["caption_plan"]
     assert (a["caption_y"], a["caption_policy"]) == (b["caption_y"], b["caption_policy"])
     assert ass_a == ass_b
@@ -184,6 +186,20 @@ async def test_preview_and_export_decide_the_same_captions(tmp_path, monkeypatch
 
 
 # ── the MP4 ──────────────────────────────────────────────────────────────────
+
+async def _claim_preview(job, project_id, clip_id, worker):
+    """The row as the queue leaves it when it claims a job: publication checks it (BURST R1),
+    and the claim's identity in this task, which the handler runs as (R1c)."""
+    from datetime import datetime, timedelta
+
+    async with async_session() as session:
+        session.add(JobModel(id=job, project_id=project_id, clip_id=clip_id, type="clipper_preview",
+                             status="running", worker_id=worker, attempt_count=1,
+                             lease_expires_at=datetime.utcnow() + timedelta(minutes=10),
+                             metadata_json="{}"))
+        await session.commit()
+    CLAIMED_ATTEMPT.set(ClaimedAttempt(job, 1, worker))
+
 
 class _Queue:
     worker_id = "d2-worker"

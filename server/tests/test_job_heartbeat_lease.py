@@ -10,9 +10,9 @@ heartbeat reads T1, and the row must carry exactly T1 + LEASE_SECONDS and
 last_heartbeat T1. When both read the same tick the equal expiry is the correct
 answer, and is tested as such.
 
-`_claim` reads `job_queue.datetime.utcnow()` and `_heartbeat_once` reads
-`job_recovery.datetime.utcnow()`; both are patched, nothing sleeps, and no
-production code changed to make this testable.
+`_claim` and `_heartbeat_once` both read `job_recovery.datetime.utcnow()` since
+R1c moved the claim there (`job_queue.datetime` is patched as well); nothing
+sleeps, and no production code changed to make this testable.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ async def _claimed(queue: JobQueue, job_id: str) -> None:
                              updated_at=T0 - timedelta(minutes=1), metadata_json=json.dumps({})))
         await session.commit()
     async with async_session() as session:
-        assert await queue._claim(session, job_id) is True
+        assert await queue._claim(session, job_id) is not None
 
 
 async def _row(job_id: str) -> dict:

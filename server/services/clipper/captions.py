@@ -26,6 +26,7 @@ from services.clipper.captions_geom import (  # noqa: F401
     SCAN_STEP_PCT, SPEC_BAND_HI, SPEC_BAND_LO, _base_y_pct, _widest_band,
     scan_bounds, scan_grid)
 from services.captioner_events import _group_words
+from services.clipper import caption_display
 from services.captioner_presets import (
     DEFAULT_PRESETS,
     SAFE_CAPTION_BOTTOM,
@@ -414,9 +415,14 @@ def build_caption_plan(
 
     if not chunks:
         logger.debug("caption plan: no words in candidate %s", (cand or {}).get("id"))
+    # Display time, declared as display (BURST1): no two cards on the anchor at once, a burst with no
+    # room for a legible card is a reported limit, never a new "measured" timing.
+    duration = max(_f((cand or {}).get("end")) - _f((cand or {}).get("start")), 0.0)
+    chunks, limits = caption_display.settle(chunks, duration, MIN_CHUNK_S)
 
     return {
         "chunks": chunks,
+        "display": {"rule": caption_display.RULE, "min_chunk_s": MIN_CHUNK_S, "limits": limits},
         "style": style,
         "x_pct": x_pct,
         "y_pct": y_pct,
@@ -435,18 +441,23 @@ def caption_plan_to_overlays(plan: dict) -> list[dict]:
     y_pct = _f(plan.get("y_pct"), 0.75)
     scale = _f(plan.get("scale"), 1.0) or 1.0
     entry_pop = bool(plan.get("entry_pop"))
+    # A settled plan's ends are already display time; extending them again would put two cards on
+    # the anchor at once. A stored plan without the rule renders exactly as it always has.
+    settled = caption_display.is_settled(plan)
 
     overlays: list[dict] = []
     for chunk in plan.get("chunks") or []:
         text = (chunk.get("text") or "").strip()
         if not text:
             continue
+        if settled and chunk.get("display") == "no_time":
+            continue                  # the clip ended first; listed in plan["display"]["limits"]
         start = _f(chunk.get("start"))
         end = _f(chunk.get("end"), start + MIN_CHUNK_S)
         overlay = {
             "text": text,
             "start_t": max(start, 0.0),
-            "end_t": max(end, start + MIN_CHUNK_S),
+            "end_t": end if settled and end > start else max(end, start + MIN_CHUNK_S),
             "template_id": preset_id,
             "style": dict(style),
             "x_pct": x_pct,
@@ -456,7 +467,8 @@ def caption_plan_to_overlays(plan: dict) -> list[dict]:
         }
         if entry_pop:
             overlay["entry_pop"] = True
-        if chunk.get("words"):
+        # A redistributed card's slot is not when its words were said: no per-word highlight on it.
+        if chunk.get("words") and not (settled and chunk.get("display") == "redistributed"):
             overlay["words"] = chunk["words"]
         overlays.append(overlay)
     return overlays

@@ -10,6 +10,8 @@ K8  `warnings` that is not a list of str reads as `[]` (and is logged) through
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import asyncio
 import hashlib
 import logging
@@ -19,11 +21,13 @@ import pytest
 from sqlalchemy import update
 
 from database import async_session
+from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
 from models import ClipModel, JobModel, ProjectModel, TranscriptModel
 from services.clipper import storage
 from services.clipper.serialize import clip_to_dict
 from workers import clipper_captions as captions
 from workers import clipper_render_jobs as jobs
+from workers.clipper_preview_publish import attempt_path
 from workers import clipper_render_plan as planning
 
 UNAVAILABLE = {"origin": None, "outcome": "unavailable", "reason": "no_timed_words"}
@@ -157,6 +161,14 @@ class _Render:
         self.payload[job], self.last = payload, job
         if hold:
             self.holds[job] = (asyncio.Event(), asyncio.Event())
+        # The row as the queue leaves it when it claims a job: publication checks it (BURST R1).
+        async with async_session() as session:
+            session.add(JobModel(id=job, project_id=ident, clip_id=ident, type="clipper_preview",
+                                 status="running", worker_id=_Queue.worker_id, attempt_count=1,
+                                 lease_expires_at=datetime.utcnow() + timedelta(minutes=10),
+                                 metadata_json="{}"))
+            await session.commit()
+        CLAIMED_ATTEMPT.set(ClaimedAttempt(job, 1, _Queue.worker_id))   # the claim's identity (R1c)
         task = asyncio.create_task(jobs.handle_preview(job, ident, ident, {}, _Queue()))
         if not hold:
             return task
@@ -171,8 +183,9 @@ class _Render:
         await (await self.start(ident, job, payload, hold=False))
 
 
-def _published(ident) -> Path:
-    return storage.preview_path(ident, ident)
+def _published(ident, job) -> Path:
+    """The file `job`'s first attempt publishes: an immutable per-attempt name (BURST R1)."""
+    return attempt_path(storage.preview_path(ident, ident), {"job_id": job, "attempt": 1})
 
 
 def _sha(path: Path) -> str | None:
@@ -180,14 +193,15 @@ def _sha(path: Path) -> str | None:
 
 
 def _attempts(ident) -> list[str]:
-    return sorted(p.name for p in _published(ident).parent.iterdir()
+    return sorted(p.name for p in storage.preview_path(ident, ident).parent.iterdir()
                   if p.name.startswith(f".{ident}."))
 
 
 async def _snapshot(ident):
     row = await _row(ident)
-    return {"file": _sha(_published(ident)), "preview_path": row.preview_path,
-            "warnings": row.warnings}
+    # The file the row SELECTS — per-attempt names since BURST R1.
+    return {"file": _sha(Path(row.preview_path)) if row.preview_path else None,
+            "preview_path": row.preview_path, "warnings": row.warnings}
 
 
 STORED = {"chunks": [{"text": "SAVED", "start": 0.2, "end": 1.0, "words": []}],
@@ -223,11 +237,15 @@ async def test_k7a_an_edit_during_a_preview_rejects_it_and_changes_nothing(
     task = await render.start(ident, f"{ident}-p1", b"P1")
     await _edit(client, ident, how)
     before = await _snapshot(ident)
-    assert before["file"] == hashlib.sha256(b"P0").hexdigest()
+    # The earlier file at its own per-attempt name (BURST R1): a clip edit unselects it, and the
+    # refused preview must leave it exactly as it was.
+    p0 = _published(ident, f"{ident}-p0")
+    assert _sha(p0) == hashlib.sha256(b"P0").hexdigest()
 
     with pytest.raises(RuntimeError, match="changed while it rendered"):
         await task
     assert await _snapshot(ident) == before
+    assert _sha(p0) == hashlib.sha256(b"P0").hexdigest()
     assert _attempts(ident) == []
 
 
@@ -240,7 +258,7 @@ async def test_k7b_an_old_preview_does_not_replace_a_newer_one(monkeypatch, clie
     await render.run(ident, f"{ident}-new", b"NEW")
     newer = await _snapshot(ident)
     assert newer["file"] == hashlib.sha256(b"NEW").hexdigest()
-    assert newer["preview_path"] == str(_published(ident))
+    assert newer["preview_path"] == str(_published(ident, f"{ident}-new"))
     # The new preview burned the saved plan, so it took the caption report back.
     assert newer["warnings"] == ["Layout: kept from analysis"]
 
@@ -287,11 +305,11 @@ async def test_k7d_unchanged_inputs_publish_file_row_and_warnings(monkeypatch):
 
     after = await _snapshot(ident)
     assert after["file"] == hashlib.sha256(b"FRESH").hexdigest()
-    assert after["preview_path"] == str(_published(ident))
+    assert after["preview_path"] == str(_published(ident, f"{ident}-p"))
     assert after["warnings"][0] == "Layout: kept from analysis"
     assert "no_timed_words" in after["warnings"][1] and "last preview" in after["warnings"][1]
     # It rendered into its own attempt file, not the published path.
-    assert render.seen[f"{ident}-p"]["out"] != _published(ident)
+    assert render.seen[f"{ident}-p"]["out"] != _published(ident, f"{ident}-p")
     assert _attempts(ident) == []
 
 
@@ -338,7 +356,7 @@ async def test_k7_a_legacy_warnings_value_neither_blocks_nor_allows_publication(
     await render.run(ident, f"{ident}-p0", b"P0")
     published = await _snapshot(ident)
     assert published == {"file": hashlib.sha256(b"P0").hexdigest(),
-                         "preview_path": str(_published(ident)), "warnings": legacy}
+                         "preview_path": str(_published(ident, f"{ident}-p0")), "warnings": legacy}
 
     task = await render.start(ident, f"{ident}-p1", b"P1")
     await _edit(client, ident, "clip_window")

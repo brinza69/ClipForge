@@ -12,11 +12,12 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional, Callable, Dict, Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from database import async_session
 import job_recovery
+from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
 from job_rows import add_job, new_job_row
 from models import JobModel, JobStatus, JobType, ProjectModel
 
@@ -155,8 +156,9 @@ class JobQueue:
             )
             await session.commit()
 
-    async def complete_job(self, job_id: str, *, owner_id: Optional[str] = None):
-        """Mark a job as completed."""
+    async def complete_job(self, job_id: str, *, owner_id: Optional[str] = None,
+                           attempt: Optional[int] = None):
+        """Mark a job as completed. `attempt`: only while the row is still that attempt (R1c)."""
         async with async_session() as session:
             query = (
                 update(JobModel)
@@ -171,6 +173,8 @@ class JobQueue:
             )
             if owner_id is not None:
                 query = query.where(JobModel.worker_id == owner_id)
+            if attempt is not None:
+                query = query.where(JobModel.attempt_count == attempt)
             result = await session.execute(query)
             await session.commit()
         self._running_jobs.pop(job_id, None)
@@ -189,8 +193,9 @@ class JobQueue:
         error: str,
         *,
         owner_id: Optional[str] = None,
+        attempt: Optional[int] = None,
     ):
-        """Mark a job as failed."""
+        """Mark a job as failed. `attempt`: only while the row is still that attempt (R1c)."""
         from models import ProjectStatus
         from services.clipper.clip_mutations import release_export_claim
         error_text = str(error)[:800]
@@ -206,6 +211,8 @@ class JobQueue:
                     JobModel.status == JobStatus.queued.value,
                     JobModel.worker_id.is_(None),
                 )
+            if attempt is not None:
+                query = query.where(JobModel.attempt_count == attempt)
             result = await session.execute(
                 query.values(
                     status=JobStatus.failed.value,
@@ -245,8 +252,9 @@ class JobQueue:
         # original failure.
         await self._cleanup_workspace(job_id)
 
-    async def cancel_job(self, job_id: str, *, owner_id: Optional[str] = None):
-        """Cancel a running or queued job."""
+    async def cancel_job(self, job_id: str, *, owner_id: Optional[str] = None,
+                         attempt: Optional[int] = None):
+        """Cancel a running or queued job. `attempt`: only while the row is still that attempt (R1c)."""
         self._cancelled_jobs.add(job_id)
         task = self._running_jobs.get(job_id)
         if task and task is not asyncio.current_task():
@@ -280,6 +288,8 @@ class JobQueue:
                     (JobModel.status == JobStatus.running.value)
                     & (JobModel.worker_id == owner_id)
                 )
+            if attempt is not None:
+                query = query.where(JobModel.attempt_count == attempt)
             result = await session.execute(query)
 
             # Keep parent project state consistent with the user's cancellation.
@@ -326,31 +336,8 @@ class JobQueue:
     async def recover_stuck_jobs(self):
         return await job_recovery.recover_stuck_jobs(self)
 
-    async def _claim(self, session, job_id: str) -> bool:
-        """Take a queued job. True only for the caller that actually got it.
-
-        The conditional UPDATE is the lock. `WHERE status = 'queued'` means the
-        second writer matches no rows and gets rowcount 0, whatever order the
-        two processes arrived in.
-        """
-        now = datetime.utcnow()
-        result = await session.execute(
-            update(JobModel)
-            .where(JobModel.id == job_id)
-            .where(JobModel.status == JobStatus.queued.value)
-            .where(JobModel.cancellation_requested.is_(False))
-            .values(
-                status=JobStatus.running.value,
-                worker_id=self.worker_id,
-                lease_expires_at=now + timedelta(seconds=self.LEASE_SECONDS),
-                last_heartbeat=now,
-                attempt_count=func.coalesce(JobModel.attempt_count, 0) + 1,
-                cancellation_requested=False,
-                updated_at=now,
-            )
-        )
-        await session.commit()
-        return result.rowcount == 1
+    async def _claim(self, session, job_id: str) -> Optional[ClaimedAttempt]:
+        return await job_recovery._claim(self, session, job_id)
 
     async def _process_next(self):
         """Pick up the next queued job and execute it. Two lanes: heavy media
@@ -407,8 +394,10 @@ class JobQueue:
             # between two writers.
             #
             # SQLite serialises writers, so the loser sees the committed
-            # `running` and matches nothing. rowcount is the whole signal.
-            if not await self._claim(session, job.id):
+            # `running` and matches nothing. The returned attempt is the whole
+            # signal, and the handler's identity from here on (R1c).
+            claimed = await self._claim(session, job.id)
+            if claimed is None:
                 logger.debug("job %s was claimed by another worker", job.id)
                 return
 
@@ -421,6 +410,10 @@ class JobQueue:
 
         # Run handler in a background task
         async def _run():
+            # This task's own context: the handler, and what it awaits or starts, run as the
+            # claimed attempt. Its end changes the row only while the row is still that attempt.
+            CLAIMED_ATTEMPT.set(claimed)
+            mine = {"owner_id": claimed.worker, "attempt": claimed.attempt}
             heartbeat_task = asyncio.create_task(self._heartbeat_loop(job_id))
             try:
                 await handler(
@@ -431,25 +424,25 @@ class JobQueue:
                     queue=self,
                 )
                 if job_id not in self._lost_ownership_jobs:
-                    await self.complete_job(job_id, owner_id=self.worker_id)
+                    await self.complete_job(job_id, **mine)
             except asyncio.CancelledError:
                 if job_id in self._lost_ownership_jobs:
                     logger.warning("Stopped stale worker for job %s", job_id)
                 elif self._stop_event.is_set():
                     await self._requeue_owned_job(job_id)
                 else:
-                    await self.cancel_job(job_id, owner_id=self.worker_id)
+                    await self.cancel_job(job_id, **mine)
             except JobCancelledError:
                 if job_id in self._lost_ownership_jobs:
                     logger.warning("Cancelled stale worker for job %s", job_id)
                 elif self._stop_event.is_set():
                     await self._requeue_owned_job(job_id)
                 else:
-                    await self.cancel_job(job_id, owner_id=self.worker_id)
+                    await self.cancel_job(job_id, **mine)
             except Exception as e:
                 logger.exception(f"Job {job_id} failed with exception")
                 if job_id not in self._lost_ownership_jobs:
-                    await self.fail_job(job_id, str(e), owner_id=self.worker_id)
+                    await self.fail_job(job_id, str(e), **mine)
             finally:
                 heartbeat_task.cancel()
                 await asyncio.gather(heartbeat_task, return_exceptions=True)
