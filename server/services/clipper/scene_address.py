@@ -371,14 +371,17 @@ def _counts(rows: list[dict], legacy_unique: int) -> dict:
                        "merged": k - legacy_unique}}
 
 
+def _header(scene: dict) -> dict:
+    return {"reader_version": SCENE_READER_VERSION, "addressing_version": proxy_clock.ADDRESSING_VERSION,
+            "threshold": scene.get("threshold"), "time_base": scene.get("time_base"),
+            "isolation_rule": ISOLATION_RULE}
+
+
 def assemble(scene: dict, before: dict, read_after: Callable[[], dict],
              addresser: Callable[[dict, dict], dict], ctx: dict | None = None) -> dict:
     """scenes_addressed for one scene pass. `before` is the provenance read
     before the decode; `read_after` reads it again once every row is done."""
-    doc: dict[str, Any] = {"reader_version": SCENE_READER_VERSION,
-                           "addressing_version": proxy_clock.ADDRESSING_VERSION,
-                           "threshold": scene.get("threshold"), "time_base": scene.get("time_base"),
-                           "isolation_rule": ISOLATION_RULE}
+    doc: dict[str, Any] = _header(scene)
     legacy_unique = len(scene.get("times") or [])
     if scene["state"] in NO_ROW_STATES or scene.get("rows") is None:
         state = scene["state"] if scene["state"] in NO_ROW_STATES else "decode_mismatch"
@@ -421,8 +424,32 @@ def provenance_now(project_id: str, proxy_path: str) -> dict:
     return proxy_provenance.read_provenance(project_id, source_path=src, proxy_path=proxy_path)
 
 
+def not_requested(scene: dict, before: dict) -> dict:
+    """scenes_addressed when the costly 3b pass is off (`clipper_scene_addressing`,
+    codex-verdict-next-16 §3). The decode's own states still win (a failed decode is
+    not "not requested"); otherwise every selected frame keeps its 3a decode facts,
+    with `state: not_requested` — never `refused`, and never an empty result: with
+    zero scenes it is `not_requested` with `detected: 0`, not `ok`."""
+    if scene["state"] in NO_ROW_STATES or scene.get("rows") is None:
+        return assemble(scene, before, lambda: before, address_row, {})
+    rows = [{**_decode_facts(r), "state": "not_requested", "reason": None} for r in scene["rows"]]
+    legacy_unique = len(scene.get("times") or [])
+    counts = {**_counts(rows, legacy_unique), "not_requested": len(rows)}
+    if len({r["legacy_index"] for r in rows if r["legacy_index"] is not None}) != legacy_unique:
+        return {**_header(scene), "state": "decode_mismatch", "reasons": [],
+                "reason": f"counts_inconsistent ({counts})", "counts": {**counts, "detected": None},
+                "provenance": _provenance_summary(before, None), "rows": None}
+    return {**_header(scene), "state": "not_requested", "reasons": [],
+            "reason": "scene addressing not requested (CLIPFORGE_CLIPPER_SCENE_ADDRESSING off)",
+            "counts": counts, "provenance": _provenance_summary(before, None), "rows": rows}
+
+
 def address_scenes(project_id: str, proxy_path: str, scene: dict, before: dict) -> dict:
     """scenes_addressed for build_signals. `before` = provenance_now() read before scene_pass."""
+    from config import settings  # local: the pass above stays config-free for its tests
+
+    if not settings.clipper_scene_addressing:
+        return not_requested(scene, before)
     ctx = {}
     if before.get("state") == "recorded":
         p, s = before.get("proxy_identity") or {}, before.get("source_identity") or {}

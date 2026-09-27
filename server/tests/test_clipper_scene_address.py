@@ -17,6 +17,13 @@ import pytest
 
 from services.clipper import ANALYSIS_VERSION, proxy_clock as C, scene_address as S, storage
 
+
+@pytest.fixture(autouse=True)
+def _scene_addressing_on(monkeypatch):
+    """This file tests the 3b pass itself, which is opt-in since codex-verdict-next-16 §3."""
+    from config import settings
+    monkeypatch.setattr(settings, "clipper_scene_addressing", True)
+
 TB = "1/10240"
 HDR = "[Parsed_showinfo_1 @ 0000015186b08080] "
 

@@ -34,6 +34,13 @@ def _build_skip() -> str | None:
 _SKIP = _build_skip()
 pytestmark = [pytest.mark.real_ffmpeg, pytest.mark.skipif(_SKIP is not None, reason=_SKIP or "")]
 
+
+@pytest.fixture(autouse=True)
+def _scene_addressing_on(monkeypatch):
+    """This file tests the 3b pass itself, which is opt-in since codex-verdict-next-16 §3."""
+    from config import settings
+    monkeypatch.setattr(settings, "clipper_scene_addressing", True)
+
 W, H = 480, 272
 RATES = [(Fraction(60), 15360), (Fraction(30), 15360), (Fraction(25), 12800),
          (Fraction(60000, 1001), 60000), (Fraction(24), 12288), (Fraction(24000, 1001), 24000)]

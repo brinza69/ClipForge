@@ -202,6 +202,14 @@ class Settings(BaseSettings):
     # every deliverable at once.
     clipper_trim_silence: bool = False
 
+    # Address every selected scene frame to a source interval (AD3 3b). OFF by
+    # default (codex-verdict-next-16 §3): it costs two subprocesses per selected
+    # frame — 769 s on a 12 h VOD's 948 scenes in the pilot, 13x the scene pass —
+    # and no consumer reads `scenes_addressed` yet. Off, the scene pass and its
+    # cheap 3a evidence (each frame's integer PTS, legacy_index) still run, and
+    # `scenes_addressed.state` says `not_requested`: neither a refusal nor empty.
+    clipper_scene_addressing: bool = False
+
     # 0 = never auto-purge project artifacts.
     clipper_retention_days: int = 0
 
