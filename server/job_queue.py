@@ -9,7 +9,7 @@ import logging
 import os
 import socket
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Callable, Dict, Any
 
 from sqlalchemy import select, update
@@ -67,8 +67,11 @@ class JobQueue:
         self._handlers: Dict[str, Callable] = {}
         self._running_jobs: Dict[str, asyncio.Task] = {}
         self._running_types: Dict[str, str] = {}   # job_id -> job type (lane bookkeeping)
+        # job_id -> the REGISTERED task's attempt. One process can run two attempts of one job
+        # (its own retry after a lease loss); only the registered one's end may unregister (AQ1).
+        self._running_attempts: Dict[str, int] = {}
         self._cancelled_jobs = set()
-        self._lost_ownership_jobs = set()
+        self._lost_ownership_jobs: Dict[str, set] = {}   # job_id -> the attempts that lost it
         self.worker_id = (
             f"{socket.gethostname()[:80]}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
         )
@@ -138,23 +141,7 @@ class JobQueue:
         message: str = "",
     ):
         """Update job progress (0.0 - 1.0)."""
-        now = datetime.utcnow()
-        async with async_session() as session:
-            await session.execute(
-                update(JobModel)
-                .where(JobModel.id == job_id)
-                .where(JobModel.status == JobStatus.running.value)
-                .where(JobModel.worker_id == self.worker_id)
-                .where(JobModel.cancellation_requested.is_(False))
-                .values(
-                    progress=progress,
-                    progress_message=message,
-                    last_heartbeat=now,
-                    lease_expires_at=now + timedelta(seconds=self.LEASE_SECONDS),
-                    updated_at=now,
-                )
-            )
-            await session.commit()
+        return await job_recovery.update_progress(self, job_id, progress, message)
 
     async def complete_job(self, job_id: str, *, owner_id: Optional[str] = None,
                            attempt: Optional[int] = None):
@@ -177,8 +164,7 @@ class JobQueue:
                 query = query.where(JobModel.attempt_count == attempt)
             result = await session.execute(query)
             await session.commit()
-        self._running_jobs.pop(job_id, None)
-        self._running_types.pop(job_id, None)
+        self._unregister(job_id, attempt)
         if result.rowcount == 1:
             self._cancelled_jobs.discard(job_id)
             logger.info(f"Job {job_id} completed")
@@ -237,8 +223,7 @@ class JobQueue:
                 await release_export_claim(session, job)
 
             await session.commit()
-        self._running_jobs.pop(job_id, None)
-        self._running_types.pop(job_id, None)
+        self._unregister(job_id, attempt)
         if result.rowcount != 1:
             logger.warning(
                 f"Ignored failure for job {job_id}: it was already terminal or missing"
@@ -254,13 +239,18 @@ class JobQueue:
 
     async def cancel_job(self, job_id: str, *, owner_id: Optional[str] = None,
                          attempt: Optional[int] = None):
-        """Cancel a running or queued job. `attempt`: only while the row is still that attempt (R1c)."""
-        self._cancelled_jobs.add(job_id)
-        task = self._running_jobs.get(job_id)
-        if task and task is not asyncio.current_task():
-            task.cancel()
-            self._running_jobs.pop(job_id, None)
-            self._running_types.pop(job_id, None)
+        """Cancel a running or queued job. `attempt`: only while the row is still that attempt (R1c).
+
+        With `attempt` — an invocation ending itself — nothing in memory moves before the row says it
+        is still that attempt: an old attempt's cancel neither flags nor stops the task that replaced
+        it (AQ1). Without it — a person's cancel — it stops the attempt registered now."""
+        flagged = attempt is None and job_id not in self._cancelled_jobs
+        if attempt is None:
+            self._cancelled_jobs.add(job_id)
+            task = self._running_jobs.get(job_id)
+            if task and task is not asyncio.current_task():
+                task.cancel()
+                self._unregister(job_id, None)
 
         async with async_session() as session:
             from models import ProjectStatus
@@ -306,11 +296,14 @@ class JobQueue:
 
             await session.commit()
         if transitioned:
+            if attempt is not None and self._running_attempts.get(job_id) == attempt:
+                self._cancelled_jobs.add(job_id)
             logger.info(f"Job {job_id} cancelled")
         elif job and job.status == JobStatus.cancelled.value:
             logger.info(f"Job {job_id} was already cancelled")
         else:
-            self._cancelled_jobs.discard(job_id)
+            if flagged:
+                self._cancelled_jobs.discard(job_id)
             logger.warning(
                 f"Ignored cancellation for job {job_id}: it was already terminal or missing"
             )
@@ -324,11 +317,20 @@ class JobQueue:
     def is_cancelled(self, job_id: str) -> bool:
         return job_id in self._cancelled_jobs
 
-    async def _heartbeat_once(self, job_id: str) -> bool:
-        return await job_recovery._heartbeat_once(self, job_id)
+    def _unregister(self, job_id: str, attempt: Optional[int]) -> None:
+        """Drop the job's registration — with `attempt`, only when it is that attempt's (AQ1): an
+        old attempt's end never unregisters the task that replaced it."""
+        if attempt is not None and self._running_attempts.get(job_id) != attempt:
+            return
+        self._running_jobs.pop(job_id, None)
+        self._running_types.pop(job_id, None)
+        self._running_attempts.pop(job_id, None)
 
-    async def _heartbeat_loop(self, job_id: str) -> None:
-        return await job_recovery._heartbeat_loop(self, job_id)
+    async def _heartbeat_once(self, job_id: str, owner: Optional[asyncio.Task] = None) -> bool:
+        return await job_recovery._heartbeat_once(self, job_id, owner)
+
+    async def _heartbeat_loop(self, job_id: str, owner: Optional[asyncio.Task] = None) -> None:
+        return await job_recovery._heartbeat_loop(self, job_id, owner)
 
     async def _requeue_owned_job(self, job_id: str) -> bool:
         return await job_recovery._requeue_owned_job(self, job_id)
@@ -414,7 +416,12 @@ class JobQueue:
             # claimed attempt. Its end changes the row only while the row is still that attempt.
             CLAIMED_ATTEMPT.set(claimed)
             mine = {"owner_id": claimed.worker, "attempt": claimed.attempt}
-            heartbeat_task = asyncio.create_task(self._heartbeat_loop(job_id))
+            # Its heartbeat stops THIS task on a loss, never one that replaced it (AQ1).
+            heartbeat_task = asyncio.create_task(self._heartbeat_loop(job_id, asyncio.current_task()))
+
+            def lost() -> bool:
+                return claimed.attempt in self._lost_ownership_jobs.get(job_id, ())
+
             try:
                 await handler(
                     job_id=job_id,
@@ -423,17 +430,17 @@ class JobQueue:
                     metadata=job_metadata,
                     queue=self,
                 )
-                if job_id not in self._lost_ownership_jobs:
+                if not lost():
                     await self.complete_job(job_id, **mine)
             except asyncio.CancelledError:
-                if job_id in self._lost_ownership_jobs:
+                if lost():
                     logger.warning("Stopped stale worker for job %s", job_id)
                 elif self._stop_event.is_set():
                     await self._requeue_owned_job(job_id)
                 else:
                     await self.cancel_job(job_id, **mine)
             except JobCancelledError:
-                if job_id in self._lost_ownership_jobs:
+                if lost():
                     logger.warning("Cancelled stale worker for job %s", job_id)
                 elif self._stop_event.is_set():
                     await self._requeue_owned_job(job_id)
@@ -441,19 +448,24 @@ class JobQueue:
                     await self.cancel_job(job_id, **mine)
             except Exception as e:
                 logger.exception(f"Job {job_id} failed with exception")
-                if job_id not in self._lost_ownership_jobs:
+                if not lost():
                     await self.fail_job(job_id, str(e), **mine)
             finally:
                 heartbeat_task.cancel()
                 await asyncio.gather(heartbeat_task, return_exceptions=True)
-                self._running_jobs.pop(job_id, None)
-                self._running_types.pop(job_id, None)
-                self._lost_ownership_jobs.discard(job_id)
-                self._cancelled_jobs.discard(job_id)
+                attempts = self._lost_ownership_jobs.get(job_id)
+                if attempts is not None:
+                    attempts.discard(claimed.attempt)
+                    if not attempts:
+                        del self._lost_ownership_jobs[job_id]
+                if self._running_attempts.get(job_id) == claimed.attempt:
+                    self._unregister(job_id, claimed.attempt)
+                    self._cancelled_jobs.discard(job_id)
 
         task = asyncio.create_task(_run())
         self._running_jobs[job_id] = task
         self._running_types[job_id] = job_type
+        self._running_attempts[job_id] = claimed.attempt
         logger.info(f"Started job {job_id} [{job_type}]")
 
     async def start(self):

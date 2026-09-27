@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, update
 
 from database import async_session
-from job_attempt import ClaimedAttempt
+from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
 from models import JobModel, JobStatus, ProjectModel
 
 logger = logging.getLogger("clipforge.queue")
@@ -97,12 +97,50 @@ async def _claim(queue, session, job_id: str) -> ClaimedAttempt | None:
     return None if attempt is None else ClaimedAttempt(job_id, int(attempt), worker)
 
 
-async def _heartbeat_once(queue, job_id: str) -> bool:
-    """Renew a lease, returning False when this worker lost ownership."""
+def _mine(job_id: str) -> int | None:
+    """The attempt this task runs `job_id` as (the claim `_run` set, inherited by the tasks it
+    starts), or None when it runs no claim of that job."""
+    claimed = CLAIMED_ATTEMPT.get()
+    return claimed.attempt if claimed is not None and claimed.job_id == job_id else None
+
+
+def _as_mine(query, job_id: str):
+    """Only the row of THIS task's attempt: an old attempt's heartbeat, progress or requeue
+    renews, moves or releases nothing of the attempt that replaced it (AQ1)."""
+    attempt = _mine(job_id)
+    return query if attempt is None else query.where(JobModel.attempt_count == attempt)
+
+
+async def update_progress(queue, job_id: str, progress: float, message: str = "") -> None:
+    """Update job progress (0.0 - 1.0), which renews the lease too. Moved here from `JobQueue`
+    with AQ1, which took job_queue.py past 500 lines."""
+    now = datetime.utcnow()
+    async with async_session() as session:
+        await session.execute(_as_mine(
+            update(JobModel)
+            .where(JobModel.id == job_id)
+            .where(JobModel.status == JobStatus.running.value)
+            .where(JobModel.worker_id == queue.worker_id)
+            .where(JobModel.cancellation_requested.is_(False))
+            .values(
+                progress=progress,
+                progress_message=message,
+                last_heartbeat=now,
+                lease_expires_at=now + timedelta(seconds=queue.LEASE_SECONDS),
+                updated_at=now,
+            ), job_id))
+        await session.commit()
+
+
+async def _heartbeat_once(queue, job_id: str, owner: asyncio.Task | None = None) -> bool:
+    """Renew a lease, returning False when this worker lost ownership.
+
+    `owner` is the invocation this heartbeat belongs to: a loss stops IT, never the task
+    registered under the same job id now, which may be the attempt that replaced it (AQ1)."""
     now = datetime.utcnow()
     try:
         async with async_session() as session:
-            result = await session.execute(
+            result = await session.execute(_as_mine(
                 update(JobModel)
                 .where(JobModel.id == job_id)
                 .where(JobModel.status == JobStatus.running.value)
@@ -112,8 +150,7 @@ async def _heartbeat_once(queue, job_id: str) -> bool:
                     last_heartbeat=now,
                     lease_expires_at=now + timedelta(seconds=queue.LEASE_SECONDS),
                     updated_at=now,
-                )
-            )
+                ), job_id))
             await session.commit()
     except Exception:
         logger.exception("Heartbeat failed for job %s", job_id)
@@ -122,19 +159,21 @@ async def _heartbeat_once(queue, job_id: str) -> bool:
     if result.rowcount == 1:
         return True
 
-    queue._lost_ownership_jobs.add(job_id)
-    task = queue._running_jobs.get(job_id)
-    if task and task is not asyncio.current_task():
+    queue._lost_ownership_jobs.setdefault(job_id, set()).add(_mine(job_id))
+    task = owner if owner is not None else queue._running_jobs.get(job_id)
+    # Already cancelled (a person's cancel empties the row too): a second cancel would cut
+    # short the wait for its threads that the first one started.
+    if task and task is not asyncio.current_task() and not task.cancelling():
         task.cancel()
     logger.warning("Worker %s lost ownership of job %s", queue.worker_id, job_id)
     return False
 
 
-async def _heartbeat_loop(queue, job_id: str) -> None:
+async def _heartbeat_loop(queue, job_id: str, owner: asyncio.Task | None = None) -> None:
     try:
         while True:
             await asyncio.sleep(queue.HEARTBEAT_SECONDS)
-            if not await queue._heartbeat_once(job_id):
+            if not await queue._heartbeat_once(job_id, owner):
                 return
     except asyncio.CancelledError:
         raise
@@ -143,10 +182,10 @@ async def _heartbeat_loop(queue, job_id: str) -> None:
 
 
 async def _requeue_owned_job(queue, job_id: str) -> bool:
-    """Release a job during graceful shutdown without cancelling it."""
+    """Release a job during graceful shutdown without cancelling it — only this task's attempt."""
     now = datetime.utcnow()
     async with async_session() as session:
-        result = await session.execute(
+        result = await session.execute(_as_mine(
             update(JobModel)
             .where(JobModel.id == job_id)
             .where(JobModel.status == JobStatus.running.value)
@@ -160,8 +199,7 @@ async def _requeue_owned_job(queue, job_id: str) -> bool:
                 progress=func.min(JobModel.progress, 0.05),
                 progress_message="Interrupted by backend shutdown; requeued.",
                 updated_at=now,
-            )
-        )
+            ), job_id))
         await session.commit()
     if result.rowcount == 1:
         logger.info("Requeued job %s after graceful shutdown", job_id)
@@ -345,4 +383,5 @@ async def stop(queue):
 
     queue._running_jobs.clear()
     queue._running_types.clear()
+    queue._running_attempts.clear()
     logger.info("Job queue processor stopped")

@@ -121,13 +121,16 @@ clipforge/
 │   ├── models.py                    ← SQLAlchemy ORM + JobType enum
 │   ├── database.py                  ← DB setup + init_db() column migrations
 │   ├── job_queue.py                 ← JobQueue: register_handler/update_progress, 2 lanes,
-│   │                                  enqueue/_claim/_process_next, fail/cancel/complete
+│   │                                  enqueue/_claim/_process_next, fail/cancel/complete — each
+│   │                                  run's end acts only as its claimed attempt (AQ1)
 │   ├── job_rows.py                  ← new_job_row/add_job: the ONE place a job row is built
 │   │                                  (add_job = in the caller's transaction; re-exported by job_queue)
 │   ├── job_attempt.py               ← ClaimedAttempt + CLAIMED_ATTEMPT: the attempt a handler runs as,
 │   │                                  fixed at the claim (R1c), never re-read from the job row
 │   ├── job_recovery.py              ← lease lifecycle: recover_stuck_jobs, heartbeats, stop,
-│   │                                  _requeue_owned_job, _cleanup_workspace (JobQueue delegates here)
+│   │                                  _requeue_owned_job, _cleanup_workspace, _claim, update_progress
+│   │                                  (JobQueue delegates here); heartbeat/progress/requeue touch only
+│   │                                  the row of the task's claimed attempt (AQ1)
 │   ├── routers/                     ← jobs, utilities, doodle, remix, parallel,
 │   │                                  clipper, clipper_clips (tiktok PLANNED)
 │   ├── services/
