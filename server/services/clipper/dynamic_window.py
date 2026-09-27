@@ -18,11 +18,12 @@ rest of `services/clipper/`.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from services.clipper.dynamic_cameras import action_band
 from services.clipper.face_gap import continue_gaps
@@ -46,8 +47,43 @@ UI_LUM_MIN, UI_LUM_MAX = 110, 215
 _CUT_TIMEOUT_S = 600
 
 
+def _observe_open(cap: Any, cv2: Any, observed: dict | None, fps: float, step: int) -> None:
+    """What a read loop will run on, for `observed` (codex-verdict-next-22 §2 Q2).
+
+    The return values cannot say it: a capture that never opened returns the
+    same `[]` panels as a window with no panels (CC1-C0 §5.1)."""
+    if observed is None:
+        return
+    try:
+        backend = cap.getBackendName()
+    except (AttributeError, cv2.error):
+        backend = None
+    info = cv2.getBuildInformation()
+    observed.update({
+        "opened": bool(cap.isOpened()), "backend": backend, "opencv": cv2.__version__,
+        # OpenCV decodes with its OWN libav, not the ffmpeg that cut the window.
+        "decoder": {k: (re.search(rf"{k}:\s+YES \(([^)]+)\)", info) or [None, None])[1]
+                    for k in ("avcodec", "avformat", "avutil")},
+        "fps_reported": cap.get(cv2.CAP_PROP_FPS), "fps": fps, "step": step,
+        "reads": [], "sampled": [], "stop": None})
+
+
+def _observe_read(cap: Any, cv2: Any, observed: dict | None, index: int,
+                  pos_frames: float | None, ok: bool) -> None:
+    """One read: its ordinal, POS_FRAMES before it and POS_MSEC after it, or the stop.
+    OpenCV's index and PTS name a frame; they do not certify its pixels."""
+    if observed is None:
+        return
+    if not ok:
+        observed["stop"] = {"after_reads": index, "pos_frames": pos_frames}
+        return
+    observed["reads"].append({"index": index, "pos_frames": pos_frames,
+                              "pos_msec": cap.get(cv2.CAP_PROP_POS_MSEC)})
+
+
 def region_motion(window: Path | str, hop: float,
-                  band: tuple[float, float, float, float], src_w: int
+                  band: tuple[float, float, float, float], src_w: int, *,
+                  observed: dict | None = None
                   ) -> tuple[list[float], list[float], list[float], list[float], float]:
     """(how much is happening, where, how much there is to look at, and AT WHAT STEP).
 
@@ -81,6 +117,10 @@ def region_motion(window: Path | str, hop: float,
     and 17% of the tested slice was menu screens. What a game UI panel is that
     gameplay is not is DESATURATED AND FLAT, so count pixels whose channels sit
     within 18 levels of each other at middling brightness.
+
+    `observed` (keyword-only, default None = unchanged): a dict filled with the
+    open, the decoder, the fps and step this call EXECUTED, every read and the
+    read ordinals it sampled, and where reading stopped.
     """
     import cv2
     import numpy as np
@@ -89,6 +129,7 @@ def region_motion(window: Path | str, hop: float,
     try:
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) or 10.0
         step = max(1, int(round(fps * hop)))
+        _observe_open(cap, cv2, observed, fps, step)
         band_x0, band_x1 = src_w * band[0], src_w * band[1]
         col_w = (band_x1 - band_x0) / MOTION_COLS
 
@@ -99,10 +140,14 @@ def region_motion(window: Path | str, hop: float,
         previous = None
         index = 0
         while True:
+            pos = cap.get(cv2.CAP_PROP_POS_FRAMES) if observed is not None else None
             ok, frame = cap.read()
+            _observe_read(cap, cv2, observed, index, pos, ok)
             if not ok:
                 break
             if index % step == 0:
+                if observed is not None:
+                    observed["sampled"].append(index)
                 h, w = frame.shape[:2]
                 crop = frame[int(h * band[2]):int(h * band[3]),
                              int(w * band[0]):int(w * band[1])]
@@ -154,7 +199,7 @@ PANEL_HOP_S = 0.5
 
 
 def ui_panels(window: Path | str, src_w: int, src_h: int,
-              hop: float = PANEL_HOP_S) -> list[dict[str, int]]:
+              hop: float = PANEL_HOP_S, *, observed: dict | None = None) -> list[dict[str, int]]:
     """Rectangles of game UI — inventory, crafting, menus — in SOURCE pixels.
 
     Why this exists at all: `resolve_position` has implemented caption collision
@@ -171,6 +216,9 @@ def ui_panels(window: Path | str, src_w: int, src_h: int,
 
     Detection is per CLIP, not per project, because a panel opens and closes —
     `regions.json` is measured once for a whole stream and cannot express that.
+
+    `observed`: as in `region_motion`. A `[]` from a capture that did not open
+    is not "no panels"; only `observed["opened"]` tells them apart.
     """
     import cv2
     import numpy as np
@@ -179,14 +227,19 @@ def ui_panels(window: Path | str, src_w: int, src_h: int,
     try:
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) or 10.0
         step = max(1, int(round(fps * hop)))
+        _observe_open(cap, cv2, observed, fps, step)
         hits = np.zeros((PANEL_ROWS, PANEL_COLS), dtype=np.int32)
         frames = 0
         index = 0
         while True:
+            pos = cap.get(cv2.CAP_PROP_POS_FRAMES) if observed is not None else None
             ok, frame = cap.read()
+            _observe_read(cap, cv2, observed, index, pos, ok)
             if not ok:
                 break
             if index % step == 0:
+                if observed is not None:
+                    observed["sampled"].append(index)
                 small = cv2.resize(frame, (PANEL_COLS, PANEL_ROWS),
                                    interpolation=cv2.INTER_AREA).astype(np.int16)
                 spread = small.max(axis=2) - small.min(axis=2)
@@ -220,7 +273,8 @@ def ui_panels(window: Path | str, src_w: int, src_h: int,
 
 def analyse_window(proxy: Path | str, start: float, duration: float,
                    band: tuple[float, float, float, float] | None,
-                   src_w: int, *, detector: Any = None) -> dict[str, Any]:
+                   src_w: int, *, detector: Any = None, address: bool = False,
+                   provenance: Callable[[], dict] | None = None) -> dict[str, Any]:
     """Everything `plan_dynamic_edit` needs for one candidate.
 
     Returns `{"faces", "motion", "focus", "detail", "ui", "band", "hop"}`.
@@ -232,16 +286,31 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
 
     Cutting the window out of the proxy first turns hundreds of random seeks on
     a 6-hour file into one sequential read, and both measurements share it.
+
+    `address=True` is a DIAGNOSTIC with no production caller (codex-verdict-next-19
+    §2, next-22 §2): the same encode also writes its encoder stats, and the result
+    gains `window_addressed` (window_address.compose), a parallel structure that
+    changes no other key. `provenance` is then required: a zero-argument reader of
+    `read_provenance` for this source and proxy, read before the cut and after the
+    last address. Off (the default), the argv and the result are today's exactly.
     """
     work = Path(tempfile.mkdtemp(prefix="dynwin_"))
     try:
         window = work / "window.mp4"
-        subprocess.run(
-            [ffmpeg_bin(), "-y", "-loglevel", "error",
-             "-ss", f"{start:.3f}", "-i", str(proxy), "-t", f"{duration:.3f}",
-             "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
-             str(window)],
-            check=True, capture_output=True, timeout=_CUT_TIMEOUT_S)
+        argv = [ffmpeg_bin(), "-y", "-loglevel", "error",
+                "-ss", f"{start:.3f}", "-i", str(proxy), "-t", f"{duration:.3f}",
+                "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+                str(window)]
+        if address:
+            from services.clipper import proxy_provenance, window_address
+
+            if provenance is None:
+                raise TypeError("analyse_window(address=True) needs a provenance reader")
+            before = provenance()
+            build = proxy_provenance.ffmpeg_build(argv[0])     # the build that RUNS this encode
+            stats = work / "enc_stats.txt"
+            argv[-1:-1] = window_address.stats_options(stats)
+        subprocess.run(argv, check=True, capture_output=True, timeout=_CUT_TIMEOUT_S)
 
         times = [i * FACE_HOP_S for i in range(int(duration / FACE_HOP_S) + 1)]
         samples = (face_presence(str(window), times) if detector is None else
@@ -258,18 +327,30 @@ def analyse_window(proxy: Path | str, start: float, duration: float,
             info = video_info(str(window))
             band = action_band(samples, int(info.get("width") or 0),
                                int(info.get("height") or 0))
+        seen_motion: dict | None = {} if address else None
         totals, focus, detail, ui, motion_hop = region_motion(
-            window, FACE_HOP_S, band, src_w)
+            window, FACE_HOP_S, band, src_w, observed=seen_motion)
         info = video_info(str(window))
         src_h = int(src_w * (int(info.get("height") or 0) or 1)
                     / max(1, int(info.get("width") or 0) or 1))
-        return {"faces": faces, "motion": totals, "motion_hop": motion_hop,
-                "face_decoded_space": "reencoded_window",
-                "proxy_width": info.get("width"), "proxy_height": info.get("height"),
-                "focus": focus,
-                "detail": detail, "ui": ui, "band": tuple(band),
-                "panels": ui_panels(window, src_w, src_h),
-                "hop": FACE_HOP_S}
+        seen_panels: dict | None = {} if address else None
+        result = {"faces": faces, "motion": totals, "motion_hop": motion_hop,
+                  "face_decoded_space": "reencoded_window",
+                  "proxy_width": info.get("width"), "proxy_height": info.get("height"),
+                  "focus": focus,
+                  "detail": detail, "ui": ui, "band": tuple(band),
+                  "panels": ui_panels(window, src_w, src_h, observed=seen_panels),
+                  "hop": FACE_HOP_S}
+        if address:
+            result["window_addressed"] = window_address.compose(
+                request={"start": argv[argv.index("-ss") + 1],
+                         "duration": argv[argv.index("-t") + 1]},
+                recipe=window_address.recipe_of(argv[1:]),
+                stats_text=stats.read_text() if stats.exists() else None,
+                faces=samples, motion_count=len(totals),
+                seen_motion=seen_motion, seen_panels=seen_panels,
+                before=before, read_after=provenance, build=build)
+        return result
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
