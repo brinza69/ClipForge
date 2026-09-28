@@ -27,6 +27,7 @@ Evidenta a ce s-a postat difera pe canal, si asta conteaza:
                facute, ca sa se poata reincerca.
 """
 import json
+import os
 import pathlib
 import re
 import sys
@@ -41,11 +42,28 @@ from buffer_api import channel_by_name, default_org, gql  # noqa: E402
 from googleapiclient.discovery import build  # noqa: E402
 from services.drive_upload import _resolve_credentials  # noqa: E402
 
-DRIVE_ROOT = targets.get("povestitor_drive_folder")
+DRIVE_ROOT = targets.get("povestitor_drive_folder", "")
+
+
+def _canal(cheie):
+    """Numele canalului, sau "" daca lipseste.
+
+    `PROFILES` se construieste la importul modulului, deci un `targets.get()`
+    strict ar omori tot scriptul din cauza unui canal pe care rularea curenta
+    nu-l atinge niciodata — un aparat care posteaza doar povestitor nu are de ce
+    sa stie numele canalelor franceze. Lipsa se semnaleaza in `main()`, pe
+    profilul care chiar are nevoie de ea.
+    """
+    return targets.get(cheie, "")
 POSTED = "posted"
-SLOTS_LOCAL = [(8, 0), (13, 0), (20, 30)]
+# 4 postari/zi pe toate canalele (cerut 24 aug 2026). Al patrulea slot e
+# seara, nu la pranz: mediana vizualizarilor pe ultimele 45 de zile arata
+# 20:00 cea mai buna ora pe toate cele patru canale si 13:00 cea mai slaba.
+SLOTS_LOCAL = [(8, 0), (13, 0), (18, 30), (20, 30)]
 TZ = ZoneInfo("Europe/Bucharest")   # zona reala: trecerea la ora de iarna nu muta sloturile
-QUEUE_MAX = 10                      # Buffer Free: postari tinute in coada UNUI canal
+# Cate postari poate tine coada UNUI canal. 10 era plafonul planului Free;
+# pe plan platit nu mai exista, deci se ridica din CLIPFORGE_QUEUE_MAX.
+QUEUE_MAX = int(os.environ.get("CLIPFORGE_QUEUE_MAX", "10"))
 LEAD_MINUTES = 15
 
 def _sufix_ro(desc, part, total):
@@ -60,24 +78,114 @@ def _prefix_fr(desc, part, total):
     return desc if total == 1 else f"Partie {part} : {desc}"
 
 
+# Clasamentul (scor + titlu de YouTube) produs de scripts/rank_videos.py.
+_RANKING = {}
+_rank_file = _ROOT / "data" / "pov_ranking.json"
+if _rank_file.exists():
+    _RANKING = json.loads(_rank_file.read_text(encoding="utf-8"))
+
+
+def _meta_youtube(g, f, part, total):
+    """YouTube cere TITLU separat de descriere — fara el, Shorts-ul ramane fara
+    nume sau il ia din primele cuvinte ale descrierii. Titlul vine din clasament;
+    daca lipseste, se taie prima propozitie a descrierii.
+    `madeForKids` e o declaratie ceruta de YouTube: continutul asta nu e pentru
+    copii. `isAiGenerated` NU se seteaza — decizia utilizatorului."""
+    r = _RANKING.get(str(g["key"])) or {}
+    titlu = r.get("titlu") or (g["desc"].split(".")[0] or g["desc"])[:95]
+    if total > 1:
+        titlu = f"{titlu[:88]} ({part}/{total})"
+    # Categoria e OBLIGATORIE la YouTube ("YouTube posts require a category").
+    # 24 = Entertainment, potrivit pentru povestiri narate; 22 = People & Blogs
+    # e alternativa. Se schimba din CLIPFORGE_YT_CATEGORY.
+    return {"youtube": {"title": titlu[:100], "privacy": "public",
+                        "madeForKids": False,
+                        "categoryId": os.environ.get("CLIPFORGE_YT_CATEGORY", "24")}}
+
+
 PROFILES = {
     "tiktok": {
-        "channel": targets.get("tiktok_channel_ro"),
+        # REDESCHIS 29 aug 2026. A fost inchis pe 25 aug, cand ambele canale
+        # povestitor au trecut pe engleza; acum povestitorul e romanesc peste
+        # tot, si pe Facebook si pe TikTok. Cine vede istoricul si crede ca
+        # profilul asta e mort: nu e.
+        "channel": _canal("tiktok_channel_ro"),
+        "channel_key": "tiktok_channel_ro",
         "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "drive",
         "metadata": None,
         "caption": _sufix_ro,
     },
     "facebook": {
-        "channel": targets.get("facebook_channel"),
-        "plan": _ROOT / "data" / "fb_post_list_povestitor.json",
+        # Romana pe Facebook e definitiva (28 aug 2026): cand se termina stocul
+        # romanesc NU se trece pe `facebook_en`, se cere continut nou. Nota
+        # veche de aici spunea invers.
+        "channel": _canal("facebook_channel"),
+        "channel_key": "facebook_channel",
+        # acelasi plan ca TikTok: fisierele sunt aceleasi, difera doar evidenta
+        # a ce s-a postat (folderul posted/ vs. istoricul din Buffer)
+        "plan": _ROOT / "data" / "pov_post_list.json",
         "record": "buffer",
         # vertical 1080x1920 -> Reel; `post` ar aparea ca video obisnuit in feed
         "metadata": {"facebook": {"type": "reel"}},
         "caption": _sufix_ro,
     },
+    # Pista ENGLEZA: alt folder de Drive, descrieri din coloana L. A tinut patru
+    # zile — TikTok a trecut pe engleza pe 27 aug, Facebook pe 25 — si s-a
+    # inchis pe 29 aug, cand povestitorul a revenit integral pe romana.
+    # Fisierele engleze raman pe Drive, nerandate mai departe si nepostate.
+    "tiktok_en": {
+        "inchis": "povestitorul e romanesc peste tot din 29 aug 2026",
+        "channel": _canal("tiktok_channel_ro"),
+        "channel_key": "tiktok_channel_ro",
+        "plan": _ROOT / "data" / "pov_en_post_list.json",
+        "drive_root": _canal("povestitor_en_drive_folder"),
+        "record": "drive",
+        "metadata": None,
+        "caption": _sufix_ro,
+    },
+    "facebook_en": {
+        "inchis": "povestitorul e romanesc peste tot din 29 aug 2026",
+        "channel": _canal("facebook_channel"),
+        "channel_key": "facebook_channel",
+        "plan": _ROOT / "data" / "pov_en_post_list.json",
+        "drive_root": _canal("povestitor_en_drive_folder"),
+        "record": "buffer",
+        "metadata": {"facebook": {"type": "reel"}},
+        "caption": _sufix_ro,
+    },
+    # Narator: canal conectat la Buffer pe 27 aug 2026. Numele lui trebuie pus
+    # in `data/targets.json` sub `narator_channel` — profilul se opreste cu un
+    # mesaj clar daca lipseste, nu ghiceste.
+    # `metadata` depinde de retea: Facebook cere {"facebook": {"type": "reel"}},
+    # TikTok nu cere nimic. Se completeaza cand se stie reteaua.
+    "narator": {
+        "channel": _canal("narator_channel"),
+        "channel_key": "narator_channel",
+        "plan": _ROOT / "data" / "narator_post_list.json",
+        "record": "buffer",
+        "metadata": None,
+        "caption": _sufix_ro,
+    },
+    "narativ": {
+        "inchis": "pista romana, oprita 25 aug 2026",
+        "channel": "Narativ",          # canal YouTube, nu e in targets.json
+        "plan": _ROOT / "data" / "pov_post_list.json",
+        "record": "buffer",
+        "metadata": _meta_youtube,
+        "caption": _sufix_ro,
+    },
+    "facebook_fr": {
+        "channel": _canal("facebook_channel_fr"),
+        "channel_key": "facebook_channel_fr",
+        "plan": _ROOT / "data" / "fr_post_list.json",
+        "record": "buffer",
+        "metadata": {"facebook": {"type": "reel"}},
+        "caption": _prefix_fr,
+    },
     "franceza": {
-        "channel": targets.get("tiktok_channel_fr"),
+        "channel": _canal("tiktok_channel_fr"),
+        "channel_key": "tiktok_channel_fr",
         "plan": _ROOT / "data" / "fr_post_list.json",
         "record": "buffer",
         "metadata": None,
@@ -182,8 +290,12 @@ def drive_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def posted_folder(drive, dry):
-    q = (f"'{DRIVE_ROOT}' in parents and name = '{POSTED}' "
+def posted_folder(drive, dry, root=None):
+    """`posted/` din folderul profilului. Pista engleza are alt folder de Drive,
+    deci si alta evidenta — altfel un clip englez ar parea postat pentru ca
+    exista un fisier cu acelasi NR in `posted/`-ul romanesc."""
+    root = root or DRIVE_ROOT
+    q = (f"'{root}' in parents and name = '{POSTED}' "
          f"and mimeType = 'application/vnd.google-apps.folder' and trashed = false")
     found = drive.files().list(q=q, fields="files(id)").execute().get("files", [])
     if found:
@@ -192,7 +304,7 @@ def posted_folder(drive, dry):
         return None
     fid = drive.files().create(
         body={"name": POSTED, "mimeType": "application/vnd.google-apps.folder",
-              "parents": [DRIVE_ROOT]}, fields="id").execute()["id"]
+              "parents": [root]}, fields="id").execute()["id"]
     print(f"creat folderul {POSTED}/")
     return fid
 
@@ -204,7 +316,30 @@ def main():
     if which not in PROFILES:
         raise SystemExit(f"--channel trebuie sa fie: {', '.join(PROFILES)}")
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else None
+    # --first 226,227 le urca in fata cozii fara sa schimbe planul; restul
+    # ramane in ordinea de creare. Util cand vrei sa vezi repede un lot nou.
+    doar = [s.strip() for s in argv[argv.index("--first") + 1].split(",")
+            if s.strip()] if "--first" in argv else []
     prof = PROFILES[which]
+    # Profilurile romanesti indica aceleasi canale ca cele engleze (`tiktok_en`,
+    # `facebook_en`) — difera doar planul, folderul si coloana de descriere. O
+    # rulare din obisnuinta ar pune romana pe un canal trecut pe engleza, si
+    # s-ar vedea abia dupa publicare. Deci se cere spus explicit.
+    if not prof["channel"]:
+        raise SystemExit(
+            f"profilul '{which}' n-are canal: lipseste cheia "
+            f"'{prof.get('channel_key')}' din data/targets.json "
+            f"(sau variabila CLIPFORGE_{(prof.get('channel_key') or '').upper()}).")
+    if prof.get("inchis") and "--si-inchise" not in argv:
+        # Nu se numeste aici profilul de schimb: directia s-a inversat deja o
+        # data (pana pe 29 aug mesajul trimitea spre `_en`, exact ce s-a inchis
+        # apoi). Motivul din `inchis` spune ce e valabil ACUM; el se schimba
+        # odata cu decizia, un nume ghicit aici nu.
+        print(f"profilul '{which}' e inchis: {prof['inchis']}")
+        print(f"canalul lui ({prof['channel']}) nu se mai alimenteaza de aici. "
+              f"Deschise: {', '.join(k for k, v in PROFILES.items() if not v.get('inchis'))}. "
+              f"Cu --si-inchise merge oricum, daca chiar asta vrei.")
+        return
 
     org = default_org()
     ch = channel_by_name(prof["channel"], org)
@@ -216,9 +351,13 @@ def main():
         print("coada e plina — reia dupa ce publica." if free <= 0 else "--limit 0, nimic de facut.")
         return
 
-    drive = drive_service()
+    # Doar evidenta pe folder are nevoie de Drive. Canalele care isi citesc
+    # istoricul din Buffer nu-l ating deloc, deci o expirare a tokenului Google
+    # (se intampla saptamanal) nu trebuie sa le blocheze si pe ele.
+    drive = drive_service() if prof["record"] == "drive" else None
+    radacina = prof.get("drive_root") or DRIVE_ROOT
     if prof["record"] == "drive":
-        folder_id = posted_folder(drive, dry)
+        folder_id = posted_folder(drive, dry, radacina)
         done_names, done_ids = set(), set()
         if folder_id:
             done_names = {f["name"] for f in drive.files().list(
@@ -232,24 +371,50 @@ def main():
         print(f"deja pe canal: {len(done_ids)} prin Drive, {len(done_texts)} captions "
               f"(inclusiv istoricul importat, adica ce a fost postat manual)")
 
-    def is_done(f, desc=""):
+    def is_done(f, desc="", total=1):
         if f["name"] in done_names or f.get("id") in done_ids:
             return True
         # Postarile manuale nu au URL de Drive — se recunosc dupa caption.
         # Descrierile au 180-300 de caractere, deci un prefix de 40 e destul de
         # distinctiv incat sa nu dea fals pozitiv.
+        #
+        # La clipurile cu parti se compara captionul INTREG, nu descrierea:
+        # partile au aceeasi descriere si difera doar prin `(1/2)` / `(2/2)`, pus
+        # la SFARSIT. Cu prefix de 40, partea 2 parea postata de indata ce partea
+        # 1 ajungea pe canal — nu in aceeasi rulare, unde lista de captions se
+        # citeste o data la inceput, ci la urmatoarea. Adica exact cand un grup
+        # nu incapuse intreg in coada, si povestea ramanea publicata pe jumatate.
+        if total > 1:
+            # captionul INTREG, nu un prefix: sufixul e la SFARSIT, deci orice
+            # taiere il pierde si cele doua parti redevin identice.
+            plin = _norm(prof["caption"](desc, f.get("part", 1), total))
+            return bool(plin) and plin in done_texts
         key = _norm(desc)[:40]
         return bool(key) and any(x.startswith(key) for x in done_texts)
 
     slots = free_slots(datetime.now(timezone.utc), taken)
     sent = 0
-    for g in load_groups(prof["plan"]):
-        if sent >= n_max:
+    oprit = False          # rate limit: opreste TOT, nu doar grupul curent
+    grupuri = load_groups(prof["plan"])
+    if "--invers" in argv:
+        # Ordinea de pe Drive, dar de la cel mai nou spre cel mai vechi.
+        grupuri = list(reversed(grupuri))
+    if doar:
+        # ordinea din --first conteaza (e un clasament), nu ordinea din plan
+        rang = {n: i for i, n in enumerate(doar)}
+        fata = sorted((g for g in grupuri if str(g["key"]) in doar),
+                      key=lambda g: rang[str(g["key"])])
+        lipsa = [d for d in doar if d not in {str(g["key"]) for g in fata}]
+        if lipsa:
+            print(f"  --first: nu am gasit in plan {lipsa}")
+        grupuri = fata + [g for g in grupuri if str(g["key"]) not in doar]
+    for g in grupuri:
+        if sent >= n_max or oprit:
             break
         if not g["desc"]:
             print(f"  sarit {g['key']}: fara descriere (captionul ar fi gol)")
             continue
-        todo = [f for f in g["files"] if not is_done(f, g["desc"])]
+        todo = [f for f in g["files"] if not is_done(f, g["desc"], len(g["files"]))]
         if not todo:
             continue
         if len(todo) > n_max - sent:
@@ -271,10 +436,28 @@ def main():
                    "schedulingType": "automatic", "mode": "customScheduled",
                    "dueAt": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                    "assets": [{"video": {"url": f["url"]}}]}
-            if prof["metadata"]:
-                inp["metadata"] = prof["metadata"]
+            md = prof["metadata"]
+            if callable(md):
+                md = md(g, f, f.get("part", 1), total)
+            if md:
+                inp["metadata"] = md
             try:
                 res = (gql(CREATE, {"i": inp}) or {}).get("createPost") or {}
+                # Reels cere fix 9:16. Cateva randari vechi au iesit 1080x1980
+                # (raport 0.5455) si sunt respinse. Merg totusi ca postare
+                # obisnuita in feed — mai bine acolo decat deloc, si coada nu se
+                # blocheaza pe ele.
+                # Reels are conditii pe care un videoclip vechi nu le respecta:
+                # raport ~9:16 si cel mult 1m30s. Postarea obisnuita in feed nu
+                # le are, deci acolo merge — mai bine in feed decat deloc, si
+                # mai ales coada nu se blocheaza pe un singur fisier.
+                e_reel = isinstance(prof["metadata"], dict) and                     prof["metadata"].get("facebook", {}).get("type") == "reel"
+                msg = (res.get("message") or "").lower()
+                if e_reel and ("aspect ratio" in msg or "no longer than" in msg):
+                    motiv = "prea lung" if "no longer than" in msg else "raport gresit"
+                    print(f"  {label}: {motiv} pentru Reels — pun ca postare in feed")
+                    alt = dict(inp, metadata={"facebook": {"type": "post"}})
+                    res = (gql(CREATE, {"i": alt}) or {}).get("createPost") or {}
             except RuntimeError as e:
                 # Buffer are DOUA plafoane: 100 cereri/15min si 250/24h. Pe cel
                 # de 15 minute se asteapta si se reia; ce s-a programat deja
@@ -283,6 +466,7 @@ def main():
                     fereastra = "15 minute" if '"15m"' in str(e) else "24 de ore"
                     print(f"  rate limit Buffer ({fereastra}) dupa {sent} postari "
                           f"— reia dupa ce trece")
+                    oprit = True
                     break
                 raise
             if res.get("message"):
@@ -296,7 +480,7 @@ def main():
             if prof["record"] == "drive" and folder_id:
                 try:
                     drive.files().update(fileId=f["id"], addParents=folder_id,
-                                         removeParents=DRIVE_ROOT).execute()
+                                         removeParents=radacina).execute()
                 except Exception as e:  # noqa: BLE001
                     print(f"     ATENTIE: nu am putut muta in {POSTED}/ ({str(e)[:70]}) "
                           f"— rularea urmatoare l-ar reprograma; muta-l manual")

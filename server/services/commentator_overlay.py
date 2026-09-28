@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import settings
+from services.encode_profile import video_args as _encode_args
 from services.commentators import (
     _video_path as commentator_video_path,
     _ai_processed_path as commentator_ai_path,
@@ -167,7 +168,10 @@ def composite_commentator(
         "-filter_complex", filter_complex,
         "-map", "[out]",
         "-map", "0:a?",                   # keep main's audio only
-        "-c:v", "libx264", "-preset", "slow", "-crf", "18",
+        # Acelasi profil ca in celelalte encodari — vezi services/encode_profile.
+        # Fara `-r` aici: intra deja la fps-ul fortat de etapa anterioara.
+        "-preset", "slow",
+        *_encode_args(int(os.environ.get("CLIPFORGE_OUTPUT_FPS", "60"))),
         "-pix_fmt", "yuv420p",
         "-c:a", "copy",
         "-movflags", "+faststart",

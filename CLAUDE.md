@@ -26,6 +26,24 @@ ClipForge is a local AI video clipping studio:
 
 ---
 
+## La începutul FIECĂREI sesiuni
+
+Rulează întâi asta și continuă de unde a rămas, fără să întrebi ce e de făcut:
+
+```
+server\.venv\Scripts\python.exe scripts\stare.py
+```
+
+Raportul spune, în ordine: ce randează acum, câte credite ElevenLabs au rămas,
+cât mai țin cozile pe fiecare canal, câte rânduri n-au fost randate pe fiecare
+rol, și ce procese de fundal rulează. **Un canal marcat „SE GOLEȘTE" (sub 2 zile)
+se rezolvă primul.**
+
+Nu modifică nimic — doar citește. Pentru contextul lui *de ce* s-a făcut ceva,
+vezi `docs/handoff-*.md`, cel mai recent întâi.
+
+---
+
 ## Rules for Every Agent
 
 ### 1. Always read the relevant PRP before writing code

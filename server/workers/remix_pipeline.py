@@ -122,6 +122,55 @@ class _Sliced:
 # in subtitrari — trebuie sa fie acelasi text in amandoua, fiindca alinierea pe
 # cuvinte potriveste audio-ul TTS cu exact acest sir. NU intra in descriere:
 # acolo ar polua captionul postarii.
+# Muzica de fundal din sursa, tinuta SUB voce. Gol = oprit (comportamentul de
+# pana acum: audio-ul original se arunca si ramane doar vocea TTS).
+# Valoarea e in decibeli, negativa: -18 se aude discret, -12 e deja prezent.
+BG_MUSIC_DB = os.environ.get("CLIPFORGE_BG_MUSIC_DB", "").strip()
+
+
+def _atempo_chain(rate: float) -> str:
+    """atempo accepta doar 0.5–2.0 pe instanta, deci se inlanuie pentru rate
+    mai extreme. Factorul de intindere e limitat la 0.4–3.0 in speed_match, deci
+    inversul lui poate ieși din plaja unei singure instante."""
+    parts, r = [], rate
+    while r > 2.0:
+        parts.append("atempo=2.0")
+        r /= 2.0
+    while r < 0.5:
+        parts.append("atempo=0.5")
+        r /= 0.5
+    parts.append(f"atempo={r:.6f}")
+    return ",".join(parts)
+
+
+def _bg_audio_filter(factor: float, db_override: str | None = None) -> str | None:
+    """Filtrul care amesteca muzica sursei sub voce, sau None daca e oprit.
+
+    Audio-ul original TREBUIE intins cu acelasi factor ca imaginea, altfel se
+    desincronizeaza progresiv de video. Video-ul primeste PTS*factor (>1 =
+    incetinit), deci audio-ul are nevoie de atempo=1/factor.
+
+    `amix` cu normalize=1 (implicit) imparte volumul la numarul de intrari si ar
+    face vocea de doua ori mai slaba — de aici normalize=0.
+    `duration=shortest` opreste la finalul vocii, ca `-shortest` de dinainte.
+    """
+    # Presetul bate variabila de mediu: pista franceza vrea sunetul sursei
+    # ARUNCAT, cea romaneasca il vrea sub voce. `db_override=""` (sir gol pus
+    # explicit pe preset) inseamna "fara audio original", nu "foloseste globalul".
+    db_raw = BG_MUSIC_DB if db_override is None else str(db_override).strip()
+    if not db_raw:
+        return None
+    try:
+        db = float(db_raw)
+    except ValueError:
+        logger.warning("bg_music_db=%r nu e un numar — ignor", db_raw)
+        return None
+    tempo = _atempo_chain(1.0 / factor) if factor and factor != 1.0 else "anull"
+    return (f"[0:a]{tempo},volume={db}dB,aresample=async=1:first_pts=0[bg];"
+            f"[1:a]aresample=async=1:first_pts=0[voce];"
+            f"[bg][voce]amix=inputs=2:normalize=0:duration=shortest[aout]")
+
+
 def tts_outro(lang: str | None = None) -> str:
     """Indemnul rostit la final, pe limba variantei.
 
@@ -434,35 +483,47 @@ async def _stage_erase(
         # T20-D: auto-localize the caption band so no manual box is needed.
         # Refines `roi` to the real caption lane (held-still + speech-correlated).
         # Falls back to the passed rect if it can't find a convincing lane.
+        # Pot fi MAI MULTE benzi: un clip cu un disclaimer lipit sus plus
+        # subtitrarea sursei (care nu e mereu jos) are doua. Inainte se lua doar
+        # cea mai bine punctata si a doua ramanea in imagine.
+        rois = [roi]
         try:
-            from services.caption_detector import auto_locate_caption_band
+            from services.caption_detector import auto_locate_caption_bands
             located = await loop.run_in_executor(
                 None,
-                lambda: auto_locate_caption_band(
+                lambda: auto_locate_caption_bands(
                     str(video_path), speech_intervals=speech_intervals,
                     on_progress=_det_progress,
                 ),
             )
             if located:
-                roi = located
-                logger.info(f"auto-localized caption band: {roi}")
+                rois = located
+                roi = located[0]          # prima ramane cea pentru auditul de acoperire
+                logger.info(f"auto-localized {len(rois)} caption band(s): {rois}")
         except Exception:
             logger.exception("auto-localize failed; using passed erase rect")
 
+        # Cate o trecere de detectie pe fiecare banda. Segmentele isi poarta
+        # fiecare masca si caseta proprie, deci se pot pune cap la cap.
         if coverage == "tight":
             # T20: per-display tight glyph/box masks — erase the least.
             from services.caption_detector import detect_caption_displays
-            detected_segments = await loop.run_in_executor(
-                None,
-                lambda: detect_caption_displays(str(video_path), roi=roi, on_progress=_det_progress),
-            )
+            _det = detect_caption_displays
         else:
             # "band": legacy per-segment rectangle zones.
             from services.caption_detector import detect_caption_segments
-            detected_segments = await loop.run_in_executor(
+            _det = detect_caption_segments
+
+        detected_segments = []
+        for idx, r in enumerate(rois):
+            segs = await loop.run_in_executor(
                 None,
-                lambda: detect_caption_segments(str(video_path), roi=roi, on_progress=_det_progress),
+                lambda r=r: _det(str(video_path), roi=r, on_progress=_det_progress),
             )
+            if segs:
+                logger.info(f"banda {idx + 1}/{len(rois)} {r}: {len(segs)} segment(e)")
+                detected_segments.extend(segs)
+        detected_segments.sort(key=lambda s: s["start_t"])
 
         if not detected_segments:
             logger.warning(
@@ -679,6 +740,31 @@ async def _run_tts(text: str, cfg: Dict, output_path: str, slc: _Sliced) -> str:
             lambda: xtts_synth(
                 text=text, voice_id=voice_id, language=language,
                 output_path=output_path, speed=speed,
+            ),
+        )
+        return out
+
+    if engine == "kokoro":
+        # TTS local pe GPU — zero credite. Doar engleza; vezi services/kokoro_tts.
+        from services.kokoro_tts import synthesize as kokoro_synth
+        out = await loop.run_in_executor(
+            None,
+            lambda: kokoro_synth(
+                text=text, output_path=output_path, voice=voice_id,
+                language=language, speed=speed,
+            ),
+        )
+        return out
+
+    if engine == "f5_ro":
+        # Clonare zero-shot in ROMANA, local pe GPU — zero credite.
+        # voice_id = numele clipului de referinta din data/voices/.
+        from services.f5_ro_tts import synthesize as f5_synth
+        out = await loop.run_in_executor(
+            None,
+            lambda: f5_synth(
+                text=text, output_path=output_path, voice_id=voice_id,
+                language=language, speed=speed,
             ),
         )
         return out
@@ -920,13 +1006,28 @@ async def _stage_match_and_caption(
     fused_vf = ",".join(p for p in (speed_vfilter, scale_vf, subtitles_vf) if p)
 
     ffmpeg = _ffmpeg_bin()
-    cmd = [
-        ffmpeg, "-y", "-loglevel", "error",
-        "-i", str(erased_video),   # input 0: erased video (its audio is dropped)
-        "-i", str(voice_path),     # input 1: the TTS voice
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-filter:v", fused_vf,
-        "-c:v", "libx264", "-preset", "slow", "-crf", "16",
+    # Cand muzica de fundal e pornita, filtrul video trebuie mutat in
+    # filter_complex: ffmpeg nu accepta -filter:v si -filter_complex impreuna.
+    bg_af = _bg_audio_filter(plan.get("factor") or 1.0, cfg.get("bg_music_db"))
+    if bg_af and _has_audio_stream(str(erased_video)):
+        cmd = [
+            ffmpeg, "-y", "-loglevel", "error",
+            "-i", str(erased_video),   # input 0: video erased + audio-ul original
+            "-i", str(voice_path),     # input 1: vocea TTS
+            "-filter_complex", f"[0:v]{fused_vf}[vout];{bg_af}",
+            "-map", "[vout]", "-map", "[aout]",
+        ]
+    else:
+        cmd = [
+            ffmpeg, "-y", "-loglevel", "error",
+            "-i", str(erased_video),   # input 0: erased video (its audio is dropped)
+            "-i", str(voice_path),     # input 1: the TTS voice
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-filter:v", fused_vf,
+        ]
+    from services.encode_profile import video_args
+    cmd += [
+        "-preset", "slow", *video_args(OUTPUT_FPS, crf_fallback="16"),
         "-r", str(OUTPUT_FPS),     # forced CFR — see OUTPUT_FPS
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
@@ -996,7 +1097,7 @@ async def handle_remix_pipeline(
             "caption_zone": {x, y, w, h, src_w, src_h},
             "transcript_engine": "ollama|openai|anthropic",
             "transcript_target_lang": "en"|"ro"|"",
-            "tts_engine": "xtts|elevenlabs|local_clone",
+            "tts_engine": "xtts|kokoro|elevenlabs|local_clone|f5_ro",
             "tts_voice_id": "...",
             "tts_language": "en",
             "caption_template_id": "bold_impact"

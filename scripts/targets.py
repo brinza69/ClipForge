@@ -9,13 +9,19 @@ Values go in `data/targets.json` (`data/` is gitignored, next to
 `buffer_config.json` and `drive_oauth_*.json`):
 
     {
-      "fr_sheet_id":               "…",
-      "fr_tab":                    "Victoria",
-      "fr_drive_folder":           "…",
-      "povestitor_drive_folder":   "…",
-      "tiktok_channel_ro":         "…",
-      "tiktok_channel_fr":         "…",
-      "facebook_channel":          "…"
+      "pov_sheet_id":                "…",   # sheet-ul romanesc (Sheet1)
+      "pov_tab":                     "Sheet1",
+      "fr_sheet_id":                 "…",
+      "fr_tab":                      "Victoria",
+      "fr_drive_folder":             "…",   # Victoria (franceza)
+      "povestitor_drive_folder":     "…",   # povestitor RO (contine posted/)
+      "povestitor_en_drive_folder":  "…",   # povestitor EN
+      "narator_drive_folder":        "…",
+      "comentator_drive_folder":     "…",
+      "tiktok_channel_ro":           "…",
+      "tiktok_channel_fr":           "…",
+      "facebook_channel":            "…",
+      "facebook_channel_fr":         "…"
     }
 
 Missing keys fail loudly with the key name, rather than silently pointing a
@@ -30,23 +36,38 @@ _cache: dict | None = None
 
 
 def _path() -> pathlib.Path:
+    """Unde stau tintele.
+
+    Sunt comune pe rig — acelasi sheet, aceleasi foldere, aceleasi canale —
+    spre deosebire de `data_b/`, care tine starea SEPARATA a celui de-al doilea
+    backend (presete, DB, token). Dispecerul legat de placa B mostenea
+    `CLIPFORGE_DATA_DIR=data_b` de la watchdog si murea la pornire cautand un
+    `data_b/targets.json` care nu exista si nu trebuie sa existe. Deci: daca
+    exista in folderul indicat de mediu, se foloseste; altfel `data/` din repo.
+    """
     data = os.environ.get("CLIPFORGE_DATA_DIR")
-    base = pathlib.Path(data) if data else _ROOT / "data"
-    if not base.is_absolute():
-        base = _ROOT / base
-    return base / "targets.json"
+    if data:
+        base = pathlib.Path(data)
+        if not base.is_absolute():
+            base = _ROOT / base
+        p = base / "targets.json"
+        if p.exists():
+            return p
+    return _ROOT / "data" / "targets.json"
 
 
 def all_targets() -> dict:
+    """Continutul fisierului, sau {} daca nu exista.
+
+    Lipsa fisierului NU e fatala aici: `get()` verifica intai mediul si accepta
+    o valoare implicita, deci un aparat care doar posteaza poate rula din
+    variabile de mediu, cu doar cheile de care are nevoie. Cine chiar are nevoie
+    de o cheie si n-o gaseste nicaieri afla in `get()`, cu tot cu motiv.
+    """
     global _cache
     if _cache is None:
         p = _path()
-        if not p.exists():
-            raise SystemExit(
-                f"lipseste {p}\n"
-                f"Vezi docstring-ul din scripts/targets.py pentru forma fisierului."
-            )
-        _cache = json.loads(p.read_text(encoding="utf-8"))
+        _cache = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
     return _cache
 
 
@@ -57,5 +78,9 @@ def get(key: str, default=None):
         return env
     val = all_targets().get(key, default)
     if val is None:
-        raise SystemExit(f"lipseste cheia '{key}' din {_path()}")
+        p = _path()
+        motiv = (f"lipseste cheia '{key}' din {p}" if p.exists()
+                 else f"nu exista {p}, si nici variabila CLIPFORGE_{key.upper()}")
+        ndl = chr(10)
+        raise SystemExit(motiv + ndl + "Vezi docstring-ul din scripts/targets.py pentru forma fisierului.")
     return val
