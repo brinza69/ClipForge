@@ -7,6 +7,8 @@ before input, one encode, captions inside the single filtergraph, escaped user
 text — are checkable without ffmpeg, without media on disk and in milliseconds.
 """
 
+from pathlib import Path
+
 import pytest
 
 from services.clipper import render
@@ -95,7 +97,10 @@ def test_captions_are_burned_inside_the_same_filter_complex():
     # appended after it, and asserting on the graph's last character made this
     # test a statement about filter ORDER, which it never meant to be.
     assert _video_branch(graph).endswith("[vout]")
-    assert cmd[cmd.index("-map") + 1] == "[vout]"
+    # The encoded stream now includes the explicit frame grid after this
+    # composition. The still and MP4 must use that same sampling stage.
+    assert ";[vout]fps=" in graph
+    assert graph.endswith(cmd[cmd.index("-map") + 1])
 
 
 def test_ass_path_is_escaped_for_the_filter_parser():
@@ -103,12 +108,13 @@ def test_ass_path_is_escaped_for_the_filter_parser():
     assert "D\\:/proj/captions.ass" in graph
 
 
-def test_without_captions_the_layout_pad_is_mapped_directly():
+def test_without_captions_the_layout_reaches_the_shared_frame_grid():
     cmd = _cmd()
     graph = _graph(cmd)
     assert "subtitles=" not in graph
     assert _video_branch(graph).endswith("[v]")
-    assert cmd[cmd.index("-map") + 1] == "[v]"
+    assert ";[v]fps=" in graph
+    assert graph.endswith(cmd[cmd.index("-map") + 1])
 
 
 # --------------------------------------------------------------------------
@@ -134,7 +140,8 @@ def test_audio_is_levelled_the_same_way_the_multi_shot_path_levels_it():
 
     graph = _graph(_cmd())
     assert loudness_chain() in graph
-    assert graph.endswith("[aout]")
+    assert f"{loudness_chain()}[aout]" in graph
+    assert "[aout]" in _cmd()
 
 
 def test_encoder_settings():
@@ -241,7 +248,8 @@ def test_empty_watermark_adds_no_drawtext():
 def test_watermark_and_captions_share_one_chain():
     graph = _graph(_cmd(ass_path="D:/proj/c.ass", watermark="clipforge"))
     assert graph.count(";[v]") == 1
-    assert graph.count("[vout]") == 1
+    assert any(stage.startswith("[v]subtitles=") and "drawtext=" in stage
+               for stage in graph.split(";"))
     assert "subtitles=" in graph and "drawtext=" in graph
 
 
@@ -297,7 +305,87 @@ async def test_render_clip_honours_cancellation_before_spawning_ffmpeg():
         )
 
 
+async def test_render_publishes_only_after_validation_and_keeps_old_output_on_failure(
+    tmp_path, monkeypatch
+):
+    final = tmp_path / "clip.mp4"
+    final.write_bytes(b"previous render")
+    seen = {}
+
+    def fake_run(cmd, **_kwargs):
+        output = Path(cmd[-1])
+        seen["temp"] = output
+        output.write_bytes(b"new render" * 300)
+
+    monkeypatch.setattr(render, "_has_audio", lambda _src: False)
+    monkeypatch.setattr(render, "video_info", lambda _path: {"duration": 1.0})
+    monkeypatch.setattr(render, "run", fake_run)
+
+    result = await render.render_clip(
+        "source.mp4", CAND, {}, None, str(final),
+        fps=30, crf=20, preset="fast",
+    )
+
+    assert result["path"] == str(final)
+    assert final.read_bytes() == b"new render" * 300
+    assert seen["temp"] != final
+    assert not seen["temp"].exists()
+
+    final.write_bytes(b"previous render")
+
+    def failed_run(cmd, **_kwargs):
+        seen["failed_temp"] = Path(cmd[-1])
+        seen["failed_temp"].write_bytes(b"partial")
+        raise RuntimeError("encode failed")
+
+    monkeypatch.setattr(render, "run", failed_run)
+    with pytest.raises(RuntimeError, match="encode failed"):
+        await render.render_clip(
+            "source.mp4", CAND, {}, None, str(final),
+            fps=30, crf=20, preset="fast",
+        )
+
+    assert final.read_bytes() == b"previous render"
+    assert not seen["failed_temp"].exists()
+
+
 def test_preview_constants_are_low_res_and_cheap():
     assert (render.PREVIEW_W, render.PREVIEW_H) == (540, 960)
     assert render.PREVIEW_CRF == 30
     assert render.PREVIEW_PRESET == "veryfast"
+
+
+def test_the_caption_is_burned_after_the_overlay_not_before():
+    """A DEFECT A HUMAN FOUND AND EVERY INSTRUMENT HERE MISSED.
+
+    `pad=...:color=black@0` makes the letterbox bars transparent so the blurred
+    copy can show through. Burning the subtitles onto that frame draws the text
+    into the colour planes and leaves the alpha at zero, so `overlay`
+    composited it away — on a `crop` shot the frame is opaque and the caption
+    survived, on a `fit` shot the caption sits in the bar by construction and
+    vanished.
+
+    Measured before the fix: 331 seconds across 27 of the 88 stored clips had no
+    caption at all, and one was silent for 88% of its length.
+    """
+    from services.clipper.dynamic_render import build_dynamic_filtergraph
+
+    plan = {"shots": [{"index": 0, "composition": "fit", "t0": 0.0, "t1": 2.0}],
+            "style": {}}
+    graph, _label = build_dynamic_filtergraph(plan, "c.txt", "x.ass",
+                                              src_w=1920, src_h=1080)
+    assert "overlay=0:0,subtitles=" in graph, graph
+    # ...and NOT on the foreground branch, which is where the alpha is zero.
+    foreground = graph.split("[fg];")[0]
+    assert "subtitles=" not in foreground, foreground
+
+
+def test_no_caption_file_means_no_subtitles_filter_anywhere():
+    from services.clipper.dynamic_render import build_dynamic_filtergraph
+
+    plan = {"shots": [{"index": 0, "composition": "fit", "t0": 0.0, "t1": 2.0}],
+            "style": {}}
+    graph, _label = build_dynamic_filtergraph(plan, "c.txt", None,
+                                              src_w=1920, src_h=1080)
+    assert "subtitles=" not in graph
+    assert graph.endswith("overlay=0:0[vout]"), graph

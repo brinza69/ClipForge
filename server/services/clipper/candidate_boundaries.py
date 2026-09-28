@@ -12,9 +12,12 @@ primary boundary signal; audio energy only refines it.
 
 from __future__ import annotations
 
+import copy
+
 import logging
 from typing import Sequence
 
+from services.clipper import end_acoustics, end_tail
 from services.clipper.candidate_terms import (
     DANGLE_PAUSE_S, GRID_S, LEAD_IN_MAX_S, PAUSE_KEEP_S, PAYOFF_WINDOW_S,
     REACTION_MAX_S, RELEASE_GAP_S, SENTENCE_END_REACH_S, SNAP_TOLERANCE_S,
@@ -218,7 +221,36 @@ def _drop_dangling_tail(end: float, words: Sequence[dict], start: float,
 
 def _fit(start: float, end: float, words: Sequence[dict], lo: float, hi: float,
          floor: float, ceiling: float) -> tuple[float, float]:
-    """Force the span inside [lo, hi] and the media bounds, staying off words."""
+    """Force the span inside [lo, hi] and the media bounds, staying off words.
+
+    "Staying off words" was true of the START and never of the END. Measured by
+    Batch R5's boundary audit over the whole corpus: 261 of 6.762 windows end
+    strictly inside a word and ZERO begin inside one — and that 261/0 asymmetry
+    IS the diagnosis, because this is the one place a start is snapped and an
+    end is not. The end only met `_snap` when the maximum duration was breached.
+
+    Every rule above chooses WHICH word the clip ends on and several of them land
+    off a word edge: `_reaction_end` returns `min(w1, limit)`, so a reaction
+    hitting `REACTION_MAX_S` mid-word cuts there; `_payoff_time` searches a 0.5s
+    grid; the minimum-duration branch below adds `lo` to a start. `_keep_release`
+    does not rescue any of them — it returns early when the gap already exceeds
+    `TAIL_PAD_S`, which is exactly the mid-word case.
+
+    Pushing OUT to the end of the straddled word is what the corpus wants:
+    measured over all 261, every one fits inside its own maximum, 260 are pushed
+    out and one is pulled back. The move is NOT small — median 0.10s, p90 0.66s,
+    and 120 of the 261 exceed 0.15s. Three exceed three seconds, on transcripts
+    carrying a five-second token; no word-length guard is applied, because the
+    audio does not confirm that those extensions are silence (all three sit in
+    intervals classified as speech with the RMS active), so a statistical
+    threshold would flag an odd timestamp without knowing where the word really
+    ends. `scripts/measure_boundary_snap.py` reproduces every figure here.
+
+    `_snap` falls back to pulling in to the word's start when the push would
+    breach `limit`, and the guard below refuses that when it would take the clip
+    under the minimum — a truncated word is a defect, and a clip shorter than the
+    floor is a different one.
+    """
     start = max(floor, start)
     end = min(ceiling, max(end, start + 0.1))
     if end - start > hi:
@@ -230,6 +262,12 @@ def _fit(start: float, end: float, words: Sequence[dict], lo: float, hi: float,
     start = _snap(words, start, to_end=False, limit=floor)
     if end - start > hi:  # snapping backwards can reopen the max breach
         start = _snap(words, end - hi, to_end=False, limit=end - hi)
+    # LAST, so nothing above can put the cut back inside a word. Bounded by both
+    # the maximum and the media; a pull-back that breaches the minimum is
+    # refused, because trading one defect for another is not a repair.
+    snapped = _snap(words, end, to_end=True, limit=min(start + hi, ceiling))
+    if lo <= snapped - start <= hi and snapped <= ceiling + _EPS:
+        end = snapped
     return start, max(end, start + 0.1)
 
 
@@ -248,13 +286,34 @@ def _rank_alternatives(raw: list[dict], words: Sequence[dict], start: float,
     return [alt for _drift, alt in kept[:2]]
 
 
+def _context_floor(cand: dict) -> float | None:
+    """The earliest fact this clip must contain, or None when it needs none.
+
+    Only the story path has one. On the legacy path there is no anchor, so
+    nothing here changes what the boundary code has always done.
+    """
+    story = cand.get("story")
+    if not isinstance(story, dict):
+        return None
+    times = [_num(item.get("t"), -1.0)
+             for item in (story.get("required_context") or [])
+             if isinstance(item, dict)]
+    times = [t for t in times if t >= 0]
+    return min(times) if times else None
+
+
 def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
-                      min_s: float, max_s: float) -> dict:
+                      min_s: float, max_s: float,
+                      atoms: Sequence[dict] | None = None,
+                      audio=None) -> dict:
     """Return a NEW candidate with human-quality in and out points.
 
     Order matters: open on a sentence, add a lead-in only if the opening line
     dangles, keep the reaction after the payoff, keep a question with its
     answer, then trim dead air. Every step re-checks [min_s, max_s].
+
+    `audio` (an `end_acoustics.SpeechAudio`) lets the end be settled on what
+    the audio shows; None is exactly the transcript-only behaviour.
     """
     cand = cand or {}
     lo, hi = _bounds(min_s, max_s)
@@ -269,8 +328,17 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
     reasons = [str(r) for r in (cand.get("reasons") or [])]
     alternatives: list[dict] = []
 
+    # The latest start that still carries every required fact. `story.py` chose
+    # the opening for exactly this and nothing downstream knew: measured on the
+    # short gate source, `start_on_sentence` moved one balanced variant from
+    # 32.0 to 32.5 and left its only required-context fact half a second
+    # outside the clip. Snapping to a sentence is a presentation fix; dropping
+    # the setup the moment was cut around is not a fair price for it.
+    context_floor = _context_floor(cand)
+
     snapped = _nearest_sentence_start(sentences, start)
-    if snapped is not None and snapped + lo <= ceiling:
+    if (snapped is not None and snapped + lo <= ceiling
+            and (context_floor is None or snapped <= context_floor + 0.001)):
         start = snapped
         _add(reasons, "start_on_sentence")
     start = _snap(words, start, to_end=False, limit=floor)
@@ -321,7 +389,11 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
             _add(reasons, "end_on_sentence")
 
     dropped = _drop_dangling_tail(end, words, start, lo)
+    orphan = None
     if dropped < end - 0.05:
+        # Kept for the audio step below: dropped from the text, still a
+        # possible onset in the sound.
+        orphan = [w for w in words if _num(w["end"]) <= end + _EPS][-1]
         end = dropped
         _add(reasons, "dangling_tail_dropped")
 
@@ -334,6 +406,27 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
         _add(reasons, "release_kept")
 
     start, end = _fit(start, end, words, lo, hi, floor, ceiling)
+    # After `_fit`, because its end-snap works on Whisper boxes and would push
+    # an end the audio placed inside a stretched box (1204's one-second "so")
+    # out to the box's end, putting the dropped word back. Bounded by the same
+    # maximum and media end; it only ever moves the end later.
+    end_evidence = None
+    if audio is not None:
+        end, end_evidence = end_acoustics.settle_end(
+            start, end, words, audio=audio, limit=min(start + hi, ceiling), lo=lo,
+            dropped=orphan)
+        for code in end_evidence["reasons"]:
+            _add(reasons, code)
+        # EN3: the pause after the last word, off unless configured (end_tail.py).
+        from config import settings
+
+        end, tail = end_tail.extend_tail(end, words, end_evidence, audio=audio,
+                                         limit=min(start + hi, ceiling),
+                                         target_s=settings.clipper_end_tail_s)
+        if tail is not None:
+            end_evidence["tail"] = tail
+            if tail["state"] == "moved":
+                _add(reasons, "end_tail_extended")
     inside, _before, _after = _neighbourhood(words, start, end)
 
     out = dict(cand)  # a NEW dict; the caller's candidate is never touched
@@ -341,5 +434,18 @@ def refine_boundaries(cand: dict, transcript: dict, signals: dict, *,
                 "text": _text_of(inside) or str(cand.get("text") or ""),
                 "words": list(inside), "reasons": reasons,
                 "alternatives": _rank_alternatives(alternatives, words, start, end, lo, hi)})
+    if end_evidence is not None:
+        out["end_evidence"] = end_evidence
+    # `dict(cand)` copies the story block, metrics and all, and everything above
+    # this line can move BOTH edges. Measured before this call existed: on the
+    # four-hour source, 20 story candidates ended up with required context
+    # outside their own final span and their recorded hook latency belonged to
+    # a window that no longer existed. The story block is deep-copied first so
+    # remeasuring never writes through into the caller's candidate.
+    if isinstance(out.get("story"), dict):
+        from services.clipper import story_evidence
+
+        out["story"] = copy.deepcopy(out["story"])
+        story_evidence.remeasure(out, atoms=atoms)
     return out
 

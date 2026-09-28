@@ -32,7 +32,20 @@ _FRONTEND_ONLY: set[str] = set()
 # are set per project through the API or left at their config default — so the
 # test asserts the direction that matters (nothing posted is dropped) and only
 # reports these.
-_BACKEND_ONLY = {"vision_model"}
+_BACKEND_ONLY = {
+    "vision_model",
+    # Declared in ClipperSettings but deliberately NOT in DEFAULT_SETTINGS. The
+    # backend resolves its default from config.py, so a value posted wholesale
+    # from the browser would override a rig that was configured there — the
+    # exact trap `trim_silence` fell into, and worse here because this key
+    # decides which reasoning engine runs. The form sends it only when the user
+    # picks one.
+    "reasoning_mode",
+    # Same argument, one batch later: the rig chooses the editing grammar
+    # through config.py, and a browser that posts the whole settings object
+    # would silently move every project back to `legacy_dynamic`.
+    "edit_mode",
+}
 
 
 def _typescript_defaults() -> dict[str, object]:
@@ -50,6 +63,14 @@ def _typescript_defaults() -> dict[str, object]:
         value = raw.strip()
         if value in ("true", "false"):
             out[key] = value == "true"
+        elif value == "null":
+            # `null` is a VALUE, not a string called "null". Until
+            # `source_has_burned_captions` there was no nullable default here,
+            # so this fell through to the string branch and compared `'null'`
+            # against `None` — an unhandled case reading as a different kind of
+            # answer, which is the shape of defect this suite exists for. It
+            # failed loudly rather than quietly, which is the good direction.
+            out[key] = None
         elif re.fullmatch(r"-?\d+(\.\d+)?", value):
             out[key] = float(value)
         else:
@@ -128,6 +149,28 @@ def test_the_parser_reads_the_real_file():
     assert len(keys) > 10
     for known in ("clip_count", "min_clip_s", "auto_export", "vision_review"):
         assert known in keys, f"{known} missing — the parser has drifted"
+
+
+@pytest.mark.parametrize("value", [True, False, None])
+def test_the_caption_source_answer_survives_as_given(value):
+    from routers.clipper import _normalise_settings
+
+    assert _normalise_settings({"source_has_burned_captions": value})[
+        "source_has_burned_captions"] is value
+
+
+@pytest.mark.parametrize("bad", [1, 0, "true", "false", "yes", "", [], {}])
+def test_the_caption_source_answer_is_refused_rather_than_coerced(bad):
+    """Until B2 these became None in silence: a 200 for a request whose answer
+    was then dropped. `1 == True`, so this also pins the isinstance check."""
+    from fastapi import HTTPException
+
+    from routers.clipper import _normalise_settings
+
+    with pytest.raises(HTTPException) as exc:
+        _normalise_settings({"source_has_burned_captions": bad})
+    assert exc.value.status_code == 422
+    assert exc.value.detail["error"] == "invalid_value"
 
 
 @pytest.mark.parametrize("key", ["auto_export", "vision_review"])

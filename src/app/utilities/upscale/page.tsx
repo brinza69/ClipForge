@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8420";
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "m4v", "avi"];
 
@@ -142,7 +141,7 @@ export default function UpscalePage() {
       form.append("target_p", String(targetP));
       form.append("denoise", String(denoise));
 
-      const submit = await fetch(`${WORKER_URL}/api/utilities/upscale`, {
+      const submit = await fetch(`/worker-api/utilities/upscale`, {
         method: "POST",
         body: form,
       });
@@ -159,7 +158,7 @@ export default function UpscalePage() {
           throw new Error("Job timed out after 60 minutes");
         }
         await new Promise((r) => setTimeout(r, 1500));
-        const sr = await fetch(`${WORKER_URL}/api/jobs/${job_id}`);
+        const sr = await fetch(`/worker-api/jobs/${job_id}`);
         if (!sr.ok) throw new Error(`Status fetch failed (${sr.status})`);
         const j = await sr.json();
         setProgress(Math.round((j.progress || 0) * 100));
@@ -169,11 +168,11 @@ export default function UpscalePage() {
         if (j.status === "cancelled") throw new Error("Job was cancelled");
       }
 
-      const rRes = await fetch(`${WORKER_URL}/api/utilities/upscale/${job_id}/result`);
+      const rRes = await fetch(`/worker-api/utilities/upscale/${job_id}/result`);
       const result = await rRes.json();
       setStats(result.stats as Stats);
 
-      const dlRes = await fetch(`${WORKER_URL}/api/utilities/upscale/${job_id}/download`);
+      const dlRes = await fetch(`/worker-api/utilities/upscale/${job_id}/download`);
       if (!dlRes.ok) throw new Error("Failed to fetch output");
       const blob = await dlRes.blob();
       const url = URL.createObjectURL(blob);

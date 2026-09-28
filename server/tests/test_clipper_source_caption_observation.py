@@ -1,0 +1,419 @@
+"""Subtitle-line boxes with the time they were seen — batch A's first half.
+
+WHAT THESE TESTS ARE PROTECTING. Every question this record will be asked is of
+the form "was there text on screen during this stretch, and where" — and the
+three ways to get that wrong are all absences read as answers: a moment nobody
+sampled read as a moment with no subtitle, a frame the detector failed on read
+as a frame with no boxes, and a text box read as a subtitle without anybody
+confirming it is dialogue. One test each, and they are the ones to keep.
+"""
+
+from __future__ import annotations
+
+from services.clipper import source_caption_observation as sco
+
+
+class _Reader:
+    """CRAFT's shape: `detect()[0][0]` is a list of `[x0, x1, y0, y1]`."""
+
+    def __init__(self, boxes, raises=False):
+        self.boxes, self.raises = boxes, raises
+
+    def detect(self, _frame, **_kw):
+        if self.raises:
+            raise RuntimeError("no")
+        return [[self.boxes]]
+
+
+def _annotated(**kw):
+    got = {"video": "s.mp4", "image_w": 480, "image_h": 270,
+           "provenance": sco.HUMAN,
+           "samples": [{"t": 1.0, "boxes": [{"x0": 0.25, "x1": 0.72,
+                                             "y0": 0.91, "y1": 0.97}]}]}
+    got.update(kw)
+    return sco.from_annotations(got.pop("video"), got.pop("samples"), **got)
+
+
+# --- an absence is never an answer ------------------------------------------
+
+
+def test_a_moment_nobody_sampled_is_unevidenced_and_not_text_free():
+    """The distinction the whole record exists for. A shot with no sample in it
+    has to come back as "nothing was looked at", never as "no text was seen"."""
+    obs = _annotated()
+    got = sco.coverage(obs, 10.0, 12.0)
+    assert got["samples"] == 0 and got["unevidenced"] is True
+    assert got["with_text"] == got["without_text"] == 0
+
+
+def test_an_interval_whose_only_samples_refused_is_unevidenced_too():
+    """Looked at and not seen is, for every decision downstream, the same as not
+    looked at — so a refusal may not quietly become "no text"."""
+    obs = _annotated(samples=[{"t": 1.0, "boxes": None}])
+    got = sco.coverage(obs, 0.0, 2.0)
+    assert got["samples"] == 1 and got["refused"] == 1
+    assert got["without_text"] == 0 and got["unevidenced"] is True
+
+
+def test_a_sample_that_saw_no_text_is_evidence():
+    obs = _annotated(samples=[{"t": 1.0, "boxes": []}])
+    got = sco.coverage(obs, 0.0, 2.0)
+    assert got["without_text"] == 1 and got["unevidenced"] is False
+
+
+def test_the_boxes_inside_the_interval_come_back_with_it():
+    obs = _annotated(samples=[
+        {"t": 1.0, "boxes": [{"x0": 0.25, "x1": 0.72, "y0": 0.91, "y1": 0.97}]},
+        {"t": 9.0, "boxes": [{"x0": 0.1, "x1": 0.2, "y0": 0.1, "y1": 0.2}]}])
+    got = sco.coverage(obs, 0.0, 2.0)
+    assert got["with_text"] == 1 and len(got["boxes"]) == 1
+    assert got["boxes"][0]["x1"] == 0.72, "and not the other interval's"
+
+
+def test_an_interval_that_is_not_two_ordered_seconds_is_refused():
+    obs = _annotated()
+    for lo, hi in ((2.0, 1.0), (1.0, 1.0), (None, 2.0), ("a", 2.0)):
+        got = sco.coverage(obs, lo, hi)
+        assert got["unevidenced"] is True, (lo, hi)
+        assert got["why"], (lo, hi)
+
+
+def test_no_observation_at_all_is_unevidenced_and_not_empty():
+    for bad in (None, {}, {"samples": None}, 7, "samples"):
+        got = sco.coverage(bad, 0.0, 2.0)
+        assert got["unevidenced"] is True, repr(bad)
+
+
+# --- a text box is not a subtitle -------------------------------------------
+
+
+def test_the_detector_never_confirms_the_boxes_are_dialogue():
+    """`pilot6b38`'s watermark is in 13 of 14 frames — MORE persistent than go
+    ghost's real caption track — and only its width separates them, on
+    thresholds chosen with the answer visible. So the detector's `dialogue`
+    stays None and a consumer has to go and get a confirmation."""
+    got = sco.observe("x.mp4", [1.0], reader=_Reader([[10, 100, 200, 220]]))
+    assert got["dialogue"] is None
+
+
+def test_only_a_real_boolean_confirms_dialogue():
+    """A form posting the string "true" would otherwise turn a watermark into a
+    subtitle track and suppress somebody's captions over it."""
+    for bad in ("true", "false", 1, 0, "", [], {}, None):
+        assert _annotated(dialogue=bad)["dialogue"] is None, repr(bad)
+    assert _annotated(dialogue=True)["dialogue"] is True
+    assert _annotated(dialogue=False)["dialogue"] is False
+
+
+def test_an_annotation_may_not_claim_to_be_the_detector():
+    """The detector route is `observe`, and it is the only one that can be
+    re-run. An annotation wearing that name is an unverifiable record under the
+    name of the one thing that is verifiable."""
+    got = _annotated(provenance=sco.DETECTOR)
+    assert got["samples"] == [] and got["why"]
+    assert _annotated(provenance=sco.AGENT)["provenance"] == sco.AGENT
+
+
+# --- what the detector produces ---------------------------------------------
+
+
+def test_every_line_survives_and_none_is_aggregated_into_a_band(monkeypatch):
+    """`source_captions._bands` keeps ONE width per band per frame — the widest
+    box — which is exactly why it cannot answer a per-interval question. Two
+    lines of the same caption fall in the same tenth of the frame and would
+    become one number there; here they stay two boxes with two extents."""
+    got = _run(monkeypatch,
+               _Reader([[120, 340, 232, 250], [100, 380, 252, 268]]), [1.0])
+    boxes = got["samples"][0]["boxes"]
+    assert len(boxes) == 2
+    assert boxes[0]["x0"] == 0.25 and boxes[1]["x0"] == round(100 / 480, 4)
+    assert boxes[0]["y0"] != boxes[1]["y0"], "and they keep their own rows"
+
+
+def test_a_detector_that_raises_is_a_refusal_and_not_an_empty_frame(monkeypatch):
+    got = _run(monkeypatch, _Reader([], raises=True), [1.0])
+    assert got["read"] == 0 and got["refused"] == 1
+    assert got["samples"][0]["boxes"] is None
+    assert got["samples"][0]["refused"] == sco.DETECTOR_FAILED
+
+
+def test_a_frame_with_no_text_is_an_empty_list_and_not_a_refusal(monkeypatch):
+    got = _run(monkeypatch, _Reader([]), [1.0])
+    assert got["read"] == 1 and got["refused"] == 0
+    assert got["samples"][0]["boxes"] == []
+
+
+def test_the_boxes_are_fractions_of_the_image_that_was_analysed(monkeypatch):
+    """The detector runs on the PROXY. A box in its pixels means nothing without
+    the frame it was measured in, and fractions travel to the source where
+    pixels do not."""
+    got = _run(monkeypatch, _Reader([[120, 360, 243, 270]]), [1.0])
+    assert got["image_w"] == 480 and got["image_h"] == 270
+    assert got["samples"][0]["boxes"] == [
+        {"x0": 0.25, "x1": 0.75, "y0": 0.9, "y1": 1.0}]
+
+
+def test_a_box_outside_the_frame_fails_the_whole_frame(monkeypatch):
+    """A box running from 0 to a million is a perfectly finite number and would
+    put a subtitle across the entire width. The frame is the unit: a partial
+    list measures the model's failure and reads as a measurement of the frame."""
+    got = _run(monkeypatch, _Reader([[0, 480, 0, 270], [0, 999999, 10, 20]]),
+               [1.0])
+    assert got["samples"][0]["boxes"] is None
+    assert got["samples"][0]["refused"] == sco.DETECTOR_FAILED
+
+
+def test_the_decoded_time_is_recorded_beside_the_requested_one(monkeypatch):
+    """Seeking is approximate. Reporting the boxes at the time that was ASKED
+    for states a precision the decoder did not deliver, and an interval decision
+    made on a box placed a second from where it was seen is undetectable
+    downstream."""
+    got = _run(monkeypatch, _Reader([]), [51.15], decoded_ms=51400.0)
+    assert got["samples"][0]["t_requested"] == 51.15
+    assert got["samples"][0]["t_decoded"] == 51.4
+
+
+def test_no_detector_is_not_an_observation_that_saw_nothing():
+    got = sco.observe("x.mp4", [1.0], reader=None)
+    assert got["samples"] == [] and got["read"] == 0
+    assert got["why"] in (sco.NO_DETECTOR, sco.NO_VIDEO)
+
+
+def test_times_that_are_not_finite_seconds_are_refused():
+    for at in (None, [], "1.0", [1.0, "x"], [-1.0], [float("nan")], 7):
+        got = sco.observe("x.mp4", at, reader=_Reader([]))
+        assert got["samples"] == [], repr(at)
+        assert got["why"] == sco.BAD_TIMES, repr(at)
+
+
+# --- a fake capture, so the rule is testable without a file -----------------
+
+
+def _run(monkeypatch, reader, times, decoded_ms: float | None = None):
+    import sys
+    import types
+
+    class _Cap:
+        """A decoder that answers the two properties separately, and reports a
+        frame index derived from the position — so a test can tell a real
+        disjointness check from one comparing the request."""
+
+        def __init__(self, _path):
+            self._want = 0.0
+
+        def isOpened(self):
+            return True
+
+        def set(self, _prop, value):
+            self._want = value
+
+        def get(self, prop):
+            if prop == 1:                                # CAP_PROP_POS_FRAMES
+                return float(int(self._want / 40.0))     # 25 fps
+            return self._want if decoded_ms is None else decoded_ms
+
+        def read(self):
+            class _F:
+                shape = (270, 480, 3)
+
+            return True, _F()
+
+        def release(self):
+            pass
+
+    fake = types.ModuleType("cv2")
+    fake.CAP_PROP_POS_MSEC = 0
+    fake.CAP_PROP_POS_FRAMES = 1
+    fake.VideoCapture = _Cap
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+    return sco.observe("x.mp4", times, reader=reader)
+
+
+# --- did the hold-out really hold anything out -------------------------------
+
+
+def test_two_different_times_that_decode_to_one_frame_are_not_disjoint(monkeypatch):
+    """THE CHECK THAT WAS ASSUMED. Shifting the requested times by half a slot
+    does not guarantee different frames: at 25 fps, 1.00 s and 1.02 s are the
+    same frame, and a hold-out built that way tests a region against its own
+    inputs while reporting that it escaped the circularity."""
+    build = _run(monkeypatch, _Reader([]), [1.00])
+    later = _run(monkeypatch, _Reader([]), [1.02])
+    assert build["samples"][0]["t_requested"] != later["samples"][0]["t_requested"]
+    assert build["samples"][0]["frame"] == later["samples"][0]["frame"]
+    got = sco.disjoint(build, later)
+    assert got["shared"] == 1 and got["disjoint"] is False
+
+
+def test_frames_far_enough_apart_are_disjoint(monkeypatch):
+    build = _run(monkeypatch, _Reader([]), [1.00, 2.00])
+    later = _run(monkeypatch, _Reader([]), [1.50, 2.50])
+    got = sco.disjoint(build, later)
+    assert got["disjoint"] is True and got["shared"] == 0
+    assert got["build"] == 2 and got["holdout"] == 2
+
+
+def test_a_sample_with_no_frame_index_cannot_be_shown_to_be_distinct(monkeypatch):
+    """It blocks the clean answer rather than passing quietly: `disjoint: None`
+    is "nobody could tell", and a caller that read it as True would be back to
+    testing the region against its own inputs."""
+    build = _run(monkeypatch, _Reader([]), [1.00])
+    later = {"samples": [{"t_requested": 5.0, "t_decoded": 5.0, "frame": None,
+                          "boxes": []}]}
+    got = sco.disjoint(build, later)
+    assert got["disjoint"] is None and got["unidentified"] == 1
+    assert got["why"] == "some_samples_carry_no_frame_index"
+
+
+def test_an_empty_set_is_not_a_disjoint_one(monkeypatch):
+    build = _run(monkeypatch, _Reader([]), [1.00])
+    for bad in (None, {}, {"samples": []}, 7):
+        got = sco.disjoint(build, bad)
+        assert got["disjoint"] is not True, repr(bad)
+
+
+# --- a miss is not a gap -----------------------------------------------------
+
+
+def _det(t, boxes):
+    return {"t_requested": t, "t_decoded": t, "frame": int(t * 25),
+            "boxes": boxes, "refused": None}
+
+
+def _line(x0=0.3, x1=0.7):
+    return {"x0": x0, "x1": x1, "y0": 0.91, "y1": 0.96}
+
+
+def test_a_frame_the_detector_missed_stops_being_evidence_of_an_empty_one():
+    """A frame the detector fails on comes back with no boxes; left alone that
+    sample counts under `without_text`, a region is built as though nothing
+    needed keeping there, and the mistake is invisible because a miss and a gap
+    look identical.
+
+    The instance this test originally cited — `6053a598cf06` at 1161.1 s — was
+    not one, and the citation is removed rather than repaired: the detector
+    returned a box there and the claim came from misreading a thumbnail. The
+    rule is what the test is for, and it holds whether or not that particular
+    frame is an example of it."""
+    obs = {"samples": [_det(1.0, []), _det(2.0, [_line()])]}
+    before = sco.coverage(obs, 0.5, 1.5)
+    assert before["without_text"] == 1 and before["with_text"] == 0
+
+    fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line(0.25, 0.75)],
+                               "by": sco.AGENT, "why": "seen_on_the_sheet"}])
+    after = sco.coverage(fixed, 0.5, 1.5)
+    assert fixed["corrections"] == 1
+    assert after["with_text"] == 1 and after["without_text"] == 0
+    assert len(after["boxes"]) == 1
+
+
+def test_the_correction_is_marked_and_the_detectors_own_boxes_are_kept():
+    """The record may never claim a detector saw what a person supplied, and a
+    later pass measuring the detector's recall needs what it returned."""
+    obs = {"samples": [_det(1.0, [_line()])]}
+    fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line(0.1, 0.2)],
+                               "by": sco.HUMAN}])
+    row = fixed["samples"][0]
+    assert row["provenance"] == sco.CORRECTED
+    assert row["corrected_by"] == [sco.HUMAN]
+    assert len(row["detector_boxes"]) == 1 and len(row["boxes"]) == 2
+
+
+def test_a_correction_may_only_add():
+    """Saying the detector saw something that is not really there is a
+    `non_dialogue` LABEL. Spelling it here too would put one decision in two
+    places under two names."""
+    obs = {"samples": [_det(1.0, [_line()])]}
+    for bad in ({"at": 1.0, "boxes": [], "by": sco.AGENT},
+                {"at": 1.0, "boxes": None, "by": sco.AGENT}):
+        fixed = sco.correct(obs, [bad])
+        assert fixed["corrections"] == 0, repr(bad)
+        assert fixed["correction_refusals"], repr(bad)
+        assert len(fixed["samples"][0]["boxes"]) == 1
+
+
+def test_a_correction_without_a_person_or_an_agent_behind_it_is_refused():
+    obs = {"samples": [_det(1.0, [])]}
+    for by in (None, "detector", "", 7):
+        fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line()], "by": by}])
+        assert fixed["corrections"] == 0, repr(by)
+
+
+def test_a_correction_that_matched_no_sample_is_reported():
+    obs = {"samples": [_det(1.0, [])]}
+    fixed = sco.correct(obs, [{"at": 9.0, "boxes": [_line()], "by": sco.AGENT}])
+    assert fixed["corrections"] == 0
+    assert any("no_sample_at" in r for r in fixed["correction_refusals"])
+
+
+def test_correcting_a_refused_frame_makes_it_readable_again():
+    obs = {"samples": [{"t_requested": 1.0, "t_decoded": 1.0, "frame": 25,
+                        "boxes": None, "refused": sco.DETECTOR_FAILED}]}
+    fixed = sco.correct(obs, [{"at": 1.0, "boxes": [_line()], "by": sco.AGENT}])
+    assert fixed["samples"][0]["refused"] is None
+    assert fixed["read"] == 1 and fixed["refused"] == 0
+
+
+# --- the two properties disagree by one frame --------------------------------
+
+
+def test_the_decoded_time_is_the_frame_that_was_read_not_the_one_before(
+        monkeypatch):
+    """`POS_FRAMES` before the read, `POS_MSEC` after it, and neither swapped.
+
+    Measured on the pilot proxy: `set(POS_FRAMES, 2243)` leaves `POS_FRAMES` at
+    2243 and `POS_MSEC` at 224200, and f2243's presentation time is 224.3 s.
+    Reading both before the read — which this module did — pairs a correct index
+    with a time one frame early. On `b23c14c41495` that carried f2425 as a
+    construction frame of the final phase when its true time, 242.5 s, is past
+    the clip's end at 242.42.
+    """
+    import sys
+    import types
+
+    fps = 10.0
+
+    class _Cap:
+        """A decoder with the real off-by-one: before a read, the index names
+        the frame about to be decoded and the time names the one before it."""
+
+        def __init__(self, _path):
+            self._next = 0
+            self._read = -1
+
+        def isOpened(self):
+            return True
+
+        def set(self, prop, value):
+            self._next = int(round(value / 1000.0 * fps)) if prop == 0 else int(value)
+            self._read = self._next - 1
+
+        def get(self, prop):
+            if prop == 1:                       # CAP_PROP_POS_FRAMES
+                return float(self._next)
+            return self._read / fps * 1000.0    # CAP_PROP_POS_MSEC
+
+        def read(self):
+            self._read = self._next
+            self._next += 1
+
+            class _F:
+                shape = (270, 480, 3)
+
+            return True, _F()
+
+        def release(self):
+            pass
+
+    fake = types.ModuleType("cv2")
+    fake.CAP_PROP_POS_MSEC = 0
+    fake.CAP_PROP_POS_FRAMES = 1
+    fake.VideoCapture = _Cap
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+
+    got = sco.observe("x.mp4", [224.3], reader=lambda *a, **k: [])
+    sample = got["samples"][0]
+    assert sample["frame"] == 2243, "the index still names the frame that was read"
+    assert sample["t_decoded"] == 224.3, (
+        "the time must be the read frame's, not the previous frame's "
+        f"(got {sample['t_decoded']})")

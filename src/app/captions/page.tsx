@@ -11,8 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Type, Upload, Plus, Trash2, Loader2, Download, AlertCircle,
-  CheckCircle2, FileVideo, Palette, Sparkles, Save,
+  Type, Upload, Plus, Trash2, Loader2, Download, FileVideo, Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CloneFromVideo } from "@/components/captions/clone-from-video";
@@ -22,7 +21,6 @@ import { CloneFromVideo } from "@/components/captions/clone-from-video";
 // avoids browser extension content scripts that intercept cross-port fetches
 // — Chrome/Edge plugins like Grammarly, screenshot tools etc. silently break
 // multipart POSTs from :3000 → :8420.
-const WORKER_URL = "";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -458,6 +456,7 @@ export default function CaptionStudioPage() {
 
       // Poll
       const start = Date.now();
+      let completed = false;
       while (Date.now() - start < 30 * 60 * 1000) {
         await new Promise((r) => setTimeout(r, 1000));
         const sr = await fetch(`/worker-api/jobs/${job_id}`);
@@ -465,10 +464,11 @@ export default function CaptionStudioPage() {
         const j = await sr.json();
         setBurnProgress(Math.round((j.progress || 0) * 100));
         setBurnMsg(j.progress_message || "");
-        if (j.status === "done") break;
+        if (j.status === "done") { completed = true; break; }
         if (j.status === "failed") throw new Error(j.error || "Burn failed");
         if (j.status === "cancelled") throw new Error("Cancelled");
       }
+      if (!completed) throw new Error("Job timed out after 30 minutes");
 
       const dl = await fetch(`/worker-api/captions/burn/${job_id}/download`);
       if (!dl.ok) throw new Error("Download failed");

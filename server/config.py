@@ -90,6 +90,12 @@ class Settings(BaseSettings):
         return self.data_dir / "tiktok"
 
     @property
+    def narrator_dir(self) -> Path:
+        """Spatiul de lucru per proiect pentru Naratorul AI pentru video
+        (sursa, cadre, analiza scenelor, transcript, voce, subtitrari, export)."""
+        return self.data_dir / "narrator"
+
+    @property
     def clipper_dir(self) -> Path:
         """Per-project workspace for the AI Stream Clipper (proxies, signals,
         sampled frames, previews, exports). Under data/, so .gitignore already
@@ -109,6 +115,7 @@ class Settings(BaseSettings):
             self.knowledge_dir,
             self.doodle_dir,
             self.tiktok_dir,
+            self.narrator_dir,
             self.clipper_dir,
         ]:
             d.mkdir(parents=True, exist_ok=True)
@@ -202,6 +209,23 @@ class Settings(BaseSettings):
     # every deliverable at once.
     clipper_trim_silence: bool = False
 
+    # Address every selected scene frame to a source interval (AD3 3b). OFF by
+    # default (codex-verdict-next-16 §3): it costs two subprocesses per selected
+    # frame — 769 s on a 12 h VOD's 948 scenes in the pilot, 13x the scene pass —
+    # and no consumer reads `scenes_addressed` yet. Off, the scene pass and its
+    # cheap 3a evidence (each frame's integer PTS, legacy_index) still run, and
+    # `scenes_addressed.state` says `not_requested`: neither a refusal nor empty.
+    clipper_scene_addressing: bool = False
+
+    # EN3 (`end_tail.extend_tail`): the TARGET end, in seconds after the last
+    # word's acoustic (vocal) end, under EN1's guards — not seconds added on top
+    # of EN1's end (EN1 sits at vocal + 0.1 s, so 0.4 extends by ~0.3 s). 0 = off,
+    # today's EN1 end. Evidence: blind round 3 with the corrected procedure
+    # (3/4 new pairs chose it, 0 chose EN1, both null pairs "no difference");
+    # rounds 1-2 had procedural faults and are not the same evidence. Turning it
+    # on is a separate, reversible activation (codex-verdict-next-14/18).
+    clipper_end_tail_s: float = 0.0
+
     # 0 = never auto-purge project artifacts.
     clipper_retention_days: int = 0
 
@@ -223,9 +247,36 @@ class Settings(BaseSettings):
     #                earliest start that carries every fact the payoff needs
     # Legacy stays the default until story_v1 has been measured on more than
     # one source. Both need clipper_llm_select; with it off this has no effect.
+    #
+    # SUPERSEDED by clipper_reasoning_mode below, and kept because 133 projects
+    # on this rig predate that setting. services/clipper/reasoning_mode.py maps
+    # the pair onto one mode; do not read either of these directly any more.
     clipper_reasoning_version: str = "legacy"
 
     clipper_llm_select: bool = False
+    # The one switch that decides which reasoning engine runs:
+    #   "legacy"          — interesting signals -> window -> features -> score
+    #   "llm_nominate"    — legacy scoring plus the LLM nomination pass + judge
+    #   "story_v1"        — payoff first: anchors, context debt, hook latency
+    #   "story_v2_shadow" — v2 writes its artefacts, legacy still orders the board
+    #   "story_v2"        — not selectable yet; see reasoning_mode.SELECTABLE
+    #
+    # Blank means "derive it from the two legacy keys above", so an operator who
+    # already set CLIPFORGE_CLIPPER_LLM_SELECT keeps exactly what they had.
+    clipper_reasoning_mode: str = ""
+    # WHICH editing grammar the renderer uses (Batch R2):
+    #   "legacy_dynamic"        — the renderer exactly as it is today
+    #   "content_aware_shadow"  — resolve and record the profile, deliver legacy
+    #   "content_aware"         — not selectable yet; see edit_profiles.SELECTABLE
+    #
+    # Blank means `legacy_dynamic`. Set to shadow to make the profile observable
+    # on this rig without changing a single export.
+    clipper_edit_mode: str = ""
+    # How long any one model call may take before the next engine is tried.
+    # A provider that never answers is the failure the engine list cannot route
+    # around on its own: without a deadline the whole run waits on it and the
+    # fallbacks are never reached. 0 disables the deadline.
+    clipper_llm_timeout_s: float = 180.0
     # The judging pass needs a FRONTIER model, and the repo-wide default is a
     # small one. Measured on the same 46 candidates: gpt-4o-mini answered
     # almost everything 50, 40 or 10 with reasons like "Excitement about
@@ -314,6 +365,27 @@ class Settings(BaseSettings):
     # Solving also needs the challenge script: `pip install yt-dlp-ejs`.
     ytdlp_js_runtimes: str = ""
 
+    # TIKTOK NU MERGE FARA ASTA — masurat pe 30 aug 2026, dupa trei zile in care
+    # cauza a fost cautata aiurea. Cu user-agentul implicit al yt-dlp, ORICE link
+    # TikTok pica cu "Unexpected response from webpage request". Nu e verificare
+    # anti-bot si nu e nevoie de cookies: acelasi URL luat cu `curl` si un
+    # user-agent de Chrome intoarce 200 si o pagina de 409 KB care CONTINE blocul
+    # `__UNIVERSAL_DATA_FOR_REHYDRATION__` pe care yt-dlp il cauta. Cu
+    # user-agentul de mai jos, aceleasi linkuri se rezolva instant.
+    #
+    # Ce s-a incercat degeaba pana la asta, ca sa nu se reia: yt-dlp stabil
+    # 2026.08.19, nightly 2026.08.27 si 2026.08.29; cookies din Chrome si din
+    # Edge (baza e blocata cat browserul ruleaza); un cookies.txt real cu 74 de
+    # cookie-uri TikTok; si `tiktok:api_hostname`. Toate au dat aceeasi eroare.
+    #
+    # Se aplica la TOATE sursele, nu doar TikTok: un user-agent de browser real
+    # e mai compatibil peste tot, iar YouTube a fost verificat dupa schimbare.
+    # Gol = user-agentul propriu al yt-dlp.
+    ytdlp_user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    )
+
     @property
     def ytdlp_opts(self) -> dict:
         """Everything yt-dlp needs to reach a gated source. Merged at both
@@ -323,6 +395,9 @@ class Settings(BaseSettings):
                     for r in self.ytdlp_js_runtimes.split(",") if r.strip()]
         if runtimes:
             opts["js_runtimes"] = {name: {} for name in runtimes}
+        ua = self.ytdlp_user_agent.strip()
+        if ua:
+            opts["http_headers"] = {"User-Agent": ua}
         return opts
 
     @property

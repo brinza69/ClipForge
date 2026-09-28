@@ -2,8 +2,16 @@
 # ClipForge rig watchdog — keeps the dual-GPU video factory running FOREVER.
 #
 # Cold-starts AND supervises the whole rig:
-#   - backend A : RTX 3060      (:8420, data/)
-#   - backend B : GTX 1660 SUPER(:8421, data_b/)
+#   - backend A : GTX 1660 SUPER (:8420, data/)
+#   - backend B : RTX 3060       (:8421, data_b/)
+#
+# Atentie: `Get-GpuUuids` intoarce UUID-urile in ORDINEA INDEXULUI si le da in
+# ordine lui A si lui B. Pe rigul asta `nvidia-smi` listeaza 1660 la index 0,
+# deci A primeste 1660, NU 3060 — verificat pe procesele care ruleaza, nu dedus.
+# Antetul spunea invers si a supravietuit asa luni de zile.
+# `scripts/start-dual-gpu.ps1` face invers (dupa MODEL), deci daca pornesti rigul
+# cu el, maparea se schimba in tacere. Watchdog-ul e cel care porneste in mod
+# normal backendurile.
 #   - dual_dispatch.py  (drives both backends from the Google Sheet)
 #   - dual_status_writer.py (live dashboard feed)
 #
@@ -22,9 +30,27 @@ $root = "D:\clipforge"
 #   dual_dispatch.py     - sheet-ul mare, roluri RO (implicit)
 #   herstory_dispatch.py - sheet-ul francez
 # Schimba cu: setx CLIPFORGE_DISPATCHER herstory_dispatch.py
-$dispatcher = $env:CLIPFORGE_DISPATCHER
-if (-not $dispatcher) { $dispatcher = "dual_dispatch.py" }
-$dispatchRe = [regex]::Escape($dispatcher)
+# Forma: "script.py" sau "script.py:A" — a doua parte leaga dispecerul de o
+# singura placa. Cu CLIPFORGE_DISPATCHER_2 setat, rigul ruleaza DOUA piste in
+# paralel, cate una pe fiecare GPU. Fara sufix, un dispecer conduce ambele placi
+# si NU trebuie sa existe al doilea: si-ar trimite joburi unul peste altul.
+function Parse-Dispatcher($spec, $fallback) {
+    if (-not $spec) { $spec = $fallback }
+    if (-not $spec) { return $null }
+    $parts = $spec.Split(':')
+    [pscustomobject]@{
+        Script  = $parts[0]
+        Backend = $(if ($parts.Count -gt 1) { $parts[1] } else { $null })
+        Pattern = [regex]::Escape($parts[0])
+    }
+}
+$d1 = Parse-Dispatcher $env:CLIPFORGE_DISPATCHER 'dual_dispatch.py'
+$d2 = Parse-Dispatcher $env:CLIPFORGE_DISPATCHER_2 $null
+if ($d2 -and (-not $d1.Backend -or -not $d2.Backend)) {
+    Log "REFUZ doua dispecere fara placa explicita (foloseste script.py:A / script.py:B)"
+    $d2 = $null
+}
+$dispatchRe = $d1.Pattern
 $py   = "$root\server\.venv\Scripts\python.exe"
 $log  = "$root\data\watchdog.log"
 
@@ -132,14 +158,15 @@ function Ensure-Backend($port, $uuid, $dataDir, $name) {
     Start-Backend $port $uuid $dataDir $name
 }
 
-function Ensure-Proc($pattern, $scriptPath, $outLog, $errLog, $name) {
+function Ensure-Proc($pattern, $scriptPath, $outLog, $errLog, $name, $extraArgs = @()) {
     # NOTE: the venv python.exe is a LAUNCHER that spawns a real child, so ONE
     # logical process (dispatcher / status writer / backend) shows up as TWO
     # python.exe. Do NOT "dedupe" by killing the extra — that kills the launcher
     # and takes the real process down with it, which caused the restart churn +
     # OOM earlier. Just make sure at least one is running.
     if (Test-ProcRunning $pattern) { return }
-    Start-Process -WindowStyle Hidden -FilePath $py -ArgumentList $scriptPath `
+    $argv = @($scriptPath) + $extraArgs
+    Start-Process -WindowStyle Hidden -FilePath $py -ArgumentList $argv `
         -WorkingDirectory $root -RedirectStandardOutput $outLog -RedirectStandardError $errLog
     Log "started $name"
 }
@@ -168,8 +195,31 @@ while ($true) {
     # Start dispatcher + status writer once ALL detected backends are healthy.
     if (($oks.Count -gt 0) -and (-not ($oks -contains $false))) {
         # dispatcher stdout MUST be dispatch.log — the status writer parses it for row numbers
-        Ensure-Proc $dispatchRe "$root\scripts\$dispatcher" "$root\data\dispatch.log"   "$root\data\dispatch.err.log" "dispatcher"
+        # dispecerul 1 scrie in dispatch.log — status writer-ul il parseaza de acolo
+        $a1 = @(); if ($d1.Backend) { $a1 = @('--backend', $d1.Backend) }
+        Ensure-Proc $d1.Pattern "$root\scripts\$($d1.Script)" "$root\data\dispatch.log" `
+            "$root\data\dispatch.err.log" "dispatcher($($d1.Script)$(if($d1.Backend){' '+$d1.Backend}))" $a1
+        if ($d2) {
+            Ensure-Proc $d2.Pattern "$root\scripts\$($d2.Script)" "$root\data\dispatch2.log" `
+                "$root\data\dispatch2.err.log" "dispatcher2($($d2.Script) $($d2.Backend))" @('--backend', $d2.Backend)
+        }
         Ensure-Proc 'dual_status_writer\.py' "$root\scripts\dual_status_writer.py" "$root\data\status.out.log" "$root\data\status.err.log"   "status-writer"
+        # Avanseaza loturile: cand cel curent se termina, scrie configuratia
+        # urmatorului si reporneste rigul. Fara el placa B sta degeaba de la
+        # primul lot terminat pana vine cineva sa schimbe presetele de mana.
+        Ensure-Proc 'avanseaza_loturi\.py' "$root\scripts\avanseaza_loturi.py" "$root\data\loturi.out.log" "$root\data\loturi.err.log" "avans-loturi"
+        # Coada naratorului tine 10 postari (plafonul contului), adica 2,5
+        # zile la 4/zi. Fara realimentare, canalul tace in weekend.
+        Ensure-Proc 'umple_cozile\.py' "$root\scripts\umple_cozile.py" "$root\data\cozi.log" "$root\data\cozi.err.log" "cozi"
+        # Alimenteaza sheet-ul francez cu cele mai vizionate shorts de la Varizz.
+        # Fara el, pista franceza se termina si placa A sta degeaba — asa a stat
+        # doua zile in august. Se opreste singur cand canalul e epuizat peste prag.
+        Ensure-Proc 'varizz_populare\.py' "$root\scripts\varizz_populare.py" "$root\data\varizz.log" "$root\data\varizz.err.log" "varizz" @('--bucla')
+        # Muzica de fundal pe randarile narator noi. Fara ea, un lot proaspat
+        # ajunge pe Drive fara melodie si `umple_coada_narator` il programeaza
+        # asa — diferit de tot ce e deja publicat. Pornit DUPA coada-narator
+        # inadins: aia realimenteaza la 3 ore, asta prinde fisierul inainte.
+        Ensure-Proc 'pune_muzica_narator\.py' "$root\scripts\pune_muzica_narator.py" "$root\data\muzica_narator.log" "$root\data\muzica_narator.err.log" "muzica-narator" @('--bucla')
     }
 
     if ($tick % 20 -eq 0) {

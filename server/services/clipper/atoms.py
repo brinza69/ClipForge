@@ -303,8 +303,13 @@ def _notable(atoms: Sequence[dict]) -> dict[str, float]:
     }
 
 
-def to_lines(atoms: Sequence[dict], limit: int = 600_000) -> str:
-    """Atoms as prompt lines, each carrying the evidence for its own moment.
+def to_line_items(atoms: Sequence[dict]) -> list[dict]:
+    """Atoms as prompt lines that still carry their own time.
+
+    Split out of `to_lines` when the chunk planner needed to bound a chunk by
+    the CLOCK as well as by characters: joined into one string first, the times
+    are gone and the planner can only count bytes. Same lines, same marks, same
+    order — `to_lines` is now a join over this.
 
     This is what makes atoms load-bearing rather than an unread artifact. The
     transcript alone tells a model what was said; an atom line also tells it
@@ -314,8 +319,7 @@ def to_lines(atoms: Sequence[dict], limit: int = 600_000) -> str:
     Only what stands out FOR THIS SOURCE is printed. Marking every line is the
     same as marking none.
     """
-    out: list[str] = []
-    total = 0
+    out: list[dict] = []
     bars = _notable(list(atoms or []))
     for atom in atoms or []:
         marks = []
@@ -337,9 +341,25 @@ def to_lines(atoms: Sequence[dict], limit: int = 600_000) -> str:
         if semantic["kind"] not in ("speech", "hook"):
             marks.append(semantic["kind"])
         tail = f"  <{', '.join(marks)}>" if marks else ""
-        line = f"[{int(atom['start'])}] {atom['text']}{tail}"
-        total += len(line) + 1
+        out.append({
+            "start": float(atom.get("start") or 0.0),
+            "end": float(atom.get("end") or 0.0),
+            "line": f"[{int(atom['start'])}] {atom['text']}{tail}",
+        })
+    return out
+
+
+def to_lines(atoms: Sequence[dict], limit: int = 600_000) -> str:
+    """`to_line_items`, joined, truncated at `limit` characters.
+
+    The truncation is why the planner exists: it cuts the TAIL of the stream
+    with nothing recording that it did.
+    """
+    out: list[str] = []
+    total = 0
+    for item in to_line_items(atoms):
+        total += len(item["line"]) + 1
         if total > limit:
             break
-        out.append(line)
+        out.append(item["line"])
     return "\n".join(out)

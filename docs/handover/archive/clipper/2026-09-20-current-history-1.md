@@ -1,0 +1,298 @@
+# Arhivă Clipper — snapshot, R0–R3
+
+Mutat din CURRENT la 20 septembrie 2026. Istoric, inclusiv afirmații ulterior
+retrase; nu este verdictul stării actuale. Conținutul secțiunilor este păstrat.
+
+## Scop
+
+Transformă un VOD sau un videoclip lung într-o listă de clipuri verticale candidate, clasificate și exportabile.
+
+## Flux funcțional
+
+```text
+source → ingest → proxy/audio → transcription → analysis → scoring → candidates → preview/export
+```
+
+## Frontend
+
+- `src/app/ai-stream-clipper/page.tsx` — lista proiectelor și creare proiect.
+- `src/app/ai-stream-clipper/[id]/page.tsx` — pagina proiectului și polling status.
+- `src/components/clipper/source-form.tsx` — preview URL, upload, creare proiect și start analysis.
+- `src/components/clipper/analysis-progress.tsx` — SSE cu fallback polling.
+- `src/components/clipper/clip-editor.tsx` — editare settings și regenerare.
+- `src/components/clipper/reasoning-mode-field.tsx` — selectorul de mod; trimite `reasoning_mode`
+  doar când utilizatorul alege explicit, altfel config-ul rig-ului ar fi suprascris.
+- `src/components/clipper/candidate-grid.tsx` — afișare și acțiuni candidate.
+
+## Backend/API
+
+- `server/routers/clipper.py` — preview și upload source, create/list/get/delete project.
+- `server/routers/clipper_settings.py` — contractul de settings: `_default_settings`,
+  `_normalise_settings` și modurile refuzate. Fără rute; ambele intrări HTTP trec prin el.
+- `server/routers/clipper_runs.py` — start/cancel/retry analysis, artifacts, presets,
+  ranker status/train. Montat sub același prefix; niciun URL nu s-a schimbat.
+- `server/routers/clipper_clips.py`
+  - get/patch clip;
+  - approve/reject/regenerate/export;
+  - preview/export file;
+  - feedback, performance și events;
+  - list clips.
+
+## Worker și servicii
+
+- `server/workers/clipper_pipeline.py` — orchestration pipeline.
+- `server/workers/clipper_build.py` — build candidate/clip data.
+- `server/workers/clipper_judging.py` — rundele de judge peste pool-uri de momente.
+- `server/workers/clipper_finalize.py` — layout, captions, headlines, trace, `clips` rows, auto-export.
+- `server/workers/clipper_cache.py` — ce a lăsat o rulare anterioară pe disc și dacă mai e de încredere.
+- `server/workers/clipper_render_jobs.py` — preview și export jobs.
+- `server/workers/clipper_render_plan.py` — planuri de render.
+- `server/services/clipper/` — logică DB-free, testabilă unitar.
+- `server/services/clipper/storage.py` — artefacte, paths și cleanup.
+- `server/services/clipper/ffmpeg_tools.py` — probe și comenzi FFmpeg.
+
+## Persistență și output
+
+- DB: proiecte, job-uri, clips, transcript și feedback.
+- Disc: source, proxy, transcript, analysis, scoring, previews și exports.
+
+## Stare, 2026-08-28
+
+**Reasoning v2 este implementat până la Batch 6 inclusiv.** Rulează în `story_v2_shadow`, care
+calculează ordinea v2 și o înregistrează, dar livrează în continuare ordinea legacy. `story_v2` este
+**refuzat de API** — regula funcționează, dar review-ul existent a fost contaminat de defectele de
+randare și nu poate deschide gate-ul Batch 10. Shadow este acum inert: verdictul judge-ului merge în
+`selection_score`, ordinea livrată rămâne cea euristică, iar alegerile v2 se păstrează separat prin
+`shadow_rank` și `shadow_run_id`.
+
+Ce s-a livrat, cu măsurătoarea care justifică fiecare. **Fiecare rând este snapshot-ul de la
+momentul batch-ului respectiv, nu o singură rulare** — numărul de candidați diferă de la un batch la
+altul (909 → 943 → 946) fiindcă fiecare batch a schimbat ce se produce. Starea artefactului curent e
+mai jos.
+
+| batch | ce repară | snapshot la data batch-ului, `gateslice4h` |
+|---|---|---|
+| 1 | `reasoning_mode`, o singură setare | story engine-ul era **inaccesibil din API**; ambele chei vechi erau aruncate tăcut |
+| 2a | `origin` la feedback | 43 de rânduri de antrenare, **toate cu eticheta 1.0**; acum 0 |
+| 0 | `reasoning_run.json`, `selection_trace.json` | acoperire și fallback-uri, înainte nemăsurabile |
+| 3 | `story_evidence`, remeasure | payoff semantic vs mecanic: mediană 5–7s, maxim 61s; metrici stale acum **0** |
+| 4 | chunking pe ceas | 2 chunk-uri (3h21m + 38m) → **6 de ~45m**, zero goluri; cel mai timpuriu payoff 2.95h → **0.11h** |
+| 5 | momente, nu variante | 943 variante → **295 grupuri de momente**; variante story care poartă verdict **1 → 47 din 61** |
+| 2b | board = ce a ales judge-ul | 7/10 câștigători legacy erau `not_evaluated`; sub regula v2, **0** — v2 nu are backfill |
+| 6 | patru scale de scor, eligibilitate separată | exact **80** din 946 au `overall != heuristic_score`, și aceia sunt pool-ul judecat |
+
+## Ce s-a schimbat după snapshot-ul Batch 6
+
+### Pilot multi-gen și review orb
+
+- `story_v2_shadow` a rulat pe patru surse diverse: talking-head EN, vlog IRL în română, interviu
+  și Just Chatting, plus baseline-ul gaming. Motorul a produs momente story pe toate tipurile și
+  româna nu a produs colaps. Acesta este un diagnostic de coverage, **nu dovadă de calitate**.
+- Pagina `/clipper-review` compară legacy cu v2 fără a expune board-ul în payload înainte de verdict.
+  Sesiunile sunt persistente și fiecare este ștampilată cu versiunea rendererului.
+- Prima sesiune a fost invalidă: ruta servise preview-ul de maximum 12s în locul exportului complet.
+  Ruta cere acum exportul și răspunde 409 dacă lipsește; sesiunea veche rămâne marcată invalid.
+- Corpusul de review are 58 de clipuri: `pilotf81b` 15, `pilotee0e` 14, `pilot6b38` 15,
+  `pilot2c8a` 14. Board-urile diferă aproape complet, deci review-ul nu este formalitate.
+- Review-ul pe `render_v2_subject_aware` a raportat probleme tehnice la **45/58**. Orice precizie
+  legacy/v2 calculată pe acele sesiuni amestecă selecția cu randarea și nu aprobă `story_v2`.
+
+### Rendererul curent
+
+`RENDER_VERSION = render_v3_letterbox`, rezultat din commiturile `24862b7` → `b6e7ea7`:
+
+- shot-urile au `composition: crop | fit`;
+- `fit` păstrează cadrul complet, cu o copie blurată în fundal în locul benzilor negre;
+- `stable_track` ancorează familia face-cam pe clusterul fix al creatorului când dovada este
+  decisivă;
+- rendererul și planificarea au fost separate în `dynamic_cuts.py`, `dynamic_geometry.py` și
+  `dynamic_subject.py`, iar fișierele de producție rămân sub 500 de linii;
+- versiunea randării este ștampilată la crearea sesiunii de review, nu reconstruită retroactiv.
+
+Toate cele 58 de exporturi au fost re-randate și verificate: **58/58 complete**, decalaj maxim între
+durata DB și MP4 **0,030s**; pe șase clipuri cu `fit`, luminozitatea benzii este 53–183, deci fundal
+blur, nu negru. Geometria este închisă; plannerul nu este.
+
+### Audit critic al celor 58 de exporturi v3
+
+| metrică | rezultat | ce demonstrează |
+|---|---:|---|
+| durată totală | 45m43s | corpusul randat |
+| shot-uri | 1.341 | **29,3/minut**, aproximativ unul la 2,04s |
+| cel mai scurt shot | 0,605s | aceeași gramatică agresivă pe toate tipurile |
+| tăieturi `fit → fit` fără schimbare finală | **116** | dedupe-ul rulează înainte de compoziția finală |
+| început fără lead-in | **58/58** | fiecare clip pornește exact pe primul cuvânt |
+| final la ≤50ms după ultimul cuvânt | **22/58** | boundary fără aer; uneori propoziție incompletă |
+| captions duble pe go ghost | **15/15** | sursa are deja subtitrări arse |
+| UI/overlays în clipurile Moist | **14/14** | `stable_track` nu garantează singur creatorul |
+
+Concluzia: v3 a reparat întinderea și letterbox-ul, dar motorul nu este încă production-ready.
+Problemele dominante sunt montajul forțat, echivalența calculată prea devreme, regimul `crop|fit`
+bazat pe orice față, boundaries agresive și captions fără source-awareness.
+
+## Batch R0 — ÎNCHIS, 29 august 2026
+
+Evaluatorul repetabil există și reproduce baseline-ul exact. Rulează-l înainte și după orice
+modificare a plannerului:
+
+```bash
+python scripts/audit_clipper_exports.py pilotf81b pilotee0e pilot6b38 pilot2c8a
+```
+
+| metrică | valoare | unde |
+|---|---:|---|
+| clipuri | 58 | cele patru piloturi |
+| shot-uri | 1.341 | 29,3349/min **pooled** |
+| aceleași shot-uri, media celor patru surse | 29,5930/min | altă întrebare, nu alt răspuns |
+| shot minim | 0,605s | |
+| tăieturi `fit → fit` echivalente | 116 | echivalență **exactă**, nu perceptuală |
+| granițe undecidable / necontigue | 0 / 0 | |
+| clipuri care încep pe primul cuvânt | 58/58 | |
+| clipuri cu ≤50ms după ultimul cuvânt | 22/58 | |
+
+Ce trebuie știut înainte să te bazezi pe el:
+
+- **Scriptul este un gate, nu un raport: iese cu 2.** Export incomplet, sidecar care numește alt clip
+  sau alt proiect, artefact refuzat, shot-uri care nu se leagă, fingerprint care nu mai corespunde
+  planului. `fingerprint: unavailable` NU pică — cele 58 de exporturi preced cheia.
+- **Absent și corupt sunt lucruri diferite, peste tot.** `composition`, `duration` și `drop_spans`
+  lipsă înseamnă necunoscut și nu pică gate-ul; prezente și imposibile sunt defecte. Un plan vechi
+  este vechi, nu stricat, iar corpusul e plin de ele.
+- **O măsurătoare lipsă este `unavailable`, niciodată 0**, iar un total care ar fi doar o limită
+  inferioară se raportează ca `unavailable`, cu limita publicată separat.
+- **`captions_duplicate_declared` iese `unavailable` pe tot corpusul, și e corect.** Nimic din
+  sidecar nu declară că sursa avea deja subtitrări arse; cei 15/15 pe go ghost au fost o observație
+  umană. R6 trebuie să producă semnalul.
+- **Un trim este reconstruit pe ceasul livrat din R8.** Un shot eliminat complet dispare, unul tăiat
+  prin mijloc devine două bucăți, iar saltul peste timpul eliminat intră în `trim_jumps`, nu în
+  tăieturile planificate sau echivalente. Ceasul, lead-in-ul și tail-ul rămân exacte.
+- Sidecar-ul poartă acum `render_version` (care renderer a rulat, static sau dinamic),
+  `input_fingerprint`, `drop_spans`, `caption_y` și dimensiunea sursei. Nimic nu este ștampilat
+  retroactiv.
+
+Ce a rămas deliberat în afara R0: `width`/`height` nu sunt în sidecar, fiindcă nu există o autoritate
+comună pentru dimensiunea de ieșire — ambele renderere o poartă ca default de parametru. Se rezolvă
+cu o constantă comună transmisă explicit ambelor căi, într-un batch ulterior.
+
+## Batch R1 — ÎNCHIS, 29 august 2026
+
+O tăietură există numai dacă imaginea livrată se schimbă. Cheia nu mai este dreptunghiul planificat,
+ci ce emite rendererul: timeline-ul de dimensiuni plus expresiile de poziție. Pe cele 58 de planuri,
+**1.341 shot-uri devin 1.225** — exact cele 116 tăieturi invizibile, zero rămase:
+
+```bash
+python scripts/build_shot_merge_fixture.py
+```
+
+Trei lucruri de reținut:
+
+- **Auditul R0 va raporta în continuare 116 pe exporturile existente.** El citește sidecar-urile
+  randate, iar R1 a schimbat plannerul. Cifra devine 0 abia după re-randarea piloturilor.
+- **Un shot care se mișcă nu se unește niciodată** — la tăietură mișcarea ar reporni. Un shake
+  identic se unește: expresia folosește timpul absolut, deci continuă neîntreruptă peste joncțiune.
+- **Merge-ul păstrează `shot_count_before_merge`.** `clipper_render_plan` respinge planurile cu mai
+  puțin de două shot-uri și le randează static; fără provenență, un clip a cărui singură vină era o
+  tăietură invizibilă și-ar fi schimbat rendererul, crop-ul și captions-urile.
+
+## Batch R2 — ÎNCHIS, 29 august 2026
+
+Fiecare clip primește acum o gramatică potrivită tipului său — **rezolvată și înregistrată, aplicată
+pe niciun clip**. Cele zece content types existente se mapează pe șase profile; nu există al doilea
+clasificator.
+
+Regula pe care se sprijină totul: **o clasificare slabă cumpără un montaj mai sigur, niciodată unul
+mai agresiv.** Iar „mică" și „nemăsurată" sunt răspunsuri diferite:
+
+| ce știm despre tip | profil | motiv |
+|---|---|---|
+| tip cunoscut, încredere ≥ 0,5 | al tipului | `type` |
+| încredere sub prag | `conservative` | `low_confidence` — numărul se păstrează |
+| încredere absentă | `conservative` | `missing_confidence` — nu se inventează din scorul sursei |
+| încredere în afara lui 0..1 | `conservative` | `invalid_confidence` — un clasificator stricat nu e unul foarte sigur |
+| tip necunoscut | `conservative` | `unknown_type` |
+| tipul setat de om | al tipului | `override` — proveniența ține loc de număr |
+
+Ce trebuie știut înainte să te bazezi pe el:
+
+- **`content_aware` nu livrează nimic și nu poate.** `delivers_profile` verifică singur
+  disponibilitatea, deci întoarce fals pentru toate modurile azi și devine adevărat de la sine în
+  ziua în care gate-ul final adaugă modul în `SELECTABLE`. Nu există al doilea comutator de ținut minte.
+- **Benzile de ritm sunt guardrail-uri ALESE, nu măsurate.** Codul o spune, testele refuză să le
+  asserteze, iar UI-ul o scrie pe ecran. Nu le cita ca rezultate înainte de gate-ul uman din §7.
+- **Shadow-ul e inert, demonstrat end-to-end:** `_decide_render` în ambele moduri dă același plan,
+  crop, captions, trim, fps, watermark și fingerprint. Singura diferență e câmpul diagnostic.
+- Profilul e în sidecar și în panoul de reasoning, rezolvat **în backend**. Frontendul doar îl
+  afișează — o a doua mapare în TypeScript ar devia de la prima.
+- Profilul NU e în fingerprint. În shadow nu schimbă imaginea; batch-ul care îl aplică îl adaugă.
+
+Un bug găsit de testul de round-trip peste HTTP, fără legătură cu R2 dar reparat aici:
+`patch_settings` normaliza dicționarul **parțial** primit, deci un PATCH pe orice altă cheie reseta
+tăcut `edit_mode` și `reasoning_mode` la valorile rig-ului. Trecuse neobservat fiindcă browserul
+trimite tot obiectul.
+
+## Batch R3a — INSTRUMENTAT, gate vizual PENDING, 29 august 2026
+
+**Nu este închis.** Codul e livrat și verificat automat; verdictul vizual nu a fost dat de nimeni,
+iar formularea corectă până atunci este exact asta: instrumentare shadow implementată, gate vizual
+pending.
+
+Ce face: `anchored_track` elimină din track detectările care nu stau pe ancora fixă găsită de
+`stable_track` — niciun eșantion nu dispare, doar cutiile lui, fiindcă timeline-ul e indexat
+pozițional. Histerezisul a devenit **retrospectiv**: o absență confirmată se marchează de unde a
+început, nu trei secunde mai târziu. Rezultatul intră în sidecar ca `creator_view`, **înregistrat și
+niciodată aplicat** — planul livrat rămâne ce a înghețat R2.
+
+```bash
+python scripts/measure_creator_presence.py pilotf81b pilotee0e pilot6b38 pilot2c8a
+```
+
+**Cum se citește măsurătoarea, fiindcă e ușor de citit greșit:**
+
+- `stable_track` găsește o ancoră pe **unul** din patru piloturi. Pe celelalte trei nu se filtrează
+  nimic și track-ul e identic — cazul care deja funcționa.
+- Pe Moist, 464 din 1.285 de eșantioane cu față sunt **compatibile cu ancora**. Asta NU înseamnă „464
+  sunt creatorul": nimeni nu a etichetat cutiile, iar geometria e tot ce știe codul. Compatibilitatea
+  e măsurată; identitatea e dedusă.
+- **Fără ancoră, compatibilitatea e `null`, nu 100%.** Nu s-a comparat nimic cu nimic.
+- `faces.json` are pe piloturi un pas median de **6,7s**, la care `ENTER_S` se rotunjește la un
+  eșantion. Orice cifră despre timeline-ul de prezență calculată acolo măsoară alt algoritm decât cel
+  care rulează în producție. Efectul asupra prezenței se poate măsura doar pe track-ul dens.
+- Toleranța efectivă e `max(lățimea ancorei, 40px)`. Pe pilotul măsurat ancora are 25px, deci decide
+  podeaua, nu lățimea feței.
+
+**Ce trebuie să verifice un om înainte ca R3a să fie închis:** Moist — creatorul, nu fața din browser;
+Jensen — diagramă lizibilă, vorbitor bine încadrat; vlog — obiectele în `fit`, persoana reală în
+`crop`; go ghost — fără comutări false.
+
+## Batch R3b — INSTRUMENTAT, gate vizual PENDING, 29 august 2026
+
+**Nu este închis**, ca și R3a: propunerea există și e verificată automat, dar nimic nu a fost aplicat
+și nimeni nu s-a uitat.
+
+Fiecare stretch al unui clip primește un regim — `speaker`, `conversation`, `action`,
+`visual_evidence`, `reaction`, `safe` — decis **pe eșantion**, nu pe shot, iar segmentele adiacente cu
+aceeași cheie vizuală se unesc. Rezultatul intră în sidecar ca `regime_view`.
+
+**De ce pe eșantion.** Un verdict ponderat peste un shot este votul majoritar pe care planul îl
+interzice, și producea `reaction` din doi oameni care nu erau niciodată pe ecran împreună.
+Coprezența e un fapt la nivel de eșantion.
+
+**Ce refuză să ghicească, și de ce contează:**
+
+- **Seria de mișcare e pe alt ceas.** Cadrele sunt întregi, deci un proxy de 10 FPS eșantionează la
+  **0,2s**, nu 0,25. În plus indexul 0 e o santinelă — nu există cadru anterior — iar valoarea `j`
+  descrie intervalul DINAINTE. Se resamplează pe bins-urile canonice înainte de orice.
+- **Acoperire și variabilitate sunt axe independente.** O serie completă dar plată e o stare reală, un
+  ecran static măsurat cap la cap; un singur cuvânt pentru ambele ascundea pe care dintre ele.
+- **Lipsa timestamp-urilor de cuvinte nu e tăcere**, un track mai scurt decât clipul lasă
+  `target_unknown`, iar evidența se mediază **doar peste eșantioanele măsurate** și e `None` unde nu
+  s-a măsurat nimic — cu `evidence_coverage` alături, ca o medie peste două eșantioane să nu fie
+  citită ca una peste douăzeci.
+- **Nu orice graniță de regim e o tăietură.** Se unesc segmentele cu aceeași cheie vizuală, altfel
+  s-ar reintroduce exact cele 116 tăieturi invizibile scoase de R1. Se raportează separat
+  `regime_boundaries` și `treatment_boundaries`.
+
+**Nimic nu spune „creator".** `stable_track` găsește un cluster geometric stabil, nu o persoană.
+Cheile sunt `crop_anchor`, `crop_subject`, `fit_full`; sidecar-ul spune `target`, iar `target_basis`
+spune dacă a fost `stable_anchor` sau `unanchored_face`. `crop_creator` poate exista abia după o
+verificare reală de identitate sau după gate-ul vizual uman.

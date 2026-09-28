@@ -144,3 +144,37 @@ def type_at(segments: Sequence[dict], t: float, fallback: str) -> str:
         if _num(seg.get("start")) <= t <= _num(seg.get("end")):
             return str(seg.get("content_type") or fallback)
     return fallback
+
+
+# Where a candidate's content type came from, as a closed set. The distinction
+# matters to `edit_profiles`: a verdict measured on the stretch the candidate
+# sits in carries a confidence, and the source's overall profile does not.
+FROM_SEGMENT = "segment"
+FROM_SOURCE = "source"
+#: A person said so. It has no confidence and does not need one — the provenance
+#: is the evidence, and inventing a number for it would make a human decision
+#: indistinguishable from a measured one.
+FROM_OVERRIDE = "override"
+
+
+def verdict_at(segments: Sequence[dict], t: float, fallback: str) -> dict:
+    """`{content_type, confidence, origin}` for the stretch `t` falls in.
+
+    `type_at` above answers the same question and throws the confidence away,
+    which was fine while nothing read it. Batch R2 does: a classification
+    nobody measured must not buy a bolder edit than one that was measured and
+    came back sure.
+
+    The fallback keeps its confidence as None on purpose. The source's overall
+    profile is a real answer for a stretch too short to classify, but it is not
+    a MEASUREMENT of this stretch, and filling in the source's own score here
+    would be indistinguishable downstream from having measured it.
+    """
+    for seg in segments or []:
+        if _num(seg.get("start")) <= t <= _num(seg.get("end")):
+            return {
+                "content_type": str(seg.get("content_type") or fallback),
+                "confidence": seg.get("confidence"),
+                "origin": FROM_SEGMENT,
+            }
+    return {"content_type": fallback, "confidence": None, "origin": FROM_SOURCE}

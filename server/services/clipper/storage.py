@@ -40,12 +40,18 @@ ARTIFACT_NAMES: frozenset[str] = frozenset(
     # "promises" is the story path's checkpoint: one sweep over the whole
     # transcript for setups that could pay off later. It is written before
     # anchor detection reads it, so a re-run does not pay for it twice.
-    # "anchors" is the story path's MODEL output. Everything else here is cheap
-    # to rebuild; that one is not. It is stored with the fingerprint of what
-    # produced it, so a re-run after a settings change recomputes instead of
-    # silently reusing an answer the new configuration would never have given.
+    # "anchors" and "judge" are the story path's MODEL outputs. They are stored
+    # with the fingerprints of what produced them, so a re-run after a settings
+    # change recomputes instead of silently reusing an answer the new
+    # configuration would never have given.
+    # "reasoning_run" and "selection_trace" are the observability pair: how the
+    # run was configured and what the models did, and why each candidate ended
+    # where it did. Neither is an input to anything — they exist so a later
+    # change can be shown to be an improvement rather than asserted to be one.
     {"signals", "faces", "regions", "segments", "candidates", "meta",
-     "promises", "atoms", "threads", "graph", "anchors", "segment_types", "regions_by_segment"}
+     "promises", "atoms", "threads", "episodes", "graph", "anchors", "judge",
+     "segment_types",
+     "regions_by_segment", "reasoning_run", "selection_trace"}
 )
 
 _SUBDIRS = (
@@ -142,10 +148,14 @@ def paths(project_id: str) -> dict[str, Path]:
         "promises": analysis / "promises.json",
         "atoms": analysis / "atoms.json",
         "threads": analysis / "threads.json",
+        "episodes": analysis / "episodes.json",
         "graph": analysis / "graph.json",
         "anchors": analysis / "anchors.json",
+        "judge": analysis / "judge.json",
         "segment_types": analysis / "segment_types.json",
         "regions_by_segment": analysis / "regions_by_segment.json",
+        "reasoning_run": analysis / "reasoning_run.json",
+        "selection_trace": analysis / "selection_trace.json",
     }
 
 
@@ -190,6 +200,7 @@ def _json_default(obj: Any) -> Any:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text through a same-directory temporary file and replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp{uuid.uuid4().hex[:8]}")
     try:
@@ -200,6 +211,45 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+def atomic_write_text(path: str | Path, text: str) -> None:
+    """Atomically publish a text file without exposing a partial write."""
+    _atomic_write_text(Path(path), text)
+
+
+def atomic_write_json(path: str | Path, data: Any, **kwargs: Any) -> None:
+    """Atomically serialise and publish JSON data."""
+    atomic_write_text(Path(path), json.dumps(data, **kwargs))
+
+
+def temporary_output_path(path: str | Path) -> Path:
+    """Return a same-directory temporary media path preserving its suffix.
+
+    Keeping the final suffix matters because ffmpeg infers the muxer from it.
+    The temporary name is hidden and unique, so concurrent retries cannot
+    write into one another's output.
+    """
+    final = Path(path)
+    return final.with_name(f".{final.stem}.tmp-{uuid.uuid4().hex}{final.suffix}")
+
+
+def finalize_output(temp: str | Path, final: str | Path) -> None:
+    """Atomically publish a validated media file over the final path."""
+    temp_path = Path(temp)
+    final_path = Path(final)
+    if not temp_path.is_file():
+        raise FileNotFoundError(f"temporary output is missing: {temp_path}")
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(temp_path, final_path)
+
+
+def is_usable_output(path: str | Path, minimum_bytes: int = 1024) -> bool:
+    """Whether a stored media path is a regular file with usable bytes."""
+    try:
+        return Path(path).is_file() and Path(path).stat().st_size > minimum_bytes
+    except OSError:
+        return False
+
+
 def write_artifact(project_id: str, name: str, data: dict | list) -> Path:
     """Atomically write analysis/{name}.json. Raises ValueError for a name
     outside ARTIFACT_NAMES."""
@@ -207,7 +257,7 @@ def write_artifact(project_id: str, name: str, data: dict | list) -> Path:
     # Compact separators, not indent=2: signals.json carries one sample per
     # proxy frame, so pretty-printing a 3-hour stream costs tens of MB.
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=_json_default)
-    _atomic_write_text(path, text)
+    atomic_write_text(path, text)
     return path
 
 
@@ -235,6 +285,48 @@ def artifact_exists(project_id: str, name: str) -> bool:
 
 
 # ── Housekeeping ─────────────────────────────────────────────────────────────
+
+def stale_artifacts(project_id: str, source: str | Path | None = None) -> str | None:
+    """Why the cached analysis cannot be trusted, or None if it can.
+
+    `retry_analysis` resumes from the furthest stage whose artifacts EXIST, and
+    existence was the whole test: a `signals.json` written by different code,
+    or against a different file, resumed exactly like a good one. Both failure
+    modes are already documented in this repo and both were paid for —
+
+      * session 3 drew conclusions from a `faces.json` produced before the
+        detector was fixed, and every one of them was worthless;
+      * repointing a project from a 480p cut to the 1080p original and
+        exporting produced garbage, because an 854x480 plan FITS INSIDE a
+        1920x1080 frame and no bounds check can tell it is wrong.
+
+    `meta.json` has carried `analysis_version` and the source's size since the
+    clipper shipped and nothing has ever read them. This is the reader. It
+    compares the file size rather than probing: a repoint changes it, and a
+    probe would cost a subprocess on a path that runs for every retry.
+
+    Returns a short reason suitable for a log line and an API field.
+    """
+    meta = read_artifact(project_id, "meta")
+    if not isinstance(meta, dict):
+        return None                      # nothing cached: nothing to distrust
+
+    from services.clipper import ANALYSIS_VERSION
+
+    was = str(meta.get("analysis_version") or "")
+    if was and was != str(ANALYSIS_VERSION):
+        return f"analysis_version {was} -> {ANALYSIS_VERSION}"
+
+    recorded = (meta.get("source") or {}).get("filesize")
+    if source and recorded:
+        try:
+            now = Path(source).stat().st_size
+        except OSError:
+            return None                  # the media is gone; ingest will say so
+        if int(now) != int(recorded):
+            return f"source changed on disk ({recorded} -> {now} bytes)"
+    return None
+
 
 def delete_project(project_id: str) -> None:
     """Remove the whole project tree. Silent when it was never created."""

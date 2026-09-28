@@ -42,6 +42,7 @@ MODELS = {
 }
 
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}
+UPSCALER_TIMEOUT_SECONDS = 3600.0
 
 
 def _ffmpeg_bin() -> str:
@@ -74,6 +75,55 @@ def _run(cmd: list[str], timeout: int = 3600) -> subprocess.CompletedProcess:
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         creationflags=_creationflags(), timeout=timeout,
     )
+
+
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Stop a timed-out encoder and any child processes it spawned."""
+    if proc.poll() is not None:
+        return
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_creationflags(),
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            logger.exception("Could not terminate Real-ESRGAN process tree")
+
+    if proc.poll() is None:
+        proc.kill()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def _wait_for_process(
+    proc: subprocess.Popen,
+    *,
+    timeout: float = UPSCALER_TIMEOUT_SECONDS,
+    poll_interval: float = 1.5,
+    on_poll: Optional[Callable[[], None]] = None,
+) -> int:
+    """Wait for a process without allowing a stuck external tool to hang us."""
+    deadline = time.monotonic() + timeout
+    while proc.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _terminate_process_tree(proc)
+            raise TimeoutError(
+                f"Real-ESRGAN exceeded its {timeout:g}-second timeout"
+            )
+        time.sleep(min(poll_interval, remaining))
+        if on_poll:
+            on_poll()
+    return proc.returncode
 
 
 def _probe(input_path: str) -> dict:
@@ -195,12 +245,17 @@ def upscale_video(
                 creationflags=_creationflags(),
             )
             UP_LO, UP_HI = 0.08, 0.85
-            while proc.poll() is None:
-                time.sleep(1.5)
+
+            def _report_upscale_progress() -> None:
                 done = len(list(up_dir.glob("*.png")))
                 frac = UP_LO + (UP_HI - UP_LO) * (done / total if total else 0)
                 _p(frac, f"AI upscaling frame {done}/{total}…")
-        if proc.returncode != 0:
+
+            try:
+                returncode = _wait_for_process(proc, on_poll=_report_upscale_progress)
+            except TimeoutError as exc:
+                raise RuntimeError(str(exc)) from exc
+        if returncode != 0:
             try:
                 stderr = err_path.read_text("utf-8", "replace")
             except Exception:

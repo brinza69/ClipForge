@@ -4,6 +4,7 @@
 // audio preview, drag-drop image slot, status chip, reorder buttons.
 
 import { useRef, useState } from "react";
+import Image from "next/image";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Copy, ImagePlus, X, ChevronUp, ChevronDown, Check } from "lucide-react";
@@ -132,8 +133,11 @@ export function SceneRow({ projectId, scene, isFirst, isLast, onImageUploaded, o
 
           {scene.image_path ? (
             <div className="relative group">
-              <img
+              <Image
                 src={`/worker-doodle/${projectId}/${scene.image_path}`}
+                width={128}
+                height={80}
+                unoptimized
                 alt={`Scene ${scene.index + 1}`}
                 className="h-20 w-32 rounded-md object-cover border border-border/40"
               />

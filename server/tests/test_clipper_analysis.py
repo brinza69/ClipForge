@@ -375,22 +375,32 @@ def test_a_plan_records_the_frame_it_was_measured_in():
     assert plan["src_w"] == 1920 and plan["src_h"] == 1080
 
 
-def test_a_plan_from_before_the_frame_was_recorded_still_bounds_checks():
-    """Older stored plans carry no src_w/src_h; they must not all be thrown
-    away, but a plan larger than the source is still detectable."""
+def test_a_plan_from_before_the_frame_was_recorded_is_never_reused():
+    """Older stored plans carry no src_w/src_h. A bounds check cannot tell a
+    legacy 854x480 plan from a 1920x1080 one — every rect can sit comfortably
+    inside either frame — so a plan with no recorded dimensions is rejected
+    outright rather than trusted by geometry, on ANY source size."""
     from workers.clipper_render_jobs import _plan_fits
 
     legacy = {"game_rect": {"x": 492, "y": 0, "w": 934, "h": 1080}}
-    assert _plan_fits(legacy, 1920, 1080)
+    assert not _plan_fits(legacy, 1920, 1080)
     assert not _plan_fits(legacy, 854, 480)
 
 
 def test_the_pipeline_callers_pass_the_content_type():
     """Both call sites, asserted by name — the failure above is invisible at
-    runtime, so it has to be caught here."""
-    from workers import clipper_build, clipper_render_jobs
+    runtime, so it has to be caught here.
 
-    for mod in (clipper_build, clipper_render_jobs):
+    Follows the code rather than the file: layout planning moved from
+    `clipper_render_jobs` to `clipper_render_plan` in the 2026-08-18 split, and
+    this test failed on the move while the behaviour it protects was untouched.
+    Third time in one day that an `inspect.getsource` assertion broke on a
+    refactor — the technique is worth keeping for wires that are invisible at
+    runtime, and it costs a false alarm every time the wire is rerouted.
+    """
+    from workers import clipper_finalize, clipper_render_plan
+
+    for mod in (clipper_finalize, clipper_render_plan):
         src = inspect.getsource(mod)
         assert "plan_layout(" in src, f"{mod.__name__} no longer plans layouts"
         call = src[src.index("plan_layout("):]
@@ -614,13 +624,22 @@ def _scene(insets, fw=480, fh=270, frames=20):
 
     A real inset differs from its surroundings in both level and how much it
     changes frame to frame, which is what the edge search keys on.
+
+    THE GAMEPLAY'S PER-FRAME LEVEL IS LOAD-BEARING. Without it this scene is
+    the opposite of a real one: pure noise over 129,600 pixels averages to the
+    same number every frame, so the "game" here held perfectly still while the
+    inset was the only thing that moved. A real game swings from a cave to
+    daylight to a menu and a locked-off webcam does not, which is the whole
+    basis of `scene_independence`. Drop the level and every facecam in this
+    file reads as a phantom — the fixture would be testing itself.
     """
     import numpy as np
 
     rng = np.random.default_rng(7)
     out = []
     for _ in range(frames):
-        frame = (rng.integers(0, 60, size=(fh, fw))).astype("uint8")
+        level = int(rng.integers(0, 120))
+        frame = (rng.integers(0, 60, size=(fh, fw)) + level).astype("uint8")
         for x, y, w, h in insets:
             patch = np.full((h, w), 190, dtype="uint8")
             patch[h // 4:h // 2, w // 4:w // 2] = rng.integers(150, 230)
@@ -678,16 +697,39 @@ def test_a_face_that_flashes_past_is_not_a_facecam():
     assert not rects, "two sightings are noise, not an inset"
 
 
-def test_a_wide_shot_with_people_in_it_is_not_a_facecam():
-    """The gym-camera project has no inset at all: one wide IRL camera with
-    people in frame. Deriving a rect from the faces reported its own right
-    half as a facecam, area 0.36 and aspect 0.78 — outside both bounds."""
+def test_a_composited_rect_covering_half_the_frame_is_still_too_big():
+    """The area bound, on the FINAL rect — the fallback padding would sail
+    through a check made on the seed. This case is genuinely a composite; it is
+    rejected for its size, which is the only thing wrong with it."""
     from services.clipper import content_type
 
-    huge = [(286, 0, 192, 246)]
+    huge = [(240, 0, 240, 270)]
     rects, _ = content_type._find_webcams(
         _scene(huge), _face_at(huge, seen=[18]), 480, 270)
     assert not rects, "a region covering a third of the frame is not an inset"
+
+
+def test_a_wide_shot_with_people_in_it_is_not_a_facecam():
+    """The gym-camera project has no inset at all: one wide IRL camera with
+    people in frame. Deriving a rect from the faces reported its own right half
+    as a facecam, area 0.36 and aspect 0.78 — outside both bounds.
+
+    This test used to build that case by COMPOSITING a still rectangle where
+    the people were, which is the one thing a wide shot does not contain, and
+    it passed because the rect came out too big rather than because it was not
+    an inset. Widen the aspect band — which the labelled sources needed — and
+    it would have started passing a phantom. So the scene here has no
+    composite at all: one continuous picture, faces in part of it. What
+    rejects it is `scene_independence`, on purpose.
+    """
+    from services.clipper import content_type
+    from services.clipper.content_geom import make_rect
+
+    frames = _scene([])
+    boxes = [[make_rect(353, 74, 58, 86)] if i < 18 else [] for i in range(20)]
+    rects, _ = content_type._find_webcams(frames, boxes, 480, 270)
+    assert not rects, (
+        f"a window onto one continuous scene is not a second camera: {rects}")
 
 
 def test_a_facecam_flush_to_the_frame_reaches_the_frame():
@@ -700,6 +742,139 @@ def test_a_facecam_flush_to_the_frame_reaches_the_frame():
     rects, _ = content_type._find_webcams(
         _scene(insets), _face_at(insets, seen=[14]), 480, 270)
     assert rects and rects[0]["x"] == 0 and rects[0]["y"] == 0
+
+
+# ── a layout is only a layout if it lasts ────────────────────────────────────
+#
+# Detecting regions per stretch buys the second facecam on a source whose
+# camera changes, and costs this: a stretch where the streamer reacts to a
+# video containing a webcam reports that video as an inset. Measured on
+# Jynxzi's 60-80 minute stretch, where it clears `scene_independence` at 0.96
+# against a 1.0 bar — the closest call in the corpus, and one that cannot be
+# fixed by moving the bar, because his REAL camera sits at 0.89.
+
+
+def _stretch(idx, cams):
+    return {"start": idx * 1200.0, "end": (idx + 1) * 1200.0,
+            "frame_width": 480, "frame_height": 270,
+            "webcam": cams[0] if cams else None, "webcams": list(cams),
+            "confidence": {"webcam": 0.7 if cams else 0.0}}
+
+
+def _cam(x, y, w=158, h=158):
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def test_counting_people_does_not_borrow_the_facecam_bar():
+    """Two questions, two constants, and they were one until they diverged.
+
+    `_FACECAM_MIN_RATE` asks "is this rectangle part of the layout", where a
+    long sample legitimately dilutes the rate. `_SCENE_MIN_RATE` asks "is
+    somebody there", where it does not. Lowering the first from 0.15 to 0.10 —
+    right on its own terms, 8/9 to 9/9 on the facecam scoreboard — moved the
+    second with it, and on the SAME artifacts with only the code changed
+    Jynxzi's scene count went 0 to 1, the source flipped `gaming` to
+    `talking_head`, and the content classifier went 6/11 to 5/11.
+    """
+    import inspect
+
+    from services.clipper import content_type
+
+    assert content_type._SCENE_MIN_RATE == 0.15
+    src = inspect.getsource(content_type._scene_faces)
+    assert "_SCENE_MIN_RATE" in src
+    assert "_FACECAM_MIN_RATE" not in src, (
+        "counting people in the scene is reading the facecam gate again")
+
+
+def test_a_facecam_seen_in_one_stretch_of_many_is_content_not_a_camera():
+    from services.clipper.content_type import _drop_transient_webcams
+
+    ranges = [_stretch(i, [_cam(0, 110 + i)]) for i in range(6)]
+    ranges[3]["webcams"].append(_cam(240, 0, 240, 136))
+    _drop_transient_webcams(ranges)
+
+    assert [len(r["webcams"]) for r in ranges] == [1, 1, 1, 1, 1, 1]
+    assert ranges[3]["webcams"][0]["x"] == 0
+    assert ranges[3]["webcam"]["x"] == 0, "the best-of pointer went stale"
+
+
+def test_a_second_facecam_on_half_the_stretches_survives():
+    """Minecraft's co-streamer is on camera for five stretches of twelve. One
+    against five is a co-stream, not a phantom — only a SINGLE appearance is
+    treated as content."""
+    from services.clipper.content_type import _drop_transient_webcams
+
+    ranges = [_stretch(i, [_cam(0, 0, 122, 78)]) for i in range(10)]
+    for i in (1, 3, 5, 7, 9):
+        ranges[i]["webcams"].append(_cam(370, 0, 80, 68))
+    _drop_transient_webcams(ranges)
+
+    assert sum(len(r["webcams"]) for r in ranges) == 15
+
+
+def test_a_brief_facecam_with_nothing_to_outvote_it_is_kept():
+    """Kai Cenat's inset exists for four minutes of 112. A source whose only
+    facecam is brief has no settled layout for it to contradict, and dropping
+    it would be the rule deciding a source has no camera because it looked
+    away."""
+    from services.clipper.content_type import _drop_transient_webcams
+
+    ranges = [_stretch(i, []) for i in range(6)]
+    ranges[2]["webcams"] = [_cam(0, 0, 186, 134)]
+    ranges[2]["webcam"] = ranges[2]["webcams"][0]
+    _drop_transient_webcams(ranges)
+
+    assert ranges[2]["webcams"], "the only facecam in the source was dropped"
+
+
+def test_region_detection_looks_at_more_frames_than_the_classifier(tmp_path):
+    """`_MAX_FRAMES = 40` answers "how stable is this layout", which a handful
+    of frames can settle. It cannot answer "is there an inset here", which is
+    what region detection asks.
+
+    Measured on the 4-hour co-stream: 400 frames sampled, 40 looked at, and the
+    co-streamer's facecam landed 3 of those 40 — rate 0.075, under any usable
+    bar. Not rare, under-sampled. `_pick` takes every step-th frame, so at 400
+    frames and a budget of 40 it keeps one in ten and whatever falls between
+    the strides does not exist. One facecam at 40, 100 and 200 frames; both at
+    400.
+    """
+    import cv2
+    import numpy as np
+
+    from services.clipper import content_type
+
+    assert content_type._REGION_FRAMES > content_type._MAX_FRAMES
+
+    paths = []
+    for i in range(120):
+        p = tmp_path / f"f{i:04d}.jpg"
+        cv2.imwrite(str(p), np.full((270, 480, 3), 40 + i % 5, dtype=np.uint8))
+        paths.append(str(p))
+
+    assert len(content_type._load_frames(paths)[0]) == content_type._MAX_FRAMES
+    assert len(content_type._load_frames(paths, content_type._REGION_FRAMES)[0]) == 120
+
+
+def test_a_facecam_flush_to_the_BOTTOM_reaches_the_bottom():
+    """The same rule downward, which is where it was silently switched off.
+
+    `_snap_edge` concludes "the inset runs into the frame" only when its window
+    reaches the limit, and `_FACECAM_REACH_CAP` truncates the window — so a
+    facecam whose face sits further than 0.30 of the frame from the edge it is
+    against never got that answer. Both labelled bottom-left sources lost 25
+    and 46 rows of a 270-row proxy to it, which is 100 to 184 px of the
+    streamer's torso on a 1080p source, cut out of the face band.
+    """
+    from services.clipper import content_type
+
+    insets = [(0, 88, 182, 182)]
+    rects, _ = content_type._find_webcams(
+        _scene(insets), _face_at(insets, seen=[16]), 480, 270)
+    assert rects, "a bottom-left inset was not found at all"
+    assert rects[0]["y"] + rects[0]["h"] >= 269, (
+        f"the bottom edge stopped short of the frame: {rects[0]}")
 
 
 def test_one_face_detector_not_two():

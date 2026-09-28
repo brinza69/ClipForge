@@ -129,6 +129,16 @@ export interface ClipperSettings {
   caption_preset_id: string;
   caption_position: "bottom" | "center" | "top";
   caption_highlight: boolean;
+  /**
+   * Three-valued, and `null` is not `false`. `true` means a person
+   * declared that the source already carries burned-in subtitles, so
+   * this export burns no layer of its own — the defect 37 of 101 stored
+   * clips are rejected for. `source_captions` can detect it and is not
+   * allowed to set it: its thresholds were chosen on four sources with
+   * the answer visible, and an uncalibrated detector removing captions
+   * fails invisibly.
+   */
+  source_has_burned_captions: boolean | null;
   headline_enabled: boolean;
   headline_auto: boolean;
   emoji_enabled: boolean;
@@ -147,7 +157,56 @@ export interface ClipperSettings {
   // Layout
   layout_mode: LayoutMode;
   face_pct: number; // 0..1 share of the canvas given to the facecam
+
+  /**
+   * Which reasoning engine picks the moments. The backend REFUSES an unknown
+   * value instead of falling back to a default, because a setting that reads
+   * back as something other than what it ran is what this replaced: the two
+   * keys it supersedes were dropped in silence on every create and patch.
+   *
+   * OPTIONAL, and deliberately absent from DEFAULT_SETTINGS, for two reasons.
+   * Sending it means "the user chose this" — DEFAULT_SETTINGS is posted
+   * wholesale, so a value here would override a rig configured through
+   * config.py, which is the trap `trim_silence` fell into. And the 133 projects
+   * that predate the key have settings without it, so a required field would
+   * make every one of them fail this type on read.
+   *
+   * `story_v2` and `story_v2_shadow` are absent from ReasoningMode — neither is
+   * selectable yet.
+   */
+  reasoning_mode?: ReasoningMode;
+  /**
+   * WHICH editing grammar the renderer uses. Optional and absent from
+   * DEFAULT_SETTINGS for exactly the same reason as `reasoning_mode`: the
+   * backend resolves its default from config.py, and a value posted wholesale
+   * would take an operator's choice back off.
+   *
+   * `content_aware` is absent from EditMode — it is refused until the profiles
+   * have been compared against the legacy render on a corpus.
+   */
+  edit_mode?: EditMode;
 }
+
+/**
+ * `legacy` is signals -> window -> score. `llm_nominate` adds the LLM
+ * nomination pass and the judge on top of legacy scoring. `story_v1` reasons
+ * payoff-first. `story_v2_shadow` runs the v2 selection and records what it
+ * WOULD have chosen, while the board you see stays legacy.
+ *
+ * `story_v2` — the same rule actually ordering the board — is known to the
+ * backend and refused, because it has not been compared against legacy on a
+ * corpus yet. It is left out here so the form cannot offer a mode the API
+ * will reject.
+ */
+export type ReasoningMode =
+  | "legacy"
+  | "llm_nominate"
+  | "story_v1"
+  | "story_v2_shadow";
+
+import type { EditMode, EditProfile } from "./clipper-editing";
+
+export type { EditMode, EditProfile } from "./clipper-editing";
 
 export interface Rect {
   x: number;
@@ -164,24 +223,15 @@ export interface LayoutPlan {
   keyframes: { t: number; rect: Rect }[];
   warnings: string[];
   face_pct: number;
+  game_content_fit?: boolean;
+  src_w?: number;
+  src_h?: number;
+  reaction_binding?: import("./clipper-reaction").ReactionBinding;
 }
 
-export interface CaptionChunk {
-  text: string;
-  start: number;
-  end: number;
-}
+import type { CaptionPlan } from "./clipper-captions";
 
-export interface CaptionPlan {
-  chunks: CaptionChunk[];
-  style: Record<string, unknown>;
-  x_pct: number;
-  y_pct: number;
-  scale: number;
-  preset_id: string;
-}
-
-// ── Entities ─────────────────────────────────────────────────────────────────
+export type { CaptionChunk, CaptionPlan } from "./clipper-captions";
 
 export interface SourceMetadata {
   title: string;
@@ -204,68 +254,26 @@ export interface SourceMetadata {
   suggestion?: string;
 }
 
-// Why a clip was picked, as the backend recorded it. Written by the story
-// engine (`reasoning_version = "story_v1"`); legacy clips carry only `reasons`
-// and the judge's verdict, and everything here is optional for that reason.
-export interface ClipStory {
-  anchor_t?: number;
-  payoff_t?: number;
-  hook_t?: number;
-  reaction_end?: number;
-  archetypes?: string[];
-  why?: string;
-  edit_reason?: string;
-  required_context?: { t?: number; fact?: string }[];
-  unresolved_refs?: { text?: string; resolved?: boolean }[];
-  context_debt?: number;
-  hook_latency?: number;
-  thread_id?: string;
-  story_version?: string;
-  callback_to?: { t?: number; text?: string; kind?: string } | null;
-  callback_debt?: number;
+// Split out at the 500-line limit and re-exported, so every existing
+// `from "@/types/clipper"` keeps working. See clipper-reasoning.ts.
+import type { ClipReasoning, ClipReview } from "./clipper-reasoning";
+import type { ClipAttemptFields, ProjectAttemptFields } from "./clipper-attempts";
+
+export type {
+  ClipStory,
+  ClipVerdict,
+  ClipReasoning,
+  ClipFinding,
+  ClipReview,
+} from "./clipper-reasoning";
+
+/** The render's own caption decision (`caption_policy.decide`), for display only. */
+export interface EffectiveCaptionPolicy {
+  action: "burn" | "suppress"; scope: "clip" | "project" | "default";
+  decided_by: "human" | "default"; why: string;
 }
 
-export interface ClipVerdict {
-  story_editor?: string;
-  cold_viewer?: string;
-  critic?: string;
-  reject_reasons?: string[];
-  prompt_version?: string;
-}
-
-export interface ClipReasoning {
-  reasons?: string[];
-  story?: ClipStory;
-  variant?: string;
-  llm_score?: number;
-  llm_rank?: number;
-  llm_reason?: string;
-  llm_verdict?: ClipVerdict;
-}
-
-// Pass D. `reasoning` says why the MOMENT was chosen; this says what is wrong
-// with the CUT, and it only exists after an export, because that is when there
-// is a shot list and a caption position to be wrong about.
-export interface ClipFinding {
-  kind: string;
-  /** "revise" — something can act on it. "reject" — the clip is mostly dead. */
-  severity: "revise" | "reject";
-  /** Seconds from the start of the clip, so the reader can jump to it. */
-  at: number;
-  detail: string;
-  value: number;
-}
-
-export interface ClipReview {
-  version: string;
-  verdict: "APPROVE" | "REVISE" | "REJECT";
-  findings: ClipFinding[];
-  /** How many frames were sampled. `0` means the review could not look. */
-  sampled: number;
-  warnings: string[];
-}
-
-export interface ClipperClip {
+export interface ClipperClip extends ClipAttemptFields {
   id: string;
   project_id: string;
   title: string;
@@ -278,12 +286,28 @@ export interface ClipperClip {
   headline_text: string | null;
   transcript_text: string | null;
   content_type: ContentType | null;
+  /** How sure the classifier was about THIS clip's stretch, and where the
+   * verdict came from. `null` confidence means never measured — which is not
+   * the same as low, and is why such a clip gets the conservative grammar. */
+  content_confidence: number | null;
+  content_type_origin: "segment" | "source" | "override" | null;
+  /** Resolved by the backend from the three fields above. The mapping lives in
+   * `services/clipper/edit_profiles.py` and is deliberately NOT duplicated
+   * here: two copies would drift the first time either changed. */
+  edit_profile: EditProfile | null;
   layout_plan: LayoutPlan | null;
   caption_plan: CaptionPlan | null;
+  caption_preset_id?: string | null;
+  /** A person's answer for THIS clip: the source already shows burned
+   * subtitles (true — ClipForge burns no layer of its own), it shows none
+   * (false), or nobody has said (null — the project's setting decides). */
+  source_has_burned_captions?: boolean | null;
+  effective_caption_policy?: EffectiveCaptionPolicy | null;
   warnings: string[] | null;
   dedupe_group: string | null;
   is_alternative: boolean;
   rank_position: number | null;
+  selection_run_id: string | null;
   ranker_version: string | null;
   reasoning: ClipReasoning | null;
   review: ClipReview | null;
@@ -293,7 +317,7 @@ export interface ClipperClip {
   thumbnail_path: string | null;
 }
 
-export interface ClipperProject {
+export interface ClipperProject extends ProjectAttemptFields {
   id: string;
   title: string;
   source_url: string | null;
@@ -407,6 +431,7 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   caption_preset_id: "bold_impact",
   caption_position: "bottom",
   caption_highlight: true,
+  source_has_burned_captions: null,
   headline_enabled: true,
   headline_auto: true,
   emoji_enabled: false,
@@ -427,6 +452,14 @@ export const DEFAULT_SETTINGS: ClipperSettings = {
   min_score: 0,
   layout_mode: "auto",
   face_pct: 0.35,
+  // `reasoning_mode` is NOT here on purpose. This object is posted wholesale,
+  // so anything in it overrides the backend — and the backend's default for
+  // that key is RESOLVED from config.py, including an operator who turned the
+  // story engine on through the old environment variables. A value here would
+  // silently take it back off. The form sends the key only when the user picks
+  // one; see _BACKEND_ONLY in server/tests/test_settings_parity.py.
+  //
+  // `edit_mode` is absent for the same reason.
 };
 
 export const CONTENT_TYPE_LABELS: Record<ContentType, string> = {

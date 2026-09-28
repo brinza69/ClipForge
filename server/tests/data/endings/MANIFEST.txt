@@ -1,0 +1,10 @@
+# sha256 of every fixture; produced by (read-only on data/):
+#   F:/ClipForge/server/.venv/Scripts/python.exe F:/ClipForge/data/claude-master-20260924/B/gates/endings/en1/en1_fixtures.py
+# inputs: E0 B/gates/endings/{vad.json,facts.json,work/<case>_speech_16k.wav}; DB transcripts via mode=ro
+478c2a3a2c031bd69ad0de679808a0161294d80f405e8152df30fc158bb32974  02dea6f0a9e9.json
+f6a9688f9ae5c212b7206622bb13e4e9ea5bf86252fd46440a6799276d46310a  dea939f254a1.json
+98e1fa2be4fd83bd8467e78ddd0b09eda29199759b348dea4511f6930392f946  3e42c5a399c2.json
+3a0f73978db29b9978bc9a130bde357cc1358fb9ac407b76cfdaca0f17eb5b7c  1204e0fdfba2.json
+fd8ceddf6b1938efe923ff3f40a7b0ffed6ec68b8bea7a2bed73f4987d99112d  70ca6472b03b.json
+a1e23ea30dc66d8291f0542d7e72f3121a1fb3b417103dd15f66000451165c56  1204e0fdfba2_spoken_so.json
+4b78e73f632f044ebabae8f7c0b9d9e08c996b92031151c1db9da23cef404450  1204e0fdfba2_long_tail.json

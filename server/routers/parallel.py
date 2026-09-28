@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -26,12 +25,22 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from database import async_session
+from job_queue import job_queue
 from models import JobModel, JobStatus, JobType, ProjectModel, ProjectStatus
 from routers.remix import Zone, _safe_filename
 from services.downloader import detect_source_type, fetch_metadata, validate_url
+from services.file_validation import is_usable_file
+from services.job_idempotency import job_idempotency_key
 
 logger = logging.getLogger("clipforge.routers.parallel")
 router = APIRouter(prefix="/api/parallel", tags=["parallel"])
+
+_MIN_OUTPUT_BYTES = 1024
+
+
+def _is_usable_output(path: str | Path) -> bool:
+    """Accept only a regular, non-truncated media file for serving."""
+    return is_usable_file(path, minimum_bytes=_MIN_OUTPUT_BYTES)
 
 
 class VariantConfig(BaseModel):
@@ -121,7 +130,6 @@ async def parallel_start(req: StartRequest):
         await session.refresh(project)
         project_id = project.id
 
-    job_id = uuid.uuid4().hex[:12]
     job_meta = {
         "url": req.url,
         "title": req.title or metdat.get("title"),
@@ -138,22 +146,34 @@ async def parallel_start(req: StartRequest):
         "sheets_number": (req.sheets_number or "").strip() or None,
     }
 
+    job_id = await job_queue.enqueue(
+        project_id=project_id,
+        job_type=JobType.parallel_pipeline.value,
+        metadata=job_meta,
+        idempotency_key=job_idempotency_key(JobType.parallel_pipeline.value, job_meta),
+    )
+
     async with async_session() as session:
-        row = JobModel(
-            id=job_id,
-            project_id=project_id,
-            type=JobType.parallel_pipeline.value,
-            status=JobStatus.queued.value,
-            metadata_json=json.dumps(job_meta),
-        )
-        session.add(row)
-        await session.commit()
+        job = await session.get(JobModel, job_id)
+        if job and job.project_id != project_id:
+            orphan = await session.get(ProjectModel, project_id)
+            if orphan:
+                await session.delete(orphan)
+                await session.commit()
+            project_id = job.project_id
+            already_running = True
+        else:
+            already_running = False
 
     logger.info(
         f"parallel_pipeline {job_id} enqueued for project {project_id} "
         f"({len(req.variants)} variants)"
     )
-    return {"job_id": job_id, "project_id": project_id}
+    return {
+        "job_id": job_id,
+        "project_id": project_id,
+        "already_running": already_running,
+    }
 
 
 def _variant_view(r: dict) -> dict:
@@ -163,12 +183,13 @@ def _variant_view(r: dict) -> dict:
     if fp:
         try:
             p = Path(fp)
-            if p.exists():
+            if _is_usable_output(p):
                 exists, size = True, p.stat().st_size
         except Exception:
             pass
     return {
         "index": r.get("index"),
+        "status": "done",
         "name": r.get("name"),
         "label": r.get("label"),
         "commentator_preset_id": r.get("commentator_preset_id"),
@@ -183,11 +204,39 @@ def _variant_view(r: dict) -> dict:
                 "part": p.get("part"), "of": p.get("of"),
                 "filename": p.get("filename"),
                 "start": p.get("start"), "duration": p.get("duration"),
-                "available": bool(p.get("path") and Path(p["path"]).exists()),
+                "available": bool(p.get("path") and _is_usable_output(p["path"])),
             }
             for p in (r.get("parts") or [])
         ],
     }
+
+
+def _failed_variant_view(failure: dict) -> dict:
+    """Shape a failed variant without ever exposing a download link."""
+    return {
+        "index": failure.get("index"),
+        "status": "failed",
+        "name": failure.get("name"),
+        "label": failure.get("label"),
+        "commentator_preset_id": None,
+        "tts_engine": None,
+        "caption_template_id": None,
+        "output_filename": "",
+        "file_size": 0,
+        "file_available": False,
+        "error": failure.get("error") or "Variant failed",
+        "drive": None,
+        "parts": [],
+    }
+
+
+def _all_variant_views(meta: dict) -> list[dict]:
+    """Return successful and failed variants in their original order."""
+    views = [
+        *[_variant_view(r) for r in (meta.get("results") or [])],
+        *[_failed_variant_view(f) for f in (meta.get("variant_failures") or [])],
+    ]
+    return sorted(views, key=lambda item: item.get("index", 10**9))
 
 
 @router.get("/{job_id}/result")
@@ -202,7 +251,6 @@ async def parallel_result(job_id: str):
     if job.status != JobStatus.done.value:
         raise HTTPException(409, f"Job not done (status={job.status})")
     meta = json.loads(job.metadata_json or "{}")
-    results = meta.get("results") or []
     return {
         "job_id": job_id,
         "project_id": job.project_id,
@@ -211,7 +259,8 @@ async def parallel_result(job_id: str):
             "original_translated": "",
             "ai_generated": "",
         },
-        "variants": [_variant_view(r) for r in results],
+        "variants": _all_variant_views(meta),
+        "failed_variants": meta.get("variant_failures") or [],
         "sheets_commit": meta.get("sheets_commit"),
         "sheets_row": meta.get("sheets_row"),
         "sheets_number": meta.get("sheets_number"),
@@ -237,7 +286,7 @@ async def parallel_download(job_id: str, index: int):
     if not match:
         raise HTTPException(404, f"Variant {index} not found")
     out = Path(match.get("final_path", ""))
-    if not out.exists():
+    if not _is_usable_output(out):
         raise HTTPException(410, "Variant video no longer available")
     raw_name = match.get("output_filename") or out.name
     safe = _safe_filename(Path(raw_name).stem) + (Path(raw_name).suffix or ".mp4")
@@ -268,7 +317,7 @@ async def parallel_download_part(job_id: str, index: int, part: int):
     if not pmatch:
         raise HTTPException(404, f"Part {part} not found")
     out = Path(pmatch.get("path", ""))
-    if not out.exists():
+    if not _is_usable_output(out):
         raise HTTPException(410, "Part no longer available")
     safe = _safe_filename(out.stem) + ".mp4"
     return FileResponse(
@@ -299,14 +348,14 @@ async def parallel_recent(limit: int = 10):
             meta = json.loads(row.metadata_json or "{}")
         except Exception:
             meta = {}
-        results = meta.get("results") or []
+        variants = _all_variant_views(meta)
         out.append({
             "job_id": row.id,
             "project_id": row.project_id,
             "title": meta.get("title") or "Parallel",
             "url": meta.get("url"),
-            "variant_count": len(results),
-            "variants": [_variant_view(r) for r in results],
+            "variant_count": len(variants),
+            "variants": variants,
             "finished_at": row.updated_at.isoformat() if row.updated_at else None,
         })
     return {"runs": out, "count": len(out)}

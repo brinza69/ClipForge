@@ -135,15 +135,23 @@ def normalise_anchor(raw: Any, duration: float) -> dict | None:
 
     context = []
     for item in raw.get("required_context") or []:
+        quote, atom_ids = "", []
         if isinstance(item, dict):
             t = _num(item.get("t", item.get("time")), -1.0)
             fact = str(item.get("fact") or item.get("why") or "")[:160]
+            # The two fields grounding needs. `fact` is the model's own
+            # paraphrase and can never match the transcript verbatim; `quote`
+            # is what it claims was actually said.
+            quote = str(item.get("quote") or "")[:240]
+            atom_ids = [i for i in (item.get("atom_ids") or [])
+                        if isinstance(i, (int, str))][:8]
         else:
             t, fact = -1.0, str(item)[:160]
         # Context after the payoff is not context, and context from another
         # part of the stream is a different clip.
         if 0 <= t <= payoff and payoff - t <= MAX_CONTEXT_REACH_S:
-            context.append({"t": round(t, 3), "fact": fact})
+            context.append({"t": round(t, 3), "fact": fact,
+                            "quote": quote, "atom_ids": atom_ids})
     context.sort(key=lambda c: c["t"])
 
     hook = raw.get("hook") if isinstance(raw.get("hook"), dict) else {}
@@ -162,6 +170,9 @@ def normalise_anchor(raw: Any, duration: float) -> dict | None:
         "unresolved_context": [str(u)[:120]
                                for u in (raw.get("unresolved_context") or [])][:6],
         "confidence": _clamp01(_num(raw.get("confidence"), 0.6)),
+        "payoff_quote": str(raw.get("payoff_quote") or "")[:240],
+        "payoff_atom_ids": [i for i in (raw.get("payoff_atom_ids") or [])
+                            if isinstance(i, (int, str))][:8],
         "story_version": STORY_VERSION,
     }
 
@@ -368,7 +379,9 @@ def variants_from_anchor(anchor: dict, reaction_end: float, *,
             "start": window[0], "end": window[1],
             "reasons": ["story_anchor", f"variant_{name}"],
             "variant": name,
+            "anchor_id": anchor.get("anchor_id"),
             "story": {
+                "anchor_id": anchor.get("anchor_id"),
                 "anchor_t": payoff,
                 "archetypes": list(anchor.get("archetypes") or []),
                 "why": anchor.get("why", ""),
@@ -378,6 +391,20 @@ def variants_from_anchor(anchor: dict, reaction_end: float, *,
                 "reaction_end": round(end, 3),
                 "edit_reason": why,
                 "story_version": STORY_VERSION,
+                # Carried from the anchor rather than left behind. All three
+                # were dropped here and none survived into the candidate
+                # artifact, so nothing downstream could tell a payoff the model
+                # was sure of from one it guessed at, and nothing could say
+                # which prompt produced it.
+                "confidence": _clamp01(_num(anchor.get("confidence"), 0.6)),
+                "payoff_strength": _clamp01(_num(anchor.get("payoff_strength"), 0.5)),
+                "payoff_grounded": bool(anchor.get("payoff_grounded")),
+                "payoff_evidence": anchor.get("payoff_evidence"),
+                "grounding": anchor.get("grounding"),
+                "provenance": {
+                    "prompt_version": anchor.get("prompt_version"),
+                    "story_version": STORY_VERSION,
+                },
             },
         })
     return out

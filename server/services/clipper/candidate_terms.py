@@ -74,6 +74,10 @@ TAIL_PAD_S = 0.40
 RELEASE_GAP_S = 0.05      # silence left before the next word when padding
 LEAD_IN_MAX_S = 5.0       # a longer preceding sentence is context, not a lead-in
 SNAP_TOLERANCE_S = 2.5    # furthest a start is moved to reach a sentence
+# How close a cut has to sit to a sentence's own edge to count as ON it.
+# Was a literal inside `extract_features`; named here in R5 so the score and
+# the completeness verdict cannot answer the same question differently.
+SENTENCE_EDGE_S = 0.35
 SENTENCE_END_REACH_S = 3.5  # furthest an end is pushed OUT to finish a sentence
 DANGLE_PAUSE_S = 1.5      # silence after an orphan word that proves it is one
 GRID_S = 0.5              # payoff search resolution

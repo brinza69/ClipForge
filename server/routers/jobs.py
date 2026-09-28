@@ -15,6 +15,12 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
 @router.get("/", response_model=list[JobResponse])
+# The sidebar badge asks for `/api/jobs?status=…`, without the slash. With no
+# alias FastAPI answers 307 to an ABSOLUTE backend URL, so the browser leaves
+# the /worker-api proxy and the call works only where CORS happens to allow the
+# origin. The slash cannot be added client-side: Next.js 308s it away before the
+# rewrite (A1 browser baseline, data/claude-master-20260924/A/badge-finding.md).
+@router.get("", response_model=list[JobResponse], include_in_schema=False)
 async def list_jobs(
     project_id: str = None,
     status: str = None,

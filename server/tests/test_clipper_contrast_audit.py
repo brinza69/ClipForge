@@ -1,0 +1,281 @@
+"""Batch R6's contrast gate: what reaches the exit code.
+
+Same rule as `test_clipper_caption_audit.py`, and it is in `CLAUDE.md` for the
+same reason: a diagnostic that would invalidate the conclusion has to reach the
+exit code, and needs a test through `main()` that demonstrates the non-zero exit.
+
+The case this file is built around is the empty population. This script's whole
+method is a sweep over colour pairs, and a sweep over an empty list is silent
+and green — it would print "every palette clears the bar" over no palettes at
+all, which is the same shape as the empty corpus that passed in Batch R5.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+WHITE, BLACK = "#FFFFFF", "#000000"
+
+
+def _audit(monkeypatch, data_dir: Path):
+    import importlib.util
+
+    monkeypatch.setenv("CLIPFORGE_DATA_DIR", str(data_dir))
+    path = (Path(__file__).resolve().parents[2] / "scripts"
+            / "audit_caption_contrast.py")
+    spec = importlib.util.spec_from_file_location("audit_caption_contrast",
+                                                  path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _sidecar(tmp_path: Path, clip: str, style) -> None:
+    exports = tmp_path / "clipper" / "p" / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / f"{clip}.json").write_text(
+        json.dumps({"caption_plan": {"style": style}}), encoding="utf-8")
+
+
+def _run(module, presets: dict | None = None) -> tuple[int, dict]:
+    import io
+    import sys
+    from contextlib import redirect_stdout
+
+    if presets is not None:
+        module.DEFAULT_PRESETS = presets
+    old = sys.argv
+    sys.argv = ["audit_caption_contrast.py", "--json"]
+    buffer = io.StringIO()
+    try:
+        with redirect_stdout(buffer):
+            code = module.main()
+    finally:
+        sys.argv = old
+    return code, json.loads(buffer.getvalue())
+
+
+GOOD = {"text_color": WHITE, "highlight_color": WHITE,
+        "outline_color": BLACK, "outline_width": 5}
+
+
+def test_an_empty_preset_list_is_not_a_pass(tmp_path, monkeypatch):
+    """A sweep over nothing is silent and green."""
+    _sidecar(tmp_path, "a", GOOD)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={})
+    assert code == 1
+    assert any("sweep over nothing" in line for line in out["failures"])
+
+
+def test_an_empty_corpus_is_not_a_pass(tmp_path, monkeypatch):
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert code == 1
+    assert any("sweep over nothing" in line for line in out["failures"])
+
+
+def test_a_clean_population_passes(tmp_path, monkeypatch):
+    _sidecar(tmp_path, "a", GOOD)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert out["failures"] == [] and code == 0
+
+
+NEON = {"name": "Neon Pop", "text_color": WHITE, "outline_width": 5,
+        "highlight_color": "#FF3366", "outline_color": "#1A0033"}
+VIRAL = {"name": "Viral Gradient", "text_color": WHITE, "outline_width": 5,
+         "highlight_color": "#FF6B35", "outline_color": BLACK}
+
+
+def test_the_two_real_presets_are_accepted_below_the_bar(tmp_path, monkeypatch):
+    """The finding is real and the decision was to ship it: neither preset has
+    ever been used, and `Neon Pop` cannot reach 3.0 without ceasing to be a
+    saturated pink. Accepted, with the number recorded."""
+    _sidecar(tmp_path, "a", GOOD)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"neon": NEON, "viral": VIRAL})
+    assert out["failures"] == [] and code == 0
+    accepted = [r for r in out["presets"] if r["accepted"]]
+    assert len(accepted) == 2
+    assert all(r["highlight"]["clears_large_text"] is False for r in accepted)
+
+
+def test_repainting_an_accepted_preset_fires_the_gate_again(tmp_path,
+                                                            monkeypatch):
+    """KEYED ON THE PALETTE, NOT ON THE NAME. An exception by name would let
+    somebody repaint `Neon Pop` into something worse and keep the pass."""
+    _sidecar(tmp_path, "a", GOOD)
+    module = _audit(monkeypatch, tmp_path)
+    for changed in ({**NEON, "highlight_color": "#FF0033"},
+                    {**NEON, "outline_color": "#330066"},
+                    {**NEON, "outline_width": 3},
+                    {**NEON, "text_color": "#EEEEEE"}):
+        code, out = _run(module, presets={"neon": changed})
+        assert code == 1, changed
+        assert out["presets"][0]["accepted"] is None, changed
+
+
+def test_a_new_preset_that_misses_the_bar_still_fails(tmp_path, monkeypatch):
+    """The exception is two palettes, not a rule that anything may miss."""
+    _sidecar(tmp_path, "a", GOOD)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={
+        "new": {"name": "Something New", "text_color": WHITE,
+                "outline_width": 5, "highlight_color": "#FF6B35",
+                "outline_color": BLACK}})
+    assert code == 1
+    assert any("highlight floor" in line for line in out["failures"])
+
+
+def test_an_unreadable_colour_fails_the_run(tmp_path, monkeypatch):
+    _sidecar(tmp_path, "a", {"text_color": "puce", "outline_color": BLACK,
+                             "outline_width": 5})
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert code == 1
+    assert any("colour_not_a_hex_triplet" in line for line in out["failures"])
+
+
+def test_an_absent_style_is_counted_and_not_failed(tmp_path, monkeypatch):
+    """An export can genuinely carry no captions, and a sidecar can have lost
+    the style, and nothing here tells the two apart — so it is `unavailable`,
+    exactly as `audit_caption_placement` treats the same fact. Failing would
+    keep the gate permanently red for a legitimate state."""
+    _sidecar(tmp_path, "a", GOOD)
+    _sidecar(tmp_path, "b", None)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert out["sidecars_read"] == 2
+    assert any(r["refused"] == ["no_caption_style"]
+               for r in out["distinct_palettes_on_disk"])
+    assert out["failures"] == [] and code == 0
+
+
+def test_an_unreadable_sidecar_fails_and_keeps_its_row(tmp_path, monkeypatch):
+    _sidecar(tmp_path, "a", GOOD)
+    (tmp_path / "clipper" / "p" / "exports" / "b.json").write_text(
+        "{not json", encoding="utf-8")
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert out["sidecars_refused"], "it did not vanish"
+    assert code == 1
+
+
+def test_a_style_stored_as_an_unparsable_repr_is_refused(tmp_path, monkeypatch):
+    """`caption_plan.style` is sometimes a repr rather than JSON, which the
+    clipper has stored since it shipped. A repr that will not parse is a
+    refusal, not an absent style."""
+    _sidecar(tmp_path, "a", GOOD)
+    _sidecar(tmp_path, "b", "{'text_color': ")
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert any("style_repr_unparsable" in line
+               for line in out["sidecars_refused"])
+    assert code == 1
+
+
+def test_a_style_stored_as_a_parsable_repr_is_read(tmp_path, monkeypatch):
+    _sidecar(tmp_path, "a", str(GOOD))
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert out["distinct_palettes_on_disk"][0]["fill"]["floor"] == 4.58
+    assert code == 0
+
+
+def test_a_caption_plan_that_is_not_a_record_is_refused_not_raised(tmp_path,
+                                                                   monkeypatch):
+    """`side.get("caption_plan") or {}` returns the list itself for `[1]`, and
+    `.get` on a list raises — out of a loop over the corpus, so the audit
+    reports on the part before the crash and never says it crashed. The
+    placement audit was taught this and this one was not."""
+    _sidecar(tmp_path, "a", GOOD)
+    (tmp_path / "clipper" / "p" / "exports" / "b.json").write_text(
+        json.dumps({"caption_plan": [1]}), encoding="utf-8")
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert any("caption_plan_not_a_record" in line
+               for line in out["sidecars_refused"])
+    assert code == 1
+
+
+def test_a_style_that_is_present_and_corrupt_is_not_an_absent_one(tmp_path,
+                                                                  monkeypatch):
+    """An absent style is a legitimate export with no captions and does not fail
+    the run. A style that is the number 7 is a corrupt record, and `verdict`
+    would spell both `no_caption_style`."""
+    _sidecar(tmp_path, "a", GOOD)
+    _sidecar(tmp_path, "b", 7)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert any("style_not_a_record" in line for line in out["sidecars_refused"])
+    assert code == 1
+
+
+def test_a_sidecar_that_is_not_a_record_is_refused(tmp_path, monkeypatch):
+    _sidecar(tmp_path, "a", GOOD)
+    (tmp_path / "clipper" / "p" / "exports" / "b.json").write_text(
+        "[1, 2, 3]", encoding="utf-8")
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert any("sidecar_not_a_record" in line
+               for line in out["sidecars_refused"])
+    assert code == 1
+
+
+def test_two_styles_with_the_same_colours_and_different_outlines_are_two_rows(
+        tmp_path, monkeypatch):
+    """The floor depends on the outline being DRAWN, so two styles with
+    identical colours and widths of 5 and 0 get different answers. Keying the
+    dedupe on colours alone collapsed them into one row and reported whichever
+    came first."""
+    _sidecar(tmp_path, "a", GOOD)
+    _sidecar(tmp_path, "b", {**GOOD, "outline_width": 0})
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    rows = out["distinct_palettes_on_disk"]
+    assert len(rows) == 2, rows
+    assert any(r["refused"] == ["outline_width_is_zero"] for r in rows)
+    assert code == 1
+
+
+def test_the_counts_are_per_distinct_verdict_and_still_sum(tmp_path,
+                                                           monkeypatch):
+    """One row per palette is only honest if the row says how many exports it
+    stands for."""
+    for clip in ("a", "b", "c"):
+        _sidecar(tmp_path, clip, GOOD)
+    _sidecar(tmp_path, "d", {**GOOD, "outline_width": 2})
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    counts = sorted(int(r["name"].rsplit("(x", 1)[1].rstrip(")"))
+                    for r in out["distinct_palettes_on_disk"])
+    assert counts == [1, 3]
+    assert sum(counts) == out["sidecars_read"] == 4
+
+
+def test_an_accepted_preset_is_accepted_on_a_STORED_EXPORT_too(tmp_path,
+                                                               monkeypatch):
+    """THE TEST THAT WAS PROMISED. The exception took its name from the caller,
+    which passes a preset id for the presets and `project/clip (x99)` for a
+    stored export — so the same palette matched in one population and not the
+    other, and the first real use of `Neon Pop` would have made the presets pass
+    and the exports fail on it."""
+    _sidecar(tmp_path, "a", NEON)
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    disk = out["distinct_palettes_on_disk"]
+    assert len(disk) == 1
+    assert disk[0]["accepted"], "the stored export matches the exception"
+    assert disk[0]["highlight"]["clears_large_text"] is False
+    assert out["failures"] == [] and code == 0
+
+
+def test_a_stored_export_with_a_repainted_neon_pop_still_fails(tmp_path,
+                                                              monkeypatch):
+    _sidecar(tmp_path, "a", {**NEON, "highlight_color": "#FF0033"})
+    module = _audit(monkeypatch, tmp_path)
+    code, out = _run(module, presets={"a": {"name": "A", **GOOD}})
+    assert out["distinct_palettes_on_disk"][0]["accepted"] is None
+    assert code == 1

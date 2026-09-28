@@ -221,11 +221,17 @@ export function CandidateGrid({
       <ClipEditor
         clip={editClip}
         open={editClip !== null}
+        maxClipS={project.max_clip_s_effective}
         onOpenChange={(v) => !v && setEditClip(null)}
         // The board re-derives from the server, never from local state: a trim
         // changes the duration and drops the preview path, and both come back
         // from the PATCH rather than being guessable here.
-        onSaved={onRefresh}
+        onSaved={(updated) => {
+          // Keep the open editor on the server's saved window/caption/layout.
+          // Refreshing the board alone leaves editClip holding the old object.
+          if (updated) setEditClip((current) => current?.id === updated.id ? updated : current);
+          onRefresh();
+        }}
       />
     </div>
   );

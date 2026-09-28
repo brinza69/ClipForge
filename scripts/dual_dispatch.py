@@ -1,7 +1,11 @@
 """ClipForge dual-GPU dispatcher.
 
-Drives TWO backends concurrently — A on the RTX 3060 (:8420), B on the
-GTX 1660 SUPER (:8421) — so two sheet rows process at once (one per GPU).
+Drives TWO backends concurrently — A on the GTX 1660 SUPER (:8420), B on the
+RTX 3060 (:8421) — so two sheet rows process at once (one per GPU).
+
+Maparea vine din `watchdog.ps1`, care da UUID-urile in ordinea indexului lui A
+si lui B; pe rigul asta index 0 e 1660. Verificat in `data/watchdog.log`, pe
+liniile `started backend ... gpu=<uuid>`, nu dedus din numele placilor.
 Reads pending rows (URL set, description empty), sends one to each free
 backend via /api/auto (explicit URL), then writes the AI description back to
 the sheet. Runs forever; picks up new rows automatically. Ctrl+C / kill to stop.
@@ -25,10 +29,27 @@ TAB = _cfg.get("tab", "Sheet1")
 # 2 = tot sheet-ul. A stat pe 199 cat timp se lucra doar la lotul nou; asta ascundea
 # ~180 de randuri vechi fara narator/comentator, care nu ar fi fost randate niciodata.
 MIN_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MIN_ROW", "2"))
-# A -> :8420 (GPU 0), B -> :8421 (GPU 1). On a single-GPU PC only A is reachable;
+# Limita de sus, ca un lot sa nu se reverse peste urmatorul. Randurile din sheet
+# sunt loturi consecutive cu roluri diferite: 285-294 cer narator+comentator,
+# 295-302 cer povestitor. Fara MAX_ROW, dispecerul termina primul lot si trece
+# linistit in al doilea cu presetele gresite — pe credite ElevenLabs.
+# 0 = fara limita.
+MAX_ROW = int(os.environ.get("CLIPFORGE_DISPATCH_MAX_ROW", "0"))
+# A -> :8420 (GPU 0 = 1660 SUPER), B -> :8421 (GPU 1 = 3060). Single-GPU: only A;
 # B is auto-skipped at assign time (see backend_up). Labels are by index, not card
 # model, so the rig is portable to any machine.
 BACKENDS = {"A(:8420)": "http://127.0.0.1:8420", "B(:8421)": "http://127.0.0.1:8421"}
+# `--backend A` (sau B) leaga dispecerul de o singura placa, ca sa poata rula
+# doua piste in paralel: una pe fiecare GPU. Fara asta, doua dispecere ar vedea
+# amandoua aceeasi placa libera si i-ar trimite cate un job fiecare.
+_only = None
+for _i, _a in enumerate(sys.argv):
+    if _a == "--backend" and _i + 1 < len(sys.argv):
+        _only = sys.argv[_i + 1].strip().upper()
+if _only:
+    BACKENDS = {k: v for k, v in BACKENDS.items() if k.upper().startswith(_only)}
+    if not BACKENDS:
+        raise SystemExit(f"--backend {_only}: nu exista; alege A sau B")
 # Each backend's own data dir — needed to look a project's source URL up in its
 # SQLite DB (there is no HTTP endpoint for a project).
 BACKEND_DBS = {"A(:8420)": r"D:\clipforge\data\db\clipforge.db",
@@ -228,7 +249,7 @@ def read_pending():
         pend = (r[pcol].strip() if len(r) > pcol and r[pcol] else "")
         # Skip @herytstory rows — those are French content handled by
         # victoria_dispatch.py (French desc -> col E), not Romanian.
-        if i < MIN_ROW or not b.startswith("http") or "herytstory" in b.lower():
+        if i < MIN_ROW or (MAX_ROW and i > MAX_ROW)                 or not b.startswith("http") or "herytstory" in b.lower():
             continue
         # A row still needs work when its description is missing OR when any
         # role's video is not on Drive yet. Keying on the description alone
@@ -278,6 +299,26 @@ def bump(row, attempts, done, bad_rows, reason):
     note_bad(row, reason, bad_rows)
     done.add(row)
     return True
+
+
+# `--max-randuri N` opreste dispecerul dupa N randuri RANDATE (nu si cele sarite
+# fiindca existau deja pe Drive). Iese cu SystemExit, care trece prin plasa de
+# siguranta de mai jos — altfel s-ar reporni si ar continua la nesfarsit.
+MAX_RANDURI = None
+for _i, _a in enumerate(sys.argv):
+    if _a == "--max-randuri" and _i + 1 < len(sys.argv):
+        MAX_RANDURI = int(sys.argv[_i + 1])
+_randate = {"n": 0}
+
+
+def _bifeaza_rand():
+    """Numara un rand terminat; opreste rularea cand s-a atins limita."""
+    if MAX_RANDURI is None:
+        return
+    _randate["n"] += 1
+    print(f"randuri terminate: {_randate['n']}/{MAX_RANDURI}", flush=True)
+    if _randate["n"] >= MAX_RANDURI:
+        raise SystemExit(0)
 
 
 def main(dry=False):
@@ -436,6 +477,7 @@ def main(dry=False):
                 except Exception as e:
                     print(f"[{name}] row {row} writeback fail: {str(e)[:80]}", flush=True)
                 done.add(row); inflight[name] = None
+                _bifeaza_rand()
             elif st in ("failed", "error", "cancelled"):
                 print(f"[{name}] row {row} {st}: {(j.get('error') or '')[:90]}", flush=True)
                 done.add(row); inflight[name] = None      # skip so we don't loop on it

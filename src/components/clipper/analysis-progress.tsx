@@ -108,6 +108,10 @@ export function AnalysisProgress({
 
   const current = stageIndex(live.progress_message);
   const pct = Math.round((live.progress ?? 0) * 100);
+  // A clip's render is not an analysis run: its messages ("Rendering export",
+  // "Planning the shot list") match none of PIPELINE_STAGES, so the list showed
+  // "Validating source" spinning for a whole export (A4 release-browser.md, O1).
+  const clipScoped = live.type === "clipper_export" || live.type === "clipper_preview";
 
   return (
     <Card className="space-y-4 p-5">
@@ -118,8 +122,9 @@ export function AnalysisProgress({
             {live.progress_message || "Working…"}
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            You can leave this page — the analysis keeps running on the worker, and what you see
-            here is read back from it.
+            {clipScoped
+              ? "One clip is rendering on the worker; the board below stays usable, and this panel closes when it finishes."
+              : "You can leave this page — the analysis keeps running on the worker, and what you see here is read back from it."}
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={() => void cancel()}>
@@ -137,7 +142,7 @@ export function AnalysisProgress({
         </div>
       </div>
 
-      <ol className="space-y-1">
+      {!clipScoped && <ol className="space-y-1">
         {PIPELINE_STAGES.map((stage, i) => {
           const done = i < current;
           const active = i === current;
@@ -165,7 +170,7 @@ export function AnalysisProgress({
             </li>
           );
         })}
-      </ol>
+      </ol>}
     </Card>
   );
 }

@@ -1,0 +1,1226 @@
+[
+ {
+  "rate": "24",
+  "fps": "24",
+  "duration_s": 600,
+  "source_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High 4:4:4 Predictive",
+    "width": 960,
+    "height": 540,
+    "has_b_frames": 0,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "avg_frame_rate": "24/1",
+    "time_base": "1/12288",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 7372800,
+    "duration": "600.000000",
+    "nb_frames": "14400"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.000000",
+    "size": "39487728",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "source_check": {
+   "frames": 14400,
+   "expected": 14400,
+   "not_own_index": 0
+  },
+  "source_packets": {
+   "n": 14400,
+   "unparsed": 0,
+   "tb": [
+    1,
+    12288
+   ],
+   "ticks_per_frame": "512",
+   "not_on_index_grid": 0
+  },
+  "proxy_cmd": [
+   "-y",
+   "-loglevel",
+   "error",
+   "-i",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\src_24.mp4",
+   "-an",
+   "-sn",
+   "-dn",
+   "-vf",
+   "scale=480:-2:flags=bilinear",
+   "-r",
+   "10",
+   "-c:v",
+   "libx264",
+   "-preset",
+   "veryfast",
+   "-crf",
+   "30",
+   "-pix_fmt",
+   "yuv420p",
+   "-g",
+   "10",
+   "-movflags",
+   "+faststart",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\proxy_24.mp4"
+  ],
+  "proxy_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High",
+    "width": 480,
+    "height": 270,
+    "has_b_frames": 2,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "10/1",
+    "avg_frame_rate": "10/1",
+    "time_base": "1/10240",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 6146048,
+    "duration": "600.200000",
+    "nb_frames": "6002"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.200000",
+    "size": "850758",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "state": "read",
+  "domain": {
+   "state": "ok"
+  },
+  "proxy_slots": 6002,
+  "proxy_packets": 6002,
+  "proxy_nb_frames": "6002",
+  "proxy_pts_off_grid": 0,
+  "simulated_slots": 6002,
+  "unreadable": 0,
+  "sim_mismatches": 0,
+  "sim_mismatch_examples": [],
+  "addressed": 5998,
+  "addr_mismatches": 0,
+  "addr_mismatch_examples": [],
+  "refused_by_reason": {
+   "start_transient": 3,
+   "end_of_stream": 1
+  },
+  "refused_slots": [
+   0,
+   1,
+   2,
+   6001
+  ],
+  "first_slots": [
+   {
+    "slot": 0,
+    "shown": 0,
+    "read": "read",
+    "sim": 0,
+    "addr": null
+   },
+   {
+    "slot": 1,
+    "shown": 1,
+    "read": "read",
+    "sim": 1,
+    "addr": null
+   },
+   {
+    "slot": 2,
+    "shown": 2,
+    "read": "read",
+    "sim": 2,
+    "addr": null
+   },
+   {
+    "slot": 3,
+    "shown": 4,
+    "read": "read",
+    "sim": 4,
+    "addr": 4
+   }
+  ],
+  "last_slots": [
+   {
+    "slot": 5998,
+    "shown": 14392,
+    "read": "read",
+    "sim": 14392,
+    "addr": 14392
+   },
+   {
+    "slot": 5999,
+    "shown": 14394,
+    "read": "read",
+    "sim": 14394,
+    "addr": 14394
+   },
+   {
+    "slot": 6000,
+    "shown": 14397,
+    "read": "read",
+    "sim": 14397,
+    "addr": 14397
+   },
+   {
+    "slot": 6001,
+    "shown": 14399,
+    "read": "read",
+    "sim": 14399,
+    "addr": null
+   }
+  ],
+  "ties_all": [],
+  "ties_addressed": 0
+ },
+ {
+  "rate": "23.976",
+  "fps": "24000/1001",
+  "duration_s": 600,
+  "source_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High 4:4:4 Predictive",
+    "width": 960,
+    "height": 540,
+    "has_b_frames": 0,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24000/1001",
+    "avg_frame_rate": "24000/1001",
+    "time_base": "1/24000",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 14400386,
+    "duration": "600.016083",
+    "nb_frames": "14386"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.016083",
+    "size": "39449759",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "source_check": {
+   "frames": 14386,
+   "expected": 14386,
+   "not_own_index": 0
+  },
+  "source_packets": {
+   "n": 14386,
+   "unparsed": 0,
+   "tb": [
+    1,
+    24000
+   ],
+   "ticks_per_frame": "1001",
+   "not_on_index_grid": 0
+  },
+  "proxy_cmd": [
+   "-y",
+   "-loglevel",
+   "error",
+   "-i",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\src_23.976.mp4",
+   "-an",
+   "-sn",
+   "-dn",
+   "-vf",
+   "scale=480:-2:flags=bilinear",
+   "-r",
+   "10",
+   "-c:v",
+   "libx264",
+   "-preset",
+   "veryfast",
+   "-crf",
+   "30",
+   "-pix_fmt",
+   "yuv420p",
+   "-g",
+   "10",
+   "-movflags",
+   "+faststart",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\proxy_23.976.mp4"
+  ],
+  "proxy_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High",
+    "width": 480,
+    "height": 270,
+    "has_b_frames": 2,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "10/1",
+    "avg_frame_rate": "10/1",
+    "time_base": "1/10240",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 6146048,
+    "duration": "600.200000",
+    "nb_frames": "6002"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.200000",
+    "size": "845720",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "state": "read",
+  "domain": {
+   "state": "ok"
+  },
+  "proxy_slots": 6002,
+  "proxy_packets": 6002,
+  "proxy_nb_frames": "6002",
+  "proxy_pts_off_grid": 0,
+  "simulated_slots": 6002,
+  "unreadable": 0,
+  "sim_mismatches": 0,
+  "sim_mismatch_examples": [],
+  "addressed": 5998,
+  "addr_mismatches": 0,
+  "addr_mismatch_examples": [],
+  "refused_by_reason": {
+   "start_transient": 3,
+   "end_of_stream": 1
+  },
+  "refused_slots": [
+   0,
+   1,
+   2,
+   6001
+  ],
+  "first_slots": [
+   {
+    "slot": 0,
+    "shown": 0,
+    "read": "read",
+    "sim": 0,
+    "addr": null
+   },
+   {
+    "slot": 1,
+    "shown": 1,
+    "read": "read",
+    "sim": 1,
+    "addr": null
+   },
+   {
+    "slot": 2,
+    "shown": 2,
+    "read": "read",
+    "sim": 2,
+    "addr": null
+   },
+   {
+    "slot": 3,
+    "shown": 4,
+    "read": "read",
+    "sim": 4,
+    "addr": 4
+   }
+  ],
+  "last_slots": [
+   {
+    "slot": 5998,
+    "shown": 14378,
+    "read": "read",
+    "sim": 14378,
+    "addr": 14378
+   },
+   {
+    "slot": 5999,
+    "shown": 14380,
+    "read": "read",
+    "sim": 14380,
+    "addr": 14380
+   },
+   {
+    "slot": 6000,
+    "shown": 14382,
+    "read": "read",
+    "sim": 14382,
+    "addr": 14382
+   },
+   {
+    "slot": 6001,
+    "shown": 14385,
+    "read": "read",
+    "sim": 14385,
+    "addr": null
+   }
+  ],
+  "ties_all": [
+   {
+    "slot": 902,
+    "tie_frame": 2159,
+    "shown": 2159,
+    "kept": true
+   },
+   {
+    "slot": 1903,
+    "tie_frame": 4559,
+    "shown": 4559,
+    "kept": true
+   },
+   {
+    "slot": 2904,
+    "tie_frame": 6959,
+    "shown": 6959,
+    "kept": true
+   },
+   {
+    "slot": 3905,
+    "tie_frame": 9359,
+    "shown": 9359,
+    "kept": true
+   },
+   {
+    "slot": 4906,
+    "tie_frame": 11759,
+    "shown": 11759,
+    "kept": true
+   },
+   {
+    "slot": 5907,
+    "tie_frame": 14159,
+    "shown": 14159,
+    "kept": true
+   }
+  ],
+  "ties_addressed": 6
+ },
+ {
+  "rate": "60",
+  "fps": "60",
+  "duration_s": 600,
+  "source_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High 4:4:4 Predictive",
+    "width": 960,
+    "height": 540,
+    "has_b_frames": 0,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "60/1",
+    "avg_frame_rate": "60/1",
+    "time_base": "1/15360",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 9216000,
+    "duration": "600.000000",
+    "nb_frames": "36000"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.000000",
+    "size": "98474847",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "source_check": {
+   "frames": 36000,
+   "expected": 36000,
+   "not_own_index": 0
+  },
+  "source_packets": {
+   "n": 36000,
+   "unparsed": 0,
+   "tb": [
+    1,
+    15360
+   ],
+   "ticks_per_frame": "256",
+   "not_on_index_grid": 0
+  },
+  "proxy_cmd": [
+   "-y",
+   "-loglevel",
+   "error",
+   "-i",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\src_60.mp4",
+   "-an",
+   "-sn",
+   "-dn",
+   "-vf",
+   "scale=480:-2:flags=bilinear",
+   "-r",
+   "10",
+   "-c:v",
+   "libx264",
+   "-preset",
+   "veryfast",
+   "-crf",
+   "30",
+   "-pix_fmt",
+   "yuv420p",
+   "-g",
+   "10",
+   "-movflags",
+   "+faststart",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\proxy_60.mp4"
+  ],
+  "proxy_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High",
+    "width": 480,
+    "height": 270,
+    "has_b_frames": 2,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "10/1",
+    "avg_frame_rate": "10/1",
+    "time_base": "1/10240",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 6146048,
+    "duration": "600.200000",
+    "nb_frames": "6002"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.200000",
+    "size": "919015",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "state": "read",
+  "domain": {
+   "state": "ok"
+  },
+  "proxy_slots": 6002,
+  "proxy_packets": 6002,
+  "proxy_nb_frames": "6002",
+  "proxy_pts_off_grid": 0,
+  "simulated_slots": 6002,
+  "unreadable": 0,
+  "sim_mismatches": 0,
+  "sim_mismatch_examples": [],
+  "addressed": 5998,
+  "addr_mismatches": 0,
+  "addr_mismatch_examples": [],
+  "refused_by_reason": {
+   "start_transient": 3,
+   "end_of_stream": 1
+  },
+  "refused_slots": [
+   0,
+   1,
+   2,
+   6001
+  ],
+  "first_slots": [
+   {
+    "slot": 0,
+    "shown": 0,
+    "read": "read",
+    "sim": 0,
+    "addr": null
+   },
+   {
+    "slot": 1,
+    "shown": 1,
+    "read": "read",
+    "sim": 1,
+    "addr": null
+   },
+   {
+    "slot": 2,
+    "shown": 5,
+    "read": "read",
+    "sim": 5,
+    "addr": null
+   },
+   {
+    "slot": 3,
+    "shown": 11,
+    "read": "read",
+    "sim": 11,
+    "addr": 11
+   }
+  ],
+  "last_slots": [
+   {
+    "slot": 5998,
+    "shown": 35981,
+    "read": "read",
+    "sim": 35981,
+    "addr": 35981
+   },
+   {
+    "slot": 5999,
+    "shown": 35987,
+    "read": "read",
+    "sim": 35987,
+    "addr": 35987
+   },
+   {
+    "slot": 6000,
+    "shown": 35993,
+    "read": "read",
+    "sim": 35993,
+    "addr": 35993
+   },
+   {
+    "slot": 6001,
+    "shown": 35999,
+    "read": "read",
+    "sim": 35999,
+    "addr": null
+   }
+  ],
+  "ties_all": [],
+  "ties_addressed": 0
+ },
+ {
+  "rate": "30",
+  "fps": "30",
+  "duration_s": 600,
+  "source_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High 4:4:4 Predictive",
+    "width": 960,
+    "height": 540,
+    "has_b_frames": 0,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "30/1",
+    "avg_frame_rate": "30/1",
+    "time_base": "1/15360",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 9216000,
+    "duration": "600.000000",
+    "nb_frames": "18000"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.000000",
+    "size": "49334034",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "source_check": {
+   "frames": 18000,
+   "expected": 18000,
+   "not_own_index": 0
+  },
+  "source_packets": {
+   "n": 18000,
+   "unparsed": 0,
+   "tb": [
+    1,
+    15360
+   ],
+   "ticks_per_frame": "512",
+   "not_on_index_grid": 0
+  },
+  "proxy_cmd": [
+   "-y",
+   "-loglevel",
+   "error",
+   "-i",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\src_30.mp4",
+   "-an",
+   "-sn",
+   "-dn",
+   "-vf",
+   "scale=480:-2:flags=bilinear",
+   "-r",
+   "10",
+   "-c:v",
+   "libx264",
+   "-preset",
+   "veryfast",
+   "-crf",
+   "30",
+   "-pix_fmt",
+   "yuv420p",
+   "-g",
+   "10",
+   "-movflags",
+   "+faststart",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\proxy_30.mp4"
+  ],
+  "proxy_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High",
+    "width": 480,
+    "height": 270,
+    "has_b_frames": 2,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "10/1",
+    "avg_frame_rate": "10/1",
+    "time_base": "1/10240",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 6146048,
+    "duration": "600.200000",
+    "nb_frames": "6002"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.200000",
+    "size": "902026",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "state": "read",
+  "domain": {
+   "state": "ok"
+  },
+  "proxy_slots": 6002,
+  "proxy_packets": 6002,
+  "proxy_nb_frames": "6002",
+  "proxy_pts_off_grid": 0,
+  "simulated_slots": 6002,
+  "unreadable": 0,
+  "sim_mismatches": 0,
+  "sim_mismatch_examples": [],
+  "addressed": 5998,
+  "addr_mismatches": 0,
+  "addr_mismatch_examples": [],
+  "refused_by_reason": {
+   "start_transient": 3,
+   "end_of_stream": 1
+  },
+  "refused_slots": [
+   0,
+   1,
+   2,
+   6001
+  ],
+  "first_slots": [
+   {
+    "slot": 0,
+    "shown": 0,
+    "read": "read",
+    "sim": 0,
+    "addr": null
+   },
+   {
+    "slot": 1,
+    "shown": 1,
+    "read": "read",
+    "sim": 1,
+    "addr": null
+   },
+   {
+    "slot": 2,
+    "shown": 2,
+    "read": "read",
+    "sim": 2,
+    "addr": null
+   },
+   {
+    "slot": 3,
+    "shown": 5,
+    "read": "read",
+    "sim": 5,
+    "addr": 5
+   }
+  ],
+  "last_slots": [
+   {
+    "slot": 5998,
+    "shown": 17990,
+    "read": "read",
+    "sim": 17990,
+    "addr": 17990
+   },
+   {
+    "slot": 5999,
+    "shown": 17993,
+    "read": "read",
+    "sim": 17993,
+    "addr": 17993
+   },
+   {
+    "slot": 6000,
+    "shown": 17996,
+    "read": "read",
+    "sim": 17996,
+    "addr": 17996
+   },
+   {
+    "slot": 6001,
+    "shown": 17999,
+    "read": "read",
+    "sim": 17999,
+    "addr": null
+   }
+  ],
+  "ties_all": [],
+  "ties_addressed": 0
+ },
+ {
+  "rate": "25",
+  "fps": "25",
+  "duration_s": 600,
+  "source_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High 4:4:4 Predictive",
+    "width": 960,
+    "height": 540,
+    "has_b_frames": 0,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "25/1",
+    "avg_frame_rate": "25/1",
+    "time_base": "1/12800",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 7680000,
+    "duration": "600.000000",
+    "nb_frames": "15000"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.000000",
+    "size": "41128706",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "source_check": {
+   "frames": 15000,
+   "expected": 15000,
+   "not_own_index": 0
+  },
+  "source_packets": {
+   "n": 15000,
+   "unparsed": 0,
+   "tb": [
+    1,
+    12800
+   ],
+   "ticks_per_frame": "512",
+   "not_on_index_grid": 0
+  },
+  "proxy_cmd": [
+   "-y",
+   "-loglevel",
+   "error",
+   "-i",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\src_25.mp4",
+   "-an",
+   "-sn",
+   "-dn",
+   "-vf",
+   "scale=480:-2:flags=bilinear",
+   "-r",
+   "10",
+   "-c:v",
+   "libx264",
+   "-preset",
+   "veryfast",
+   "-crf",
+   "30",
+   "-pix_fmt",
+   "yuv420p",
+   "-g",
+   "10",
+   "-movflags",
+   "+faststart",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\proxy_25.mp4"
+  ],
+  "proxy_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High",
+    "width": 480,
+    "height": 270,
+    "has_b_frames": 2,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "10/1",
+    "avg_frame_rate": "10/1",
+    "time_base": "1/10240",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 6146048,
+    "duration": "600.200000",
+    "nb_frames": "6002"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.200000",
+    "size": "858530",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "state": "read",
+  "domain": {
+   "state": "ok"
+  },
+  "proxy_slots": 6002,
+  "proxy_packets": 6002,
+  "proxy_nb_frames": "6002",
+  "proxy_pts_off_grid": 0,
+  "simulated_slots": 6002,
+  "unreadable": 0,
+  "sim_mismatches": 0,
+  "sim_mismatch_examples": [],
+  "addressed": 5998,
+  "addr_mismatches": 0,
+  "addr_mismatch_examples": [],
+  "refused_by_reason": {
+   "start_transient": 3,
+   "end_of_stream": 1
+  },
+  "refused_slots": [
+   0,
+   1,
+   2,
+   6001
+  ],
+  "first_slots": [
+   {
+    "slot": 0,
+    "shown": 0,
+    "read": "read",
+    "sim": 0,
+    "addr": null
+   },
+   {
+    "slot": 1,
+    "shown": 1,
+    "read": "read",
+    "sim": 1,
+    "addr": null
+   },
+   {
+    "slot": 2,
+    "shown": 2,
+    "read": "read",
+    "sim": 2,
+    "addr": null
+   },
+   {
+    "slot": 3,
+    "shown": 4,
+    "read": "read",
+    "sim": 4,
+    "addr": 4
+   }
+  ],
+  "last_slots": [
+   {
+    "slot": 5998,
+    "shown": 14992,
+    "read": "read",
+    "sim": 14992,
+    "addr": 14992
+   },
+   {
+    "slot": 5999,
+    "shown": 14994,
+    "read": "read",
+    "sim": 14994,
+    "addr": 14994
+   },
+   {
+    "slot": 6000,
+    "shown": 14997,
+    "read": "read",
+    "sim": 14997,
+    "addr": 14997
+   },
+   {
+    "slot": 6001,
+    "shown": 14999,
+    "read": "read",
+    "sim": 14999,
+    "addr": null
+   }
+  ],
+  "ties_all": [],
+  "ties_addressed": 0
+ },
+ {
+  "rate": "59.94",
+  "fps": "60000/1001",
+  "duration_s": 600,
+  "source_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High 4:4:4 Predictive",
+    "width": 960,
+    "height": 540,
+    "has_b_frames": 0,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "60000/1001",
+    "avg_frame_rate": "60000/1001",
+    "time_base": "1/60000",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 36000965,
+    "duration": "600.016083",
+    "nb_frames": "35965"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.016083",
+    "size": "98379314",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "source_check": {
+   "frames": 35965,
+   "expected": 35965,
+   "not_own_index": 0
+  },
+  "source_packets": {
+   "n": 35965,
+   "unparsed": 0,
+   "tb": [
+    1,
+    60000
+   ],
+   "ticks_per_frame": "1001",
+   "not_on_index_grid": 0
+  },
+  "proxy_cmd": [
+   "-y",
+   "-loglevel",
+   "error",
+   "-i",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\src_59.94.mp4",
+   "-an",
+   "-sn",
+   "-dn",
+   "-vf",
+   "scale=480:-2:flags=bilinear",
+   "-r",
+   "10",
+   "-c:v",
+   "libx264",
+   "-preset",
+   "veryfast",
+   "-crf",
+   "30",
+   "-pix_fmt",
+   "yuv420p",
+   "-g",
+   "10",
+   "-movflags",
+   "+faststart",
+   "F:\\ClipForge\\data\\claude-master-20260924\\B\\gates\\m0v2\\_tmp_synth\\proxy_59.94.mp4"
+  ],
+  "proxy_probe": {
+   "stream": {
+    "codec_name": "h264",
+    "profile": "High",
+    "width": 480,
+    "height": 270,
+    "has_b_frames": 2,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "10/1",
+    "avg_frame_rate": "10/1",
+    "time_base": "1/10240",
+    "start_pts": 0,
+    "start_time": "0.000000",
+    "duration_ts": 6146048,
+    "duration": "600.200000",
+    "nb_frames": "6002"
+   },
+   "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "600.200000",
+    "size": "923826",
+    "tags": {
+     "major_brand": "isom",
+     "encoder": "Lavf62.12.101"
+    }
+   },
+   "rc": 0
+  },
+  "state": "read",
+  "domain": {
+   "state": "ok"
+  },
+  "proxy_slots": 6002,
+  "proxy_packets": 6002,
+  "proxy_nb_frames": "6002",
+  "proxy_pts_off_grid": 0,
+  "simulated_slots": 6002,
+  "unreadable": 0,
+  "sim_mismatches": 0,
+  "sim_mismatch_examples": [],
+  "addressed": 5999,
+  "addr_mismatches": 0,
+  "addr_mismatch_examples": [],
+  "refused_by_reason": {
+   "start_transient": 3
+  },
+  "refused_slots": [
+   0,
+   1,
+   2
+  ],
+  "first_slots": [
+   {
+    "slot": 0,
+    "shown": 0,
+    "read": "read",
+    "sim": 0,
+    "addr": null
+   },
+   {
+    "slot": 1,
+    "shown": 1,
+    "read": "read",
+    "sim": 1,
+    "addr": null
+   },
+   {
+    "slot": 2,
+    "shown": 5,
+    "read": "read",
+    "sim": 5,
+    "addr": null
+   },
+   {
+    "slot": 3,
+    "shown": 11,
+    "read": "read",
+    "sim": 11,
+    "addr": 11
+   }
+  ],
+  "last_slots": [
+   {
+    "slot": 5998,
+    "shown": 35945,
+    "read": "read",
+    "sim": 35945,
+    "addr": 35945
+   },
+   {
+    "slot": 5999,
+    "shown": 35951,
+    "read": "read",
+    "sim": 35951,
+    "addr": 35951
+   },
+   {
+    "slot": 6000,
+    "shown": 35957,
+    "read": "read",
+    "sim": 35957,
+    "addr": 35957
+   },
+   {
+    "slot": 6001,
+    "shown": 35963,
+    "read": "read",
+    "sim": 35963,
+    "addr": 35963
+   }
+  ],
+  "ties_all": [
+   {
+    "slot": 902,
+    "tie_frame": 5399,
+    "shown": 5399,
+    "kept": true
+   },
+   {
+    "slot": 1903,
+    "tie_frame": 11399,
+    "shown": 11399,
+    "kept": true
+   },
+   {
+    "slot": 2904,
+    "tie_frame": 17399,
+    "shown": 17399,
+    "kept": true
+   },
+   {
+    "slot": 3905,
+    "tie_frame": 23399,
+    "shown": 23399,
+    "kept": true
+   },
+   {
+    "slot": 4906,
+    "tie_frame": 29399,
+    "shown": 29399,
+    "kept": true
+   },
+   {
+    "slot": 5907,
+    "tie_frame": 35399,
+    "shown": 35399,
+    "kept": true
+   }
+  ],
+  "ties_addressed": 6
+ }
+]

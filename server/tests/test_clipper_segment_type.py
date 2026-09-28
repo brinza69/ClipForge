@@ -131,7 +131,9 @@ def test_a_stretch_with_too_few_frames_is_skipped():
 
 def test_the_layout_at_a_time_beats_the_whole_file_answer(monkeypatch):
     """A source whose arrangement changes has no single layout, and using the
-    averaged one crops a clip against a frame it was never in."""
+    averaged one crops a clip against a frame it was never in. (OW1: the render
+    reads it through its pinned analysis context, `Context.regions_at`.)"""
+    from services.clipper import analysis_generation
     from workers import clipper_render_jobs as jobs
 
     disk = {
@@ -143,15 +145,16 @@ def test_the_layout_at_a_time_beats_the_whole_file_answer(monkeypatch):
     }
     monkeypatch.setattr(jobs.storage, "read_artifact",
                         lambda _pid, name: disk.get(name))
-    assert jobs._regions_for("p1", 300.0)["webcam"] is None
-    assert jobs._regions_for("p1", 900.0)["webcam"]["w"] == 9
+    assert analysis_generation.legacy("p1").regions_at(300.0)["webcam"] is None
+    assert analysis_generation.legacy("p1").regions_at(900.0)["webcam"]["w"] == 9
     # Outside every stretch, the whole-file answer is better than nothing.
-    assert jobs._regions_for("p1", 9999.0)["webcam"]["w"] == 1
+    assert analysis_generation.legacy("p1").regions_at(9999.0)["webcam"]["w"] == 1
 
 
 def test_no_per_stretch_regions_means_the_old_behaviour(monkeypatch):
+    from services.clipper import analysis_generation
     from workers import clipper_render_jobs as jobs
 
     monkeypatch.setattr(jobs.storage, "read_artifact",
                         lambda _pid, name: {"webcam": "global"} if name == "regions" else None)
-    assert jobs._regions_for("p1", 5.0) == {"webcam": "global"}
+    assert analysis_generation.legacy("p1").regions_at(5.0) == {"webcam": "global"}

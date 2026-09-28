@@ -20,7 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from database import async_session, get_session
 from models import JobModel, JobStatus, JobType, ProjectModel, ProjectStatus
+from routers.upload_limits import read_upload_limited
 from services.downloader import validate_url, detect_source_type, fetch_metadata
+from services.file_validation import is_usable_file
 from job_queue import job_queue
 
 logger = logging.getLogger("clipforge.routers.utilities")
@@ -75,9 +77,10 @@ async def erase_region(
     if not auto_detect and (w <= 0 or h <= 0):
         raise HTTPException(400, "Region width and height must be greater than 0")
 
-    content = await file.read()
-    if len(content) > 500 * 1024 * 1024:
-        raise HTTPException(413, "File too large. Maximum 500 MB.")
+    content = await read_upload_limited(
+        file, 500 * 1024 * 1024,
+        too_large_detail="File too large. Maximum 500 MB.",
+    )
     if len(content) < 1000:
         raise HTTPException(400, "File appears to be empty or invalid.")
 
@@ -154,7 +157,7 @@ async def download_erase_result(job_id: str):
 
     meta = _json.loads(job.metadata_json or "{}")
     out = Path(meta.get("output_path", ""))
-    if not out.exists():
+    if not is_usable_file(out):
         raise HTTPException(410, "Output file no longer available")
 
     filename = meta.get("output_filename") or out.name
@@ -216,9 +219,10 @@ async def silence_remove(
             f"Audio: {sorted(_SILENCE_AUDIO_EXTS)}  Video: {sorted(_SILENCE_VIDEO_EXTS)}",
         )
 
-    content = await file.read()
-    if len(content) > 500 * 1024 * 1024:
-        raise HTTPException(413, "File too large. Maximum 500 MB.")
+    content = await read_upload_limited(
+        file, 500 * 1024 * 1024,
+        too_large_detail="File too large. Maximum 500 MB.",
+    )
     if len(content) < 100:
         raise HTTPException(400, "File appears to be empty.")
 
@@ -294,7 +298,7 @@ async def download_silence_remove_result(job_id: str):
 
     meta = json.loads(job.metadata_json or "{}")
     out = Path(meta.get("output_path", ""))
-    if not out.exists():
+    if not is_usable_file(out):
         raise HTTPException(410, "Output file no longer available")
 
     filename = meta.get("output_filename") or out.name
@@ -391,9 +395,10 @@ async def upscale_video_endpoint(
             f"Video only: {sorted(_UPSCALE_VIDEO_EXTS)}",
         )
 
-    content = await file.read()
-    if len(content) > 1024 * 1024 * 1024:
-        raise HTTPException(413, "File too large. Maximum 1 GB.")
+    content = await read_upload_limited(
+        file, 1024 * 1024 * 1024,
+        too_large_detail="File too large. Maximum 1 GB.",
+    )
     if len(content) < 1000:
         raise HTTPException(400, "File appears to be empty or invalid.")
 
@@ -451,7 +456,7 @@ async def download_upscale_result(job_id: str):
 
     meta = json.loads(job.metadata_json or "{}")
     out = Path(meta.get("output_path", ""))
-    if not out.exists():
+    if not is_usable_file(out):
         raise HTTPException(410, "Output file no longer available")
 
     filename = meta.get("output_filename") or out.name

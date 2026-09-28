@@ -51,82 +51,68 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
+
+from services.clipper import chunking
 
 logger = logging.getLogger("clipforge.clipper.llm_select")
 
 # Engines tried in order. Local first: pass 1 is bulk reading, which is what a
 # small local model is good at and what an API charges most for.
 NOMINATE_ENGINES = ("ollama", "openai")
-JUDGE_ENGINES = ("openai", "anthropic", "ollama")
 
 MAX_TRANSCRIPT_CHARS = 600_000    # ~150k tokens; longer sources are chunked
 CHUNK_CHARS = 120_000             # ~30k tokens per nomination chunk
-MAX_JUDGE_CLIPS = 80
-MAX_CLIP_CHARS = 900
 
-_SYSTEM = (
-    "You pick moments from livestream transcripts that work as standalone "
-    "short-form clips. You judge what HAPPENS, not how loud it is. "
-    "Answer only with the JSON asked for — no preface, no code fence, no prose."
+# Reaching a model, and recording every attempt, lives in llm_engine.py.
+# Re-exported because llm_judge, promises and the tests all import them from
+# here and the split is not meant to be visible to them.
+from services.clipper.llm_engine import (  # noqa: E402,F401
+    JUDGE_ENGINES, MAX_CLIP_CHARS, MAX_JUDGE_CLIPS,
+    _ask, _ask_json, _ask_json_result, _note, _note_chunk, _note_result,
+    _num, parse_json,
 )
-
-_JSON_BLOCK = re.compile(r"\{.*\}|\[.*\]", re.DOTALL)
 
 
 # --------------------------------------------------------------------------
 # pure helpers — no network, unit-testable
 # --------------------------------------------------------------------------
 
-def parse_json(raw: str) -> Any:
-    """The JSON in a model's answer, or None.
 
-    Models wrap JSON in code fences and prefaces however firmly you ask them
-    not to, and a whole analysis pass must not be lost to a stray backtick.
+def transcript_line_items(segments: Sequence[dict]) -> list[dict]:
+    """`[seconds] text` per segment, each keeping its own start and end.
+
+    The planner bounds a chunk by the clock as well as by characters, and once
+    these are joined into one string the clock is gone.
     """
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    try:
-        return json.loads(text)
-    except (ValueError, TypeError):
-        pass
-    match = _JSON_BLOCK.search(text)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(0))
-    except (ValueError, TypeError):
-        logger.warning("llm_select: answer was not JSON (%.120s)", text)
-        return None
-
-
-def _num(value: Any, default: float = 0.0) -> float:
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return default
-    return out if out == out else default
-
-
-def transcript_lines(segments: Sequence[dict], limit: int = MAX_TRANSCRIPT_CHARS) -> str:
-    """`[seconds] text` per segment — the model needs a timestamp to point at."""
-    out: list[str] = []
-    total = 0
+    out: list[dict] = []
     for seg in segments or []:
         if not isinstance(seg, dict):
             continue
         text = " ".join(str(seg.get("text") or "").split())
         if not text:
             continue
-        line = f"[{int(_num(seg.get('start')))}] {text}"
-        total += len(line) + 1
+        out.append({
+            "start": _num(seg.get("start")),
+            "end": _num(seg.get("end")) or _num(seg.get("start")),
+            "line": f"[{int(_num(seg.get('start')))}] {text}",
+        })
+    return out
+
+
+def transcript_lines(segments: Sequence[dict], limit: int = MAX_TRANSCRIPT_CHARS) -> str:
+    """`[seconds] text` per segment — the model needs a timestamp to point at.
+
+    Truncates at `limit` and says nothing about it, which is the silent tail
+    loss the chunk planner replaces.
+    """
+    out: list[str] = []
+    total = 0
+    for item in transcript_line_items(segments):
+        total += len(item["line"]) + 1
         if total > limit:
             break
-        out.append(line)
+        out.append(item["line"])
     return "\n".join(out)
 
 
@@ -197,6 +183,7 @@ def apply_scores(cands: list[dict], verdicts: Any, *, weight: float = 0.5) -> in
             except (TypeError, ValueError):
                 continue
     hit = 0
+    scored: list[dict] = []
     w = min(1.0, max(0.0, weight))
     for i, cand in enumerate(cands):
         verdict = by_id.get(i)
@@ -211,10 +198,22 @@ def apply_scores(cands: list[dict], verdicts: Any, *, weight: float = 0.5) -> in
             continue
         score = min(100.0, raw)
         cand["llm_score"] = round(score, 1)
+        cand["judge_score"] = round(score, 1)
         if verdict.get("why"):
             cand["llm_reason"] = str(verdict["why"])[:200]
         cand["overall"] = round((1.0 - w) * _num(cand.get("overall")) + w * score, 2)
+        cand["selection_score"] = cand["overall"]
+        scored.append(cand)
         hit += 1
+
+    # A ranking says WHICH clips make the cut; a scored answer has to say the
+    # same thing or the board rule sees a pool in which nothing was selected.
+    # `selection.status_of` reads `llm_rank`, and without this every candidate
+    # in a scored pool came back `not_selected_in_judged_pool` — the judge had
+    # spoken and the board came out empty.
+    for position, cand in enumerate(
+            sorted(scored, key=lambda c: -_num(c.get("llm_score")))):
+        cand["llm_rank"] = position + 1
     return hit
 
 
@@ -222,141 +221,76 @@ def apply_scores(cands: list[dict], verdicts: Any, *, weight: float = 0.5) -> in
 # prompts
 # --------------------------------------------------------------------------
 
-def nominate_prompt(lines: str, want: int) -> str:
-    return (
-        f"Below is a livestream transcript, one line per segment, each prefixed "
-        f"with its start time in seconds.\n\n"
-        f"List up to {want} moments that would work as standalone short clips. "
-        f"Favour: a joke that lands, a story with a payoff, a genuine reaction, "
-        f"someone being proved wrong, a rule or a plan being broken, an argument. "
-        f"Ignore: narrating routine actions, listing inventory, filler, and "
-        f"stretches where nothing is resolved.\n\n"
-        f'Answer as JSON only: [{{"t": <seconds>, "duration": <15-90>, '
-        f'"why": "<max 8 words>"}}]\n\n'
-        f"--- TRANSCRIPT ---\n{lines}"
-    )
-
-
-ANCHOR_PROMPT_VERSION = "anchor_v1"
-
-
-def anchor_prompt(lines: str, want: int,
-                  promises: Sequence[dict] | None = None,
-                  episodes: Sequence[dict] | None = None) -> str:
-    """Payoff-first. The question is not where a window should start."""
-    from services.clipper.story import ARCHETYPES
-
-    # What the stream has been about before this chunk (§2). Without it a
-    # moment at hour seven is read as though the stream started at hour seven:
-    # the model cannot tell that the fight it is watching has been going for
-    # forty minutes, or that an argument began long before these lines.
-    #
-    # Stated BEFORE the transcript rather than after, because it is context for
-    # reading what follows, not an extra instruction to remember.
-    so_far = ""
-    if episodes:
-        from services.clipper.episodes import to_lines as episode_lines
-
-        body = episode_lines(episodes)
-        if body:
-            so_far = ("WHAT THE STREAM HAS BEEN ABOUT SO FAR, before the lines "
-                      "below:\n" + body + "\n\nUse it to tell a moment that "
-                      "stands on its own from one that only makes sense to "
-                      "someone who has been watching. Do not clip from it — it "
-                      "is background, and none of it is in the window.\n\n")
-
-    recall = ""
-    if promises:
-        # Only the setups still open at this point in the stream. A payoff
-        # that lands on one of these is a callback, and it is the one kind of
-        # clip a per-chunk pass cannot otherwise see.
-        #
-        # Stated as its own numbered step, not as an aside. Measured: with the
-        # instruction buried and `callback_to` last in a ten-field schema, a
-        # model found "finds diamond AFTER ASKING ADMINS" — recognising the
-        # link in prose — and still left the field null on all four anchors.
-        recall = (
-            "\n  5. CALLBACK — these were said EARLIER in the stream and are "
-            "still unresolved:\n"
-            + "\n".join(f"       [{p['t']:.0f}] ({p['kind']}) {p['text']}"
-                        for p in promises[:12])
-            + "\n     If a moment below is the answer to one of them, you MUST "
-              "set `callback_to` to that timestamp. A payoff that resolves "
-              "something said earlier is worth far more than one that does "
-              "not, so do not leave it out. Set it to null when nothing "
-              "matches.\n")
-
-    return (
-        so_far
-        + "Below is a livestream transcript, one line per segment, prefixed with "
-        "its start time in seconds.\n\n"
-        f"Find up to {want} moments that deserve a standalone short clip. For "
-        "each one, work BACKWARDS from what happened:\n"
-        "  1. the PAYOFF — the thing that makes the moment worth watching, and "
-        "when it happens\n"
-        "  2. the REQUIRED CONTEXT — every fact a viewer who saw nothing else "
-        "must already know for that payoff to land, each with the timestamp "
-        "where it is established. Usually one or two. Never more than 90 "
-        "seconds before the payoff.\n"
-        "  3. the HOOK — the earliest line that gives a stranger a reason to "
-        "keep watching, if there is one\n"
-        "  4. UNRESOLVED CONTEXT — anything the clip would still leave "
-        "unexplained: a name never introduced, an event referred to but not "
-        "shown\n\n"
-        f"{recall}\n"
-        f"Archetypes, choose one or two: {', '.join(ARCHETYPES)}\n\n"
-        "Ignore moments that are only loud. Narrating routine actions, reading "
-        "an inventory and filler are not payoffs.\n"
-        "Some lines end in <angle brackets> with what the audio and picture "
-        "were doing there. Treat that as evidence, never as the reason on its "
-        "own — LOUD without something happening is not a payoff.\n\n"
-        'Answer as JSON only: [{"payoff_t": <seconds>, "payoff_strength": '
-        '<0-1>, "archetypes": ["..."], "why": "<max 12 words>", '
-        '"required_context": [{"t": <seconds>, "fact": "<max 8 words>"}], '
-        '"hook": {"t": <seconds>}, "unresolved_context": ["..."], '
-        '"callback_to": <seconds or null>, "confidence": <0-1>}]\n\n'
-        f"--- TRANSCRIPT ---\n{lines}"
-    )
-
-
-
-# --------------------------------------------------------------------------
-# the two passes
-# --------------------------------------------------------------------------
-
-async def _ask(engines: Sequence[str], prompt: str, *, model: str | None = None,
-               num_ctx: int = 32768) -> str | None:
-    """First engine that answers. None when they all fail — never raises."""
-    from services.descriptions import _call_llm
-
-    for engine in engines:
-        try:
-            answer = await _call_llm(engine, prompt, model=model, system=_SYSTEM,
-                                     temperature=0.2, num_ctx=num_ctx)
-        except Exception as exc:  # noqa: BLE001 — any engine failure is the same to us
-            logger.info("llm_select: %s unavailable (%s)", engine, exc)
-            continue
-        if answer and answer.strip():
-            return answer
-        logger.info("llm_select: %s returned nothing", engine)
-    return None
+# The prompts themselves live in llm_prompts.py — re-exported because the
+# tests, `clipper_build._anchor_stamp` and this module's own passes all
+# reach for them by their old names.
+from services.clipper.llm_prompts import (  # noqa: E402,F401
+    ANCHOR_PROMPT_VERSION, anchor_prompt, nominate_prompt,
+)
 
 
 async def nominate(segments: Sequence[dict], duration: float, *,
                    per_chunk: int = 12,
-                   engines: Sequence[str] = NOMINATE_ENGINES) -> list[dict]:
+                   engines: Sequence[str] = NOMINATE_ENGINES,
+                   trace: Any = None, timeout: float | None = None,
+                   is_cancelled=None) -> list[dict]:
     """Moments a cheap model thinks are clip-worthy. [] when no engine answers."""
-    lines = transcript_lines(segments)
-    if not lines:
+    items = transcript_line_items(segments)
+    if not items:
         return []
     found: list[dict] = []
-    for chunk in chunk_lines(lines):
-        answer = await _ask(engines, nominate_prompt(chunk, per_chunk))
-        if answer is None:
-            continue
-        found.extend(moments_to_windows(parse_json(answer), duration))
-    logger.info("llm_select: nominated %d moments", len(found))
+    chunks = chunking.plan_chunks(items)
+    for chunk in chunks:
+        if is_cancelled is not None and is_cancelled():
+            break
+        request = f"nominate#{chunk['index']}"
+        want = chunking.quota_for(chunk, per_chunk=per_chunk)
+        parsed = await _ask_json(engines, nominate_prompt(chunk["lines"], want),
+                                 trace=trace, stage="nominate", request=request,
+                                 timeout=timeout, is_cancelled=is_cancelled,
+                                 keys=("t", "start", "time"))
+        before = len(found)
+        found.extend(moments_to_windows(parsed, duration))
+        _note_chunk_span(trace, "nominate", chunk, len(found) - before)
+    _note_coverage(trace, "nominate", chunks, duration)
+    logger.info("llm_select: nominated %d moments from %d chunks",
+                len(found), len(chunks))
     return found
+
+
+def _note_chunk_span(trace: Any, kind: str, chunk: dict, produced: int) -> None:
+    """Record the slice a model was given, WITH the clock on it."""
+    if trace is None:
+        return
+    try:
+        trace.note_chunk(kind, chunk["index"], chars=chunk["chars"],
+                         t_start=chunk["t_start"], t_end=chunk["t_end"],
+                         produced=produced)
+    except Exception:  # noqa: BLE001
+        logger.debug("llm_select: trace rejected a chunk", exc_info=True)
+
+
+def _note_coverage(trace: Any, kind: str, chunks: Sequence[dict],
+                   duration: float) -> None:
+    """How much of the source this pass actually read, and what it missed.
+
+    A gap is a fact about the run. Before this, three hours of a stream could
+    go unread and the only trace was that no clip came from there.
+    """
+    if trace is None:
+        return
+    try:
+        cov = chunking.coverage(chunks, duration)
+        trace.note_count(f"{kind}_chunks", cov["chunks"])
+        trace.note_stage(
+            kind, "covered" if not cov["gaps"] else "gaps",
+            f"{cov['covered_s']}s of {round(duration, 1)}s"
+            + (f", {len(cov['gaps'])} gap(s)" if cov["gaps"] else ""))
+        for gap in cov["gaps"][:8]:
+            trace.note_error(f"{kind}_gap",
+                             f"{gap['start']}-{gap['end']}s: {gap['why']}")
+    except Exception:  # noqa: BLE001
+        logger.debug("llm_select: trace rejected coverage", exc_info=True)
 
 
 def _attach_callback(anchor: dict, raw: Any, promises: Sequence[dict]) -> None:
@@ -389,7 +323,12 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
                          model: str | None = None,
                          promises: Sequence[dict] | None = None,
                          atoms: Sequence[dict] | None = None,
-                         threads: Sequence[dict] | None = None) -> list[dict]:
+                         threads: Sequence[dict] | None = None,
+                         episodes: Sequence[dict] | None = None,
+                         trace: Any = None, timeout: float | None = None,
+                         is_cancelled=None, chunk_cache: Any = None,
+                         checkpoint: Callable[[dict], None] | None = None,
+                         ) -> list[dict]:
     """Anchors: a payoff, what a viewer must know for it to land, an archetype.
 
     The richer sibling of `nominate`, and the input to the story engine. Same
@@ -400,6 +339,7 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
     ~64k tokens at the measured rate and up to 285k on a talkative source,
     past the context of the models this would otherwise use.
     """
+    from services.clipper import anchor_identity
     from services.clipper.story import normalise_anchor
 
     # Atom lines carry the evidence for their own moment — that the room got
@@ -407,21 +347,39 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
     # line carries only the words. Features as evidence, at the grain of one
     # utterance, which is what atoms exist for.
     if atoms:
-        from services.clipper.atoms import to_lines
-        lines = to_lines(atoms, MAX_TRANSCRIPT_CHARS)
+        from services.clipper.atoms import to_line_items
+        items = to_line_items(atoms)
     else:
-        lines = transcript_lines(segments)
-    if not lines:
+        items = transcript_line_items(segments)
+    if not items:
         return []
     from services.clipper import episodes as episode_mod
     from services.clipper import promises as promise_mod
+    from services.clipper import reasoning_chunks
 
     # Built once for the whole stream, sliced per chunk. Free — no model call.
     # Threads give the stretches; the atoms give the words that label them.
-    stream_episodes = episode_mod.build(threads or [], atoms or [])
+    # `None` means nobody supplied the persisted upstream artifact.  An empty
+    # list is a real, cacheable answer for a short source and must not trigger a
+    # private recomputation that the envelope cannot account for.
+    stream_episodes = (episode_mod.build(threads or [], atoms or [])
+                       if episodes is None else list(episodes))
 
     found: list[dict] = []
-    for chunk in chunk_lines(lines):
+    chunks = chunking.plan_chunks(items)
+    prepared = reasoning_chunks.prepare("anchors", chunks, chunk_cache)
+    state = prepared.state
+    reused = 0
+    for chunk in chunks:
+        if is_cancelled is not None and is_cancelled():
+            break
+        saved = reasoning_chunks.reusable(state, chunk)
+        if saved is not None:
+            found.extend(saved)
+            reused += 1
+            _note_chunk_span(trace, "anchors", chunk, len(saved))
+            continue
+        index, lines = chunk["index"], chunk["lines"]
         # Setups still open anywhere up to the END of this chunk, which
         # includes ones inside it. Filtering to "before the chunk" was wrong
         # at real scale: a chunk holds five hours of this source, and a model
@@ -431,29 +389,94 @@ async def detect_anchors(segments: Sequence[dict], duration: float, *,
         # Still bounded — `open_at` drops anything older than the lifetime or
         # closer than the gap, so a payoff never sees a prediction it cannot
         # possibly resolve.
-        stamps = [t for t in (_num(line.split("]", 1)[0].lstrip("["), -1.0)
-                              for line in chunk.splitlines()
-                              if line.startswith("[")) if t >= 0]
-        first_t, last_t = (min(stamps), max(stamps)) if stamps else (0.0, 0.0)
+        first_t, last_t = chunk["t_start"], chunk["t_end"]
         live = promise_mod.open_at(promises or [], last_t, span_from=first_t)
         # Only what CLOSED before this chunk opens: an episode still running is
         # partly in the window, and describing it as background would tell the
         # model the moment it is reading is old news.
         so_far = episode_mod.before(stream_episodes, first_t)
-        answer = await _ask(engines,
-                            anchor_prompt(chunk, per_chunk, live, so_far),
-                            model=model)
-        if answer is None:
-            continue
-        for raw in (parse_json(answer) or []):
+        request = f"anchors#{index}"
+        want = chunking.quota_for(chunk, per_chunk=per_chunk)
+        answer = await _ask_json_result(
+            engines, anchor_prompt(lines, want, live, so_far), model=model,
+            trace=trace, stage="anchors", request=request, timeout=timeout,
+            is_cancelled=is_cancelled, keys=("payoff_t", "t", "payoff"))
+        if answer.cancelled:
+            break
+        before = len(found)
+        produced = []
+        for raw in (answer.parsed or []):
             anchor = normalise_anchor(raw, duration)
             if anchor is not None:
                 anchor["prompt_version"] = ANCHOR_PROMPT_VERSION
+                anchor["chunk_index"] = index
                 _attach_callback(anchor, raw, promises or [])
-                found.append(anchor)
+                produced.append(anchor)
+        usable = answer.usable and (not answer.parsed or bool(produced))
+        found.extend(produced)
+        provenance = answer.provenance()
+        provenance["normalised_items"] = len(produced)
+        state = reasoning_chunks.record(
+            state, chunk, usable=usable, items=produced,
+            provenance=provenance)
+        if checkpoint is not None:
+            checkpoint(state)
+        _note_chunk_span(trace, "anchors", chunk, len(found) - before)
+    _note_coverage(trace, "anchors", chunks, duration)
+    if trace is not None:
+        tally = reasoning_chunks.counts(state)
+        trace.note_count("anchors_chunks_reused", reused)
+        trace.note_count("anchors_chunks_usable", tally[reasoning_chunks.USABLE])
+        trace.note_count("anchors_chunks_unusable", tally[reasoning_chunks.UNUSABLE])
+        trace.note_count("anchors_chunks_pending", tally[reasoning_chunks.PENDING])
+        trace.note_stage("anchors_cache", prepared.reason,
+                         f"{reused} reused, {tally[reasoning_chunks.UNUSABLE]} unusable, "
+                         f"{tally[reasoning_chunks.PENDING]} pending")
+    found = anchor_identity.assign(
+        _dedupe_anchors(found), anchor_identity.source_namespace(items, duration))
     found.sort(key=lambda a: a["payoff_t"])
-    logger.info("llm_select: %d anchors (%s)", len(found), ANCHOR_PROMPT_VERSION)
+    logger.info("llm_select: %d anchors from %d chunks (%s)", len(found),
+                len(chunks), ANCHOR_PROMPT_VERSION)
     return found
+
+
+# Two anchors this close in time, from OVERLAPPING chunks, are the same moment
+# seen twice. The overlap exists so a moment on a boundary is whole somewhere;
+# the price is that the model reports it from both sides.
+_SAME_PAYOFF_S = 4.0
+
+
+def _dedupe_anchors(anchors: list[dict]) -> list[dict]:
+    """Collapse the duplicates the chunk overlap creates, keeping the better.
+
+    "Better" is the more confident one, and on a tie the one with a grounded
+    quote — not the first, which would systematically prefer whichever side of
+    the overlap happened to be read first.
+
+    This is a TIME-based collapse and it is deliberately narrow. The stable
+    moment id that would let two variants of one moment recognise each other
+    arrives with the grouping batch; until then, four seconds is the width of
+    one utterance and nothing wider is safe to merge.
+    """
+    out: list[dict] = []
+    for anchor in sorted(anchors, key=lambda a: _num(a.get("payoff_t"))):
+        # Only ACROSS chunks. Two anchors three seconds apart that the model
+        # reported from the SAME prompt are two things it chose to name
+        # separately, having seen both — merging them would silently discard a
+        # judgement, and this function exists to undo an artefact of the
+        # overlap, not to second-guess the model.
+        twin = next((o for o in out
+                     if o.get("chunk_index") != anchor.get("chunk_index")
+                     and abs(_num(o.get("payoff_t")) - _num(anchor.get("payoff_t")))
+                     <= _SAME_PAYOFF_S), None)
+        if twin is None:
+            out.append(anchor)
+            continue
+        better = (_num(anchor.get("confidence")), bool(anchor.get("payoff_quote")))
+        held = (_num(twin.get("confidence")), bool(twin.get("payoff_quote")))
+        if better > held:
+            out[out.index(twin)] = anchor
+    return out
 
 
 

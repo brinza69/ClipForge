@@ -47,10 +47,12 @@ def test_paths_exposes_the_contract_keys(clipper):
         "root", "source_dir", "proxy_dir", "proxy", "audio_dir", "audio",
         "frames_dir", "thumbs_dir", "analysis_dir", "previews_dir", "exports_dir",
         "signals", "faces", "regions", "segments", "candidates", "meta",
-        "promises", "atoms", "threads", "graph",
-        "anchors",
+        "promises", "atoms", "threads", "episodes", "graph",
+        "anchors", "judge",
         "segment_types",
         "regions_by_segment",
+        "reasoning_run",
+        "selection_trace",
     }
     assert p["proxy"].name == "proxy.mp4"
     assert p["audio"].name == "speech.wav"
@@ -71,6 +73,36 @@ def test_artifact_round_trip_is_atomic(clipper):
 
     storage.write_artifact(pid, "signals", {"audio_rms": []})
     assert storage.read_artifact(pid, "signals") == {"audio_rms": []}
+
+
+def test_atomic_json_write_replaces_without_leaving_temporary_files(tmp_path):
+    path = tmp_path / "nested" / "sidecar.json"
+
+    from services.clipper import storage
+
+    storage.atomic_write_json(path, {"status": "ready"}, indent=2)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"status": "ready"}
+    assert list(path.parent.iterdir()) == [path]
+
+
+def test_output_publish_is_atomic_and_requires_a_real_file(tmp_path):
+    from services.clipper import storage
+
+    final = tmp_path / "exports" / "clip.mp4"
+    temp = storage.temporary_output_path(final)
+    assert temp.parent == final.parent
+    assert temp.suffix == final.suffix
+    assert temp != final
+
+    temp.parent.mkdir(parents=True)
+    temp.write_bytes(b"new output")
+    storage.finalize_output(temp, final)
+
+    assert final.read_bytes() == b"new output"
+    assert not temp.exists()
+    assert storage.is_usable_output(final, minimum_bytes=3)
+    assert not storage.is_usable_output(final, minimum_bytes=100)
 
 
 def test_artifact_accepts_a_list_payload(clipper):

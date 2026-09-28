@@ -22,6 +22,12 @@ Write-Host "3060 = $u3060" -ForegroundColor Cyan
 Write-Host "1660 = $u1660" -ForegroundColor Cyan
 if (-not $u3060 -or -not $u1660) { Write-Host "Could not detect both GPUs — aborting." -ForegroundColor Red; exit 1 }
 
+# ATENTIE: scriptul asta leaga placile dupa MODEL (A=3060, B=1660), pe cand
+# `watchdog.ps1` — cel care porneste rigul in mod normal — le leaga dupa INDEX,
+# ceea ce pe rigul asta da A=1660, B=3060. Deci maparea depinde de CU CE ai
+# pornit. Daca folosesti scriptul asta, `stare.py` si pagina live vor eticheta
+# placile invers, iar un lot trimis pe "1660" va ajunge pe 3060.
+
 # --- backend A on the 3060 (main data/) ---
 $env:CLIPFORGE_MAX_CONCURRENT_JOBS = "1"
 $env:CUDA_VISIBLE_DEVICES = $u3060

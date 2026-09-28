@@ -1,0 +1,175 @@
+"""Condition 2: synthetic probes through build_proxy's EXACT command, checked against THIS replica.
+
+    server/.venv/Scripts/python.exe data/claude-master-20260924/B/gates/m0v2/synth_probe.py [rate ...]
+
+Rates: 24 (framing-4 §1, asked for as "Jensen's rate") and 24000/1001 (Jensen's REAL rate, ffprobe
+r_frame_rate 24000/1001, tb 1/24000), plus 60 / 30 / 25 / 60000/1001 again, because F-offset
+validated them against offlib.cfr_pick, not against addrlib.simulate.
+
+Per rate (method of offset/synthetic_long.py, whose build_proxy copy and copy-check are imported):
+  1. lavfi geq barcode source, 10 min, lossless x264; decoded in full, each frame must read back as
+     its own index; its packet list (exact integer pts/duration) is the replica's input;
+  2. the proxy is built with build_proxy's argument list (ingest.py:339-354, checked token by token);
+  3. every proxy slot is decoded (checksum-verified) and its barcode read; the proxy's packet PTS
+     must be exactly on the 1/10 s grid; the shown index is compared slot by slot with
+     addrlib.simulate (whole stream, EOF included) AND with addrlib.address (steady-state local rule),
+     whose refusals are counted by reason;
+  4. first and last slots are listed; exact ties (end == slot - 0.11 in rational arithmetic) are
+     listed with the side ffmpeg took.
+Media live in m0v2/_tmp_synth/ and are deleted at the end. Exit 1 on any refusal or mismatch.
+"""
+from __future__ import annotations
+
+import json
+import math
+import shutil
+import subprocess
+import sys
+from collections import Counter
+from fractions import Fraction
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "offset"))
+import addrlib as A  # noqa: E402
+import mediaio as M  # noqa: E402
+import offlib  # noqa: E402
+import synthetic_long as SL  # noqa: E402  (build_proxy_cmd, check_copy_matches_ingest: read-only)
+
+DUR = 600
+RATES = {"24": Fraction(24), "23.976": Fraction(24000, 1001), "60": Fraction(60), "30": Fraction(30),
+         "25": Fraction(25), "59.94": Fraction(60000, 1001)}
+GW, GH, UP, RW, RH = SL.GW, SL.GH, SL.UP, SL.RW, SL.RH
+WORK = HERE / "_tmp_synth"
+
+
+def meta(pr: dict) -> dict:
+    return {"stream": pr["stream"], "format": pr["format"]}
+
+
+def run_rate(name: str, fps: Fraction) -> dict:
+    src, prx = WORK / f"src_{name}.mp4", WORK / f"proxy_{name}.mp4"
+    out: dict = {"rate": name, "fps": str(fps), "duration_s": DUR}
+    gen = [M.FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+           f"color=c=black:s={GW}x{GH}:r={fps.numerator}/{fps.denominator}:d={DUR}",
+           "-vf", f"geq=lum='{offlib.geq_barcode_expr(GW, GH)}':cb=128:cr=128,"
+                  f"scale={GW * UP}:{GH * UP}:flags=neighbor",
+           "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", "-pix_fmt", "yuv420p", str(src)]
+    r = subprocess.run(gen, capture_output=True, text=True)
+    if r.returncode:
+        return {**out, "state": "source_not_built", "why": r.stderr[-300:]}
+    sp = M.probe(src)
+    out["source_probe"] = sp
+    stb = A._tb(sp["stream"]["time_base"])
+    d = offlib.decode(src, None, None, RW, RH, copyts=True)
+    if d["state"] != "verified":
+        return {**out, "state": "source_unverified", "why": d["problems"]}
+    reads = [offlib.read_barcode(f) for f in d["frames"]]
+    n_exp = math.ceil(DUR * fps)
+    bad_src = sum(1 for i, x in enumerate(reads) if x["state"] != "read" or x["index"] != i)
+    out["source_check"] = {"frames": len(reads), "expected": n_exp, "not_own_index": bad_src}
+    del d, reads
+    pk = M.packets(src)
+    step = Fraction(stb[1], stb[0]) / fps
+    grid_src = sum(1 for i, (p, q) in enumerate(zip(pk["pts"], pk["dur"])) if p != i * step or q != step)
+    out["source_packets"] = {"n": len(pk["pts"]), "unparsed": pk["unparsed"], "tb": list(stb),
+                             "ticks_per_frame": str(step), "not_on_index_grid": grid_src}
+    if bad_src or len(pk["pts"]) != n_exp or grid_src or pk["unparsed"]:
+        return {**out, "state": "source_self_check_failed"}
+    cmd = SL.build_proxy_cmd(src, prx, GW * UP, float(fps))
+    out["proxy_cmd"] = cmd[1:]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode:
+        return {**out, "state": "proxy_not_built", "why": r.stderr[-300:]}
+    pp = M.probe(prx)
+    out["proxy_probe"] = pp
+    ptb = A._tb(pp["stream"]["time_base"])
+    ppk = M.packets(prx)
+    per_slot = Fraction(ptb[1], ptb[0]) / A.PROXY_FPS
+    grid_prx = sum(1 for k, p in enumerate(ppk["pts"]) if p != k * per_slot)
+    d = offlib.decode(prx, None, None, RW, RH, copyts=True)
+    if d["state"] != "verified":
+        return {**out, "state": "proxy_unverified", "why": d["problems"]}
+    shown = [offlib.read_barcode(f) for f in d["frames"]]
+    sim = A.simulate(pk["pts"], pk["dur"], stb)
+    dom = A.domain(meta(pp), meta(sp))
+    rows, mism_sim, mism_addr, reasons = [], [], [], Counter()
+    for k, x in enumerate(shown):
+        row = {"slot": k, "shown": x.get("index"), "read": x["state"],
+               "sim": sim[k] if k < len(sim) else None}
+        a = A.address(ppk["pts"][k] if k < len(ppk["pts"]) else None, meta(pp), meta(sp),
+                      A.window(pk["pts"], pk["dur"], stb, k), len(pk["pts"]), len(ppk["pts"]))
+        row["addr"] = a.get("source_index") if a["state"] == "addressed" else None
+        if a["state"] != "addressed":
+            reasons[a["reason"].split(" ")[0]] += 1
+        if x["state"] != "read" or row["sim"] != row["shown"]:
+            mism_sim.append(row)
+        if a["state"] == "addressed" and row["addr"] != row["shown"]:
+            mism_addr.append(row)
+        if a["state"] == "addressed" and a["tie"]:
+            row["tie"] = True
+        rows.append(row)
+    ties = [r for r in rows if r.get("tie")]
+    # every exact tie in the stream, whether or not ffmpeg kept the frame: frame i (end == edge of slot n)
+    all_ties = []
+    for n in range(A.START_SLOTS, len(ppk["pts"])):
+        edge = Fraction(n, A.PROXY_FPS) - Fraction(11, 100)
+        i_q = edge * fps - 1                            # frame whose end is exactly the edge
+        if i_q.denominator == 1 and 0 <= int(i_q) < len(pk["pts"]):
+            i = int(i_q)
+            all_ties.append({"slot": n, "tie_frame": i, "shown": rows[n]["shown"],
+                             "kept": rows[n]["shown"] == i})
+    out.update(state="read", domain=dom, proxy_slots=len(shown), proxy_packets=len(ppk["pts"]),
+               proxy_nb_frames=pp["stream"].get("nb_frames"), proxy_pts_off_grid=grid_prx,
+               simulated_slots=len(sim), unreadable=sum(1 for x in shown if x["state"] != "read"),
+               sim_mismatches=len(mism_sim), sim_mismatch_examples=mism_sim[:5],
+               addressed=len(rows) - sum(reasons.values()), addr_mismatches=len(mism_addr),
+               addr_mismatch_examples=mism_addr[:5], refused_by_reason=dict(reasons),
+               refused_slots=[r["slot"] for r in rows if r["addr"] is None][:20],
+               first_slots=rows[:4], last_slots=rows[-4:], ties_all=all_ties,
+               ties_addressed=len(ties))
+    return out
+
+
+def main() -> int:
+    problems = SL.check_copy_matches_ingest()
+    print("build_proxy copy vs ingest.py:", "matches" if not problems else problems)
+    if problems:
+        return 1
+    WORK.mkdir(exist_ok=True)
+    which = sys.argv[1:] or list(RATES)
+    results, bad = [], 0
+    for name in which:
+        res = run_rate(name, RATES[name])
+        results.append(res)
+        (HERE / f"synth_{'_'.join(which)}.json").write_text(json.dumps(results, indent=1, default=str))
+        if res["state"] != "read":
+            bad += 1
+            print(f"{name}: {res['state']} {res.get('why', '')}")
+            continue
+        fail = (res["sim_mismatches"] or res["addr_mismatches"] or res["unreadable"]
+                or res["proxy_pts_off_grid"] or res["domain"]["state"] != "ok"
+                or res["proxy_slots"] != res["simulated_slots"])
+        bad += bool(fail)
+        print(f"\n{name} fps ({res['fps']}): source {res['source_check']} packets {res['source_packets']}")
+        print(f"  domain {res['domain']}; proxy slots {res['proxy_slots']} (packets {res['proxy_packets']}, "
+              f"nb_frames {res['proxy_nb_frames']}, PTS off grid {res['proxy_pts_off_grid']}, "
+              f"unreadable {res['unreadable']}); simulated slots {res['simulated_slots']}")
+        print(f"  simulate vs shown: {res['proxy_slots'] - res['sim_mismatches']}/{res['proxy_slots']} equal, "
+              f"mismatches {res['sim_mismatches']} {res['sim_mismatch_examples'][:2]}")
+        print(f"  address(): addressed {res['addressed']}, mismatches {res['addr_mismatches']}, "
+              f"refused {res['refused_by_reason']} at slots {res['refused_slots']}")
+        print(f"  first slots {[(r['slot'], r['shown'], r['sim'], r['addr']) for r in res['first_slots']]}")
+        print(f"  last slots  {[(r['slot'], r['shown'], r['sim'], r['addr']) for r in res['last_slots']]}")
+        print(f"  exact ties {len(res['ties_all'])}: kept {sum(t['kept'] for t in res['ties_all'])} "
+              f"{[(t['slot'], t['tie_frame'], t['shown']) for t in res['ties_all'][:8]]}; "
+              f"addressed on a tie {res['ties_addressed']}")
+        print("  RESULT", "FAIL" if fail else "ok")
+    shutil.rmtree(WORK, ignore_errors=True)
+    print(f"\nrates run {len(results)}; failed or refused {bad}")
+    return 1 if bad or not results else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

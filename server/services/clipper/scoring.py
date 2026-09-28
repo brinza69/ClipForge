@@ -48,162 +48,13 @@ from typing import Any, Callable
 
 logger = logging.getLogger("clipforge.clipper.scoring")
 
-SUB_SCORES = (
-    "hook", "clarity", "setup_efficiency", "payoff", "emotion", "novelty",
-    "audio_energy", "visual_energy", "reaction", "caption_suitability",
-    "platform_fit", "context_completeness", "retention", "edit_confidence",
-    "technical", "safety",
+# The weight rows live in scoring_profiles.py — re-exported because the
+# tests, `scripts/score_contribution.py` and the runbook all reach for them
+# by their old names, and the split is not meant to be visible to them.
+from services.clipper.scoring_profiles import (  # noqa: E402,F401
+    PLATFORM_BANDS, PROFILES, SUB_SCORES, _DEFAULT_BAND, _RAW_PROFILES,
+    _normalise,
 )
-
-# Ideal duration band per platform, in seconds.
-#
-# `platform_fit` is still COMPUTED and reported — the breakdown showing "60s,
-# TikTok prefers under 45" is worth knowing — but it carries ZERO WEIGHT in
-# every profile as of 2026-08-17, and that is a measurement rather than taste.
-#
-# Measured over 1073 real candidates from four projects, with the gaming
-# profile's weights:
-#
-#   * platform_fit was the LARGEST single contributor to how the board is
-#     ordered — 2.10 of the 16.22 points of spread the ranking has to work
-#     with, 13% of all discrimination.
-#   * and it is almost binary: 798 candidates at 100, 120 at 0, 155 spread
-#     between. What it contributed was the answer to "is the duration in band",
-#     not a judgement about the clip.
-#   * worse, the generator and the band DISAGREE. `clipper_max_clip_s` is 90 s
-#     and the TikTok band ends at 45, so 279 of those 1073 candidates — 26% —
-#     were produced by the pipeline exactly as asked and then docked 6 points
-#     by the scorer for being that long.
-#   * the practical effect: a 50 s clip lost 6 points to a 44 s one, while
-#     `payoff` — whether the moment has a point at all — contributes 1.14 in
-#     total. Duration outweighed content five to one.
-#
-# Zeroing the weight rather than deleting the sub-score keeps the number in the
-# breakdown, and `_normalise()` divides by the real sum so the freed 5-6% is
-# redistributed across the content sub-scores proportionally — no new opinion
-# about what matters, just one thing that should not have had a vote losing it.
-#
-# The lower bound is 15 s everywhere: shorter than that and none of these
-# surfaces give a clip a second look. That is a filter's job, and
-# `clipper_min_clip_s` already enforces it at generation.
-PLATFORM_BANDS: dict[str, tuple[float, float]] = {
-    "tiktok": (15.0, 45.0),
-    "youtube_shorts": (15.0, 60.0),
-    "instagram_reels": (15.0, 90.0),
-    "facebook_reels": (15.0, 60.0),
-}
-_DEFAULT_BAND = (15.0, 60.0)
-
-# Raw per-profile weights. Each row sums to 100 by hand for readability;
-# _normalise() divides by the actual sum so an edit can never silently change
-# the meaning of `overall`.
-_RAW_PROFILES: dict[str, dict[str, float]] = {
-    # Gaming: stakes read through sound and motion long before they read in
-    # words, and the streamer's reaction IS the clip.
-    "gaming": {
-        "hook": 8, "clarity": 3, "setup_efficiency": 5, "payoff": 10,
-        "emotion": 8, "novelty": 6, "audio_energy": 12, "visual_energy": 12,
-        "reaction": 11, "caption_suitability": 3, "platform_fit": 0,
-        "context_completeness": 4, "retention": 5, "edit_confidence": 3,
-        "technical": 2, "safety": 2,
-    },
-    # Podcast: nothing happens on screen, so an idea has to open well and land.
-    "podcast": {
-        "hook": 14, "clarity": 13, "setup_efficiency": 8, "payoff": 13,
-        "emotion": 7, "novelty": 8, "audio_energy": 3, "visual_energy": 2,
-        "reaction": 4, "caption_suitability": 7, "platform_fit": 0,
-        "context_completeness": 7, "retention": 4, "edit_confidence": 2,
-        "technical": 1, "safety": 1,
-    },
-    # Interview: an answer clipped away from its question has to still make
-    # sense on its own, so context_completeness carries real weight.
-    "interview": {
-        "hook": 12, "clarity": 12, "setup_efficiency": 7, "payoff": 12,
-        "emotion": 8, "novelty": 7, "audio_energy": 3, "visual_energy": 3,
-        "reaction": 5, "caption_suitability": 6, "platform_fit": 0,
-        "context_completeness": 11, "retention": 4, "edit_confidence": 2,
-        "technical": 2, "safety": 1,
-    },
-    # IRL: unscripted, so what happened in frame beats what was said about it.
-    "irl": {
-        "hook": 10, "clarity": 5, "setup_efficiency": 6, "payoff": 9,
-        "emotion": 12, "novelty": 11, "audio_energy": 8, "visual_energy": 12,
-        "reaction": 9, "caption_suitability": 3, "platform_fit": 0,
-        "context_completeness": 3, "retention": 3, "edit_confidence": 2,
-        "technical": 1, "safety": 1,
-    },
-    # Commentary: a take is only worth clipping if it is both sharp and new.
-    "commentary": {
-        "hook": 13, "clarity": 10, "setup_efficiency": 8, "payoff": 12,
-        "emotion": 11, "novelty": 11, "audio_energy": 4, "visual_energy": 3,
-        "reaction": 5, "caption_suitability": 6, "platform_fit": 0,
-        "context_completeness": 5, "retention": 3, "edit_confidence": 2,
-        "technical": 1, "safety": 1,
-    },
-    # Talking head: one static face — the words and the burned-in captions are
-    # the entire visual interest.
-    "talking_head": {
-        "hook": 14, "clarity": 12, "setup_efficiency": 8, "payoff": 12,
-        "emotion": 8, "novelty": 7, "audio_energy": 3, "visual_energy": 2,
-        "reaction": 3, "caption_suitability": 10, "platform_fit": 0,
-        "context_completeness": 6, "retention": 4, "edit_confidence": 2,
-        "technical": 2, "safety": 1,
-    },
-    # Tutorial: a step cut off mid-explanation is worse than useless, so
-    # completeness and clarity dominate and excitement barely counts.
-    "tutorial": {
-        "hook": 8, "clarity": 15, "setup_efficiency": 8, "payoff": 10,
-        "emotion": 3, "novelty": 5, "audio_energy": 2, "visual_energy": 4,
-        "reaction": 2, "caption_suitability": 9, "platform_fit": 0,
-        "context_completeness": 17, "retention": 5, "edit_confidence": 3,
-        "technical": 3, "safety": 1,
-    },
-    # Sports: the play and the crowd. Commentary is often unintelligible and
-    # scoring it heavily would throw away the best moments.
-    "sports": {
-        "hook": 8, "clarity": 3, "setup_efficiency": 6, "payoff": 13,
-        "emotion": 9, "novelty": 6, "audio_energy": 12, "visual_energy": 14,
-        "reaction": 11, "caption_suitability": 2, "platform_fit": 0,
-        "context_completeness": 3, "retention": 3, "edit_confidence": 2,
-        "technical": 1, "safety": 1,
-    },
-    # Low dialogue: there is almost no speech to score, so picture and
-    # soundtrack decide and the language sub-scores are near-zero weight.
-    "low_dialogue": {
-        "hook": 6, "clarity": 1, "setup_efficiency": 4, "payoff": 9,
-        "emotion": 12, "novelty": 12, "audio_energy": 13, "visual_energy": 18,
-        "reaction": 8, "caption_suitability": 1, "platform_fit": 0,
-        "context_completeness": 2, "retention": 4, "edit_confidence": 2,
-        "technical": 1, "safety": 1,
-    },
-    # Unknown: the fallback until content-type detection is confident. Flat
-    # enough that a misdetection never costs much.
-    "unknown": {
-        "hook": 10, "clarity": 8, "setup_efficiency": 6, "payoff": 10,
-        "emotion": 8, "novelty": 7, "audio_energy": 7, "visual_energy": 7,
-        "reaction": 6, "caption_suitability": 5, "platform_fit": 0,
-        "context_completeness": 6, "retention": 5, "edit_confidence": 4,
-        "technical": 3, "safety": 2,
-    },
-}
-
-
-def _normalise(raw: dict[str, float]) -> dict[str, float]:
-    """Scale a weight row so it sums to exactly 1.0 over every sub-score."""
-    filled = {name: float(raw.get(name, 0.0)) for name in SUB_SCORES}
-    total = sum(filled.values())
-    if total <= 0:  # a row of zeros would make `overall` meaningless
-        return {name: 1.0 / len(SUB_SCORES) for name in SUB_SCORES}
-    return {name: value / total for name, value in filled.items()}
-
-
-PROFILES: dict[str, dict[str, float]] = {
-    name: _normalise(row) for name, row in _RAW_PROFILES.items()
-}
-
-
-# --------------------------------------------------------------------------
-# numeric helpers — every one of these is a NaN / divide-by-zero guard
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -499,7 +350,43 @@ def score_candidate(cand: dict, features: dict, *, profile: str,
     overall = sum(sub_scores[name] * weights[name] for name in SUB_SCORES)
 
     return {
+        # `overall` is kept as the name every existing caller uses. It is the
+        # HEURISTIC score and nothing else — `heuristic_score` says so out loud,
+        # because by the time a candidate reaches the board `overall` may have
+        # been blended with a verdict and the two readings had become
+        # indistinguishable.
         "overall": round(_clamp(overall), 1),
+        "heuristic_score": round(_clamp(overall), 1),
+        "eligibility": eligibility_of(cand),
         "sub_scores": sub_scores,
         "reason": explain(sub_scores, cand, features),
     }
+
+
+# Eligibility is not quality. A clip can be well made and still be unusable —
+# cut around a payoff that is outside its own window — and a clip can be thin
+# and perfectly usable. Collapsing the two into one number is what let audio
+# energy compensate for a missing payoff.
+ELIGIBLE = "eligible"
+UNCERTAIN = "uncertain"
+INELIGIBLE = "ineligible"
+
+
+def eligibility_of(cand: dict) -> str:
+    """Whether this candidate can work at all, separately from how good it is.
+
+    INELIGIBLE means the window does not contain the thing it was cut for.
+    `story_evidence.validate_story_span` already answers that; this reads its
+    verdict rather than recomputing it, so there is one definition and not two.
+
+    UNCERTAIN is NOT a soft reject. It means the evidence is thin — nothing
+    grounded, context missing — and thin evidence is the normal state of a
+    legacy candidate, which has no story block at all.
+    """
+    story = cand.get("story") if isinstance(cand, dict) else None
+    if not isinstance(story, dict):
+        return UNCERTAIN
+    validity = story.get("validity")
+    if validity == "invalid":
+        return INELIGIBLE
+    return ELIGIBLE if validity == "valid" else UNCERTAIN

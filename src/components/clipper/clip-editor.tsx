@@ -8,17 +8,21 @@
 // with the captions burned in through the SAME code path the export uses. None
 // of it had a UI, so editing a clip meant curl. Phase 9.6 of the task board.
 //
-// What this deliberately does NOT do is drag-to-crop. Editing the layout rects
-// by hand is a canvas tool and a build of its own; the layout is planned from
-// detected regions and the honest fix for a bad one is better detection, which
-// is where the work has gone. `layout_plan` stays patchable over the API for
-// anyone who needs it.
+// ReactionFraming adds explicit source-region selection for a reaction clip.
+// Its saved choice is bound to the source and clip interval, and the ordinary
+// preview/export honor it ahead of dynamic planning.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { errorDescription, readApiError } from "@/lib/api-error";
+import { rangeTooLong } from "@/components/clipper/range-limit";
 import { CLIPPER_API, type ClipperClip } from "@/types/clipper";
+import { placementNotice } from "./caption-placement";
+import { ClipFramePreview } from "./clip-frame-preview";
+import { ReactionFraming } from "./reaction-framing";
+import { CaptionDisplayNote } from "./caption-display-note";
+import { SourceTreatmentField } from "./source-treatment-field";
 
 interface Preset {
   id: string;
@@ -100,11 +104,15 @@ export function ClipEditor({
   open,
   onOpenChange,
   onSaved,
+  maxClipS,
 }: {
   clip: ClipperClip | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onSaved: () => void;
+  onSaved: (clip?: ClipperClip) => void;
+  /** The server's effective maximum clip length (`max_clip_s_effective`); the server
+   * refuses longer ranges (O4). Undefined: no local refusal, the server decides. */
+  maxClipS?: number;
 }) {
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(0);
@@ -114,19 +122,19 @@ export function ClipEditor({
   const [presets, setPresets] = useState<Preset[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // RX1: the caption-source save's own report, for THIS clip (the save hands back a new clip object).
+  const [captionUnchecked, setCaptionUnchecked] = useState<{ id: string; text: string } | null>(null);
   // Bumped on every save so the <img> refetches — the frame is rendered
   // server-side from the SAVED clip, so it is only true after a round trip.
   const [frameKey, setFrameKey] = useState(0);
-  const [at, setAt] = useState(0.5);
 
   useEffect(() => {
     if (!clip) return;
     setStart(clip.start_time);
     setEnd(clip.end_time);
     setHeadline(clip.headline_text ?? "");
-    setPresetId(clip.caption_plan?.preset_id ?? "");
+    setPresetId(clip.caption_plan?.preset_id ?? clip.caption_preset_id ?? "");
     setCaptionY(clip.caption_plan?.y_pct ?? 0.75);
-    setAt(Math.min(0.5, Math.max(0, clip.duration / 2)));
     setError(null);
   }, [clip]);
 
@@ -139,13 +147,16 @@ export function ClipEditor({
   }, [open]);
 
   const duration = Math.max(0, end - start);
+  // The server's rule (O4), from the same endpoints and the server's own limit.
+  const tooLong = clip != null
+    && rangeTooLong({ start: clip.start_time, end: clip.end_time }, start, end, maxClipS);
   const trimmed = clip ? start !== clip.start_time || end !== clip.end_time : false;
   const dirty = useMemo(() => {
     if (!clip) return false;
     return (
       trimmed ||
       headline !== (clip.headline_text ?? "") ||
-      presetId !== (clip.caption_plan?.preset_id ?? "") ||
+      presetId !== (clip.caption_plan?.preset_id ?? clip.caption_preset_id ?? "") ||
       Math.abs(captionY - (clip.caption_plan?.y_pct ?? 0.75)) > 1e-4
     );
   }, [clip, trimmed, headline, presetId, captionY]);
@@ -160,7 +171,7 @@ export function ClipEditor({
       body.end_time = end;
     }
     if (headline !== (clip.headline_text ?? "")) body.headline_text = headline;
-    if (presetId && presetId !== (clip.caption_plan?.preset_id ?? "")) {
+    if (presetId && presetId !== (clip.caption_plan?.preset_id ?? clip.caption_preset_id ?? "")) {
       body.caption_preset_id = presetId;
     }
     if (clip.caption_plan && Math.abs(captionY - (clip.caption_plan.y_pct ?? 0.75)) > 1e-4) {
@@ -184,7 +195,7 @@ export function ClipEditor({
         return;
       }
       setFrameKey((k) => k + 1);
-      onSaved();
+      onSaved((await r.json()).clip);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -209,7 +220,41 @@ export function ClipEditor({
           return;
         }
         setFrameKey((k) => k + 1);
-        onSaved();
+        onSaved((await r.json()).clip);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [clip, onSaved],
+  );
+
+  // Saved on its own endpoint and at once, like the reaction framing: it is a
+  // declaration about the source, not part of the caption plan — a rebuild
+  // replaces the plan and must not bring a second layer back over the source's.
+  const saveCaptionSource = useCallback(
+    async (value: boolean | null) => {
+      if (!clip) return;
+      setBusy("caption-source");
+      setError(null);
+      setCaptionUnchecked(null);
+      try {
+        const r = await fetch(`${CLIPPER_API}/clips/${clip.id}/caption-source`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source_has_burned_captions: value }),
+        });
+        if (!r.ok) {
+          setError(errorDescription(
+            await readApiError(r, "Setarea subtitrării nu a putut fi salvată")));
+          return;
+        }
+        setFrameKey((k) => k + 1);
+        const body = await r.json();
+        const unchecked = placementNotice(body.caption_placement);
+        if (unchecked) setCaptionUnchecked({ id: clip.id, text: unchecked });
+        onSaved(body.clip);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -220,6 +265,7 @@ export function ClipEditor({
   );
 
   if (!clip) return null;
+  const sourceCaptions = clip.source_has_burned_captions ?? null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -229,44 +275,8 @@ export function ClipEditor({
         </DialogHeader>
 
         <div className="grid gap-5 sm:grid-cols-[300px_1fr]">
-          {/* The still, rendered server-side through the same overlay builder
-              the export uses — so the caption STYLE and HEIGHT are the real
-              thing. The framing is not: the endpoint returns the 16:9 source
-              and the export crops it to 9:16, which is said below rather than
-              left for someone to discover after shipping a clip. */}
-          <div className="space-y-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              key={frameKey}
-              src={`${CLIPPER_API}/clips/${clip.id}/preview-frame?t=${at.toFixed(2)}&v=${frameKey}`}
-              alt={`Frame at ${at.toFixed(1)}s with the captions burned in`}
-              className="w-full rounded-lg border border-border/40 bg-black"
-            />
-            <input
-              type="range"
-              min={0}
-              max={Math.max(0.1, duration)}
-              step={0.1}
-              value={Math.min(at, duration)}
-              onChange={(e) => setAt(Number.parseFloat(e.target.value))}
-              className="w-full"
-              aria-label="Frame to preview"
-            />
-            <p className="text-center text-[11px] tabular-nums text-muted-foreground">
-              +{at.toFixed(1)}s of {duration.toFixed(1)}s
-            </p>
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              The whole source frame. Caption style and height are exactly what
-              the export burns; the framing is not — the export crops this to
-              9:16. Use <span className="text-foreground/70">render preview</span> to
-              see the cut itself.
-            </p>
-            {trimmed && (
-              <p className="rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-500">
-                The still is of the SAVED clip. Save to see the new boundaries.
-              </p>
-            )}
-          </div>
+          <ClipFramePreview key={clip.id} clipId={clip.id} duration={clip.duration}
+            revision={frameKey} dirty={dirty} />
 
           <div className="space-y-4">
             <Field
@@ -286,6 +296,13 @@ export function ClipEditor({
               {end <= start && (
                 <p className="text-[11px] text-rose-500">
                   The end has to come after the start.
+                </p>
+              )}
+              {tooLong && (
+                <p className="text-[11px] text-rose-500">
+                  Clips in this project can be at most {maxClipS}s, and this range is{" "}
+                  {duration.toFixed(1)}s. Raise the maximum clip length in the project settings to
+                  go longer.
                 </p>
               )}
               {trimmed && (
@@ -315,6 +332,50 @@ export function ClipEditor({
               </div>
             </Field>
 
+            <Field label="Subtitrarea din sursă">
+              <select
+                value={sourceCaptions === null ? "" : sourceCaptions ? "suppress" : "burn"}
+                onChange={(e) => saveCaptionSource(
+                  e.target.value === "" ? null : e.target.value === "suppress")}
+                disabled={busy !== null || dirty || clip.status === "exporting"}
+                title={dirty ? "Salvează mai întâi celelalte modificări" : ""}
+                className="w-full rounded border border-border/50 bg-transparent px-2 py-1.5 text-xs"
+              >
+                <option value="">Urmează proiectul</option>
+                <option value="burn">Arde subtitrarea ClipForge</option>
+                <option value="suppress">Nu arde — sursa are deja subtitrare</option>
+              </select>
+              <p className="text-[11px] text-muted-foreground">
+                {sourceCaptions === true
+                  ? "Exportul acestui clip nu primește subtitrarea ClipForge: textul ars în sursă rămâne singurul."
+                  : sourceCaptions === false
+                    ? "Subtitrarea ClipForge se arde în acest clip, oricum ar fi setat proiectul."
+                    : "Decide setarea proiectului; dacă nimeni n-a spus nimic, subtitrarea ClipForge se arde. Alege „Nu arde” când video-ul are deja subtitrare, ca să nu apară două rânduri de text."}
+              </p>
+              {clip.effective_caption_policy === null && (
+                // A response that did not compute it: say so rather than keep
+                // showing the previous clip's decision as the current one.
+                <p className="text-[11px] text-muted-foreground">Efectiv: necalculat în acest răspuns.</p>
+              )}
+              {clip.effective_caption_policy && (
+                // Computed by the backend with the render's own function, so
+                // "follow the project" shows what the project actually decides.
+                <p className="text-[11px] font-medium text-foreground/80">
+                  Efectiv: {clip.effective_caption_policy.action === "suppress" ? "nu se arde" : "se arde"}
+                  {" — "}
+                  {{ clip: "decis pentru acest clip", project: "decis de proiect",
+                     default: "implicit, nimeni n-a declarat" }[clip.effective_caption_policy.scope]}
+                </p>
+              )}
+              {captionUnchecked?.id === clip.id && (
+                <p className="text-[11px] text-amber-500">{captionUnchecked.text}</p>
+              )}
+              <CaptionDisplayNote view={clip.caption_display} />
+            </Field>
+
+            <SourceTreatmentField clip={clip} disabled={busy !== null || dirty}
+              onSaved={(c) => { setFrameKey((k) => k + 1); onSaved(c); }} />
+
             <Field label="Caption preset">
               <div className="flex gap-2">
                 <select
@@ -332,7 +393,8 @@ export function ClipEditor({
                 <button
                   type="button"
                   onClick={() => regenerate("captions")}
-                  disabled={busy !== null}
+                  disabled={busy !== null || dirty}
+                  title={dirty ? "Save your changes before rebuilding captions" : ""}
                   className="shrink-0 rounded border border-border/50 px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted/40 disabled:opacity-50"
                 >
                   {busy === "captions" ? "…" : "rebuild"}
@@ -380,7 +442,7 @@ export function ClipEditor({
               <button
                 type="button"
                 onClick={save}
-                disabled={busy !== null || !dirty || end <= start}
+                disabled={busy !== null || !dirty || end <= start || tooLong}
                 className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {busy === "save" ? "saving…" : "save"}
@@ -388,6 +450,10 @@ export function ClipEditor({
             </div>
           </div>
         </div>
+        <ReactionFraming key={`${clip.id}:${clip.start_time}:${clip.end_time}`}
+          clip={clip} disabled={dirty || busy !== null || clip.status === "exporting"}
+          onBusyChange={(active) => setBusy(active ? "reaction" : null)}
+          onSaved={(updated) => { setFrameKey((k) => k + 1); onSaved(updated); }} />
       </DialogContent>
     </Dialog>
   );

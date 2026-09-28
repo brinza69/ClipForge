@@ -12,6 +12,7 @@ EXISTING job SSE endpoint at /api/jobs/{id}/stream rather than a new transport.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -33,12 +34,11 @@ from models import (
     ProjectModel,
     ProjectStatus,
 )
-from services.clipper import ANALYSIS_VERSION
+from services.clipper import ANALYSIS_VERSION, reasoning_mode
 from services.clipper.serialize import (
     PROJECT_PATCHABLE,
     PROJECT_PATCHABLE_JSON,
     apply_patch,
-    clip_to_dict,
     job_to_dict,
     project_to_dict,
 )
@@ -53,88 +53,12 @@ _TERMINAL = {ProjectStatus.ready.value, ProjectStatus.failed.value, ProjectStatu
 _ALLOWED_UPLOAD_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".ts", ".flv"}
 
 
-def _err(status: int, code: str, message: str, details: str = "") -> HTTPException:
-    """Structured error matching main.py's unhandled-exception shape, so the
-    frontend's readApiError() reads both the same way."""
-    return HTTPException(status, {"error": code, "message": message, "details": details})
-
-
-def _default_settings() -> dict[str, Any]:
-    """Mirrors DEFAULT_SETTINGS in src/types/clipper.ts, sourced from config so
-    the operator can retune the rig without touching the frontend."""
-    return {
-        "clip_count": settings.clipper_default_clip_count,
-        "min_clip_s": settings.clipper_min_clip_s,
-        "max_clip_s": settings.clipper_max_clip_s,
-        "platform": "tiktok",
-        "fps": settings.clipper_export_fps,
-        "language": "auto",
-        "auto_export": settings.clipper_auto_export,
-        "vision_review": settings.clipper_vision_review,
-        "vision_model": settings.clipper_vision_model,
-        "caption_preset_id": "bold_impact",
-        "caption_position": "bottom",
-        "caption_highlight": True,
-        "headline_enabled": True,
-        "headline_auto": True,
-        "emoji_enabled": False,
-        "profanity_mask": False,
-        "trim_silence": settings.clipper_trim_silence,
-        "jump_cuts": False,
-        "auto_zoom": True,
-        "reaction_zoom": True,
-        "facecam_emphasis": True,
-        "dynamic_edit": settings.clipper_dynamic_edit,
-        "include_chat": False,
-        "watermark_text": "",
-        "min_score": 0,
-        "layout_mode": "auto",
-        "face_pct": settings.clipper_face_pct,
-    }
-
-
-def _normalise_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
-    """Merge client settings over the defaults and clamp everything.
-
-    Clamping happens here, once, rather than in each consumer: an out-of-range
-    value from a hand-rolled API call must never reach the pipeline (a
-    max_clip_s of 10 hours would make the renderer try to encode the whole VOD).
-    """
-    out = _default_settings()
-    for key, value in (raw or {}).items():
-        if key in out and value is not None:
-            out[key] = value
-
-    def _num(key: str, lo: float, hi: float, cast=float):
-        try:
-            out[key] = cast(max(lo, min(hi, cast(out[key]))))
-        except (TypeError, ValueError):
-            out[key] = cast(_default_settings()[key])
-
-    _num("clip_count", 1, 20, int)
-    # Same ceiling as clip_count: auto-export cannot ask for more clips than the
-    # run will produce, and an unbounded value here is unattended render time.
-    _num("auto_export", 0, 20, int)
-    _num("min_clip_s", 3, 600)
-    _num("max_clip_s", 5, 900)
-    _num("face_pct", 0.15, 0.6)
-    _num("min_score", 0, 100)
-
-    # A min above max would produce zero candidates with no visible reason.
-    if out["min_clip_s"] >= out["max_clip_s"]:
-        out["min_clip_s"], out["max_clip_s"] = (
-            settings.clipper_min_clip_s,
-            settings.clipper_max_clip_s,
-        )
-
-    if out.get("platform") not in {"tiktok", "youtube_shorts", "instagram_reels", "facebook_reels"}:
-        out["platform"] = "tiktok"
-    if out.get("caption_position") not in {"bottom", "center", "top"}:
-        out["caption_position"] = "bottom"
-    if out.get("fps") not in {"source", 30, 60}:
-        out["fps"] = settings.clipper_export_fps
-    out["watermark_text"] = str(out.get("watermark_text") or "")[:80]
-    return out
+# The settings contract lives in clipper_settings.py — re-exported because the
+# tests reach for these by their old names and both entry points below use them.
+from routers.clipper_settings import (  # noqa: E402,F401
+    _NOT_AVAILABLE_YET, _default_settings, _err, _normalise_settings,
+    _rig_reasoning_mode,
+)
 
 
 # ── Source preview + upload ─────────────────────────────────────────────────
@@ -208,6 +132,42 @@ async def upload_source(file: UploadFile = File(...)) -> dict:
 # ── Projects ────────────────────────────────────────────────────────────────
 
 
+def _staged_upload(raw: str) -> Path:
+    """Resolve a client-supplied upload reference to a file we actually staged.
+
+    `create_project` used to take `upload_path` as a PATH, check only that it
+    existed, and then `.replace()` it into the project directory. That is a
+    move of any file the server process can reach — the client picked the
+    source, the server carried it out. There is no authentication anywhere in
+    ClipForge, so this was not privilege escalation over an already-open
+    perimeter; it was still a filesystem primitive handed out for free, and the
+    fix is small enough that arguing about its priority costs more than doing
+    it.
+
+    Only the NAME is taken from the client, never the location. `Path(...).name`
+    strips every directory component, so `..`, an absolute path and a UNC share
+    all collapse to a bare filename that is then looked up in the staging dir
+    this server wrote it to. The containment re-check after `resolve()` is
+    belt and braces: it also catches a symlink planted inside staging, which
+    resolves outward.
+    """
+    name = Path(raw).name
+    if not name or name in (".", ".."):
+        raise _err(400, "missing_upload", "Upload the video file first.")
+    if Path(name).suffix.lower() not in _ALLOWED_UPLOAD_SUFFIXES:
+        raise _err(400, "unsupported_upload",
+                   "That file type is not a supported video container.")
+
+    staging = (settings.clipper_dir / "_uploads").resolve()
+    candidate = (staging / name).resolve()
+    if not candidate.is_relative_to(staging):
+        raise _err(400, "missing_upload", "Upload the video file first.")
+    if not candidate.is_file():
+        raise _err(400, "missing_upload", "Upload the video file first.",
+                   "The staged file is gone — upload it again.")
+    return candidate
+
+
 @router.post("/projects")
 async def create_project(payload: dict, session: AsyncSession = Depends(get_session)) -> dict:
     """Create a clipper project. Does NOT start analysis — the client calls
@@ -236,8 +196,9 @@ async def create_project(payload: dict, session: AsyncSession = Depends(get_sess
             raise _err(400, exc.code, exc.message, exc.suggestion) from exc
         source_type = checked["source_type"]
     elif source_kind == "upload":
-        if not upload_path or not Path(upload_path).exists():
+        if not upload_path:
             raise _err(400, "missing_upload", "Upload the video file first.")
+        staged = _staged_upload(upload_path)
         source_type = "local"
     else:
         raise _err(
@@ -263,9 +224,9 @@ async def create_project(payload: dict, session: AsyncSession = Depends(get_sess
     storage.ensure_dirs(project.id)
     # The staged upload moves under the project so cleanup is a single rmtree.
     if source_kind == "upload" and upload_path:
-        dest = storage.paths(project.id)["source_dir"] / Path(upload_path).name
+        dest = storage.paths(project.id)["source_dir"] / staged.name
         try:
-            Path(upload_path).replace(dest)
+            staged.replace(dest)
             project.video_path = str(dest)
             await session.commit()
         except OSError:
@@ -319,16 +280,14 @@ async def _load_project(session: AsyncSession, project_id: str) -> ProjectModel:
     return project
 
 
-@router.get("/projects/{project_id}")
-async def get_project(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    """Full project: candidates in rank order plus the job currently running,
-    which is everything the detail page needs to re-derive its state after a
-    reload."""
-    project = await _load_project(session, project_id)
+async def _board(session: AsyncSession, project: ProjectModel) -> list[dict]:
+    """The project's clips in board order, each with its effective caption policy
+    and its `last_preview` (one query for the board, D2r-3)."""
+    from services.clipper.project_attempts import clip_cards
 
     clips = await session.execute(
         select(ClipModel)
-        .where(ClipModel.project_id == project_id)
+        .where(ClipModel.project_id == project.id)
         .order_by(
             # NULLs last so unranked candidates don't jump to the top.
             ClipModel.rank_position.is_(None),
@@ -336,6 +295,24 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_sessi
             ClipModel.start_time,
         )
     )
+    return await clip_cards(session, list(clips.scalars().all()), project)
+
+
+@router.get("/projects/{project_id}")
+async def get_project(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    """Full project: candidates in rank order plus the job currently running,
+    which is everything the detail page needs to re-derive its state after a
+    reload.
+
+    `error` is the latest ANALYSIS attempt's, never a clip job's, and
+    `retry_allowed` is the predicate `/retry` refuses by — both from
+    `project_attempts.analysis_state` (D2r-3). It used to be the latest failed
+    job of any type, so a discarded preview offered a rescore of a ready project.
+    """
+    from services.clipper.project_attempts import analysis_state
+
+    project = await _load_project(session, project_id)
+
     active = await session.execute(
         select(JobModel)
         .where(JobModel.project_id == project_id)
@@ -343,20 +320,12 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_sessi
         .order_by(JobModel.created_at.desc())
         .limit(1)
     )
-    last_failed = await session.execute(
-        select(JobModel)
-        .where(JobModel.project_id == project_id)
-        .where(JobModel.status == JobStatus.failed.value)
-        .order_by(JobModel.created_at.desc())
-        .limit(1)
-    )
-    failed_job = last_failed.scalar_one_or_none()
     active_job = active.scalar_one_or_none()
 
     payload = project_to_dict(project)
-    payload["clips"] = [clip_to_dict(c) for c in clips.scalars().all()]
+    payload["clips"] = await _board(session, project)
     payload["active_job"] = job_to_dict(active_job) if active_job else None
-    payload["error"] = failed_job.error if (failed_job and not active_job) else None
+    payload.update(await analysis_state(session, project))
     return payload
 
 
@@ -368,16 +337,60 @@ async def patch_settings(
 
     The override is intentionally free of validation against detection: the
     user is always allowed to disagree with the classifier (brief §16).
+
+    `source_has_burned_captions` is classified apart from every other setting
+    (B2, PRPs/clipper-master-plan-2026-09-24.md §5): scoring never reads it, so
+    changing it alone queues no rescore, and the clips whose render it flips
+    are invalidated here, in the same transaction, or the request is refused
+    whole — see `apply_project_answer`.
     """
-    project = await _load_project(session, project_id)
+    from routers.clipper_caption_source import apply_project_answer
+    from services.clipper import caption_policy
+    from services.clipper.clip_mutations import begin_write
+
+    # B1's pattern (`clip_mutations.lock_clip`): SQLite's write lock BEFORE the
+    # read, so the `exporting` check on the affected clips sees the rows the
+    # write lands on — two backends share this DB, a claim can come from either.
+    # ONE BEGIN for the project and every inheriting clip (C4), never a
+    # `lock_clip` per clip; a lock held elsewhere is 503 `database_busy` (R4a).
+    await begin_write(session)
+    project = await session.get(ProjectModel, project_id, populate_existing=True)
+    if not project:
+        raise _err(404, "project_not_found", "That clip project no longer exists.")
 
     body = dict(payload or {})
+    scoring_changed = False
+    caption_source = {"changed": False, "affected_clip_ids": [],
+                      "invalidated_clip_ids": [], "export_cleared_clip_ids": []}
     if "settings" in body:
-        body["clipper_settings"] = _normalise_settings(body.pop("settings"))
+        stored = project.clipper_settings or {}
+        # Merged over what the project ALREADY has, not over the defaults. A
+        # PATCH is allowed to be partial, and normalising the partial dict on
+        # its own silently reverted every key it did not mention — including the
+        # two whose whole design is that an unrelated edit must not move them.
+        # The browser happens to post the entire object, which is why this went
+        # unseen; a hand-rolled call is not obliged to.
+        new = _normalise_settings({**stored, **dict(body.pop("settings") or {})})
+        # The EFFECTIVE delta, both sides normalised: a stored dict that merely
+        # lacks a key the rig now defaults is not a change. One that no longer
+        # normalises (a mode since withdrawn) counts as every key changed —
+        # the rescore it used to get.
+        try:
+            old = _normalise_settings(stored)
+        except HTTPException:
+            old = {}
+        delta = {k for k in set(new) | set(old) if k not in old or old[k] != new.get(k)}
+        scoring_changed = bool(delta - {caption_policy.SETTING})
+        if delta:
+            body["clipper_settings"] = new
+            caption_source = await apply_project_answer(
+                session, project, stored.get(caption_policy.SETTING),
+                new[caption_policy.SETTING])
 
     changed = apply_patch(project, body, PROJECT_PATCHABLE, PROJECT_PATCHABLE_JSON)
-    if changed:
-        await session.commit()
+    # Unconditional: it also ends the write lock. With nothing changed it is an
+    # empty transaction and writes nothing.
+    await session.commit()
 
     # Overriding the content type has to actually change something. The profile
     # picks the scoring weights AND the default layout, both of which were
@@ -386,10 +399,14 @@ async def patch_settings(
     # reuses the cached transcript, signals and candidates: seconds on a short
     # source, a few minutes on a 6-hour one, and no re-download or re-transcribe.
     rescored_job: str | None = None
-    if "content_type_override" in changed or "clipper_settings" in changed:
-        from services.clipper import storage
+    if "content_type_override" in changed or scoring_changed:
+        from services.clipper import analysis_generation, storage
 
-        has_analysis = storage.artifact_exists(project_id, "candidates")
+        # OW1 (next-24 Q2): a rescore reads a verified, current generation; any
+        # other analysis (legacy flat files, an old or broken generation) is
+        # rebuilt ONCE into one first — the analyze job schedules the score.
+        ctx = await asyncio.to_thread(analysis_generation.open_for, project)
+        has_analysis = ctx.current or storage.artifact_exists(project_id, "candidates")
         busy = await session.execute(
             select(JobModel)
             .where(JobModel.project_id == project_id)
@@ -399,14 +416,18 @@ async def patch_settings(
         if has_analysis and busy.scalar_one_or_none() is None:
             rescored_job = await job_queue.enqueue(
                 project_id=project_id,
-                job_type=JobType.clipper_score.value,
-                metadata={"stage": "rescore"},
+                job_type=(JobType.clipper_score.value if ctx.current
+                          else JobType.clipper_analyze.value),
+                metadata={"stage": "rescore", "launched_by": "api",
+                          **({"generation": ctx.generation} if ctx.current else {})},
             )
 
     return {
         "project": project_to_dict(project),
         "changed": changed,
         "rescore_job_id": rescored_job,
+        "caption_source": caption_source,
+        "clips": await _board(session, project),
     }
 
 
@@ -447,165 +468,3 @@ async def delete_project(project_id: str, session: AsyncSession = Depends(get_se
 
 
 # ── Pipeline control ────────────────────────────────────────────────────────
-
-
-@router.post("/projects/{project_id}/analyze")
-async def start_analysis(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    """Enqueue the analysis pipeline. One run at a time per project."""
-    project = await _load_project(session, project_id)
-
-    running = await session.execute(
-        select(JobModel)
-        .where(JobModel.project_id == project_id)
-        .where(JobModel.status.in_([JobStatus.queued.value, JobStatus.running.value]))
-        .limit(1)
-    )
-    if (existing := running.scalar_one_or_none()) is not None:
-        return {"job_id": existing.id, "already_running": True}
-
-    project.status = ProjectStatus.pending.value
-    project.analysis_version = ANALYSIS_VERSION
-    await session.commit()
-
-    job_id = await job_queue.enqueue(
-        project_id=project_id,
-        job_type=JobType.clipper_ingest.value,
-        metadata={"stage": "full"},
-    )
-    return {"job_id": job_id, "already_running": False}
-
-
-@router.post("/projects/{project_id}/cancel")
-async def cancel_analysis(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    await _load_project(session, project_id)
-    jobs = await session.execute(
-        select(JobModel)
-        .where(JobModel.project_id == project_id)
-        .where(JobModel.status.in_([JobStatus.queued.value, JobStatus.running.value]))
-    )
-    cancelled = []
-    for job in jobs.scalars():
-        await job_queue.cancel_job(job.id)
-        cancelled.append(job.id)
-    return {"cancelled": cancelled}
-
-
-@router.post("/projects/{project_id}/retry")
-async def retry_analysis(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    """Retry from the furthest stage whose artifacts already exist.
-
-    Re-downloading a 4 GB VOD because scoring crashed would be indefensible, so
-    each completed stage's output on disk acts as a checkpoint.
-    """
-    from services.clipper import storage
-
-    project = await _load_project(session, project_id)
-
-    paths = storage.paths(project_id)
-    if storage.artifact_exists(project_id, "signals") and paths["proxy"].exists():
-        resume = JobType.clipper_score.value if storage.artifact_exists(
-            project_id, "candidates"
-        ) else JobType.clipper_analyze.value
-    elif paths["proxy"].exists() and paths["audio"].exists():
-        resume = JobType.clipper_transcribe.value
-    else:
-        resume = JobType.clipper_ingest.value
-
-    project.status = ProjectStatus.pending.value
-    await session.commit()
-
-    job_id = await job_queue.enqueue(
-        project_id=project_id, job_type=resume, metadata={"stage": "resume"}
-    )
-    logger.info(f"clipper retry for {project_id} resuming at {resume}")
-    return {"job_id": job_id, "resumed_at": resume}
-
-
-@router.get("/projects/{project_id}/artifacts/{name}")
-async def get_artifact(
-    project_id: str, name: str, session: AsyncSession = Depends(get_session)
-) -> Any:
-    """Read one cached analysis artifact. `name` is checked against a fixed
-    allowlist inside storage, so this cannot be walked into another directory."""
-    from services.clipper import storage
-
-    await _load_project(session, project_id)
-    try:
-        data = storage.read_artifact(project_id, name)
-    except ValueError as exc:
-        raise _err(400, "unknown_artifact", str(exc)) from exc
-    if data is None:
-        raise _err(404, "artifact_not_found", f"No {name} artifact for this project yet.")
-    return data
-
-
-# ── Presets + ranker ────────────────────────────────────────────────────────
-
-
-@router.get("/presets")
-async def list_presets() -> dict:
-    """Caption presets, straight from the existing preset store so the clipper
-    and the rest of the app never drift apart."""
-    from services.captioner_presets import DEFAULT_PRESETS
-
-    return {
-        "presets": [
-            {
-                "id": key,
-                "name": preset.get("name", key),
-                "font_family": preset.get("font_family", ""),
-                "font_size": preset.get("font_size", 64),
-                "text_color": preset.get("text_color", "#FFFFFF"),
-                "highlight_color": preset.get("highlight_color", "#FFD700"),
-                "uppercase": bool(preset.get("uppercase", False)),
-                "position": preset.get("position", "bottom"),
-            }
-            for key, preset in DEFAULT_PRESETS.items()
-        ]
-    }
-
-
-@router.get("/ranker")
-async def ranker_status(session: AsyncSession = Depends(get_session)) -> dict:
-    from services.clipper import feedback, ranker
-
-    model = ranker.load_model()
-    rows = await feedback.training_rows(session)
-    return {
-        "enabled": settings.clipper_ranker_enabled,
-        "version": (model or {}).get("version"),
-        "trained_at": (model or {}).get("trained_at"),
-        "training_examples": len(rows),
-        "min_training_examples": ranker.MIN_TRAINING_EXAMPLES,
-        "active": bool(
-            settings.clipper_ranker_enabled and ranker.should_use_learned(model, len(rows))
-        ),
-        "metrics": (model or {}).get("metrics"),
-    }
-
-
-@router.post("/ranker/train")
-async def train_ranker(session: AsyncSession = Depends(get_session)) -> dict:
-    """Train the baseline ranker from stored feedback.
-
-    Deliberately synchronous: on any realistic dataset this is a sub-second
-    numpy fit, and a job would add more machinery than it saves.
-    """
-    from services.clipper import feedback, ranker
-
-    rows = await feedback.training_rows(session)
-    if len(rows) < ranker.MIN_TRAINING_EXAMPLES:
-        return {
-            "trained": False,
-            "reason": (
-                f"Need at least {ranker.MIN_TRAINING_EXAMPLES} reviewed clips to train; "
-                f"there are {len(rows)}."
-            ),
-            "training_examples": len(rows),
-        }
-
-    model = ranker.train(rows)
-    ranker.save_model(model)
-    logger.info(f"clipper ranker trained on {len(rows)} rows: {model.get('metrics')}")
-    return {"trained": True, "training_examples": len(rows), "metrics": model.get("metrics"),
-            "version": model.get("version")}

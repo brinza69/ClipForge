@@ -6,14 +6,21 @@ SQLite-backed async job queue for media processing tasks.
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+import os
+import socket
+import uuid
+from datetime import datetime
 from typing import Optional, Callable, Dict, Any
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from database import async_session
+import job_recovery
+from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
+from job_rows import add_job, new_job_row
 from models import JobModel, JobStatus, JobType, ProjectModel
+from services.clipper import attempt_stop
 
 logger = logging.getLogger("clipforge.queue")
 
@@ -46,18 +53,37 @@ DOODLE_LANE_TYPES = frozenset(
     }
 )
 DOODLE_LANE_LIMIT = 2
+# Jobs about ONE clip. Their failure or cancel never writes the project row.
+_CLIP_SCOPED_TYPES = frozenset({"clipper_preview", "clipper_export"})
 
 
 class JobQueue:
     """Manages background processing jobs with SQLite persistence."""
 
+    LEASE_SECONDS = 120.0
+    HEARTBEAT_SECONDS = 10.0
+    MAX_RECOVER = 50
+
     def __init__(self):
         self._handlers: Dict[str, Callable] = {}
         self._running_jobs: Dict[str, asyncio.Task] = {}
         self._running_types: Dict[str, str] = {}   # job_id -> job type (lane bookkeeping)
+        # job_id -> the REGISTERED task's attempt. One process can run two attempts of one job
+        # (its own retry after a lease loss); only the registered one's end may unregister (AQ1).
+        self._running_attempts: Dict[str, int] = {}
         self._cancelled_jobs = set()
+        self._lost_ownership_jobs: Dict[str, set] = {}   # job_id -> the attempts that lost it
+        self.worker_id = (
+            f"{socket.gethostname()[:80]}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
+        )
         self._processor_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
+        self._ready = False
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether startup recovery completed and the processor is serving."""
+        return self._ready
 
     def register_handler(self, job_type: str, handler: Callable):
         """Register a handler function for a job type."""
@@ -70,18 +96,41 @@ class JobQueue:
         job_type: str,
         clip_id: Optional[str] = None,
         metadata: Optional[dict] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
         """Add a job to the queue. Returns job ID."""
+        key = str(idempotency_key) if idempotency_key else None
         async with async_session() as session:
-            job = JobModel(
-                project_id=project_id,
-                clip_id=clip_id,
-                type=job_type,
-                status=JobStatus.queued.value,
-                metadata_json=json.dumps(metadata) if metadata else None,
-            )
+            if key:
+                existing = await session.scalar(
+                    select(JobModel.id)
+                    .where(JobModel.idempotency_key == key)
+                    .where(JobModel.status.in_([
+                        JobStatus.queued.value, JobStatus.running.value
+                    ]))
+                    .limit(1)
+                )
+                if existing:
+                    return existing
+            job = new_job_row(project_id, job_type, clip_id, metadata, key)
             session.add(job)
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                if not key:
+                    raise
+                existing = await session.scalar(
+                    select(JobModel.id)
+                    .where(JobModel.idempotency_key == key)
+                    .where(JobModel.status.in_([
+                        JobStatus.queued.value, JobStatus.running.value
+                    ]))
+                    .limit(1)
+                )
+                if not existing:
+                    raise
+                return existing
             await session.refresh(job)
             logger.info(f"Enqueued job {job.id} [{job_type}] for project {project_id}")
             return job.id
@@ -93,24 +142,16 @@ class JobQueue:
         message: str = "",
     ):
         """Update job progress (0.0 - 1.0)."""
-        async with async_session() as session:
-            await session.execute(
-                update(JobModel)
-                .where(JobModel.id == job_id)
-                .values(
-                    progress=progress,
-                    progress_message=message,
-                    updated_at=datetime.utcnow(),
-                )
-            )
-            await session.commit()
+        return await job_recovery.update_progress(self, job_id, progress, message)
 
-    async def complete_job(self, job_id: str):
-        """Mark a job as completed."""
+    async def complete_job(self, job_id: str, *, owner_id: Optional[str] = None,
+                           attempt: Optional[int] = None):
+        """Mark a job as completed. `attempt`: only while the row is still that attempt (R1c)."""
         async with async_session() as session:
-            await session.execute(
+            query = (
                 update(JobModel)
                 .where(JobModel.id == job_id)
+                .where(JobModel.status == JobStatus.running.value)
                 .values(
                     status=JobStatus.done.value,
                     progress=1.0,
@@ -118,169 +159,184 @@ class JobQueue:
                     updated_at=datetime.utcnow(),
                 )
             )
+            if owner_id is not None:
+                query = query.where(JobModel.worker_id == owner_id)
+            if attempt is not None:
+                query = query.where(JobModel.attempt_count == attempt)
+            result = await session.execute(query)
             await session.commit()
-        self._running_jobs.pop(job_id, None)
-        self._running_types.pop(job_id, None)
-        logger.info(f"Job {job_id} completed")
+        self._unregister(job_id, attempt)
+        if result.rowcount == 1:
+            self._cancelled_jobs.discard(job_id)
+            logger.info(f"Job {job_id} completed")
+        else:
+            logger.warning(
+                f"Ignored completion for job {job_id}: it was no longer running"
+            )
 
-    async def fail_job(self, job_id: str, error: str):
-        """Mark a job as failed."""
-        from models import ProjectStatus, ClipModel, ClipStatus
+    async def fail_job(
+        self,
+        job_id: str,
+        error: str,
+        *,
+        owner_id: Optional[str] = None,
+        attempt: Optional[int] = None,
+    ):
+        """Mark a job as failed. `attempt`: only while the row is still that attempt (R1c)."""
+        from models import ProjectStatus
+        from services.clipper.clip_mutations import release_export_claim
+        error_text = str(error)[:800]
         async with async_session() as session:
-            job = await session.get(JobModel, job_id)
+            query = update(JobModel).where(JobModel.id == job_id)
+            if owner_id is not None:
+                query = query.where(
+                    JobModel.status == JobStatus.running.value,
+                    JobModel.worker_id == owner_id,
+                )
+            else:
+                query = query.where(
+                    JobModel.status == JobStatus.queued.value,
+                    JobModel.worker_id.is_(None),
+                )
+            if attempt is not None:
+                query = query.where(JobModel.attempt_count == attempt)
+            result = await session.execute(
+                query.values(
+                    status=JobStatus.failed.value,
+                    error=error_text,
+                    updated_at=datetime.utcnow(),
+                )
+            )
+
+            job = await session.get(JobModel, job_id) if result.rowcount == 1 else None
             if job:
-                job.status = JobStatus.failed.value
-                job.error = str(error)[:800]
-                job.updated_at = datetime.utcnow()
-                
-                if job.project_id:
+                # A clip-scoped job speaks for its clip, not its project: recovery
+                # reads a failed project as terminal and would fail another clip's
+                # live export (R4b review F1). Pipeline and other jobs as before.
+                if job.project_id and job.type not in _CLIP_SCOPED_TYPES:
                     project = await session.get(ProjectModel, job.project_id)
                     if project:
                         project.status = ProjectStatus.failed.value
-                        project.description = f"[{job.type} failed] {str(error)[:200]}"
-                
-                if job.clip_id:
-                    clip = await session.get(ClipModel, job.clip_id)
-                    if clip:
-                        clip.status = ClipStatus.failed.value
+                        project.description = f"[{job.type} failed] {error_text[:200]}"
+
+                # Only the clip's CURRENT export attempt frees it (R4b): a failed
+                # preview, or an export another attempt superseded, leaves it.
+                await release_export_claim(session, job)
 
             await session.commit()
-        self._running_jobs.pop(job_id, None)
-        self._running_types.pop(job_id, None)
+        self._unregister(job_id, attempt)
+        if result.rowcount != 1:
+            logger.warning(
+                f"Ignored failure for job {job_id}: it was already terminal or missing"
+            )
+            return
+
+        self._cancelled_jobs.discard(job_id)
         logger.error(f"Job {job_id} failed: {error}")
         # Reclaim the failed job's scratch files (downloaded source, erased
         # video, per-variant dirs). Best-effort — never let cleanup mask the
         # original failure.
         await self._cleanup_workspace(job_id)
 
-    async def cancel_job(self, job_id: str):
-        """Cancel a running or queued job."""
-        self._cancelled_jobs.add(job_id)
-        if job_id in self._running_jobs:
-            self._running_jobs[job_id].cancel()
-            self._running_jobs.pop(job_id, None)
-            self._running_types.pop(job_id, None)
+    async def cancel_job(self, job_id: str, *, owner_id: Optional[str] = None,
+                         attempt: Optional[int] = None):
+        """Cancel a running or queued job. `attempt`: only while the row is still that attempt (R1c).
+
+        With `attempt` — an invocation ending itself — nothing in memory moves before the row says it
+        is still that attempt: an old attempt's cancel neither flags nor stops the task that replaced
+        it (AQ1). Without it — a person's cancel — it stops the attempt registered now."""
+        flagged = attempt is None and job_id not in self._cancelled_jobs
+        if attempt is None:
+            self._cancelled_jobs.add(job_id)
+            task = self._running_jobs.get(job_id)
+            if task and task is not asyncio.current_task():
+                attempt_stop.signal(self, job_id, self._running_attempts.get(job_id))   # OW1 threads
+                task.cancel()
+                self._unregister(job_id, None)
 
         async with async_session() as session:
-            from models import ProjectStatus, ClipModel, ClipStatus
+            from models import ProjectStatus
+            from services.clipper.clip_mutations import release_export_claim
 
-            await session.execute(
+            query = (
                 update(JobModel)
                 .where(JobModel.id == job_id)
+                .where(
+                    JobModel.status.in_(
+                        (JobStatus.queued.value, JobStatus.running.value)
+                    )
+                )
                 .values(
                     status=JobStatus.cancelled.value,
+                    cancellation_requested=True,
+                    worker_id=None,
+                    lease_expires_at=None,
+                    last_heartbeat=None,
                     updated_at=datetime.utcnow(),
                 )
             )
+            if owner_id is not None:
+                query = query.where(
+                    (JobModel.status == JobStatus.running.value)
+                    & (JobModel.worker_id == owner_id)
+                )
+            if attempt is not None:
+                query = query.where(JobModel.attempt_count == attempt)
+            result = await session.execute(query)
 
             # Keep parent project state consistent with the user's cancellation.
             job = await session.get(JobModel, job_id)
-            if job and job.project_id:
+            transitioned = result.rowcount == 1
+            if transitioned and job and job.project_id and job.type not in _CLIP_SCOPED_TYPES:
                 project = await session.get(ProjectModel, job.project_id)
                 if project and project.status not in (ProjectStatus.failed.value, ProjectStatus.cancelled.value):
                     project.status = ProjectStatus.cancelled.value
-                    await session.commit()
-                    await session.refresh(project)
 
-            # Best-effort clip state update (mainly for export jobs).
-            if job and job.clip_id:
-                clip = await session.get(ClipModel, job.clip_id)
-                if clip and clip.status not in (ClipStatus.exported.value, ClipStatus.failed.value, ClipStatus.rejected.value):
-                    clip.status = ClipStatus.failed.value
+            # The clip moves only for its current export attempt (R4b), as in fail_job.
+            if transitioned and job:
+                await release_export_claim(session, job)
 
             await session.commit()
-        logger.info(f"Job {job_id} cancelled")
+        if transitioned:
+            attempt_stop.signal(self, job_id, attempt)   # OW1: the attempt the row confirmed, if any
+            if attempt is not None and self._running_attempts.get(job_id) == attempt:
+                self._cancelled_jobs.add(job_id)
+            logger.info(f"Job {job_id} cancelled")
+        elif job and job.status == JobStatus.cancelled.value:
+            logger.info(f"Job {job_id} was already cancelled")
+        else:
+            if flagged:
+                self._cancelled_jobs.discard(job_id)
+            logger.warning(
+                f"Ignored cancellation for job {job_id}: it was already terminal or missing"
+            )
+            return
         # Reclaim scratch files for the cancelled job.
         await self._cleanup_workspace(job_id)
 
     async def _cleanup_workspace(self, job_id: str):
-        """Best-effort disk cleanup for a cancelled/failed job's project dir.
-        Runs the blocking rmtree in a thread so we don't stall the loop."""
-        try:
-            async with async_session() as session:
-                job = await session.get(JobModel, job_id)
-            project_id = job.project_id if job else None
-            if not project_id:
-                return
-            from services.cleanup import cleanup_job_workspace
-            loop = asyncio.get_event_loop()
-            stats = await loop.run_in_executor(
-                None, lambda: cleanup_job_workspace(project_id)
-            )
-            if stats.get("freed_bytes"):
-                logger.info(
-                    f"Job {job_id}: freed {stats['freed_bytes'] // (1024*1024)} MB "
-                    f"of scratch files"
-                )
-        except Exception:
-            logger.exception(f"workspace cleanup for {job_id} failed")
+        return await job_recovery._cleanup_workspace(self, job_id)
 
     def is_cancelled(self, job_id: str) -> bool:
         return job_id in self._cancelled_jobs
 
+    def _unregister(self, job_id: str, attempt: Optional[int]) -> None:
+        return job_recovery._unregister(self, job_id, attempt)
+
+    async def _heartbeat_once(self, job_id: str, owner: Optional[asyncio.Task] = None) -> bool:
+        return await job_recovery._heartbeat_once(self, job_id, owner)
+
+    async def _heartbeat_loop(self, job_id: str, owner: Optional[asyncio.Task] = None) -> None:
+        return await job_recovery._heartbeat_loop(self, job_id, owner)
+
+    async def _requeue_owned_job(self, job_id: str) -> bool:
+        return await job_recovery._requeue_owned_job(self, job_id)
+
     async def recover_stuck_jobs(self):
-        """
-        On startup, recover EVERY job left in `running` state. A job in
-        `running` when the process starts can only mean the previous process
-        died mid-job (crash, hard kill, or — common in dev — a restart). The
-        old 30-minute threshold left fresh jobs showing "running" for half an
-        hour after every restart; with `--reload` off and manual restarts
-        that's a constant annoyance. We requeue them all instead.
-        """
-        from models import ProjectStatus
+        return await job_recovery.recover_stuck_jobs(self)
 
-        now = datetime.utcnow()
-
-        async with async_session() as session:
-            result = await session.execute(
-                select(JobModel).where(JobModel.status == JobStatus.running.value)
-            )
-            stuck_jobs = result.scalars().all()
-            if not stuck_jobs:
-                return
-
-            # Sanity cap: if the table somehow has a flood of orphans, don't
-            # requeue them all (that could thrash on a corrupt DB). Mark the
-            # overflow failed and log loudly.
-            MAX_RECOVER = 50
-            if len(stuck_jobs) > MAX_RECOVER:
-                logger.warning(
-                    f"{len(stuck_jobs)} jobs stuck in running — only requeueing the "
-                    f"first {MAX_RECOVER}, failing the rest."
-                )
-
-            requeued = 0
-            failed = 0
-            for i, job in enumerate(stuck_jobs):
-                project = await session.get(ProjectModel, job.project_id)
-                terminal = project and project.status in (
-                    ProjectStatus.cancelled.value, ProjectStatus.failed.value,
-                )
-                if terminal or i >= MAX_RECOVER:
-                    job.status = JobStatus.failed.value
-                    job.error = (
-                        "Recovered from stuck running state; "
-                        + ("project is terminal." if terminal else "recovery cap exceeded.")
-                    )
-                    job.progress_message = "Recovered: not requeued."
-                    failed += 1
-                    continue
-
-                job.status = JobStatus.queued.value
-                job.progress = min(job.progress or 0.0, 0.05)
-                job.progress_message = (
-                    f"Recovered from backend restart at "
-                    f"{now.strftime('%H:%M:%S')} — requeued."
-                )
-                job.error = None
-                job.updated_at = datetime.utcnow()
-                requeued += 1
-
-            await session.commit()
-            logger.warning(
-                f"Stuck-job recovery: requeued {requeued}, failed {failed} "
-                f"(of {len(stuck_jobs)} running on startup)."
-            )
+    async def _claim(self, session, job_id: str) -> Optional[ClaimedAttempt]:
+        return await job_recovery._claim(self, session, job_id)
 
     async def _process_next(self):
         """Pick up the next queued job and execute it. Two lanes: heavy media
@@ -327,16 +383,22 @@ class JobQueue:
                 await self.fail_job(job.id, f"No handler registered for job type: {job.type}")
                 return
 
-            # Mark as running
-            await session.execute(
-                update(JobModel)
-                .where(JobModel.id == job.id)
-                .values(
-                    status=JobStatus.running.value,
-                    updated_at=datetime.utcnow(),
-                )
-            )
-            await session.commit()
+            # Mark as running — and only if it is still queued. The SELECT
+            # above and this UPDATE are two statements, so without the extra
+            # WHERE two processes can both read the same `queued` row and both
+            # decide to run it. That is not hypothetical here: start_all.ps1
+            # runs a SECOND backend on 8421 against the same clipforge.db, and
+            # a job claimed twice means the same ingest downloading twice, the
+            # same export writing the same file, and progress that oscillates
+            # between two writers.
+            #
+            # SQLite serialises writers, so the loser sees the committed
+            # `running` and matches nothing. The returned attempt is the whole
+            # signal, and the handler's identity from here on (R1c).
+            claimed = await self._claim(session, job.id)
+            if claimed is None:
+                logger.debug("job %s was claimed by another worker", job.id)
+                return
 
             # Capture job info before session closes
             job_id = job.id
@@ -347,6 +409,16 @@ class JobQueue:
 
         # Run handler in a background task
         async def _run():
+            # This task's own context: the handler, and what it awaits or starts, run as the
+            # claimed attempt. Its end changes the row only while the row is still that attempt.
+            CLAIMED_ATTEMPT.set(claimed)
+            mine = {"owner_id": claimed.worker, "attempt": claimed.attempt}
+            # Its heartbeat stops THIS task on a loss, never one that replaced it (AQ1).
+            heartbeat_task = asyncio.create_task(self._heartbeat_loop(job_id, asyncio.current_task()))
+
+            def lost() -> bool:
+                return claimed.attempt in self._lost_ownership_jobs.get(job_id, ())
+
             try:
                 await handler(
                     job_id=job_id,
@@ -355,77 +427,69 @@ class JobQueue:
                     metadata=job_metadata,
                     queue=self,
                 )
-                await self.complete_job(job_id)
-            except (asyncio.CancelledError, JobCancelledError):
-                await self.cancel_job(job_id)
+                if not lost():
+                    await self.complete_job(job_id, **mine)
+            except asyncio.CancelledError:
+                if lost():
+                    logger.warning("Stopped stale worker for job %s", job_id)
+                elif self._stop_event.is_set():
+                    await self._requeue_owned_job(job_id)
+                else:
+                    await self.cancel_job(job_id, **mine)
+            except JobCancelledError:
+                if lost():
+                    logger.warning("Cancelled stale worker for job %s", job_id)
+                elif self._stop_event.is_set():
+                    await self._requeue_owned_job(job_id)
+                else:
+                    await self.cancel_job(job_id, **mine)
             except Exception as e:
                 logger.exception(f"Job {job_id} failed with exception")
-                await self.fail_job(job_id, str(e))
+                if not lost():
+                    await self.fail_job(job_id, str(e), **mine)
+            finally:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
+                attempts = self._lost_ownership_jobs.get(job_id)
+                if attempts is not None:
+                    attempts.discard(claimed.attempt)
+                    if not attempts:
+                        del self._lost_ownership_jobs[job_id]
+                if self._running_attempts.get(job_id) == claimed.attempt:
+                    self._unregister(job_id, claimed.attempt)
+                    self._cancelled_jobs.discard(job_id)
 
         task = asyncio.create_task(_run())
         self._running_jobs[job_id] = task
         self._running_types[job_id] = job_type
+        self._running_attempts[job_id] = claimed.attempt
         logger.info(f"Started job {job_id} [{job_type}]")
 
     async def start(self):
         """Start the background job processor loop."""
         logger.info("Job queue processor started")
         self._stop_event.clear()
+        self._ready = False
 
         try:
             await self.recover_stuck_jobs()
         except Exception:
             logger.exception("Failed to recover stuck jobs on startup")
+            return
 
-        while not self._stop_event.is_set():
-            try:
-                await self._process_next()
-            except Exception as e:
-                logger.exception("Error in job processor loop")
-            await asyncio.sleep(1)
+        self._ready = True
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    await self._process_next()
+                except Exception:
+                    logger.exception("Error in job processor loop")
+                await asyncio.sleep(1)
+        finally:
+            self._ready = False
 
     async def stop(self):
-        """Stop the job processor gracefully.
-
-        Marks in-flight jobs as interrupted (so the UI shows clearly what
-        happened and the next startup's recovery requeues them cleanly),
-        then cancels their tasks with a short grace period to let them flush
-        DB writes before the event loop tears down.
-        """
-        self._stop_event.set()
-
-        running = list(self._running_jobs.items())
-        if running:
-            # 1) Annotate in-flight jobs before cancelling.
-            try:
-                async with async_session() as session:
-                    for job_id, _task in running:
-                        await session.execute(
-                            update(JobModel)
-                            .where(JobModel.id == job_id)
-                            .values(
-                                progress_message="Interrupted by backend shutdown.",
-                                updated_at=datetime.utcnow(),
-                            )
-                        )
-                    await session.commit()
-            except Exception:
-                logger.exception("could not annotate jobs on shutdown")
-
-            # 2) Cancel and give them up to 5s to wind down.
-            for _job_id, task in running:
-                task.cancel()
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*(t for _, t in running), return_exceptions=True),
-                    timeout=5,
-                )
-            except (asyncio.TimeoutError, Exception):
-                pass
-
-        self._running_jobs.clear()
-        self._running_types.clear()
-        logger.info("Job queue processor stopped")
+        return await job_recovery.stop(self)
 
 
 # Singleton

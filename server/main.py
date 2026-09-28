@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from database import init_db
+from database import SCHEMA_VERSION, async_session, init_db
 from routers.jobs import router as jobs_router
 from routers.utilities import router as utilities_router
 from routers.tts import router as tts_router
@@ -148,10 +148,20 @@ app.include_router(doodle_router)
 
 if settings.clipper_enabled:
     from routers.clipper import router as clipper_router
+    from routers.clipper_caption_source import router as clipper_caption_source_router
     from routers.clipper_clips import router as clipper_clips_router
+    from routers.clipper_reaction import router as clipper_reaction_router
+    from routers.clipper_review import router as clipper_review_router
+    from routers.clipper_runs import router as clipper_runs_router
+    from routers.clipper_source_treatment import router as clipper_source_treatment_router
 
     app.include_router(clipper_router)
     app.include_router(clipper_clips_router)
+    app.include_router(clipper_caption_source_router)
+    app.include_router(clipper_source_treatment_router)
+    app.include_router(clipper_reaction_router)
+    app.include_router(clipper_runs_router)
+    app.include_router(clipper_review_router)
 
 # Ensure every StaticFiles mount dir exists — a fresh/second data dir (e.g.
 # data_b/) may be missing one (doodle/), which otherwise crashes uvicorn on
@@ -170,6 +180,42 @@ app.mount("/doodle-files", StaticFiles(directory=settings.doodle_dir), name="doo
 async def health():
     """Health check endpoint."""
     return {"status": "ok", "service": "clipforge-worker"}
+
+
+@app.get("/api/ready")
+async def readiness():
+    """Readiness probe for the database, schema, directories and job queue."""
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import text
+
+    checks = {
+        "database": False,
+        "directories": False,
+        "job_queue": job_queue.is_ready,
+    }
+    try:
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+            result = await session.execute(
+                text("SELECT value FROM schema_meta WHERE key = 'schema_version'")
+            )
+            checks["database"] = result.scalar_one_or_none() == SCHEMA_VERSION
+    except Exception:
+        logger.exception("readiness database check failed")
+
+    required_dirs = (
+        settings.data_dir,
+        settings.db_path.parent,
+        settings.media_dir,
+        settings.temp_dir,
+        settings.clipper_dir,
+    )
+    checks["directories"] = all(path.is_dir() for path in required_dirs)
+    ready = all(checks.values())
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "not_ready", "checks": checks},
+    )
 
 
 @app.get("/api/system")

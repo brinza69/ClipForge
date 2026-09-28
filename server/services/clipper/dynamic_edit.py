@@ -35,6 +35,12 @@ logger = logging.getLogger("clipforge.clipper.dynamic_edit")
 
 __all__ = ["DEFAULT_STYLE", "CAMERAS", "camera_rects", "plan_dynamic_edit"]
 
+from services.clipper import dynamic_geometry
+from services.clipper import series
+from services.clipper import dynamic_subject as subject_mod
+from services.clipper.dynamic_face_framing import face_framing
+from services.clipper.dynamic_face_envelope import (apply_local_envelope, elected_spans,
+                                                    compute_framing_span)
 from services.clipper.dynamic_cameras import (   # noqa: F401  (re-exported)
     ASPECT,
     CAMERAS,
@@ -67,16 +73,16 @@ _EMPHATIC = re.compile(r"[!?]")
 
 
 def _pct(sorted_values: Sequence[float], q: float) -> float:
-    if not sorted_values:
-        return 0.0
-    idx = min(len(sorted_values) - 1, max(0, int(q * (len(sorted_values) - 1))))
-    return float(sorted_values[idx])
+    # Shared with `dynamic_regimes` through `series`, for the reason written
+    # there: two copies of one rule are one drift away from being two rules.
+    return series.percentile(sorted_values, q)
 
 
 def _norm(value: float, lo: float, hi: float) -> float:
-    if hi - lo <= 1e-9:
-        return 0.5
-    return min(1.0, max(0.0, (value - lo) / (hi - lo)))
+    # THE shared implementation, not a copy of it. `dynamic_regimes` scales a
+    # different population — samples rather than per-shot means — and that
+    # difference is deliberate; the arithmetic underneath must not diverge.
+    return series.scale(value, lo, hi)
 
 
 def _series_mean(values: Sequence[float], hop: float, t0: float, t1: float) -> float:
@@ -89,81 +95,6 @@ def _series_mean(values: Sequence[float], hop: float, t0: float, t1: float) -> f
 
 
 
-
-
-# ---------------------------------------------------------------------------
-# where to cut
-# ---------------------------------------------------------------------------
-
-def _boundaries(words: Sequence[dict], peaks: Sequence[float],
-                scenes: Sequence[float], clip_start: float, duration: float,
-                style: dict) -> list[tuple[float, float]]:
-    """Candidate cut points as [(t, weight)], clip-relative.
-
-    Weight is "how natural a cut here would sound". Speech pauses win, because
-    a cut inside a word is the one artefact a viewer always notices; a source
-    scene cut is close behind, since the source already cut there.
-    """
-    gap_min = _f(style.get("pause_gap_s"), 0.14)
-    out: list[tuple[float, float]] = []
-
-    prev_end: float | None = None
-    prev_text = ""
-    for w in words or []:
-        ws = _f(w.get("start")) - clip_start
-        we = _f(w.get("end"), _f(w.get("start"))) - clip_start
-        if prev_end is not None and 0.0 < ws < duration:
-            gap = ws - prev_end
-            if gap >= gap_min:
-                weight = 1.0 + min(1.0, gap / 0.7)
-                if _SENTENCE_END.search(prev_text.strip()):
-                    weight += 0.8
-                out.append((max(0.0, (prev_end + ws) / 2.0), weight))
-            elif _SENTENCE_END.search(prev_text.strip()):
-                out.append((max(0.0, prev_end), 1.2))
-        prev_end, prev_text = we, str(w.get("word") or "")
-
-    for t in scenes or []:
-        rel = _f(t) - clip_start
-        if 0.0 < rel < duration:
-            out.append((rel, 1.6))
-    for t in peaks or []:
-        rel = _f(t) - clip_start
-        if 0.0 < rel < duration:
-            out.append((rel, 0.7))
-
-    out.sort(key=lambda b: b[0])
-    return out
-
-
-def _cut_times(boundaries: Sequence[tuple[float, float]], duration: float,
-               style: dict) -> list[float]:
-    """Greedily walk the clip, taking the best-sounding boundary in range.
-
-    Falls back to a hard cut at the target length when a stretch offers nothing:
-    a six-second unbroken shot breaks the style far more visibly than a cut
-    landing mid-phrase.
-    """
-    lo = max(0.2, _f(style.get("min_shot_s"), DEFAULT_STYLE["min_shot_s"]))
-    target = max(lo, _f(style.get("target_shot_s"), DEFAULT_STYLE["target_shot_s"]))
-    hi = max(target, _f(style.get("max_shot_s"), DEFAULT_STYLE["max_shot_s"]))
-
-    cuts: list[float] = []
-    t = 0.0
-    while duration - t > hi:
-        window = [(bt, bw) for bt, bw in boundaries if t + lo <= bt <= t + hi]
-        if window:
-            # Prefer a strong boundary, tie-breaking toward the target length so
-            # the cadence stays even instead of clumping at one end.
-            nxt = max(window, key=lambda b: (b[1], -abs(b[0] - (t + target))))[0]
-        else:
-            nxt = t + target
-        cuts.append(round(max(nxt, t + lo), 3))
-        t = cuts[-1]
-
-    if cuts and duration - cuts[-1] < lo:      # absorb a runt tail
-        cuts.pop()
-    return cuts
 
 
 # ---------------------------------------------------------------------------
@@ -190,35 +121,6 @@ def _contains(rect: dict, x: float, y: float) -> bool:
     """Is the point inside the rectangle."""
     return (rect["x"] <= x <= rect["x"] + rect["w"]
             and rect["y"] <= y <= rect["y"] + rect["h"])
-
-
-def _merge_dead_cuts(shots: list[dict]) -> list[dict]:
-    """Join neighbours that crop the identical rectangle.
-
-    A cut is only a cut if the picture changes. Two adjacent shots on the same
-    rect give the viewer a beat where the edit claims something happened and
-    nothing did, which reads worse than not cutting at all.
-
-    This became reachable when the gameplay ladder collapsed: with
-    `game_height_pct` and `game_zoom` both at 1.00 the `game` and `game_tight`
-    rungs are the same rectangle, so a g->G step is a dead cut. Measured on the
-    18s reference clip, it removes exactly one cut at that setting and none at
-    the two wider ladders — this is not a general reshaping of the edit.
-
-    The later shot's `snap` goes with it: a snap exists to land a cut.
-    """
-    if len(shots) < 2:
-        return shots
-    out = [shots[0]]
-    for shot in shots[1:]:
-        last = out[-1]
-        if all(last["rect"][k] == shot["rect"][k] for k in ("x", "y", "w", "h")):
-            last["t1"] = shot["t1"]
-            continue
-        out.append(shot)
-    for i, shot in enumerate(out):
-        shot["index"] = i
-    return out
 
 
 def _rung(family: Sequence[str], energy: float,
@@ -316,12 +218,30 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
                       game_detail: Sequence[float] | None = None,
                       game_ui: Sequence[float] | None = None,
                       game_motion_hop: float = 0.25,
+                      stable_track: dict | None = None,
+                      no_second_camera: bool = False,
                       style: dict | None = None) -> dict:
     """Plan the shot list for one candidate.
 
     `face_track` is `[{"t": absolute seconds, "boxes": [[x, y, w, h], ...]}]` in
     PROXY pixels — the shape `signals.face_presence` returns, so a dense
     per-clip pass and the coarse whole-VOD track are interchangeable here.
+
+    `no_second_camera` says the SOURCE is a single camera — no facecam-over-
+    gameplay composite, no second guest window. NOT that it has one thing worth
+    framing: a speaker holding a watch up to the lens is one camera and two
+    targets, and that target is reached by a region built from local
+    observations, never by the fixed rectangle beside the face. It is a declared fact about the material, from
+    `layout_policy`, never a measurement taken here: the discriminators that
+    looked obvious are thresholds chosen on four sources with the answer
+    visible, and one of them is backwards. When it is set, the geometric second camera is never selected, through the
+    SAME path a dead gameplay region already takes.
+
+    It matters because `camera_rects` builds `game` from geometry alone —
+    "everything to the right of the facecam" — and on a single-camera source
+    that rectangle is the wall behind the speaker. Re-planned today,
+    `30d7c6d4eae5` spends 6.8 s of 18.1 s framed away from the only person in
+    the source while `speech` reads 0.75 to 0.83.
 
     `game_motion` is optional per-hop motion measured INSIDE the gameplay
     region. Without it the planner falls back to the whole-frame motion signal,
@@ -363,13 +283,44 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
 
     pw = int(proxy_w or _f(signals.get("proxy_width"), 0)) or src_w
     ph = int(proxy_h or _f(signals.get("proxy_height"), 0)) or src_h
+    # A source-wide fixed subject, when one was found. It arrives in PROXY
+    # pixels like everything else from the face track, and `_dominant` works in
+    # SOURCE pixels, so it is scaled here — the same trap `dynamic_edit`'s
+    # header warns about.
+    anchor = None
+    if isinstance(stable_track, dict) and stable_track.get("cx") is not None:
+        anchor = (float(stable_track["cx"]) * src_w / float(pw),
+                  float(stable_track["cy"]) * src_h / float(ph),
+                  float(stable_track.get("w") or 0.0) * src_w / float(pw))
+
+    sx, sy = src_w / float(pw), src_h / float(ph)
     samples, face = _dominant(
-        _face_samples(face_track, src_w / float(pw), src_h / float(ph), clip_start),
-        src_w, src_h)
+        _face_samples(face_track, sx, sy, clip_start),
+        src_w, src_h, anchor)
+    _spans = elected_spans(face_track, samples, sx, sy, clip_start)
+    fspan, fspan_basis = compute_framing_span(_spans, face["w"])
+    if anchor:
+        warnings.append(
+            "Framing on the source's fixed subject rather than the largest face "
+            f"in each window (spread {stable_track.get('spread')}px against "
+            f"{stable_track.get('runner_up')}px for the next cluster).")
     if not samples:
         warnings.append(
             "No face detected in this window; the facecam position is a guess.")
-    cams = camera_rects(face, merged, src_w, src_h)
+
+    # WHEN THERE IS ANYONE TO POINT AT, over the window. Built from the raw
+    # track rather than `samples`, because `_dominant` has already collapsed
+    # everything onto one cluster and a sequence with nobody in it is exactly
+    # what that collapse cannot express. See `dynamic_subject` for why the
+    # thresholds are what they are.
+    _rebased = [{"t": _f(f.get("t")) - clip_start, "boxes": f.get("boxes") or []}
+                for f in (face_track or []) if isinstance(f, dict)]
+    presence = subject_mod.presence_timeline(_rebased)
+    presence_raw = subject_mod.raw_presence(_rebased)
+    presence_hop = subject_mod._hop_of(
+        [{"t": _f(f.get("t")) - clip_start} for f in (face_track or [])
+         if isinstance(f, dict)])
+    cams = camera_rects(face, merged, src_w, src_h, framing_span=fspan)
     fallback = (face["cx"], face["cy"])
 
     words = cand.get("words") or []
@@ -413,7 +364,7 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
     push_min = _f(merged.get("push_min_shot_s"), 0.95)
 
     max_run = max(1, int(merged.get("max_same_family") or 2))
-    shots: list[dict] = []
+    shots, envelopes = [], []
     previous: str | None = None
     run = 0
     for i, (t0, t1) in enumerate(spans):
@@ -426,8 +377,14 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             energy = min(1.0, energy + 0.18)
 
         # "Alive" means all three: something moved, there is something there,
-        # and what is there is the game rather than its menus.
-        alive = (motions[i] > dead_below
+        # and what is there is the game rather than its menus. NONE of the
+        # three can tell a street from a stream: a road with lights and traffic
+        # moves, has detail, and is not a menu, so it passes every one of them
+        # and is still not a second subject. That is what `one_region` answers,
+        # and it answers it from a declaration rather than from a fourth
+        # threshold nobody calibrated.
+        alive = (not no_second_camera
+                 and motions[i] > dead_below
                  and (not details or details[i] > flat_below)
                  and (not uis or uis[i] < ui_above))
         camera = _pick_camera(ratio >= speech_on, action >= action_on,
@@ -441,22 +398,20 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
         previous = camera
 
         rect = dict(cams[camera])
+        framing_fit, framing_reason = False, None
         if camera in _FACE_CAMS:
             cx, cy = _centre_at(samples, t0, t1, fallback)
-            moved = _rect(0, rect["h"], cx, cy, CAMERAS[camera][1], src_w, src_h)
-            # A face shot whose crop does not contain the face is not a face
-            # shot. Re-centring per shot follows the subject, which is what it
-            # is for, but it follows THIS WINDOW'S detections — and the cluster
-            # centre is computed over the whole clip and is the stable one. When
-            # a window's detections are bad the crop walks off the inset the
-            # cluster had already located correctly.
-            #
-            # Found by Pass D on a real export, not by reading this: clip
-            # e8fa6b35ea66 shot 15 is `face_medium` at y=260 when the camera is
-            # at y=34 and the subject sits at cy=176. The frames are Minecraft
-            # dirt. Falling back to the camera rect is right because that rect
-            # is built around the cluster, which is the thing that was correct.
-            rect = moved if _contains(moved, face["cx"], face["cy"]) else dict(cams[camera])
+            rect, framing_fit, framing_reason = face_framing(
+                rect, (cx, cy), face, CAMERAS[camera][1], src_w, src_h,
+                anchored=anchor is not None,
+                observed_centres=[(x, y) for t, x, y, _ in samples if t0 <= t < t1])
+            if anchor is None:
+                mult, headroom = CAMERAS[camera]
+                rect, framing_fit, framing_reason, env_entry = apply_local_envelope(
+                    face_track, _spans, t0, t1, mult, headroom,
+                    fspan, src_w, src_h, clip_start, sx, sy,
+                    rect, framing_fit, framing_reason)
+                envelopes.append(env_entry)
         else:
             # Point the second camera at whatever actually moved in this shot,
             # falling back to the static action centre when nothing did.
@@ -483,9 +438,15 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             "action": round(action, 3),
             "speech": round(ratio, 3),
             "text": text[:120],
+            # Keep the presence-based choice unless conflicting face proposals
+            # require a wider frame than 9:16 can contain. That fallback does
+            # not assert that nobody is present; its reason rides on the shot.
+            "composition": "fit" if framing_fit else subject_mod.composition_for(
+                presence, t0, t1, presence_hop, presence_raw),
         })
-
-    shots = _merge_dead_cuts(shots)
+        if framing_reason:
+            shots[-1].update(move="hold", snap=False, shake=0.0,
+                             framing_adjustment=framing_reason)
 
     if not shots:
         warnings.append("The window was too short to cut; rendering it as one shot.")
@@ -498,12 +459,39 @@ def plan_dynamic_edit(cand: dict, signals: dict, face_track: Sequence[dict],
             "energy": 0.5, "action": 0.5, "speech": 0.0, "text": "",
         }]
 
-    return {
+    # OFF, and called anyway so the seam stays visible. The rule absorbed a
+    # brief `fit` run into `crop` on duration alone, and on 5 September a frame
+    # from `pilotee0e/aaf5f324e832` showed what that costs: a man cut off at the
+    # frame edge and a woman pushed to the bottom, over an interval the old
+    # export held whole. It needs evidence that the crop keeps the content, and
+    # nothing measures that yet — so `crop_keeps_content` is not passed and
+    # nothing is absorbed.
+    shots = dynamic_geometry.absorb_brief_fit_islands(shots)
+
+    # ONE merge, here, on the finished shot list — the fallback above included.
+    # It replaced `_merge_dead_cuts`, which compared the planned RECTANGLE and
+    # so could not see composition at all: two `fit` shots have different rects
+    # and deliver the identical full frame, which is how 116 invisible cuts
+    # reached the pilot corpus. A second pass after the planner would be too
+    # late; by then the plan no longer records what the absorbed shot was.
+    return dynamic_geometry.merge_equivalent_shots({
         "duration": round(duration, 3),
         "shots": shots,
         "hits": _hits(audio.get("peaks") or [], rms, hop, clip_start, duration, merged),
         "cameras": cams,
         "style": merged,
-        "subject": {"samples": len(samples), "face": face},
+        "subject": {"samples": len(samples), "face": face,
+                    "framing_span": round(fspan, 2),
+                    "framing_span_basis": fspan_basis,
+                    "elected_proposals": len(_spans), "framing_windows": envelopes,
+                    "framing_scope": "observed_centres_inside_existing_camera"},
         "warnings": warnings,
-    }
+    }, src_w, src_h)
+
+# Split out at the 500-line limit; re-exported so the worker, the tests and the
+# recipe keep one import for "the dynamic edit". Same pattern as
+# `dynamic_render` re-exporting from `dynamic_geometry`.
+from services.clipper.dynamic_cuts import (  # noqa: E402,F401
+    _boundaries,
+    _cut_times,
+)

@@ -17,7 +17,13 @@ from workers import clipper_build as build
 
 
 def _stamp(reasoning="story_v1", duration=1000.0):
-    return build._anchor_stamp({"reasoning_version": reasoning}, duration)
+    # `reasoning_mode`, not the `reasoning_version` this used to pass. That key
+    # only ever did anything alongside `llm_select`, so a cfg carrying it alone
+    # named a configuration that cannot occur — and the stamp recorded a mode
+    # the run was not in. The stamp now records the RESOLVED mode, which is what
+    # actually decides whether anchors get made and how.
+    # test_clipper_reasoning_mode.py keeps the old shape covered.
+    return build._anchor_stamp({"reasoning_mode": reasoning}, duration)
 
 
 @pytest.fixture
@@ -34,6 +40,10 @@ def store(monkeypatch):
 def test_a_cached_answer_comes_back(store):
     build._cache("p1", "anchors", _stamp(), [{"payoff_t": 12.0}])
     assert build._cached("p1", "anchors", _stamp()) == [{"payoff_t": 12.0}]
+    assert store["anchors"]["envelope_version"] == "reasoning_artifact_v1"
+    assert store["anchors"]["artifact"] == "anchors"
+    assert store["anchors"]["input_fingerprint"]
+    assert store["anchors"]["data_fingerprint"]
 
 
 def test_nothing_cached_reads_as_nothing(store):
@@ -66,7 +76,80 @@ def test_an_artifact_written_by_an_older_build_is_ignored(store):
     assert build._cached("p1", "anchors", _stamp()) is None
 
 
+def test_the_private_pre_s7_stamp_is_also_ignored(store):
+    """The old wrapper named some inputs but omitted transcript and upstream
+    artifacts.  Looking wrapped is not the same as satisfying the envelope."""
+    store["anchors"] = {"stamp": _stamp(), "data": [{"payoff_t": 12.0}]}
+    assert build._cached("p1", "anchors", _stamp()) is None
+
+
 def test_the_stamp_covers_what_changes_the_answer():
-    keys = set(_stamp())
-    assert {"prompt", "reasoning", "engines", "duration"} <= keys, (
-        "the stamp has to name everything that changes what the model is asked")
+    stamp = _stamp()
+    assert stamp["prompt_version"]
+    assert stamp["engines"]
+    assert stamp["chunk_config"]
+    assert stamp["temperature"] == 0.2
+    assert stamp["parameters"]["duration"] == 1000.0
+    assert stamp["parameters"]["reasoning"] == "story_v1"
+    assert set(stamp["upstream"]) == {
+        "promises", "atoms", "threads", "episodes",
+    }, "every value rendered into the anchor prompts is an upstream input"
+
+
+# ── cached artifacts have to have been made by this code, for this file ──────
+#
+# `retry_analysis` resumed from the furthest stage whose artifacts EXISTED, and
+# existence was the whole test. Both ways that goes wrong are already written
+# down in this repo: session 3 drew conclusions from a `faces.json` produced
+# before the detector was fixed, and repointing a project from a 480p cut to
+# the 1080p original produced garbage because an 854x480 plan FITS INSIDE a
+# 1920x1080 frame. `meta.json` has recorded the version and the source size
+# since the clipper shipped and nothing read them.
+
+
+def _meta(project_id, version, filesize):
+    from services.clipper import storage
+
+    storage.ensure_dirs(project_id)
+    storage.write_artifact(project_id, "meta", {
+        "analysis_version": version,
+        "source": {"duration": 12.0, "filesize": filesize},
+        "proxy": {"width": 480, "fps": 10},
+    })
+
+
+def test_matching_version_and_size_is_not_stale(tmp_path):
+    from services.clipper import ANALYSIS_VERSION, storage
+
+    media = tmp_path / "src.mp4"
+    media.write_bytes(bytes(4096))
+    _meta("stale-ok", ANALYSIS_VERSION, 4096)
+    assert storage.stale_artifacts("stale-ok", media) is None
+
+
+def test_a_different_analysis_version_is_stale(tmp_path):
+    from services.clipper import storage
+
+    media = tmp_path / "src.mp4"
+    media.write_bytes(bytes(4096))
+    _meta("stale-ver", "0", 4096)
+    reason = storage.stale_artifacts("stale-ver", media)
+    assert reason and "analysis_version" in reason
+
+
+def test_a_source_that_changed_size_is_stale(tmp_path):
+    """The 480p-to-1080p repoint, which no bounds check can catch."""
+    from services.clipper import ANALYSIS_VERSION, storage
+
+    media = tmp_path / "src.mp4"
+    media.write_bytes(bytes(999))
+    _meta("stale-src", ANALYSIS_VERSION, 4096)
+    reason = storage.stale_artifacts("stale-src", media)
+    assert reason and "source changed" in reason
+
+
+def test_no_meta_means_nothing_to_distrust(tmp_path):
+    from services.clipper import storage
+
+    storage.ensure_dirs("stale-none")
+    assert storage.stale_artifacts("stale-none", tmp_path / "missing.mp4") is None

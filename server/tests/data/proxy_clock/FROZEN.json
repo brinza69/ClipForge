@@ -1,0 +1,107 @@
+{
+ "files": {
+  "data/claude-master-20260924/B/gates/m0v2/addrlib.py": "c8ec66fcd691ae10455dd96e7059702d29af20d9bda785a409a134d206d348e1",
+  "data/claude-master-20260924/B/gates/m0v2/mediaio.py": "bf3503ef305530712fde06e6d62c9dcaf97803828dddd256eb32536a961f5acb",
+  "data/claude-master-20260924/B/gates/m0v2/tie_frames.py": "7d30a82f0657b4a5ae7c0838c315a83172b15bbf7091c9faf940cd539dc64b3c",
+  "data/claude-master-20260924/B/gates/m0v2/synth_probe.py": "68c731a8d90caf25fe087a0cc96bb0bf068115a93c4ba3e7c587d8b5ce97cd91",
+  "data/claude-master-20260924/B/gates/m0v2/provenance.py": "7c5cd0b4f0baf9d06ad8f4f4427e3ff0506c8712738c1c22cfe4cd7e3b3646ef",
+  "data/claude-master-20260924/B/gates/m0v2/m0v2_run.py": "569f5cf61c1c40ea708246470de4c39e66cc7396524f3c11e0fc636bddd248ca",
+  "data/claude-master-20260924/B/gates/m0v2/compare_v1_v2.py": "7a16f067ff19d918a54d1623be72bf0a2dd6d109dc3b0022644535a080ce258b",
+  "data/claude-master-20260924/B/gates/m0v2/order_check.py": "2b57c09d025a40fa5e52a22c295b95314078c5e49a63a390a8b411a108ea029f",
+  "data/claude-master-20260924/B/gates/m0v2/address_table.py": "90c08a213ccf848fcd577c91828b42902353beeb8e360cdc8268a2200ecd254d",
+  "data/claude-master-20260924/B/gates/m0v2/test_m0v2.py": "dcf42fdc1469da3be4dd4cb4247ed3f55bc40bfc78ff7d98e7fe0cd84d10d787",
+  "data/claude-master-20260924/B/gates/m0v2/conftest.py": "1944f8e1c87c6e103f16111a94d561e9e5a85e8b19b05e6cf19252c2b091084e",
+  "data/claude-master-20260924/B/gates/m0v2/freeze.py": "a163b7c781178fad460415a5f28e2ebe98c640c9bd13c6497b12d4c2fb40739b",
+  "data/claude-master-20260924/B/gates/m0v2/address_table.json": "bc476be55aac663d8cdc792b5d7aff658e730477d8700a867dd261e31b81c4f2",
+  "data/claude-master-20260924/B/gates/m0v2/address_table.md": "1d78fbc1f6a5a1669dc9ef908bc1f5d65096f437bbc70c49174b3ae63a292589",
+  "data/claude-master-20260924/B/gates/m0v2/tie_lot.json": "2d3b913129e41f57ee99bcbe47af2efb78bc6516ef87dc7b19b1a1a3014fe91f",
+  "data/claude-master-20260924/B/gates/m0v2/tie_dev.json": "a01cc5d2bca59ff7b17e5f7f4af834ef61801b9c0c4cb05bdbb327884280f93b",
+  "data/claude-master-20260924/B/gates/m0v2/provenance.json": "e7c79295a4b22cd722117495d1fa9dbe4e4c83e01d6745341a7c81bf2220b797",
+  "data/claude-master-20260924/B/gates/m0v2/synth_24_23.976_60_30_25_59.94.json": "8468b3b523cb5b068c2fb6cc076115db0acfadd306cf16a0401307286743d6c0",
+  "data/claude-master-20260924/B/gates/m0v2/out/m0_run.json": "b75fba16824f24c6e2483231140664769d7e7bc50c02d742d869b29b522d27ec",
+  "data/claude-master-20260924/B/gates/m0v2/compare.json": "4d6a2aa2b294cd6719d51510d038454da89a24aa8e14b6e7514b8af9587d30c1",
+  "data/claude-master-20260924/B/gates/m0v2/order_check.json": "5869a800e50e78778304309f1ae83bc78b862a52e573b93f827a0deab53f1495",
+  "data/claude-master-20260924/B/gates/m0v2/m0_score_v2.txt": "e0cacaefb8b2a79f0e975f1719da23e0708e3758a1bb6dd55c725cd64b88bcb4",
+  "data/claude-master-20260924/B/gates/m0v2/out/score_v2/labels_proposed.json": "27a20a05fbf683aaed44800b1a461f825eda71c9db893ecb010a4aecbd3bcb8e",
+  "data/claude-master-20260924/B/gates/m0v2/out/score_v2/labels_overrides.json": "73fed23e62b7828690c1b4ea54d5237deb6f09e908eca605130ec6666bec3999",
+  "data/claude-master-20260924/B/gates/m0/m0lib.py": "3798c1b5a7cf28ec87605e759e8d4fafe4fbce5cd24de471e99a9a20f1459018",
+  "data/claude-master-20260924/B/gates/m0/m0_run.py": "52c1bfed12c401b0e9281fc3023e44676c2c4e62c64da5f18b93f646507c4342",
+  "data/claude-master-20260924/B/gates/m0/m0_score.py": "26fc827c5add88b60564d412e68c4f588397d96596f9cd3bc809bfad096b45a0",
+  "data/claude-master-20260924/B/gates/m0/labels_overrides.json": "a8326c47e3a83aa7079f3d543effbbc495ba6b45927c53d95eb4dfe89b022662",
+  "data/claude-master-20260924/B/gates/m0/out_m7/labels_proposed.json": "df62ae088ea1e76cae158fddd4b8bbb689782d4eaaaad30a8f93312934e7bc10",
+  "data/claude-master-20260924/B/gates/m0/out_m7/m0_run.json": "40457066a049a6bcb33986d463b5163c2c464b8e79c60c7640213747954b7872",
+  "data/claude-master-20260924/B/gates/gatelog.py": "61c5e3361476fc280ca4c189a64385eaf6c527f023957d522dcc3810c29a184e",
+  "data/claude-master-20260924/B/gates/offset/offlib.py": "95a7e2bc01882ee2ff297e783905a5b417a07fff6c21e20137c394cdba22b096",
+  "data/claude-master-20260924/B/gates/offset/synthetic_long.py": "45004aef2b5196c34a6c9adcd71836ca17a89f4ff8d32c65cd5e96d559f20bd2",
+  "data/claude-master-20260924/B/gates/g1/g1_frames.json": "dc68a2d79ec155076057b5de6a7b7001bbebe108d45057a30b3d561578461e1e",
+  "data/claude-master-20260924/B/gates/g1/g1_report.json": "c4421917d6720d43e02dc7a9292380f9d276d924c786a8f6d68ba82965caa29d",
+  "data/claude-game-region/local-observation/local_observation.py": "809b295217a29a163cd3e527b874b68145a2560e269c1c88e6d860f807ec515c",
+  "server/services/clipper/ingest.py": "1e568c162560e15bdb423fdc7d4d5449dc8a320ee70ae74446ea8c9dcfe346ac",
+  "server/services/clipper/ffmpeg_tools.py": "0d21e32a39ad28f14d47c99a5756763a895fc7d8937b5b02716bbeeb8895297b",
+  "server/services/clipper/content_facecam.py": "f103d5da98e788c8c6123eb7e97224061664435906af7ea5015fbe7fffeef62a",
+  "server/services/clipper/content_type.py": "3d8902b51450d3dbdbe7ac55e3fb638793e9601f916f5c91397ddc620f616ca4",
+  "server/services/clipper/content_geom.py": "2148613fbdbddf240cb06f05c1eb6e7aa2f7b57ddd6a06f7e9872d0ed8f466c8",
+  "server/services/clipper/face_detector.py": "54aed198f4f4d1e78a6178107f1e98044a8c67396b8f49ef27d249d8d73c246a",
+  "server/services/clipper/face_yunet.py": "5ea3b9680a9261d51b366a4bbf42ce0ec188cf6d3f45d1fb2c23e02a0133f464",
+  "server/services/clipper/signals.py": "d4d40c55b9160afdb83630e2c3b63c8adc1161cbfa6f6c61ee4d1e3b9b5ae732",
+  "data/models/face_detection_yunet_2023mar.onnx": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+  "data/claude-master-20260924/A/verification-lot/SPEC.md": "382315909fd02173a19f721bef3445789f4cbb94e0836941210aa1e075cafab7",
+  "data/claude-master-20260924/A/verification-lot/SPEC-v2.md": "cce89a11024c7b462c1948a2c9de02c6a4bc14142b508423383bce42638f866b",
+  "data/claude-master-20260924/A/verification-lot/insets-v2.json": "0922b903192214f0dc50466b29e76299d00f8adf9b427ed8b515723cad2ce017"
+ },
+ "production": {
+  "head": "2ed0e4b8cb27815285eb58237385027665a6a005",
+  "status_of_read_files": "clean"
+ },
+ "versions": {
+  "python": "3.11.9",
+  "opencv": "4.14.0",
+  "numpy": "2.4.6",
+  "pytest": "8.4.2",
+  "cv2_threads": 16
+ },
+ "ffmpeg": {
+  "version_lines": [
+   "ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+   "built with gcc 15.2.0 (Rev13, Built by MSYS2 project)",
+   "configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-cairo --enable-fontconfig --enable-iconv --enable-gnutls --enable-lcms2 --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-libsnappy --enable-zlib --enable-librist --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-sdl2 --enable-libaribb24 --enable-libaribcaption --enable-libdav1d --enable-libdavs2 --enable-libopenjpeg --enable-libquirc --enable-libuavs3d --enable-libxevd --enable-libzvbi --enable-liboapv --enable-libqrencode --enable-librav1e --enable-libsvtav1 --enable-libvvenc --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxeve --enable-libxvid --enable-libaom --enable-libjxl --enable-libsvtjpegxs --enable-libvpx --enable-mediafoundation --enable-libass --enable-frei0r --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-liblensfun --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-libshaderc --enable-vulkan --enable-libplacebo --enable-opencl --enable-libcdio --enable-openal --enable-libgme --enable-libmodplug --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libshine --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libcodec2 --enable-libilbc --enable-libgsm --enable-liblc3 --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-ladspa --enable-libbs2b --enable-libflite --enable-libmysofa --enable-librubberband --enable-libsoxr --enable-chromaprint --enable-whisper"
+  ],
+  "libs": [
+   "libavutil      60. 26.101 / 60. 26.101",
+   "libavcodec     62. 28.101 / 62. 28.101",
+   "libavformat    62. 12.101 / 62. 12.101",
+   "libavdevice    62.  3.101 / 62.  3.101",
+   "libavfilter    11. 14.101 / 11. 14.101",
+   "libswscale      9.  5.101 /  9.  5.101",
+   "libswresample   6.  3.101 /  6.  3.101"
+  ],
+  "configuration_sha256": "3db14a0b1ee1d47e4fd08568660059c7cb76c32a1df01a06ecece24dc1577ed3",
+  "buildconf_sha256": "6427b77fa0b424d85039b1905539867ed49da96d1d1b7e6ef833659a715d5d7c",
+  "ffmpeg_exe": {
+   "size": 227398656,
+   "sha256": "09948d4cdd0650da6ff5a87577469f2a218dc2615ae379f8f734d24c49de0f73"
+  },
+  "ffprobe_exe": {
+   "size": 227193344,
+   "sha256": "a6618e99bb58869ded3c6f37b53aa1a8d701c3591dbb7b5b317d47369c112be2"
+  }
+ },
+ "rule": "m0v2-addr-1 (ffmpeg n8.1.1 VSYNC_CFR replica)",
+ "ffmpeg_sources_read": {
+  "fftools/ffmpeg_filter.c": "32b478325d0843c982c810a865016bed5b154f1d6c2f0b957be297dee7beb2ec",
+  "fftools/ffmpeg_dec.c": "dd79988a38f82e5ae0b8508eb5e1db9ab7f4a4c544d939535d185039180f4c5a",
+  "fftools/ffmpeg_demux.c": "28e36593d954d053122ac028708a8cf10852d5986ccee201f4f3ea3993fdffb8",
+  "fftools/ffmpeg_opt.c": "95951e05371ac6debc4856304a340d5da294c8a7adc844c9b7d2af7743cc4c6c",
+  "libavutil/mathematics.c": "c38b36d09a886b8a0471fa1c8f0174a1a852f437011d818569ece3824b1d4b6b"
+ },
+ "detector": {
+  "class": "services.clipper.face_yunet.YuNetDetector",
+  "profile": "native_v1",
+  "score": 0.9,
+  "nms": 0.3,
+  "top_k": 5000,
+  "model": "data/models/face_detection_yunet_2023mar.onnx",
+  "model_sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+ },
+ "problems": []
+}

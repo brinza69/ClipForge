@@ -25,7 +25,6 @@ import { CommentatorPicker } from "@/components/remix/commentator-picker";
 
 // Same-origin proxy through Next.js rewrites — avoids extension content
 // scripts that intercept cross-port fetches.
-const WORKER_URL = "";
 
 type Rect = { x: number; y: number; w: number; h: number };
 type ActiveRect = "erase" | "caption";
@@ -148,7 +147,6 @@ export default function RemixPage() {
   const [chromaSimilarity, setChromaSimilarity] = useState<number | null>(null);
   const [chromaBlend, setChromaBlend] = useState<number | null>(null);
   const [uploadingCommentator, setUploadingCommentator] = useState(false);
-  const commentatorFileRef = useRef<HTMLInputElement | null>(null);
 
   // Client-side chroma-keyed preview thumbnail. We pull the raw thumb,
   // walk pixels, and zero alpha where the chroma color matches within the
@@ -682,10 +680,28 @@ export default function RemixPage() {
   useEffect(() => {
     if (!jobId) return;
     let stop = false;
+    let inFlight = false;
+    let pollErrors = 0;
+    const deadline = Date.now() + 2 * 60 * 60 * 1000;
     const tick = async () => {
+      if (stop || inFlight) return;
+      if (Date.now() > deadline) {
+        stop = true;
+        setErrorMsg("Pipeline timed out after 2 hours");
+        return;
+      }
+      inFlight = true;
       try {
         const r = await fetch(`/worker-api/jobs/${jobId}`);
-        if (!r.ok) return;
+        if (!r.ok) {
+          pollErrors++;
+          if (pollErrors > 10) {
+            stop = true;
+            setErrorMsg(`Lost connection to backend while polling (${r.status})`);
+          }
+          return;
+        }
+        pollErrors = 0;
         const j = await r.json();
         if (stop) return;
         setProgress(Math.round((j.progress || 0) * 100));
@@ -720,22 +736,19 @@ export default function RemixPage() {
           stop = true;
           setErrorMsg("Cancelled");
         }
-      } catch { /* */ }
+      } catch {
+        pollErrors++;
+        if (pollErrors > 10) {
+          stop = true;
+          setErrorMsg("Lost connection to backend while polling job status");
+        }
+      }
+      finally { inFlight = false; }
     };
     tick();
     const id = setInterval(tick, 1500);
     return () => { stop = true; clearInterval(id); };
-  }, [jobId]);
-
-  const handleDownload = () => {
-    if (!downloadUrl) return;
-    const a = document.createElement("a");
-    a.href = downloadUrl;
-    a.download = downloadFilename || "remix.mp4";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  };
+  }, [jobId, loadPastRuns]);
 
   // ── Stage labels for the progress dashboard ────────────────────────────
   const stages = useMemo(() => {
@@ -754,7 +767,6 @@ export default function RemixPage() {
     }));
   }, [progress]);
 
-  const isRunning = jobStatus === "queued" || jobStatus === "running";
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -857,9 +869,6 @@ export default function RemixPage() {
               const leftPct = ((captionRect.x + captionRect.w / 2) / srcW) * 100;
               const topPct = ((captionRect.y + captionRect.h / 2) / srcH) * 100;
               const widthPct = (captionRect.w / srcW) * 100;
-              // Display-pixel size of the caption rect inside the thumbnail.
-              // 400 = the mx-auto maxWidth above; height follows aspect ratio.
-              const displayH = (captionRect.h / srcH) * (400 * (srcH / srcW));
               // Use the auto-fit scale (matches backend) × user override.
               const autoFit = Math.max(0.5, Math.min(3.0, (captionRect.h / srcH) * 4.0));
               const effectiveScale = autoFit * captionScale;

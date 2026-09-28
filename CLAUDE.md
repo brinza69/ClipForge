@@ -26,6 +26,24 @@ ClipForge is a local AI video clipping studio:
 
 ---
 
+## La începutul FIECĂREI sesiuni
+
+Rulează întâi asta și continuă de unde a rămas, fără să întrebi ce e de făcut:
+
+```
+server\.venv\Scripts\python.exe scripts\stare.py
+```
+
+Raportul spune, în ordine: ce randează acum, câte credite ElevenLabs au rămas,
+cât mai țin cozile pe fiecare canal, câte rânduri n-au fost randate pe fiecare
+rol, și ce procese de fundal rulează. **Un canal marcat „SE GOLEȘTE" (sub 2 zile)
+se rezolvă primul.**
+
+Nu modifică nimic — doar citește. Pentru contextul lui *de ce* s-a făcut ceva,
+vezi `docs/handoff-*.md`, cel mai recent întâi.
+
+---
+
 ## Rules for Every Agent
 
 ### 1. Always read the relevant PRP before writing code
@@ -82,6 +100,11 @@ oversight", "do not re-litigate without a new signal", "`_two_halves()` in the t
 for this", the table of four failed facecam-detection approaches. That is the only place the
 knowledge lives. Reformat over it and the next agent re-runs the same failed experiments.
 
+### 12. Handover organization
+Keep the current state in `docs/handover/areas/<module>/CURRENT.md` and the application-wide
+snapshot in `docs/handover/CURRENT.md`. Put superseded handovers in `docs/handover/archive/`,
+update `docs/handover/INDEX.md` when adding or moving one, and avoid duplicate sources of truth.
+
 ---
 
 ## Key File Map
@@ -115,7 +138,18 @@ clipforge/
 ├── server/
 │   ├── models.py                    ← SQLAlchemy ORM + JobType enum
 │   ├── database.py                  ← DB setup + init_db() column migrations
-│   ├── job_queue.py                 ← JobQueue: register_handler/update_progress, 2 lanes
+│   ├── job_queue.py                 ← JobQueue: register_handler/update_progress, 2 lanes,
+│   │                                  enqueue/_claim/_process_next, fail/cancel/complete — each
+│   │                                  run's end acts only as its claimed attempt (AQ1)
+│   ├── job_rows.py                  ← new_job_row/add_job: the ONE place a job row is built
+│   │                                  (add_job = in the caller's transaction; re-exported by job_queue)
+│   ├── job_attempt.py               ← ClaimedAttempt + CLAIMED_ATTEMPT: the attempt a handler runs as,
+│   │                                  fixed at the claim (R1c), never re-read from the job row
+│   ├── job_recovery.py              ← lease lifecycle: recover_stuck_jobs, heartbeats, stop,
+│   │                                  _requeue_owned_job, _cleanup_workspace, _claim, update_progress,
+│   │                                  _unregister (moved from JobQueue, OW1r2)
+│   │                                  (JobQueue delegates here); heartbeat/progress/requeue touch only
+│   │                                  the row of the task's claimed attempt (AQ1)
 │   ├── routers/                     ← jobs, utilities, doodle, remix, parallel,
 │   │                                  clipper, clipper_clips (tiktok PLANNED)
 │   ├── services/
@@ -134,8 +168,9 @@ clipforge/
 │   └── workers/                     ← clipper_pipeline, clipper_build,
 │                                       clipper_render_jobs, remix_, parallel_,
 │                                       doodle_, utility_jobs (tiktok_ PLANNED)
-├── docs/clipper-map.md              ← the clipper's file map — KEEP IT CURRENT
-├── docs/handoff-clipper-session-4.md ← state of the world, known problems, traps
+├── docs/clipper-map.md              ← the clipper's file map — KEEP IT CURRENT (an index; the
+│                                      tables are in docs/clipper-map/*.md, each under 500 lines)
+├── docs/handover/areas/clipper/CURRENT.md ← current Clipper state; historical sessions are in `docs/handover/archive/clipper/`
 └── PRPs/                            ← Implementation blueprints for each feature batch
 ```
 
@@ -161,6 +196,73 @@ clipforge/
 # CRITICAL: the job queue has TWO lanes. With CLIPFORGE_MAX_CONCURRENT_JOBS=1 and any pipeline
 #           running, a new heavy job sits at queued/0% with an empty message. That is the lane
 #           working as designed, NOT a hang — check /api/jobs/?status=running,queued first.
+# CRITICAL: a thing that could not be read must never read as a pass. Found REPEATEDLY,
+#           one layer apart each time — the count kept going up while this comment was
+#           being written: a candidate with no verdict counted as clean, a corpus figure
+#           summed off a `tail`-truncated report, an entry filtered out before the
+#           denominator, `--json` returning 0 unconditionally, a whole project dropped by
+#           an `if r`, an empty corpus passing, and a missing `remaining` list reading as
+#           "nothing left to fix". Print the denominator BEFORE the count, give a refusal
+#           its own row, and make the exit code belong to the run rather than to how it is
+#           printed. Every one was found by RUNNING the entry point; none was visible in
+#           the branch, which always looked right on its own.
+# CRITICAL: any diagnostic that would INVALIDATE the conclusion has to reach the exit
+#           code, and needs a test through `main()` that demonstrates the non-zero exit.
+#           Computing it, printing it and not wiring it up is its own failure mode, and a
+#           quieter one than the missing denominator: `changed_without_moving` was in the
+#           report from the first version and in the gate from none of them, so the
+#           instrument found the single fact that would void its own answer and returned 0.
+# CRITICAL: a check that consults the representation it is checking compares it with
+#           itself. A sweep looked for "a taken band outside the clamp while in-clamp
+#           bands exist" by asking the REPORT whether an in-clamp band existed — and the
+#           report's own flag was computed from the band's centre, which was the bug. It
+#           said no on exactly the layouts where the contradiction lived, and found zero
+#           across 9,600 cases. Check against the shipping function and its raw inputs.
+# CRITICAL: a LABEL is not a measurement. 2,024 of 2,126 shots carry `move: push`, and
+#           every one of them stands still, because `push_amount` is 0.0 in every stored
+#           style. Reading the label gives "95% of shots move" — the opposite of the
+#           truth, and an argument for a much larger piece of work. Run the function that
+#           produces the thing (`_size_timeline`), never the field that describes it.
+# CRITICAL: and a PLAN is not the DELIVERED ARTEFACT. `caption_plan.y_pct` is the
+#           preset the plan asked for; the `.ass` carries what `resolve_position`
+#           settled on and what libass burned, and they differ on 46 of 99 stored
+#           clips by up to 933px. Every figure about where the caption LANDS has
+#           to come from the file that put it there. Same family as the `move`
+#           label: read the artefact, not the intention.
+# CRITICAL: and do not compare a function's output against a run of that function
+#           on inputs it did not have. `clipper_captions` re-places the caption
+#           with the stored keep-outs PLUS `panels_to_keep_out(panels, shots)`,
+#           and `panels` is not on the sidecar — so "would today's rule produce
+#           this position" is UNANSWERABLE from what is stored. Answering it
+#           anyway gave 8 with the wrong y and 54 with the right one; neither was
+#           a fact about the rule. When the input is gone, the answer is
+#           `unavailable`, not a smaller comparison.
+# CRITICAL: and a CONSTANT is not an IDENTITY. A single-point size timeline proves the
+#           crop does not change size; it does not prove the crop is `shot["rect"]`. The
+#           delivered window comes from the anchor, and 837 of 1,965 crops differ from
+#           the planner's rectangle.
+# CRITICAL: refusing an input and then setting it to None puts the refusal straight back
+#           into `unavailable`, because `if not shots` reads None as "there were none".
+#           Committed in the commit that fixed exactly that, three guards later. Carry the
+#           state in a flag, and test BOTH directions: a refused list is not a missing one,
+#           and a missing one is not a refused one.
+# CRITICAL: `x in (True, False, None)` is not a type check — `1 == True` and `0 == False`,
+#           so an integer passes as a verdict. Use `is None or isinstance(x, bool)`.
 # CRITICAL: transcriber._clean_text strips ALL punctuation and lowercases. Pass
 #           keep_punctuation=True when you need sentence boundaries (the clipper does).
+# CRITICAL: every file a Clipper export attempt reads or writes is that attempt's own (mp4, sidecar,
+#           .cmd.txt, and the .ass in its scratch dir); only _publish_export moves them into place. A
+#           shared path let a superseded attempt hand the current one its captions (R4b review F2).
+#           render_record.ass_path is the path the encode READ (that scratch file, gone after the
+#           job); the published sibling is render_record.ass_published_path, bound by ass_sha256.
+#           /export-file serves only an `exported` clip: the three publish renames are not atomic (R4c).
+# CRITICAL: a clip-scoped job (clipper_preview, clipper_export) never writes project.status on
+#           fail/cancel: recovery reads a failed project as terminal and would fail another clip's
+#           live export (R4b review F1, job_queue._CLIP_SCOPED_TYPES).
+# CRITICAL: a preview publishes like an export: its own attempt files, then ONE check-and-rename
+#           under the write lock (_publish_preview, D2r-2). Guarding only the row UPDATE still let an
+#           old job overwrite a newer preview's file. And a project's `error` is its latest ANALYSIS
+#           attempt's (project_attempts.analysis_state: ingest/transcribe/analyze/score by created_at),
+#           never "the last failed job of any type" — that showed a discarded preview as an analysis
+#           failure whose Retry rescored a ready project (D2r-3).
 ```

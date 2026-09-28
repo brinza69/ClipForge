@@ -1,0 +1,182 @@
+{
+ "ffmpeg_build": {
+  "exe": "C:\\Users\\vlado\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1.1-full_build\\bin\\ffmpeg.exe",
+  "version_line": "ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+  "libs": {
+   "libavutil": "60.26.101",
+   "libavcodec": "62.28.101",
+   "libavformat": "62.12.101",
+   "libavdevice": "62.3.101",
+   "libavfilter": "11.14.101",
+   "libswscale": "9.5.101",
+   "libswresample": "6.3.101"
+  },
+  "configuration_sha256": "3db14a0b1ee1d47e4fd08568660059c7cb76c32a1df01a06ecece24dc1577ed3",
+  "exe_sha256": "09948d4cdd0650da6ff5a87577469f2a218dc2615ae379f8f734d24c49de0f73",
+  "exe_size": 227398656,
+  "exe_mtime_ns": 1777898794000000000
+ },
+ "results": [
+  {
+   "rate": "24",
+   "fps": "24",
+   "seconds": 600,
+   "source_frames": 14400,
+   "source_off_grid": 0,
+   "clock": "validated",
+   "recipe_params": {
+    "width": 480,
+    "fps": "10",
+    "gop": "10"
+   },
+   "domain": "ok",
+   "slots": 6002,
+   "proxy_packets": 6002,
+   "simulated_slots": 6002,
+   "proxy_pts_off_grid": 0,
+   "unreadable": 0,
+   "sim_mismatches": 0,
+   "addressed": 5998,
+   "addr_mismatches": 0,
+   "refused_by_reason": {
+    "start_transient": 3,
+    "end_of_stream": 1
+   },
+   "state": "ok"
+  },
+  {
+   "rate": "23.976",
+   "fps": "24000/1001",
+   "seconds": 600,
+   "source_frames": 14386,
+   "source_off_grid": 0,
+   "clock": "validated",
+   "recipe_params": {
+    "width": 480,
+    "fps": "10",
+    "gop": "10"
+   },
+   "domain": "ok",
+   "slots": 6002,
+   "proxy_packets": 6002,
+   "simulated_slots": 6002,
+   "proxy_pts_off_grid": 0,
+   "unreadable": 0,
+   "sim_mismatches": 0,
+   "addressed": 5998,
+   "addr_mismatches": 0,
+   "refused_by_reason": {
+    "start_transient": 3,
+    "end_of_stream": 1
+   },
+   "state": "ok"
+  },
+  {
+   "rate": "60",
+   "fps": "60",
+   "seconds": 600,
+   "source_frames": 36000,
+   "source_off_grid": 0,
+   "clock": "validated",
+   "recipe_params": {
+    "width": 480,
+    "fps": "10",
+    "gop": "10"
+   },
+   "domain": "ok",
+   "slots": 6002,
+   "proxy_packets": 6002,
+   "simulated_slots": 6002,
+   "proxy_pts_off_grid": 0,
+   "unreadable": 0,
+   "sim_mismatches": 0,
+   "addressed": 5998,
+   "addr_mismatches": 0,
+   "refused_by_reason": {
+    "start_transient": 3,
+    "end_of_stream": 1
+   },
+   "state": "ok"
+  },
+  {
+   "rate": "30",
+   "fps": "30",
+   "seconds": 600,
+   "source_frames": 18000,
+   "source_off_grid": 0,
+   "clock": "validated",
+   "recipe_params": {
+    "width": 480,
+    "fps": "10",
+    "gop": "10"
+   },
+   "domain": "ok",
+   "slots": 6002,
+   "proxy_packets": 6002,
+   "simulated_slots": 6002,
+   "proxy_pts_off_grid": 0,
+   "unreadable": 0,
+   "sim_mismatches": 0,
+   "addressed": 5998,
+   "addr_mismatches": 0,
+   "refused_by_reason": {
+    "start_transient": 3,
+    "end_of_stream": 1
+   },
+   "state": "ok"
+  },
+  {
+   "rate": "25",
+   "fps": "25",
+   "seconds": 600,
+   "source_frames": 15000,
+   "source_off_grid": 0,
+   "clock": "validated",
+   "recipe_params": {
+    "width": 480,
+    "fps": "10",
+    "gop": "10"
+   },
+   "domain": "ok",
+   "slots": 6002,
+   "proxy_packets": 6002,
+   "simulated_slots": 6002,
+   "proxy_pts_off_grid": 0,
+   "unreadable": 0,
+   "sim_mismatches": 0,
+   "addressed": 5998,
+   "addr_mismatches": 0,
+   "refused_by_reason": {
+    "start_transient": 3,
+    "end_of_stream": 1
+   },
+   "state": "ok"
+  },
+  {
+   "rate": "59.94",
+   "fps": "60000/1001",
+   "seconds": 600,
+   "source_frames": 35965,
+   "source_off_grid": 0,
+   "clock": "validated",
+   "recipe_params": {
+    "width": 480,
+    "fps": "10",
+    "gop": "10"
+   },
+   "domain": "ok",
+   "slots": 6002,
+   "proxy_packets": 6002,
+   "simulated_slots": 6002,
+   "proxy_pts_off_grid": 0,
+   "unreadable": 0,
+   "sim_mismatches": 0,
+   "addressed": 5999,
+   "addr_mismatches": 0,
+   "refused_by_reason": {
+    "start_transient": 3
+   },
+   "state": "ok"
+  }
+ ]
+}

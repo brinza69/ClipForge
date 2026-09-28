@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnalysisProgress } from "@/components/clipper/analysis-progress";
 import { CandidateGrid } from "@/components/clipper/candidate-grid";
+import { ProjectCaptionSource } from "@/components/clipper/project-caption-source";
 import { errorDescription, readApiError } from "@/lib/api-error";
 import {
   CLIPPER_API,
@@ -39,6 +40,18 @@ const TERMINAL: ReadonlySet<ProjectStatus> = new Set<ProjectStatus>([
 const SELECT_CLASS =
   "h-8 rounded-lg border border-border bg-background px-2 text-sm text-foreground " +
   "outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+
+/** "15–90s" from the project's own settings. A side the project does not set reads
+ * "default" (never an invented number), and an explicit side stays visible: a partial
+ * dict made the card read "undefined–undefineds" (codex-verdict-next-15 §1). */
+function lengthRange(s: { min_clip_s?: unknown; max_clip_s?: unknown } | null | undefined): string {
+  const ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const min = s && ok(s.min_clip_s) ? s.min_clip_s : null;
+  const max = s && ok(s.max_clip_s) ? s.max_clip_s : null;
+  if (min !== null && max !== null) return `${min}–${max}s`;
+  if (min === null && max === null) return "default";
+  return `${min !== null ? `${min}s` : "default"}–${max !== null ? `${max}s` : "default"}`;
+}
 
 export default function ClipperProjectPage() {
   const params = useParams<{ id: string }>();
@@ -223,22 +236,56 @@ export default function ClipperProjectPage() {
         </div>
       </Card>
 
-      {project.error && !project.active_job && (
+      <ProjectCaptionSource
+        projectId={projectId}
+        value={project.clipper_settings?.source_has_burned_captions ?? null}
+        onSaved={() => void loadProject()}
+      />
+
+      {/* `error` is the latest ANALYSIS attempt's, never a clip job's (D2r-3), so
+          a running preview or export no longer hides a real failure. Retry is
+          offered only where the endpoint would accept it: on a ready project the
+          failure stays visible, but rebuilding the board is the rescore, not a
+          recovery (codex-verdict-closure-4). */}
+      {project.error && (
         <Card className="space-y-3 border-destructive/40 p-4">
           <div className="flex items-start gap-2 text-sm text-destructive">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <div className="min-w-0 break-words">{project.error}</div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Retry resumes from the last stage whose files are still on disk — a completed
-            download is not fetched twice.
-          </p>
-          <Button variant="outline" onClick={() => void retry()} disabled={retrying}>
-            {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-            Retry
-          </Button>
+          {project.retry_allowed !== false && (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Retry resumes from the last stage whose files are still on disk — a completed
+                download is not fetched twice.
+              </p>
+              <Button variant="outline" onClick={() => void retry()} disabled={retrying}>
+                {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                Retry
+              </Button>
+            </>
+          )}
         </Card>
       )}
+
+      {/* A cancelled analysis is not a failure, but it is resumable, and the
+          failure panel above used to be the only way back to /retry — through a
+          stale error (D2r-3). The resume stays an explicit click;
+          `retry_allowed` is the predicate the endpoint itself applies. */}
+      {project.analysis_attempt?.status === "cancelled" &&
+        project.retry_allowed && (
+          <Card className="space-y-3 border-border/40 p-4">
+            <p className="text-sm">The analysis was cancelled.</p>
+            <p className="text-xs text-muted-foreground">
+              Resume picks up from the last stage whose files are still on disk — a completed
+              download is not fetched twice.
+            </p>
+            <Button variant="outline" onClick={() => void retry()} disabled={retrying}>
+              {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+              Resume analysis
+            </Button>
+          </Card>
+        )}
 
       {project.active_job && (
         <AnalysisProgress job={project.active_job} onFinished={() => void loadProject()} />
@@ -263,9 +310,7 @@ export default function ClipperProjectPage() {
             <div>
               Length range
               <div className="font-medium text-foreground">
-                {project.clipper_settings
-                  ? `${project.clipper_settings.min_clip_s}–${project.clipper_settings.max_clip_s}s`
-                  : "—"}
+                {lengthRange(project.clipper_settings)}
               </div>
             </div>
             <div>

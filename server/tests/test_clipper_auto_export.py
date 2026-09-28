@@ -17,19 +17,18 @@ from models import ClipModel, ClipStatus
 from workers import clipper_build
 
 
-class _Queue:
-    def __init__(self) -> None:
-        self.jobs: list[dict] = []
+async def _exported_clips() -> list[str]:
+    """The clips an export job was written for. Since R4b the job row commits
+    with the claim itself, so a stub queue's `enqueue` no longer sees it."""
+    from sqlalchemy import select
 
-    async def enqueue(self, **kw):
-        self.jobs.append(kw)
-        return f"job{len(self.jobs)}"
+    from database import async_session
+    from models import JobModel
 
-    async def update_progress(self, *a, **k):
-        return None
-
-    def is_cancelled(self, job_id):
-        return False
+    async with async_session() as session:
+        return sorted((await session.execute(
+            select(JobModel.clip_id).where(JobModel.project_id == "autoexp",
+                                           JobModel.type == "clipper_export"))).scalars())
 
 
 @pytest.fixture
@@ -43,9 +42,10 @@ async def project_with_clips():
     from sqlalchemy import delete
 
     from database import async_session
-    from models import ProjectModel
+    from models import JobModel, ProjectModel
 
     async with async_session() as session:
+        await session.execute(delete(JobModel).where(JobModel.project_id == "autoexp"))
         await session.execute(delete(ClipModel).where(ClipModel.project_id == "autoexp"))
         await session.execute(delete(ProjectModel).where(ProjectModel.id == "autoexp"))
         session.add(ProjectModel(id="autoexp", title="auto export",
@@ -67,35 +67,30 @@ async def project_with_clips():
 
 async def test_off_by_default_queues_nothing(project_with_clips):
     """The whole point of the flag. An ordinary run still ends at the board."""
-    queue = _Queue()
-    assert await clipper_build._auto_export(project_with_clips, {}, queue) == 0
-    assert queue.jobs == []
+    assert await clipper_build._auto_export(project_with_clips, {}, None) == 0
+    assert await _exported_clips() == []
 
 
 async def test_it_queues_the_best_n_one_job_each(project_with_clips):
-    queue = _Queue()
-    n = await clipper_build._auto_export(project_with_clips, {"auto_export": 3}, queue)
+    n = await clipper_build._auto_export(project_with_clips, {"auto_export": 3}, None)
     assert n == 3
-    assert [j["clip_id"] for j in queue.jobs] == ["c0", "c1", "c2"]
+    assert await _exported_clips() == ["c0", "c1", "c2"]
     # One job per clip, not one for the batch: a failed render should cost its
     # own clip, and the board fills in as they land.
-    assert len(queue.jobs) == 3
-    assert all(j["job_type"] == "clipper_export" for j in queue.jobs)
+    assert len(await _exported_clips()) == 3
 
 
 async def test_alternatives_are_never_rendered(project_with_clips):
     """They exist so a person can compare two cuts of one moment. Rendering
     both is the duplication dedupe just removed — and this one outscores every
     winner, so a naive "top by score" would pick it first."""
-    queue = _Queue()
-    await clipper_build._auto_export(project_with_clips, {"auto_export": 10}, queue)
-    assert "alt" not in [j["clip_id"] for j in queue.jobs]
+    await clipper_build._auto_export(project_with_clips, {"auto_export": 10}, None)
+    assert "alt" not in await _exported_clips()
 
 
 async def test_asking_for_more_than_exists_queues_what_exists(project_with_clips):
-    queue = _Queue()
     assert await clipper_build._auto_export(
-        project_with_clips, {"auto_export": 50}, queue) == 6
+        project_with_clips, {"auto_export": 50}, None) == 6
 
 
 async def test_an_already_exported_clip_is_not_rendered_again(project_with_clips):
@@ -111,18 +106,16 @@ async def test_an_already_exported_clip_is_not_rendered_again(project_with_clips
             .values(status=ClipStatus.exported.value))
         await session.commit()
 
-    queue = _Queue()
-    await clipper_build._auto_export(project_with_clips, {"auto_export": 3}, queue)
-    assert [j["clip_id"] for j in queue.jobs] == ["c1", "c2", "c3"]
+    await clipper_build._auto_export(project_with_clips, {"auto_export": 3}, None)
+    assert await _exported_clips() == ["c1", "c2", "c3"]
 
 
 async def test_a_nonsense_setting_is_off_rather_than_a_crash(project_with_clips):
     """It arrives from a JSON settings blob a user can edit."""
-    queue = _Queue()
     for bad in ("", "lots", None, -3, [1]):
         assert await clipper_build._auto_export(
-            project_with_clips, {"auto_export": bad}, queue) == 0
-    assert queue.jobs == []
+            project_with_clips, {"auto_export": bad}, None) == 0
+    assert await _exported_clips() == []
 
 
 def test_the_config_default_is_off():
@@ -156,3 +149,30 @@ def test_the_vision_setting_survives_project_creation_too():
     assert _normalise_settings({"vision_review": True})["vision_review"] is True
     assert _normalise_settings({})["vision_review"] is False
     assert _normalise_settings({"vision_model": "gpt-5.6-luna"})["vision_model"] == "gpt-5.6-luna"
+
+
+async def test_cancelling_during_headlines_raises_the_right_error():
+    """The regression the 500-line split introduced and no test caught.
+
+    `_attach_headlines` moved from clipper_build into clipper_finalize and its
+    `JobCancelledError` import did not follow it, so cancelling a run while
+    headlines were being generated raised NameError instead — which the queue
+    treats as a crashed job rather than a cancelled one.
+
+    A symbol-table check over the five files that batch touched found it in one
+    of them and nothing else; this test is what keeps it found.
+    """
+    from job_queue import JobCancelledError
+    from workers import clipper_finalize
+
+    class Cancelled:
+        def is_cancelled(self, _job_id):
+            return True
+
+        async def update_progress(self, *_a, **_k):
+            return None
+
+    with pytest.raises(JobCancelledError):
+        await clipper_finalize._attach_headlines(
+            [{"start": 0.0, "end": 10.0, "text": "hi"}],
+            {"headline_enabled": True}, Cancelled(), "job1")

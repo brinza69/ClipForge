@@ -162,3 +162,94 @@ def test_the_classifier_reads_more_than_frame_features_supplies():
     src = inspect.getsource(ct.detect_content_type)
     assert "summarize_motion" in src
     assert "summarize_faces" in src
+
+
+# ── the hit-rate gate ────────────────────────────────────────────────────────
+#
+# The same inset, the same stream, two sample lengths: 0.33 over 12 minutes and
+# 0.12 over 4 hours, because the rate counts how often a Haar cascade caught the
+# co-streamer facing his camera and a long sample averages in every minute he
+# looked away. The 0.15 bar therefore dropped a real facecam for being sampled
+# for longer, which is the absolute-threshold mistake in a new costume.
+#
+# This pins the property rather than the constant: a locked-off inset seen in a
+# TENTH of frames must survive. The number itself is scored by
+# scripts/score_facecam.py against docs/source-labels.md — 8/9, flat from 0.12
+# down to 0.05.
+
+def _inset_source(n: int, hits: int) -> tuple[list, list]:
+    """`n` frames of noise with a flat 120x68 inset in the top-left corner, and
+    a face detection inside it in `hits` of them."""
+    from services.clipper.content_geom import make_rect
+
+    rng = np.random.default_rng(7)
+    grays, faces = [], []
+    for i in range(n):
+        f = rng.integers(0, 255, (H, W), dtype=np.uint8)
+        f[0:68, 0:120] = 40                    # the inset: flat, hard-edged
+        grays.append(f)
+        faces.append([make_rect(49, 23, 22, 22)] if i % (n // hits) == 0 else [])
+    return grays, faces
+
+
+def test_an_inset_seen_in_a_tenth_of_frames_is_still_a_facecam():
+    from services.clipper import content_type as ct
+
+    grays, faces = _inset_source(100, 12)
+    cams, _ = ct._find_webcams(grays, faces, W, H)
+    assert len(cams) == 1, (
+        f"a cluster at rate 0.12 was dropped: {cams}. That is the 4-hour "
+        f"Minecraft source's second facecam, and it is real.")
+    assert (cams[0]["x"], cams[0]["y"]) == (0, 0)
+
+
+def test_the_rate_gate_still_rejects_a_handful_of_stray_detections():
+    """Lowering the bar cannot mean removing it — `_FACECAM_MIN_HITS` is what
+    stops three lucky frames from becoming a layout."""
+    from services.clipper import content_type as ct
+
+    grays, faces = _inset_source(100, 50)
+    faces = [boxes if i < 2 else [] for i, boxes in enumerate(faces)]
+    assert ct._find_webcams(grays, faces, W, H)[0] == []
+
+
+# ── a reason shown to a person has to be a reason ────────────────────────────
+#
+# `vote()` records a term's explanation whenever its weight clears 0.01, which
+# is right for the SCORE and far too low for the EXPLANATION. Measured on the
+# labelled corpus, `IRL World Cup` came back as gaming with "gaming vocabulary
+# in the transcript" at the top of its evidence — kw_gaming 0.017 against a
+# kw_sports of 0.157, contributing 0.034 to a winning score near 0.5.
+#
+# That is not cosmetic: it cost real time on 2026-08-18, because the evidence
+# sent the reader to the word lists, which were behaving correctly. The actual
+# cause was the `synthetic` term, and it is a much more interesting finding.
+
+
+def test_a_term_that_barely_contributed_is_not_offered_as_the_reason():
+    from services.clipper.content_geom import classify_features
+
+    # Edge-dense and saturated: `synthetic` carries this decision. The gaming
+    # vocabulary is present but negligible, exactly as on the real source.
+    verdict = classify_features({
+        "edge_density": 0.14, "saturation": 0.55, "line_ratio": 0.5,
+        "motion_mean": 0.30, "corner_stability": 0.2, "face_stability": 0.1,
+        "face_count": 0.0, "face_count_mean": 0.0, "face_area": 0.0,
+        "speech_ratio": 0.5, "kw_gaming": 0.017, "kw_sports": 0.0,
+    })
+    joined = " ".join(verdict["evidence"])
+    assert "vocabulary" not in joined, (
+        f"a 0.017 keyword score is being reported as the reason: {joined}")
+
+
+def test_the_term_that_did_decide_is_still_named():
+    from services.clipper.content_geom import classify_features
+
+    verdict = classify_features({
+        "edge_density": 0.02, "saturation": 0.10, "line_ratio": 0.05,
+        "motion_mean": 0.05, "corner_stability": 0.9, "face_stability": 0.9,
+        "face_count": 1.0, "face_count_mean": 1.0, "face_area": 0.10,
+        "speech_ratio": 0.8, "kw_gaming": 0.9,
+    })
+    assert verdict["evidence"], "a decision with a dominant term explained nothing"
+    assert verdict["evidence"] != ["no single content type stood out"]

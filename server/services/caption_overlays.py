@@ -205,6 +205,7 @@ def _word_highlight_spans(
         first_open, first_close = open_tag, close_tag
 
     spans: List[Tuple[int, int, str]] = []
+    prev_end = start_ms
     for i in range(len(words)):
         try:
             w_start = int(float(words[i].get("start", 0.0)) * 1000)
@@ -213,12 +214,15 @@ def _word_highlight_spans(
         except (TypeError, ValueError, AttributeError):
             return []
 
-        span_start = start_ms if i == 0 else max(start_ms, min(w_start, end_ms))
+        # A span held to MIN_HIGHLIGHT_MS moves the next one's start with it. It used to overlap it
+        # instead: two copies of the card on one \pos for up to 60 ms (276 of 878 pairs, BURST1).
+        span_start = start_ms if i == 0 else max(prev_end, min(w_start, end_ms))
         span_end = end_ms if i + 1 == len(words) else max(span_start, min(w_next, end_ms))
         if span_end - span_start < MIN_HIGHLIGHT_MS and i + 1 < len(words):
             span_end = min(end_ms, span_start + MIN_HIGHLIGHT_MS)
         if span_end <= span_start:
             continue
+        prev_end = span_end
 
         o_tag, c_tag = (first_open, first_close) if i == 0 else (open_tag, close_tag)
         rebuilt: List[List[str]] = [[] for _ in lines]

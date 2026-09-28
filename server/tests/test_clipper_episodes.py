@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.clipper import episodes, llm_select
+from services.clipper import chunking, episodes, llm_select
 
 
 def _thread(tid: str, start: float, end: float, *words: str) -> dict:
@@ -141,6 +141,13 @@ async def test_detect_anchors_puts_earlier_stretches_in_front_of_the_model(monke
     Chunking is forced, because that is the only shape where a summary has
     anything to say. A source small enough to fit in one prompt has no "before"
     — and that is the right answer for it, not a gap.
+
+    Forced by the CLOCK now, not by monkeypatching the splitter: the two atoms
+    sit further apart than `chunking.MAX_CHUNK_SECONDS`, so the real planner
+    has to open a second chunk. The previous version replaced `chunk_lines`
+    with a hand-rolled split, which stopped testing anything the moment the
+    planner took over — and a planner that silently made one chunk would have
+    passed it.
     """
     prompts: list[str] = []
 
@@ -149,14 +156,12 @@ async def test_detect_anchors_puts_earlier_stretches_in_front_of_the_model(monke
         return "[]"
 
     monkeypatch.setattr("services.descriptions._call_llm", fake)
-    monkeypatch.setattr(llm_select, "chunk_lines",
-                        lambda lines: lines.split("\n[1400]")[:1]
-                        + ["[1400]" + lines.split("\n[1400]")[1]])
 
+    far = chunking.MAX_CHUNK_SECONDS + 600.0
     await llm_select.detect_anchors(
-        [{"start": 3000.0, "text": "later"}], 4000.0,
-        threads=[_thread("t1", 0.0, 2400.0, "warden")],
-        atoms=_atoms((100.0, 200.0, "warden"), (1400.0, 1500.0, "diamond")))
+        [{"start": far + 600.0, "text": "later"}], far + 1000.0,
+        threads=[_thread("t1", 0.0, far - 300.0, "warden")],
+        atoms=_atoms((100.0, 200.0, "warden"), (far, far + 100.0, "diamond")))
 
     assert len(prompts) == 2
     assert "WHAT THE STREAM HAS BEEN ABOUT SO FAR" not in prompts[0], (
@@ -179,3 +184,18 @@ async def test_a_stretch_the_chunk_is_still_inside_is_not_called_background(monk
         [{"start": 100.0, "text": "in the middle of it"}], 4000.0,
         threads=[_thread("t1", 0.0, 2400.0, "warden")])
     assert "WHAT THE STREAM HAS BEEN ABOUT SO FAR" not in seen.get("prompt", "")
+
+
+async def test_a_cached_empty_episode_set_is_not_rebuilt_privately(monkeypatch):
+    """Empty is a real cache answer.  Treating it as false would recompute an
+    upstream artifact inside anchor detection, outside the identity stamped on
+    the anchor envelope."""
+    async def fake(_engine, _prompt, **_kw):
+        return "[]"
+
+    monkeypatch.setattr("services.descriptions._call_llm", fake)
+    monkeypatch.setattr(episodes, "build", lambda *_a, **_k: 1 / 0)
+
+    assert await llm_select.detect_anchors(
+        [{"start": 0.0, "end": 1.0, "text": "hello"}], 10.0,
+        episodes=[]) == []

@@ -1,0 +1,115 @@
+{
+  "39c89ae2e16e": {
+    "name": "IShowSpeed EARLY, gaming part",
+    "want": 1,
+    "rects": [
+      [
+        0,
+        88,
+        182,
+        180
+      ]
+    ],
+    "conf": [
+      0.706
+    ]
+  },
+  "2c8af11153a3": {
+    "name": "moistcr1tikal, left edge mid-height",
+    "want": 1,
+    "rects": [
+      [
+        0,
+        118,
+        84,
+        66
+      ]
+    ],
+    "conf": [
+      0.498
+    ]
+  },
+  "slice4h00test": {
+    "name": "Minecraft 4h, after the gym",
+    "want": 2,
+    "rects": [
+      [
+        0,
+        0,
+        122,
+        78
+      ],
+      [
+        370,
+        0,
+        80,
+        68
+      ]
+    ],
+    "conf": [
+      0.715,
+      0.468
+    ]
+  },
+  "2d3375ee3420": {
+    "name": "Minecraft 12m",
+    "want": 2,
+    "rects": [
+      [
+        0,
+        0,
+        122,
+        68
+      ],
+      [
+        364,
+        8,
+        82,
+        60
+      ]
+    ],
+    "conf": [
+      0.912,
+      0.714
+    ]
+  },
+  "0c9685df852b": {
+    "name": "gym 12m, fullscreen",
+    "want": 0,
+    "rects": [],
+    "conf": []
+  },
+  "f81b86d27877": {
+    "name": "go ghost, edited",
+    "want": 0,
+    "rects": [],
+    "conf": []
+  },
+  "ee0e599b3ecb": {
+    "name": "apartament, edited",
+    "want": 0,
+    "rects": [],
+    "conf": []
+  },
+  "6b3844793c6a": {
+    "name": "Jensen Huang, edited",
+    "want": 0,
+    "rects": [],
+    "conf": []
+  },
+  "5f4c2770254d": {
+    "name": "Jynxzi, bottom-left",
+    "want": 1,
+    "rects": [
+      [
+        0,
+        106,
+        158,
+        162
+      ]
+    ],
+    "conf": [
+      0.769
+    ]
+  }
+}

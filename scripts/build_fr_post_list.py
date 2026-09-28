@@ -36,6 +36,26 @@ for r in vals[1:]:
     if g(0):
         desc_by_nr[g(0)] = g(3)
 
+# Ordinea ceruta pe 26 aug 2026: **ultimele randate primele**. Inlocuieste
+# regula de pe 25 aug (Varizz intai, apoi HerStory) — sursa ramane raportata mai
+# jos, fiindca e utila de stiut, dar nu mai decide ordinea.
+#
+# NR-ul nu spune nimic despre vechime: NR 1 e din iunie, NR 91 de ieri. Ordinea
+# vine din `created`, data fisierului de pe Drive. Aceeasi regula ca in
+# `reordoneaza_franceza.py` — daca cele doua nu se potrivesc, planul si coada
+# ajung in ordini diferite.
+SURSE = _ROOT / "data" / "surse_franceza.json"
+surse = json.loads(SURSE.read_text(encoding="utf-8")) if SURSE.exists() else {}
+PRIORITATE = {"Varizz": 0, "HerStory": 1}
+
+
+def ordine(nr):
+    # cel mai nou fisier al NR-ului decide; minus pentru descrescator, iar
+    # NR-ul rupe egalitatile ca ordinea sa fie stabila
+    cel_mai_nou = max((f.get("created") or "") for f in by_nr[nr])
+    return (cel_mai_nou == "", [-ord(c) for c in cel_mai_nou], -int(nr))
+
+
 res = list_folder_files(targets.get("fr_drive_folder"))
 if res.get("status") != "ok":
     raise SystemExit(f"nu pot lista Drive: {res.get('reason')}")
@@ -51,10 +71,13 @@ for f in res["files"]:
         "name": f["name"], "id": f["id"], "part": part,
         "url": (f.get("download_url") or f.get("link") or "").strip(),
         "mb": round(int(f.get("size") or 0) / 1048576) or None,
+        # data randarii — ordinea ceruta pe canale e "ultimele facute primele",
+        # iar NR-ul nu spune nimic despre cand a fost facut clipul
+        "created": f.get("created") or "",
     })
 
 plan, fara_desc = [], []
-for nr in sorted(by_nr, key=lambda x: int(x)):
+for nr in sorted(by_nr, key=ordine):
     files = sorted(by_nr[nr], key=lambda x: x["part"])
     d = desc_by_nr.get(nr, "")
     if not d:
@@ -68,6 +91,14 @@ print(f"videoclipuri pe Drive: {len(by_nr)}   in plan: "
       f"{len({p['nr'] for p in plan})} ({len(plan)} fisiere)")
 if fara_desc:
     print(f"sarite, fara descriere in sheet: {fara_desc}")
+pe_sursa = {}
+for nr in dict.fromkeys(p["nr"] for p in plan):
+    pe_sursa.setdefault(surse.get(nr, "NECLASIFICAT"), []).append(nr)
+for canal, lista in sorted(pe_sursa.items(), key=lambda x: PRIORITATE.get(x[0], 2)):
+    print(f"  {canal:<13} {len(lista):>3}  primele: {lista[:6]}")
+if "NECLASIFICAT" in pe_sursa:
+    print("  ^ ruleaza scripts/surse_franceza.py ca sa le aseze corect")
+
 multi = sorted({p["nr"] for p in plan if p["parts"] > 1}, key=int)
 print(f"cu mai multe parti: {multi}")
 print("scris:", OUT)

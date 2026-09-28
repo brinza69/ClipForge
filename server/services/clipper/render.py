@@ -28,11 +28,21 @@ from services.clipper.ffmpeg_tools import (
     run,
     video_info,
 )
+from services.clipper import storage
 
 logger = logging.getLogger("clipforge.clipper.render")
 
 ProgressFn = Callable[[float, str], Any]
 CancelFn = Callable[[], bool]
+
+#: What THIS renderer does, stamped on anything that evaluates its output — the
+#: static counterpart to `dynamic_render.RENDER_VERSION`.
+#:
+#: A static export used to be stamped with the dynamic renderer's version, which
+#: named a grammar of shots and letterboxing that never touched it. A verdict
+#: filed under the wrong renderer is worse than an unstamped one: it is
+#: attributable, and to the wrong thing.
+RENDER_VERSION = "render_static_split_v3_reaction_fit"
 
 # A 60-second clip encodes in well under a minute; this ceiling only ever fires
 # on a wedged child process, not on a slow-but-working encode.
@@ -244,6 +254,7 @@ def build_render_cmd(
     watermark: str = "",
     drop_spans: Sequence[tuple[float, float]] | None = None,
     has_audio: bool = True,
+    source_patch: dict | None = None,
 ) -> list[str]:
     """One ffmpeg argv list for one clip. Pure — builds, runs nothing.
 
@@ -258,9 +269,15 @@ def build_render_cmd(
     command is exactly what it was before the option existed: audio is mapped
     straight from the input and never touches the graph.
     """
+    if source_patch is not None:
+        # SC lot 1 treats the source's burned text on the dynamic path only.
+        from services.clipper.source_treatment import SourceTreatmentRefused
+
+        raise SourceTreatmentRefused("static_path_unsupported", "the static renderer takes no patch")
     out_w, out_h = even(out_w), even(out_h)
     start, duration = _window(cand)
-    graph, vlabel = _filter_complex(plan, ass_path, watermark, out_w, out_h)
+    graph, vlabel = _filter_complex(
+        plan, None if drop_spans else ass_path, watermark, out_w, out_h)
 
     alabel = "0:a?"  # `?` keeps a silent source renderable instead of fatal
     if drop_spans:
@@ -280,8 +297,13 @@ def build_render_cmd(
         graph = (f"{graph};[{vlabel.strip('[]')}]select='{keep}',"
                  f"setpts=N/FRAME_RATE/TB[vcut]")
         vlabel = "[vcut]"
-        graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
-        alabel = "[acut]"
+        if has_audio:
+            graph += f";[0:a]aselect='{keep}',asetpts=N/SR/TB[acut]"
+            alabel = "[acut]"
+
+        from services.clipper.render_timeline import append_captions
+
+        graph, vlabel = append_captions(graph, vlabel, ass_path)
 
     if has_audio:
         # The same chain the multi-shot renderer runs. It goes INSIDE the
@@ -295,6 +317,9 @@ def build_render_cmd(
         graph += f";[{alabel.strip('[]').rstrip('?')}]{loudness_chain()}[aout]"
         alabel = "[aout]"
 
+    from services.clipper.render_timeline import output_frames
+
+    graph, vlabel = output_frames(graph, vlabel, fps)
     return [
         ffmpeg_bin(), "-y", "-loglevel", "error",
         "-ss", f"{start:.3f}",
@@ -325,20 +350,33 @@ async def render_clip(
     fps: int,
     crf: int,
     preset: str,
+    out_w: int = 1080,
+    out_h: int = 1920,
     watermark: str = "",
     drop_spans: Sequence[tuple[float, float]] | None = None,
     on_progress: ProgressFn | None = None,
     is_cancelled: CancelFn | None = None,
+    source_patch: dict | None = None,
 ) -> dict[str, Any]:
     """Render one clip at full resolution. Returns {path, size, duration}."""
     _raise_if_cancelled(is_cancelled)
 
+    final = Path(out)
+    temp = storage.temporary_output_path(final)
     cmd = build_render_cmd(
-        src, cand, plan, ass_path, out,
+        src, cand, plan, ass_path, str(temp),
         fps=fps, crf=crf, preset=preset, watermark=watermark,
+        out_w=out_w, out_h=out_h,
         drop_spans=drop_spans,
         has_audio=bool(_has_audio(src)),
+        source_patch=source_patch,
     )
+    # Capture the argv that is about to run on the static path too. Inferring
+    # this afterwards from caption_policy or an ASS filename loses whether the
+    # filter actually appeared in the encoder command.
+    from services.clipper import render_record
+
+    record = render_record.record(cmd, ass_path=ass_path)
     _, duration = _window(cand)
     if drop_spans:
         from services.clipper.dead_air import removed_seconds
@@ -346,11 +384,18 @@ async def render_clip(
         duration = max(0.1, duration - removed_seconds(drop_spans))
     await _report(on_progress, 0.05, f"Encoding {duration:.1f}s at 1080x1920")
 
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    await _in_thread(lambda: run(cmd, timeout=RENDER_TIMEOUT, what="clip render"))
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+        await _in_thread(lambda: run(cmd, timeout=RENDER_TIMEOUT, what="clip render"))
 
-    await _report(on_progress, 0.95, "Verifying output")
-    return await _verify(out, duration)
+        await _report(on_progress, 0.95, "Verifying output")
+        result = await _verify(str(temp), duration)
+        storage.finalize_output(temp, final)
+        result["path"] = str(final)
+        result["render_record"] = record
+        return result
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 async def render_preview(
@@ -361,28 +406,51 @@ async def render_preview(
     out: str,
     *,
     max_seconds: float = 12.0,
+    watermark: str = "",
+    drop_spans: Sequence[tuple[float, float]] | None = None,
+    source_patch: dict | None = None,
 ) -> dict[str, Any]:
     """Render a short, low-res proxy of the same graph for the editor.
 
     Deliberately the SAME filtergraph as the export: a preview that composes
-    differently from the final render is worse than no preview.
+    differently from the final render is worse than no preview. `watermark` and
+    `drop_spans` are here for the same reason — the promise was only ever kept
+    for the parts of the render the caller happened to pass on.
     """
     start, duration = _window(cand)
     capped = min(duration, max(0.1, float(max_seconds)))
     window = {"start": start, "end": start + capped}
 
+    if drop_spans:
+        from services.clipper.dead_air import spans_within
+
+        # Only the spans this preview actually covers: `build_render_cmd`
+        # shortens `-t` by every second it is given, so a span past the cap
+        # would take time out of a window it was never in.
+        drop_spans = spans_within(drop_spans, capped)
+
+    final = Path(out)
+    temp = storage.temporary_output_path(final)
     cmd = build_render_cmd(
-        src, window, plan, ass_path, out,
+        src, window, plan, ass_path, str(temp),
         fps=PREVIEW_FPS, crf=PREVIEW_CRF, preset=PREVIEW_PRESET,
         out_w=PREVIEW_W, out_h=PREVIEW_H,
+        watermark=watermark, drop_spans=drop_spans,
         # A preview is what a decision gets made on, so it is levelled the same
         # way the export will be. Judging a quiet draft of a loud deliverable
         # is judging the wrong file.
         has_audio=bool(_has_audio(src)),
+        source_patch=source_patch,          # refused here: the static path takes none (SCB2)
     )
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    await _in_thread(lambda: run(cmd, timeout=PREVIEW_TIMEOUT, what="clip preview"))
-    return await _verify(out, capped)
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+        await _in_thread(lambda: run(cmd, timeout=PREVIEW_TIMEOUT, what="clip preview"))
+        result = await _verify(str(temp), capped)
+        storage.finalize_output(temp, final)
+        result["path"] = str(final)
+        return result
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 # ── Execution helpers ────────────────────────────────────────────────────────

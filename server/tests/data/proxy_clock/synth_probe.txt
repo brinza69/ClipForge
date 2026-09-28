@@ -1,0 +1,58 @@
+build_proxy copy vs ingest.py: matches
+
+24 fps (24): source {'frames': 14400, 'expected': 14400, 'not_own_index': 0} packets {'n': 14400, 'unparsed': 0, 'tb': [1, 12288], 'ticks_per_frame': '512', 'not_on_index_grid': 0}
+  domain {'state': 'ok'}; proxy slots 6002 (packets 6002, nb_frames 6002, PTS off grid 0, unreadable 0); simulated slots 6002
+  simulate vs shown: 6002/6002 equal, mismatches 0 []
+  address(): addressed 5998, mismatches 0, refused {'start_transient': 3, 'end_of_stream': 1} at slots [0, 1, 2, 6001]
+  first slots [(0, 0, 0, None), (1, 1, 1, None), (2, 2, 2, None), (3, 4, 4, 4)]
+  last slots  [(5998, 14392, 14392, 14392), (5999, 14394, 14394, 14394), (6000, 14397, 14397, 14397), (6001, 14399, 14399, None)]
+  exact ties 0: kept 0 []; addressed on a tie 0
+  RESULT ok
+
+23.976 fps (24000/1001): source {'frames': 14386, 'expected': 14386, 'not_own_index': 0} packets {'n': 14386, 'unparsed': 0, 'tb': [1, 24000], 'ticks_per_frame': '1001', 'not_on_index_grid': 0}
+  domain {'state': 'ok'}; proxy slots 6002 (packets 6002, nb_frames 6002, PTS off grid 0, unreadable 0); simulated slots 6002
+  simulate vs shown: 6002/6002 equal, mismatches 0 []
+  address(): addressed 5998, mismatches 0, refused {'start_transient': 3, 'end_of_stream': 1} at slots [0, 1, 2, 6001]
+  first slots [(0, 0, 0, None), (1, 1, 1, None), (2, 2, 2, None), (3, 4, 4, 4)]
+  last slots  [(5998, 14378, 14378, 14378), (5999, 14380, 14380, 14380), (6000, 14382, 14382, 14382), (6001, 14385, 14385, None)]
+  exact ties 6: kept 6 [(902, 2159, 2159), (1903, 4559, 4559), (2904, 6959, 6959), (3905, 9359, 9359), (4906, 11759, 11759), (5907, 14159, 14159)]; addressed on a tie 6
+  RESULT ok
+
+60 fps (60): source {'frames': 36000, 'expected': 36000, 'not_own_index': 0} packets {'n': 36000, 'unparsed': 0, 'tb': [1, 15360], 'ticks_per_frame': '256', 'not_on_index_grid': 0}
+  domain {'state': 'ok'}; proxy slots 6002 (packets 6002, nb_frames 6002, PTS off grid 0, unreadable 0); simulated slots 6002
+  simulate vs shown: 6002/6002 equal, mismatches 0 []
+  address(): addressed 5998, mismatches 0, refused {'start_transient': 3, 'end_of_stream': 1} at slots [0, 1, 2, 6001]
+  first slots [(0, 0, 0, None), (1, 1, 1, None), (2, 5, 5, None), (3, 11, 11, 11)]
+  last slots  [(5998, 35981, 35981, 35981), (5999, 35987, 35987, 35987), (6000, 35993, 35993, 35993), (6001, 35999, 35999, None)]
+  exact ties 0: kept 0 []; addressed on a tie 0
+  RESULT ok
+
+30 fps (30): source {'frames': 18000, 'expected': 18000, 'not_own_index': 0} packets {'n': 18000, 'unparsed': 0, 'tb': [1, 15360], 'ticks_per_frame': '512', 'not_on_index_grid': 0}
+  domain {'state': 'ok'}; proxy slots 6002 (packets 6002, nb_frames 6002, PTS off grid 0, unreadable 0); simulated slots 6002
+  simulate vs shown: 6002/6002 equal, mismatches 0 []
+  address(): addressed 5998, mismatches 0, refused {'start_transient': 3, 'end_of_stream': 1} at slots [0, 1, 2, 6001]
+  first slots [(0, 0, 0, None), (1, 1, 1, None), (2, 2, 2, None), (3, 5, 5, 5)]
+  last slots  [(5998, 17990, 17990, 17990), (5999, 17993, 17993, 17993), (6000, 17996, 17996, 17996), (6001, 17999, 17999, None)]
+  exact ties 0: kept 0 []; addressed on a tie 0
+  RESULT ok
+
+25 fps (25): source {'frames': 15000, 'expected': 15000, 'not_own_index': 0} packets {'n': 15000, 'unparsed': 0, 'tb': [1, 12800], 'ticks_per_frame': '512', 'not_on_index_grid': 0}
+  domain {'state': 'ok'}; proxy slots 6002 (packets 6002, nb_frames 6002, PTS off grid 0, unreadable 0); simulated slots 6002
+  simulate vs shown: 6002/6002 equal, mismatches 0 []
+  address(): addressed 5998, mismatches 0, refused {'start_transient': 3, 'end_of_stream': 1} at slots [0, 1, 2, 6001]
+  first slots [(0, 0, 0, None), (1, 1, 1, None), (2, 2, 2, None), (3, 4, 4, 4)]
+  last slots  [(5998, 14992, 14992, 14992), (5999, 14994, 14994, 14994), (6000, 14997, 14997, 14997), (6001, 14999, 14999, None)]
+  exact ties 0: kept 0 []; addressed on a tie 0
+  RESULT ok
+
+59.94 fps (60000/1001): source {'frames': 35965, 'expected': 35965, 'not_own_index': 0} packets {'n': 35965, 'unparsed': 0, 'tb': [1, 60000], 'ticks_per_frame': '1001', 'not_on_index_grid': 0}
+  domain {'state': 'ok'}; proxy slots 6002 (packets 6002, nb_frames 6002, PTS off grid 0, unreadable 0); simulated slots 6002
+  simulate vs shown: 6002/6002 equal, mismatches 0 []
+  address(): addressed 5999, mismatches 0, refused {'start_transient': 3} at slots [0, 1, 2]
+  first slots [(0, 0, 0, None), (1, 1, 1, None), (2, 5, 5, None), (3, 11, 11, 11)]
+  last slots  [(5998, 35945, 35945, 35945), (5999, 35951, 35951, 35951), (6000, 35957, 35957, 35957), (6001, 35963, 35963, 35963)]
+  exact ties 6: kept 6 [(902, 5399, 5399), (1903, 11399, 11399), (2904, 17399, 17399), (3905, 23399, 23399), (4906, 29399, 29399), (5907, 35399, 35399)]; addressed on a tie 6
+  RESULT ok
+
+rates run 6; failed or refused 0
+exit 0

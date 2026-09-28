@@ -238,7 +238,8 @@ def _face_samples(face_track: Sequence[dict], sx: float, sy: float,
 
 
 def _dominant(samples: Sequence[tuple[float, float, float, float]],
-              src_w: int, src_h: int
+              src_w: int, src_h: int,
+              anchor: tuple[float, float] | None = None
               ) -> tuple[list[tuple[float, float, float, float]], dict[str, float]]:
     """Keep the samples belonging to the biggest face cluster.
 
@@ -252,10 +253,31 @@ def _dominant(samples: Sequence[tuple[float, float, float, float]],
         return [], {"cx": src_w / 2.0, "cy": src_h * 0.45,
                     "w": src_w * 0.11, "n": 0}
 
-    mx, my = _median([s[1] for s in samples]), _median([s[2] for s in samples])
+    # The median is a guess that the busiest cluster IS the subject. On a Just
+    # Chatting stream it is not: the busiest faces are the ones in the video
+    # being reacted to, and the median lands on them. `anchor` is the caller
+    # saying it already knows where the fixed subject sits — see
+    # `dynamic_subject.stable_track`, which only answers when the evidence is
+    # decisive, so this stays None on the sources that already work.
+    if anchor:
+        mx, my = float(anchor[0]), float(anchor[1])
+    else:
+        mx, my = _median([s[1] for s in samples]), _median([s[2] for s in samples])
     tol_x, tol_y = src_w * 0.16, src_h * 0.22
     kept = [s for s in samples if abs(s[1] - mx) <= tol_x and abs(s[2] - my) <= tol_y]
     if len(kept) < max(3, len(samples) // 6):   # cluster too thin to trust
+        if anchor:
+            # An anchor is KNOWLEDGE about the whole source; the fallback is a
+            # guess from one window. Preferring the guess is what put the crop
+            # back on the reacted-to video: measured on `pilot2c8a` clip
+            # 8cb13e48ef30, 0 of 123 detections in the window sit near the
+            # webcam — it is there in the frame and the detector simply misses
+            # it — so falling back handed the window to the content faces, all
+            # 123 of them. A fixed subject does not stop existing because this
+            # forty seconds failed to detect it.
+            return [], {"cx": float(anchor[0]), "cy": float(anchor[1]),
+                        "w": anchor[2] if len(anchor) > 2 else src_w * 0.11,
+                        "n": 0}
         kept = list(samples)
 
     return kept, {
@@ -302,24 +324,33 @@ def _rect(w: float, h: float, cx: float, cy: float, headroom: float,
 
 
 def camera_rects(face: dict[str, float], style: dict,
-                 src_w: int, src_h: int) -> dict[str, dict[str, int]]:
+                 src_w: int, src_h: int,
+                 framing_span: float | None = None) -> dict[str, dict[str, int]]:
     """The source rectangle for every camera, given where the facecam is.
 
     The gameplay cameras are pushed clear of BOTH the facecam and the chat
     strip: a "gameplay" shot that still contains the streamer's head is not a
     second camera, it is the first one with extra clutter.
+
+    `framing_span` is the editorial zoom scale derived from elected observation
+    extents (see dynamic_face_envelope.compute_framing_span). When absent the
+    observed face width is used unchanged, preserving legacy geometry exactly.
+    Only face-family cameras use this value; game bands are unaffected.
     """
     out: dict[str, dict[str, int]] = {}
-    fw = float(face.get("w") or src_w * 0.11)
+    # face_w drives game band geometry and subject identity — unchanged.
+    # face_fw is the editorial zoom scale for face cameras only.
+    face_w = float(face.get("w") or src_w * 0.11)
+    face_fw = float(framing_span if framing_span is not None else face_w)
     fcx, fcy = float(face["cx"]), float(face["cy"])
 
     for name in _FACE_CAMS:
         mult, headroom = CAMERAS[name]
-        out[name] = _rect(0, fw * mult, fcx, fcy, headroom, src_w, src_h)
+        out[name] = _rect(0, face_fw * mult, fcx, fcy, headroom, src_w, src_h)
 
     chat = src_w * (1.0 - _f(style.get("chat_margin_pct"), 0.09))
     # Everything to the right of the facecam, minus the chat strip.
-    band_lo = min(src_w * 0.75, fcx + fw * 1.2)
+    band_lo = min(src_w * 0.75, fcx + face_w * 1.2)
     band_hi = max(band_lo + src_w * 0.12, chat)
     action_cx = (band_lo + band_hi) / 2.0
 

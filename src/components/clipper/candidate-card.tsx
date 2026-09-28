@@ -7,9 +7,9 @@
 // cannot interrogate is a number they cannot overrule.
 
 import { useState } from "react";
-import { Check, Download, Film, Loader2, Play, X } from "lucide-react";
+import { Check, Clapperboard, Download, Film, Loader2, Play, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   CLIPPER_API,
@@ -18,6 +18,19 @@ import {
   formatTimecode,
   type ClipperClip,
 } from "@/types/clipper";
+import type { PreviewAttempt } from "@/types/clipper-attempts";
+import { visibleWarnings } from "./caption-display";
+import { CaptionDisplayNote } from "./caption-display-note";
+
+function previewFailure(attempt: PreviewAttempt): string {
+  if (attempt.discarded === "inputs_changed")
+    return "Preview discarded: the clip was edited while it rendered. Run Preview again.";
+  if (attempt.discarded === "newer_export")
+    return "Preview discarded: an export was published while it rendered.";
+  if (attempt.discarded === "newer_preview")
+    return "Preview discarded: a newer preview was already published.";
+  return `Preview failed: ${attempt.error ?? "the render did not finish"}`;
+}
 
 function scoreTone(score: number): string {
   if (score >= 70) return "border-emerald-500/40 bg-emerald-500/10 text-emerald-400";
@@ -50,6 +63,9 @@ export function CandidateCard({
   };
 
   const score = Math.round(clip.overall_score ?? 0);
+  // A person's cancel leaves the clip `failed` so Export stays available (R4b);
+  // the latest export job says it was a cancel, not a failure (O3).
+  const exportCancelled = clip.status === "failed" && clip.last_export?.status === "cancelled";
   const previewUrl = clip.preview_path
     ? `${CLIPPER_API}/clips/${clip.id}/preview-file`
     : null;
@@ -59,7 +75,18 @@ export function CandidateCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            {clip.rank_position != null && (
+            {/* A clip a rescore kept keeps the rank of the run that made it; showing
+                that as "#1" beside the new board's #1 read as two winners (O2). */}
+            {clip.from_current_run === false ? (
+              <span
+                className="text-[11px] font-semibold text-muted-foreground"
+                title={clip.rank_position != null
+                  ? `Kept from an earlier run, where it ranked #${clip.rank_position}`
+                  : "Kept from an earlier run"}
+              >
+                kept
+              </span>
+            ) : clip.rank_position != null && (
               <span className="text-[11px] font-semibold text-muted-foreground">
                 #{clip.rank_position}
               </span>
@@ -127,6 +154,15 @@ export function CandidateCard({
         </div>
       )}
 
+      {/* The NEWEST preview attempt, read off its job row: a failed or discarded
+          render says so beside its own clip. It used to surface as the project's
+          analysis failure, whose Retry rescored the whole source (D2r-3,
+          codex-verdict-closure-4). A later successful preview replaces it — this
+          is the latest attempt, not the last failure. */}
+      {clip.last_preview?.status === "failed" && (
+        <p className="text-[10px] text-rose-400/90">⚠ {previewFailure(clip.last_preview)}</p>
+      )}
+
       <div className="flex flex-wrap gap-1.5">
         {clip.content_type && (
           <Badge variant="secondary" className="text-[10px]">
@@ -148,10 +184,12 @@ export function CandidateCard({
                 ? "bg-emerald-500/15 text-emerald-400"
                 : clip.status === "rejected"
                   ? "bg-rose-500/15 text-rose-400"
-                  : ""
+                  : exportCancelled
+                    ? "bg-gray-500/15 text-gray-400"
+                    : ""
             }`}
           >
-            {clip.status}
+            {exportCancelled ? "export cancelled" : clip.status}
           </Badge>
         )}
       </div>
@@ -162,14 +200,22 @@ export function CandidateCard({
         </p>
       )}
 
-      {(clip.warnings?.length ?? 0) > 0 && (
+      {visibleWarnings(clip.warnings, clip.caption_display).length > 0 && (
         <div className="space-y-1">
-          {clip.warnings!.slice(0, 2).map((w) => (
+          {visibleWarnings(clip.warnings, clip.caption_display).slice(0, 2).map((w) => (
             <p key={w} className="text-[10px] text-amber-400/90">
               ⚠ {w}
             </p>
           ))}
         </div>
+      )}
+
+      <CaptionDisplayNote view={clip.caption_display} compact />
+      {/* SC3: the stored CHOICE, read from the clip the server returned (a save or a reload shows it). It
+          says nothing about a file: the export is invalidated when the choice changes (next-34 R1). */}
+      {(clip as { source_caption_treatment?: { treatment?: string } | null })
+        .source_caption_treatment?.treatment === "blur" && (
+        <p className="text-[10px] text-muted-foreground">Blur selectat pentru următoarea randare</p>
       )}
 
       <div className="mt-auto flex flex-wrap gap-1.5">
@@ -215,9 +261,25 @@ export function CandidateCard({
           {busy === "export" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Download className="h-3.5 w-3.5" />
+            <Clapperboard className="h-3.5 w-3.5" />
           )}
         </Button>
+        {/* A plain GET of the file the server holds as this clip's current
+            export: no job, no render. Offered only while the clip IS exported —
+            during a render, after a failure or after an invalidation the file on
+            disk is not the current export, and the route refuses it too. The
+            render button used to carry this icon, and was the only way to the
+            file: there was none (A4 release-browser.md, D1). */}
+        {clip.status === "exported" && (
+          <a
+            href={`${CLIPPER_API}/clips/${clip.id}/export-file`}
+            download
+            title="Download the exported file"
+            className={buttonVariants({ variant: "secondary", size: "sm" })}
+          >
+            <Download className="h-3.5 w-3.5" />
+          </a>
+        )}
       </div>
     </Card>
   );

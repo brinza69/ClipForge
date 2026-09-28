@@ -14,6 +14,8 @@ from sqlalchemy.orm import DeclarativeBase
 
 from config import settings
 
+logger = logging.getLogger("clipforge.db")
+
 
 class Base(DeclarativeBase):
     pass
@@ -62,13 +64,126 @@ def _sqlite_pragmas(dbapi_connection, _record) -> None:
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
+SCHEMA_VERSION = "2026-09-03-1"
+
+_REQUIRED_MIGRATED_COLUMNS = {
+    "jobs": {
+        "worker_id", "lease_expires_at", "last_heartbeat", "attempt_count",
+        "cancellation_requested", "idempotency_key",
+    },
+    "projects": {
+        "processing_mode", "batch_id", "batch_index", "erase_params",
+        "erased_video_path", "clipper_settings", "content_type",
+        "content_type_confidence", "content_type_override", "analysis_version",
+        "rights_confirmed", "source_kind",
+        "analysis_generation",
+    },
+    "transcripts": {"failed_chunks"},
+    "clips": {
+        "hook_text", "explanation", "thumbnail_path", "caption_preset_id",
+        "reframe_mode", "reframe_data", "export_path", "caption_style",
+        "caption_y_pct", "caption_align", "hook_y_pct", "hook_align",
+        "caption_font_size", "caption_text_color", "caption_highlight_color",
+        "caption_outline_color", "caption_y_position", "hook_font_size",
+        "hook_text_color", "hook_bg_color", "hook_y_position", "hook_box_size",
+        "hook_box_width", "hook_duration_seconds", "hook_x", "hook_y",
+        "subtitle_x", "subtitle_y", "export_resolution", "split_mode",
+        "split_parts_count", "part_label_font_size", "part_label_box_size",
+        "part_label_text_color", "part_label_bg_color", "part_label_x",
+        "part_label_y", "export_parts", "hook_bg_enabled", "title_text",
+        "title_font_size", "title_x", "title_y", "title_box_size",
+        "title_box_width", "title_bg_enabled", "creator_tag_enabled",
+        "creator_tag_text", "creator_tag_x", "creator_tag_y",
+        "creator_tag_opacity", "creator_tag_font_size", "drive_folder_link",
+        "overall_score", "sub_scores", "score_reason", "layout_plan",
+        "caption_plan", "headline_text", "content_type", "warnings",
+        "dedupe_group", "is_alternative", "rank_position", "feature_vector",
+        "reasoning", "review", "ranker_version", "preview_path",
+        "selection_run_id", "source_has_burned_captions", "export_job_id", "preview_record",
+        "source_caption_treatment", "caption_layer",
+    },
+}
+
+_REQUIRED_INDEXES = {
+    "idx_jobs_lease_expires_at", "idx_jobs_active_idempotency",
+    "idx_projects_batch_id",
+    "idx_clips_project_rank", "idx_clip_feedback_clip", "idx_clip_feedback_event",
+}
+
+
+async def _verify_migrations(conn) -> None:
+    """Turn previously silent migration failures into startup failures."""
+    from sqlalchemy import text
+
+    missing: list[str] = []
+    for table, columns in _REQUIRED_MIGRATED_COLUMNS.items():
+        result = await conn.execute(text(f"PRAGMA table_info({table})"))
+        existing = {row[1] for row in result.fetchall()}
+        missing.extend(f"{table}.{column}" for column in sorted(columns - existing))
+
+    result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type = 'index'"))
+    indexes = {row[0] for row in result.fetchall()}
+    missing.extend(f"index:{name}" for name in sorted(_REQUIRED_INDEXES - indexes))
+    if missing:
+        message = "database migration incomplete: " + ", ".join(missing)
+        logger.error(message)
+        raise RuntimeError(message)
+
+    await conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS schema_meta "
+        "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    ))
+    await conn.execute(text(
+        "INSERT INTO schema_meta(key, value) VALUES ('schema_version', :version) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    ), {"version": SCHEMA_VERSION})
+
+
 async def init_db() -> None:
     """Create all tables if they do not exist."""
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Job ownership/lease columns. `create_all()` covers new databases;
+        # these additive statements keep existing installations compatible.
+        _job_migrations = [
+            ("worker_id", "VARCHAR(160)"),
+            ("lease_expires_at", "DATETIME"),
+            ("last_heartbeat", "DATETIME"),
+            ("attempt_count", "INTEGER DEFAULT 0"),
+            ("cancellation_requested", "BOOLEAN DEFAULT 0"),
+            ("idempotency_key", "VARCHAR(64)"),
+        ]
+        for col, col_type in _job_migrations:
+            try:
+                await conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}"))
+            except Exception:
+                # Existing columns are expected during every later startup.
+                # The broader migration error policy is unchanged in this
+                # batch; lease behavior is guarded by the runtime checks.
+                pass
+        try:
+            await conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_jobs_lease_expires_at ON jobs(lease_expires_at)")
+            )
+        except Exception:
+            pass
+
+        try:
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active_idempotency "
+                "ON jobs(idempotency_key) "
+                "WHERE idempotency_key IS NOT NULL "
+                "AND status IN ('queued', 'running')"
+            ))
+        except Exception:
+            pass
+
         # Column migrations for clips table
         _clip_migrations = [
+            ("content_confidence", "REAL"),
+            ("content_type_origin", "VARCHAR(20)"),
             ("hook_text", "TEXT"),
             ("explanation", "TEXT"),
             ("thumbnail_path", "TEXT"),
@@ -82,6 +197,9 @@ async def init_db() -> None:
             ("caption_align", "VARCHAR(10)"),
             ("hook_y_pct", "REAL"),
             ("hook_align", "VARCHAR(10)"),
+            ("shadow_rank", "INTEGER"),
+            ("shadow_run_id", "VARCHAR(64)"),
+            ("selection_run_id", "VARCHAR(64)"),
         ]
         for col_name, col_type in _clip_migrations:
             try:
@@ -177,6 +295,7 @@ async def init_db() -> None:
             ("analysis_version", "VARCHAR(20)"),
             ("rights_confirmed", "BOOLEAN"),
             ("source_kind", "VARCHAR(20)"),
+            ("analysis_generation", "VARCHAR(64)"),
         ]
         for col, col_type in _clipper_project_migrations:
             try:
@@ -210,10 +329,25 @@ async def init_db() -> None:
             ("review", "TEXT"),
             ("ranker_version", "VARCHAR(20)"),
             ("preview_path", "TEXT"),
+            ("source_has_burned_captions", "BOOLEAN"),
+            ("export_job_id", "VARCHAR(12)"),
+            ("preview_record", "TEXT"),
+            ("source_caption_treatment", "TEXT"),
+            ("caption_layer", "VARCHAR(10)"),
         ]
         for col, col_type in _clipper_clip_migrations:
             try:
                 await conn.execute(text(f"ALTER TABLE clips ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass
+
+        _clip_feedback_migrations = [
+            ("origin", "VARCHAR(10)"),
+        ]
+        for col, col_type in _clip_feedback_migrations:
+            try:
+                await conn.execute(
+                    text(f"ALTER TABLE clip_feedback ADD COLUMN {col} {col_type}"))
             except Exception:
                 pass
 
@@ -241,6 +375,8 @@ async def init_db() -> None:
         except Exception:
             pass
 
+
+        await _verify_migrations(conn)
 
 async def get_session():
     """FastAPI dependency that yields a session."""

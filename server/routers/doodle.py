@@ -20,6 +20,7 @@ from database import async_session
 from models import JobModel, JobStatus, JobType
 from routers.doodle_images import router as doodle_images_router
 from services.doodle import image_providers, storage
+from services.file_validation import is_usable_file
 
 logger = logging.getLogger("clipforge.routers.doodle")
 router = APIRouter(prefix="/api/doodle", tags=["doodle"])
@@ -426,7 +427,7 @@ async def download_prompts_csv(project_id: str):
     sb = _load_or_404(project_id)
     storage.write_prompt_exports(project_id, sb)
     path = storage.project_dir(project_id) / "prompts" / "flow_prompts.csv"
-    if not path.exists():
+    if not is_usable_file(path, minimum_bytes=1):
         raise HTTPException(404, "prompts not generated yet")
     return FileResponse(path, media_type="text/csv", filename="flow_prompts.csv")
 
@@ -436,7 +437,7 @@ async def download_prompts_json(project_id: str):
     sb = _load_or_404(project_id)
     storage.write_prompt_exports(project_id, sb)
     path = storage.project_dir(project_id) / "prompts" / "flow_prompts.json"
-    if not path.exists():
+    if not is_usable_file(path, minimum_bytes=1):
         raise HTTPException(404, "prompts not generated yet")
     return FileResponse(path, media_type="application/json", filename="flow_prompts.json")
 

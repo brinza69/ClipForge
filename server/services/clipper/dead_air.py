@@ -113,6 +113,70 @@ def remap_time(t: float, spans: Sequence[tuple[float, float]]) -> float:
     return round(max(0.0, t - shift), 3)
 
 
+def _kept_ranges(start: float, end: float,
+                 spans: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Parts of one source interval left after sorted, disjoint removals."""
+    cursor = start
+    out: list[tuple[float, float]] = []
+    for lo, hi in spans:
+        if hi <= cursor:
+            continue
+        if lo >= end:
+            break
+        if lo > cursor:
+            out.append((cursor, min(lo, end)))
+        cursor = max(cursor, hi)
+        if cursor >= end:
+            break
+    if cursor < end:
+        out.append((cursor, end))
+    return out
+
+
+def _interval_was_removed(start: float, end: float,
+                          spans: Sequence[tuple[float, float]]) -> bool:
+    """Whether every source instant between two surviving pieces was cut."""
+    if end <= start:
+        return False
+    covered = sum(max(0.0, min(end, hi) - max(start, lo)) for lo, hi in spans)
+    return abs(covered - (end - start)) <= 0.001
+
+
+def delivered_shots(shots: Sequence[dict], spans: Sequence[tuple[float, float]]
+                    ) -> tuple[list[dict], set[int]]:
+    """Reconstruct the shot pieces the trimmed file actually contains.
+
+    The returned indices name boundaries whose two sides are separated by
+    removed source time. They are trim jumps, not ordinary planner cuts: even
+    two `fit` pieces from the same original shot do not deliver one continuous
+    image after the source skips forward.
+
+    Inputs are already validated by the sidecar reader. The persisted shot
+    dicts are copied, never changed by an audit.
+    """
+    if not spans:
+        return [dict(shot) for shot in shots], set()
+
+    pieces: list[dict] = []
+    source_ranges: list[tuple[float, float]] = []
+    for shot in shots:
+        start, end = float(shot["t0"]), float(shot["t1"])
+        for kept_start, kept_end in _kept_ranges(start, end, spans):
+            mapped_start = remap_time(kept_start, spans)
+            mapped_end = remap_time(kept_end, spans)
+            if mapped_end <= mapped_start:
+                continue
+            pieces.append({**shot, "t0": mapped_start, "t1": mapped_end})
+            source_ranges.append((kept_start, kept_end))
+
+    jumps = {
+        index for index in range(1, len(source_ranges))
+        if _interval_was_removed(source_ranges[index - 1][1],
+                                 source_ranges[index][0], spans)
+    }
+    return pieces, jumps
+
+
 def remap_overlays(overlays: Sequence[dict],
                    spans: Sequence[tuple[float, float]]) -> list[dict]:
     """Caption overlays on the trimmed timeline.
@@ -120,16 +184,60 @@ def remap_overlays(overlays: Sequence[dict],
     Called before the .ass is written, never after: libass positions against
     absolute times, so an overlay left on the untrimmed clock drifts further
     out of sync with every second removed.
+
+    THE KEYS ARE `start_t`/`end_t` AND THAT IS NOT COSMETIC. This function read
+    `start`/`end` until 2026-08-17 — keys that `caption_plan_to_overlays` has
+    never produced and `build_overlays_ass` has never consumed. Every overlay
+    therefore remapped to (0, 0), was dropped by the check below as "wholly
+    inside removed time", and `_write_ass` returned None for an empty list. So
+    turning `trim_silence` on did not drift the captions, it removed ALL of
+    them: the clip rendered with no subtitles at all, on both the static and
+    the multi-shot path, and the stale .ass from a previous export stayed on
+    disk looking like proof that one had been written.
+
+    Its three unit tests passed throughout, because they were written against
+    `start`/`end` as well — the function and its tests agreed with each other
+    and with nothing else. `test_the_overlay_shape_is_the_one_the_captioner_emits`
+    exists so that cannot happen again.
     """
     if not spans:
         return list(overlays or [])
     out: list[dict] = []
     for ov in overlays or []:
-        start = remap_time(_num(ov.get("start")), spans)
-        end = remap_time(_num(ov.get("end")), spans)
+        start = remap_time(_num(ov.get("start_t")), spans)
+        end = remap_time(_num(ov.get("end_t")), spans)
         if end <= start:
             continue                      # wholly inside removed time
-        out.append({**ov, "start": start, "end": end})
+        mapped = {**ov, "start_t": start, "end_t": end}
+        # Highlight events use these times independently of the line's times.
+        # Remapping only the line held LEFT for the entire LEFT RIGHT caption
+        # after a one-second cut (encoded-clock regression, 2026-09-10).
+        if isinstance(ov.get("words"), list):
+            mapped["words"] = [
+                {**word, **{key: remap_time(_num(word[key]), spans)
+                           for key in ("start", "end") if key in word}}
+                if isinstance(word, dict) else word for word in ov["words"]]
+        out.append(mapped)
+    return out
+
+
+def spans_within(spans: Sequence[tuple[float, float]],
+                 limit: float) -> list[tuple[float, float]]:
+    """The spans that fall inside the first `limit` seconds, clipped to it.
+
+    For previews, which show the opening of a clip rather than all of it. Both
+    renderers shorten their `-t` by the TOTAL removed seconds, so handing a
+    12-second preview a span that sits at t=20 makes it 2.4s short of a window
+    that span was never in.
+    """
+    out: list[tuple[float, float]] = []
+    for start, end in spans or []:
+        start, end = _num(start), _num(end)
+        if start >= limit:
+            continue
+        end = min(end, limit)
+        if end > start:
+            out.append((start, end))
     return out
 
 

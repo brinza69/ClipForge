@@ -126,6 +126,22 @@ class ClipperEvent(str, enum.Enum):
     score_overridden = "score_overridden"
     posted = "posted"
     performance_recorded = "performance_recorded"
+    # A blind evaluation answer, NOT a decision about the clip. Deliberately
+    # outside feedback._DECISIVE: someone answering "would you export this"
+    # about a clip they never asked for has not chosen to publish it, and the
+    # ranker reading it as approval is how training_rows() once returned 43
+    # rows every one of which was labelled 1.0.
+    reviewed = "reviewed"
+    # A person's persistent edit of a field with no semantic event of its own
+    # (title, transcript text, sub-scores, warnings); `field` in the payload.
+    # Keeps the edit through a rescore. NOT a verdict: correcting a transcript
+    # is not approving the clip (codex-verdict-wave1.md, answer 3).
+    metadata_changed = "metadata_changed"
+    # SYSTEM fact: a project-level change (the caption-source answer) voided an
+    # existing export; payload names the cause and the previous export. Keeps
+    # the row a rescore would otherwise delete once `invalidate_render` moved it
+    # exported -> approved. Not a human edit, not a verdict (C1).
+    export_invalidated = "export_invalidated"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -187,6 +203,10 @@ class ProjectModel(Base):
     # Bumped when the analysis pipeline changes shape; cached artifacts written
     # by an older version are recomputed instead of trusted.
     analysis_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # OW1: the analysis generation this project reads — the ONE pointer that
+    # publishes an analysis (services/clipper/analysis_generation.py). None is a
+    # pre-OW1 project: its flat analysis/ is read as `legacy`, unverified.
+    analysis_generation: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # The user's affirmation that they own the content or have permission.
     rights_confirmed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     source_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)  # url|upload|library
@@ -210,6 +230,19 @@ class JobModel(Base):
     progress_message: Mapped[str] = mapped_column(String(200), default="")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A deterministic request fingerprint prevents double-clicks from
+    # creating two active pipelines for the same input/configuration.
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Persistent ownership prevents a second backend process from recovering
+    # or finalising work that is still owned by the first one.
+    worker_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    cancellation_requested: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -333,15 +366,62 @@ class ClipModel(Base):
     layout_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Word-grouped caption chunks + resolved style.
     caption_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # A human's per-clip answer to whether the SOURCE already carries burned
+    # subtitles — see services/clipper/caption_policy.py. True suppresses
+    # ClipForge's own layer for this clip, False keeps it, NULL (default)
+    # follows the project's setting. A dedicated column rather than a key
+    # inside `caption_plan`: a caption rebuild replaces that dict and would
+    # silently resurrect a duplicate layer.
+    source_has_burned_captions: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # The export attempt that owns this clip's claim (R4b): the job id written in
+    # the SAME commit as `status = exporting` and the job row. Fail, cancel,
+    # recovery and the render's own publish move the clip only for this job; an
+    # older attempt's encode that finishes late publishes nothing. NULL for
+    # historical orphans too — their identity is not reconstructed
+    # (scripts/release_stuck_exports.py).
+    export_job_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    # The preview ATTEMPT whose file `preview_path` selects, and that attempt's caption report:
+    # `{job_id, attempt, worker, caption_plan_state}` (BURST R1, codex-verdict-next-23/24). Written in the
+    # SAME transaction as `preview_path`, which names an immutable per-attempt file: a failed commit
+    # leaves the previous file AND its report selected, never a new file under an old report. A job id
+    # alone is not an attempt — a recovered job publishes again under another `attempt`. NULL = legacy.
+    preview_record: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # What to do with the SOURCE's own burned captions on this clip (SC3, codex-verdict-next-33 §3):
+    # NULL = the existing default (nothing treated), `{"treatment": "none", "decided_by": "human"}` = a person
+    # chose none, or `{"treatment": "blur", "decided_by": "human", "mask_sha256": <validated mask>}`. Written
+    # only by PUT /clips/{id}/source-treatment; `decided_by` is the server's, never the client's.
+    source_caption_treatment: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # ClipForge's OWN caption layer chosen for this clip: "burn", "suppress" or NULL (= the existing
+    # policy). Separate from `source_has_burned_captions`, which stays the truth about the SOURCE and is
+    # never flipped to get a burn.
+    caption_layer: Mapped[str | None] = mapped_column(String(10), nullable=True)
     # The optional context hook. Distinct from `hook_text` (legacy editor).
     headline_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # How sure the classifier was about THIS stretch, and where the verdict came
+    # from. Both travel with the type since R2: an edit profile must be able to
+    # tell "measured, and low" from "never measured", and a person's override
+    # from a machine's guess. NULL confidence is a legitimate state and is never
+    # filled in from the source's own score.
+    content_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    content_type_origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
     warnings: Mapped[list | dict | None] = mapped_column(JSON, nullable=True)
     # Near-duplicates share a dedupe_group; the winner is shown and the rest
     # are kept as retrievable alternatives rather than thrown away.
     dedupe_group: Mapped[str | None] = mapped_column(String(12), nullable=True)
     is_alternative: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     rank_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Where the shadow board would have placed this clip, and which run said so.
+    # NULL for everything the shadow board did not pick, and for every run that
+    # was not in a shadow mode. Never read by the pipeline — it exists so a
+    # blind review can be shown v2's choices without shipping them.
+    shadow_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shadow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The scoring/selection run that created this row. Unlike shadow_run_id it
+    # exists for every fresh candidate, including the legacy board, and is the
+    # identity copied into an eventual render sidecar. NULL means the row
+    # predates S7f; old provenance is not reconstructed from today's trace.
+    selection_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Frozen at scoring time so the ranker trains on what the model actually
     # saw, not on features recomputed by newer code.
     feature_vector: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -379,6 +459,11 @@ class ClipFeedbackModel(Base):
     project_id: Mapped[str | None] = mapped_column(String(12), index=True, nullable=True)
     event_type: Mapped[str] = mapped_column(String(30), index=True)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # WHO did this: "manual" (a person clicked), "auto" (the pipeline did it on
+    # its own, e.g. auto_export) or "system". Only "manual" is a verdict — see
+    # feedback.label_for_events. NULL means the row predates this column and its
+    # origin is unrecoverable, which is why NULL does not label either.
+    origin: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

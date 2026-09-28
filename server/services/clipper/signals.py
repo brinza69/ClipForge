@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 import wave
 from pathlib import Path
 from types import ModuleType
@@ -29,7 +28,12 @@ from typing import Any, Sequence
 import numpy as np
 
 from services.clipper import ANALYSIS_VERSION
-from services.clipper.ffmpeg_tools import FFmpegError, ffmpeg_bin, run, video_info
+from services.clipper.face_detector import (  # re-exported; callers import from here
+    FACE_MIN_NEIGHBOURS, FACE_MIN_SIZE, FACE_SCALE_FACTOR,
+    detect_faces, face_cascades, face_presence,
+)
+from services.clipper import attempt_stop, scene_address
+from services.clipper.ffmpeg_tools import FFmpegError, video_info
 
 logger = logging.getLogger("clipforge.clipper.signals")
 
@@ -66,8 +70,6 @@ UI_LUM_MIN, UI_LUM_MAX = 110, 215
 FACE_HOP_S = 2.0
 MAX_FACE_SAMPLES = 2000      # caps Haar cost regardless of VOD length
 MAX_MOTION_SAMPLES = 200_000  # ~27 h at the default hop; guards a broken decoder
-
-_PTS_RE = re.compile(r"pts_time:([0-9]+\.?[0-9]*)")
 
 
 # --------------------------------------------------------------------------
@@ -284,27 +286,10 @@ def audio_timeline(wav_path: str, *, hop_s: float = 0.25) -> dict[str, Any]:
 
 
 def scene_timeline(proxy_path: str, *, threshold: float = 0.30) -> list[float]:
-    """Scene-change timestamps (seconds) from one ffmpeg pass over the proxy."""
-    if not proxy_path or not Path(proxy_path).exists():
-        logger.warning("scene_timeline: missing proxy %s", proxy_path)
-        return []
-    cmd = [
-        ffmpeg_bin(), "-hide_banner", "-nostdin",
-        "-i", str(proxy_path),
-        "-an",
-        "-vf", f"select='gt(scene,{threshold:.4f})',metadata=print:file=-",
-        "-f", "null", "-",
-    ]
-    try:
-        # The whole proxy still has to be decoded, so the default 600 s ceiling
-        # is too tight for a multi-hour VOD.
-        out = run(cmd, timeout=3600, what="scene detect")
-    except FFmpegError as exc:
-        logger.warning("scene_timeline: %s", exc)
-        return []
+    """Scene-change timestamps (seconds) from one ffmpeg pass over the proxy.
 
-    times = sorted({round(float(m), 3) for m in _PTS_RE.findall(out or "")})
-    return [t for t in times if t > 0]
+    The pass, and the integer PTS it now keeps, live in scene_address."""
+    return scene_address.scene_pass(proxy_path, threshold=threshold)["times"]
 
 
 def _cv2() -> ModuleType | None:
@@ -378,122 +363,6 @@ def motion_timeline(proxy_path: str, *, hop_s: float = 0.5) -> dict[str, Any]:
     return result
 
 
-FACE_SCALE_FACTOR = 1.05
-FACE_MIN_NEIGHBOURS = 5
-FACE_MIN_SIZE = (20, 20)
-_FACE_MERGE_IOU = 0.35
-
-
-def _merge_boxes(boxes: list[list[int]]) -> list[list[int]]:
-    """Drop boxes that overlap one already kept — two cascades see one face twice."""
-    kept: list[list[int]] = []
-    for box in sorted(boxes, key=lambda b: -b[2] * b[3]):
-        x0, y0, w0, h0 = box
-        for x1, y1, w1, h1 in kept:
-            ix = max(0, min(x0 + w0, x1 + w1) - max(x0, x1))
-            iy = max(0, min(y0 + h0, y1 + h1) - max(y0, y1))
-            inter = ix * iy
-            if inter and inter / float(w0 * h0 + w1 * h1 - inter) >= _FACE_MERGE_IOU:
-                break
-        else:
-            kept.append(box)
-    return kept
-
-
-_FACE_CASCADES: list[Any] | None = None
-
-
-def face_cascades() -> list[Any]:
-    """The tuned cascade set, loaded once.
-
-    Two cascades, not one: a co-stream has a facecam per person and they are
-    rarely both facing the lens. Measured over 40 frames, the frontal cascade
-    found the left facecam 17 times and the right one NEVER (that streamer was
-    turned away); the profile cascade found the right one 3 times. Neither
-    produced a false positive at 1.05/5, the best of six combinations tried —
-    1.15 missed almost everything, minNeighbors=3 let nine into the gameplay.
-    """
-    global _FACE_CASCADES
-    if _FACE_CASCADES is not None:
-        return _FACE_CASCADES
-    _FACE_CASCADES = []
-    cv2 = _cv2()
-    if cv2 is None:
-        return _FACE_CASCADES
-    for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"):
-        c = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / name))
-        if not c.empty():
-            _FACE_CASCADES.append(c)
-        else:
-            logger.warning("face_cascades: could not load cascade %s", name)
-    return _FACE_CASCADES
-
-
-def detect_faces(grey: Any) -> list[list[int]]:
-    """Face boxes in one GREYSCALE frame, as [x, y, w, h].
-
-    The single entry point for face detection in the clipper. There used to be
-    a second, untuned one in content_type.py, and on the co-stream it measured
-    0 faces in 40 frames where this finds the left facecam in 14 and the right
-    in 13 with one false positive — which is why regions.json reported no
-    webcam on a source with two of them. Equalisation is part of the tuning,
-    not a nicety: these facecams are small and dim.
-    """
-    cascades = face_cascades()
-    if not cascades:
-        return []
-    cv2 = _cv2()
-    if cv2 is None:
-        return []
-    equalised = cv2.equalizeHist(grey)
-    raw: list[list[int]] = []
-    for cascade in cascades:
-        for x, y, w, h in cascade.detectMultiScale(
-                equalised, FACE_SCALE_FACTOR, FACE_MIN_NEIGHBOURS,
-                minSize=FACE_MIN_SIZE):
-            raw.append([int(x), int(y), int(w), int(h)])
-    return _merge_boxes(raw)
-
-
-def face_presence(proxy_path: str, times: list[float]) -> list[dict[str, Any]]:
-    """Face boxes at each requested timestamp, in PROXY pixel coordinates.
-
-    Always returns one entry per requested time (empty `boxes` when the frame
-    is unreadable) so callers can zip it against their own sample grid.
-    """
-    stamps = [float(t) for t in (times or []) if float(t) >= 0]
-    blank = [{"t": round(t, 3), "boxes": []} for t in stamps]
-    cv2 = _cv2()
-    if cv2 is None or not stamps:
-        return blank
-    if not proxy_path or not Path(proxy_path).exists():
-        logger.warning("face_presence: missing proxy %s", proxy_path)
-        return blank
-
-    if not face_cascades():
-        return blank
-
-    out: list[dict[str, Any]] = []
-    cap = cv2.VideoCapture(str(proxy_path))
-    try:
-        if not cap.isOpened():
-            logger.warning("face_presence: cannot open %s", proxy_path)
-            return blank
-        for t in stamps:
-            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                out.append({"t": round(t, 3), "boxes": []})
-                continue
-            grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            out.append({"t": round(t, 3), "boxes": detect_faces(grey)})
-    except cv2.error as exc:
-        logger.warning("face_presence: detection failed for %s (%s)", proxy_path, exc)
-        return blank
-    finally:
-        cap.release()
-    return out
-
 
 def _face_sample_times(duration: float) -> list[float]:
     """Sample grid for face detection, stretched so long VODs stay bounded."""
@@ -509,11 +378,24 @@ def build_signals(
     proxy_path: str,
     wav_path: str,
     duration: float,
+    stop=None,
 ) -> dict[str, Any]:
-    """Run all of Pass A, persist analysis/signals.json, return the signals."""
+    """Run all of Pass A and return the signals. Writes NOTHING (OW1): this runs
+    in an executor thread a cancel cannot stop, and it used to publish
+    signals.json and faces.json from there (AD3H). The handler writes the result
+    into its own generation. `stop` (attempt_stop) is checked between stages."""
     audio = audio_timeline(wav_path)
-    scenes = scene_timeline(proxy_path)
+    attempt_stop.check(stop)
+    # Provenance is read before the decode used as evidence, and again (inside
+    # address_scenes) after the whole step.
+    before = scene_address.provenance_now(project_id, proxy_path)
+    scene = scene_address.scene_pass(proxy_path)
+    scenes = scene["times"]
+    attempt_stop.check(stop)
+    scenes_addressed = scene_address.address_scenes(project_id, proxy_path, scene, before, stop=stop)
+    attempt_stop.check(stop)
     motion = motion_timeline(proxy_path)
+    attempt_stop.check(stop)
 
     width = height = 0
     probe_duration = 0.0
@@ -528,7 +410,9 @@ def build_signals(
     if total <= 0:
         total = probe_duration or float(audio.get("duration") or 0.0)
 
+    attempt_stop.check(stop)
     faces = face_presence(proxy_path, _face_sample_times(total))
+    attempt_stop.check(stop)
 
     signals: dict[str, Any] = {
         "version": ANALYSIS_VERSION,
@@ -545,17 +429,9 @@ def build_signals(
         "peaks": audio["peaks"],
         "silence": audio["silence"],
         "speech": audio["speech"],
+        # Parallel to `scenes`, read by no consumer (scene_address).
+        "scenes_addressed": scenes_addressed,
     }
-
-    # Imported here so the analysis functions above stay usable (and testable)
-    # without the storage layer or its settings.
-    try:
-        from services.clipper import storage
-
-        storage.write_artifact(project_id, "signals", signals)
-        storage.write_artifact(project_id, "faces", faces)
-    except Exception as exc:  # noqa: BLE001 — a failed write must not lose the pass
-        logger.error("build_signals: could not persist signals for %s (%s)", project_id, exc)
 
     logger.info(
         "build_signals: %s — %.1fs, %d rms hops, %d peaks, %d scenes, %d motion samples, %d face samples",

@@ -1,0 +1,212 @@
+"""Where a claim's words sit relative to where the claim says they are.
+
+`story_evidence.ground_claim` marks a claim grounded only when its quote appears
+as a CONTIGUOUS run of normalised tokens in the atoms it names. A claim that
+fails is kept and recorded, never dropped — this counts how often that happens
+and CLASSIFIES each failure by which weaker local rule, if any, finds the quote.
+It does not measure distance: no drift, no `matched_t`. That belongs to the
+deterministic resolver, and until that exists these are unclassified negatives,
+not established false negatives.
+
+NOT the same thing as the Batch 3 gate. That gate is CONTEXT coverage — whether
+the chosen window CONTAINS the required context — and it passed at 8/8 and
+15/15. This is GROUNDING coverage, whether a claim can be tied to the transcript
+at all. Two different questions; only the first has a threshold. Do not
+recalibrate one against the other.
+
+The failures are re-checked against a ladder of weaker rules:
+
+    contiguous   what ships. every token, in order, adjacent, in the atoms
+                 the claim names
+    near_verbatim  the same quote, verbatim, inside a WINDOW around the time
+                 the claim gives — located, but not canonically bound
+    subsequence  every token, in order, gaps allowed, inside that same window
+    absent       no local match
+
+WHAT THE METHOD WAS TESTED AGAINST, because a measurement nobody checked is
+how the first version reached the wrong answer. Two null models:
+
+    200 invented six-word quotes drawn from the transcript's own vocabulary
+        -> 0/200 pass either rung (the first version: 8/200 and 200/200)
+    400 REAL quotes tested against windows where they were NOT said
+        -> 0/301 pass; 5/311 for the short 5-to-7-word ones, 1.6%
+
+That second one is the honest null: real quotes keep natural word frequency and
+collocation, which random draws do not.
+
+TWO THINGS THE FIRST VERSION GOT WRONG, and they inverted its conclusion.
+
+It counted 111 claims where there are 48 distinct ones: several candidate
+variants share one anchor's story block, so the same quote was counted up to
+three times and the percentages described the duplication as much as the data.
+
+And it searched the WHOLE stream. Measured against 200 invented six-word quotes
+drawn at random from the transcript's own vocabulary: 8 passed the subsequence
+test and 200 of 200 passed the bag-of-words test. A check that nothing can fail
+reports zero failures, which is how the first run concluded that no claim was
+unsupported. Support now means the words are there NEAR where the claim says
+they are; a match three hours away is not support, and the bag-of-words rung is
+gone.
+
+WHAT THIS CANNOT TELL YOU. The rungs describe what matched, not why. A claim
+that fails `contiguous` but passes `subsequence` MAY be a false negative of the
+matcher — or a real paraphrase that happens to keep word order. One that reaches
+`absent` has no local match; that is not the same as the model inventing it, and
+this method cannot separate the two. The first version's conclusion was believed
+because the labels asserted causes the measurement never established. Note also
+that the model names no atoms at all on this corpus: `matched_by` is `timestamp`
+for all 111 claims, and the `atom_ids` in the artefact are filled in by us from
+the window.
+
+    python scripts/measure_grounding.py gateslice4h
+
+Reads only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT / "server"))
+
+DATA = _ROOT / "data" / "clipper"
+
+
+def _read(project_id: str, name: str):
+    path = DATA / project_id / "analysis" / f"{name}.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+
+
+def _is_subsequence(needle: list[str], hay: list[str]) -> bool:
+    it = iter(hay)
+    return all(tok in it for tok in needle)
+
+
+#: How far from a claim's own timestamp its words may sit and still count as
+#: support. Generous — the point is to separate "we looked in the wrong atoms"
+#: from "the words are not there" — but bounded, because a quote that matches
+#: an hour away is a coincidence, not evidence.
+WINDOW_S = 120.0
+
+
+def _window_text(atoms, t: float, reach: float = WINDOW_S) -> str:
+    from services.clipper import story_evidence as se
+
+    lo, hi = t - reach, t + reach
+    return se.normalise_quote(" ".join(
+        str(a.get("text") or "") for a in atoms
+        if isinstance(a, dict)
+        and float(a.get("end") or 0) >= lo and float(a.get("start") or 0) <= hi))
+
+
+def measure(project_id: str) -> dict:
+    from services.clipper import story_evidence as se
+
+    atoms = _read(project_id, "atoms") or []
+    cands = _read(project_id, "candidates") or []
+    if isinstance(cands, dict):
+        cands = cands.get("candidates") or []
+    if not atoms or not cands:
+        return {"project": project_id, "status": "no artefacts"}
+
+
+    tally = {"contiguous": 0, "near_verbatim": 0, "subsequence": 0,
+             "absent": 0, "no_quote": 0}
+    examples: dict[str, list[str]] = {k: [] for k in tally}
+    # DISTINCT claims. Several candidate variants share one anchor's story
+    # block, so counting per candidate counts the same claim up to three times.
+    seen: set[tuple] = set()
+    total = 0
+
+    for cand in cands:
+        story = cand.get("story")
+        if not isinstance(story, dict):
+            continue
+        claims = []
+        payoff = story.get("payoff_evidence")
+        if isinstance(payoff, dict):
+            claims.append(payoff)
+        claims += [c for c in (story.get("required_context") or [])
+                   if isinstance(c, dict)]
+
+        for claim in claims:
+            quote = se.normalise_quote(claim.get("quote") or claim.get("evidence"))
+            key = (quote, round(float(claim.get("t") or -1), 1))
+            if key in seen:
+                continue
+            seen.add(key)
+            total += 1
+            if not quote:
+                tally["no_quote"] += 1
+                continue
+            if claim.get("grounded"):
+                tally["contiguous"] += 1
+                continue
+
+            near = _window_text(atoms, float(claim.get("t") or 0.0))
+            tokens = quote.split()
+            # Token sequence, never `quote in near`: that is a SUBSTRING test,
+            # so "at" matches inside "chat" and a short quote grounds itself
+            # against any word containing it. Production already compares
+            # tokens; this script did not.
+            if se._contains_sequence(near.split(), tokens):
+                bucket = "near_verbatim"
+            elif _is_subsequence(tokens, near.split()):
+                bucket = "subsequence"
+            else:
+                bucket = "absent"
+            tally[bucket] += 1
+            if len(examples[bucket]) < 3:
+                examples[bucket].append(quote[:90])
+
+    return {"project": project_id, "status": "ok", "claims": total,
+            "tally": tally, "examples": examples}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("projects", nargs="+")
+    args = parser.parse_args()
+
+    for pid in args.projects:
+        out = measure(pid)
+        print(f"\n=== {pid}")
+        if out["status"] != "ok":
+            print("  ", out["status"])
+            continue
+        total = out["claims"] or 1
+        for name in ("contiguous", "near_verbatim", "subsequence", "absent",
+                     "no_quote"):
+            n = out["tally"][name]
+            print(f"  {name:12s} {n:4d}  {n / total:6.1%}")
+        t = out["tally"]
+        strict = t["contiguous"]
+        print("")
+        print(f"  grounded as shipped : {strict}/{total} = {strict / total:.1%}")
+        # These name WHAT MATCHED, never why. "The model invented it" and "the
+        # matcher is too strict" are causes this method cannot tell apart, and
+        # printing them as labels is how the first version's conclusion got
+        # believed. The claim never names an atom — `matched_by` is `timestamp`
+        # for all 111 — so "wrong atoms" was never available either.
+        print(f"  exact, located      : {t['near_verbatim']:4d}  "
+              f"verbatim within {WINDOW_S:.0f}s, not canonically bound")
+        print(f"  relaxed, unvalidated: {t['subsequence']:4d}  "
+              "in order with gaps, in that window")
+        print(f"  no local match      : {t['absent']:4d}")
+        for name in ("near_verbatim", "subsequence", "absent"):
+            for ex in out["examples"][name]:
+                print(f"    [{name}] {ex}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

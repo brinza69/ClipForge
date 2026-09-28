@@ -1,0 +1,299 @@
+"""M0 v2 addressing: proxy slot (by its DECODED PTS) -> source frame (by the source frames' own PTS and
+durations), with the rule ffmpeg's `-r 10` CFR vsync actually implements. Outside the validated domain
+the answer is `refused` with a reason. Never a constant offset, never a nearest guess.
+
+WHICH CODE THIS REPRODUCES. The recorded build is ffmpeg 8.1.1 (gyan.dev full_build; see
+provenance.json). Its source, tag n8.1.1, file sha256 in FFMPEG_SOURCES below:
+
+  fftools/ffmpeg_filter.c
+    2453-2488  adjust_frame_pts_to_encoder_tb(): the frame PTS is rescaled (av_rescale_q, round
+               half away from zero) into tb_dst with `extra_bits = av_clip(29 - av_log2(tb.den), 0, 16)`
+               extra bits (29 - 3 = 26, CLIPPED to 16 for tb_dst = 1/10: the start is quantised to
+               1/65536 of a slot), divided back as a double, and, WHEN NOT AN INTEGER, nudged by
+               FFSIGN(pts) * 1.0 / (1<<17), i.e. half that quantum (lines 2472-2473). The nudge decides
+               exact ties when the start is off the slot grid: such a frame is KEPT.
+               When the start IS on the grid there is no nudge and the tie is decided by the double
+               sum itself: tb 1/100, start 0.9 s, 0.09 s long -> delta = -2 + 9*0.01/0.1 is the same
+               double as the literal -1.1, so `delta < -1.1` is false and the frame is KEPT too
+               (test_m0v2.py, both checked against real ffmpeg).
+               -> sync_ipts()
+    2533       duration = frame->duration * av_q2d(frame->time_base) / av_q2d(ofp->tb_out)
+               -> out_duration()
+    2539-2540  delta0 = sync_ipts - ofp->next_pts; delta = delta0 + duration
+    2548-2562  the "clipping" block rewrites sync_ipts/duration/delta0 but NOT delta, so it does not
+               change a CFR decision (and it only runs when delta0 < 0 < delta).
+    2572-2583  VSYNC_CFR: frame_drop_threshold (0 by default, ffmpeg_opt.c:62) is skipped;
+               `delta < -1.1` -> 0 frames (DROP); `delta > 1.1` -> llrintf(delta) frames, and
+               llrintf(delta0 - 0.6) copies of the previous frame first when delta0 > 1.1;
+               otherwise 1 frame.            -> cfr_decision()
+    2519-2528  at EOF (frame == NULL) nb_frames = nb_frames_prev = median3(frames_prev_hist[0..2])
+    2593-2598  frames_prev_hist[0] = nb_frames_prev (shifted history)
+    2712-2729  each emitted copy takes pts = ofp->next_pts; the previous frame is used for the first
+               nb_frames_prev copies when it has a buffer
+    2764-2765  ofp->next_pts++ per emitted copy            -> simulate()
+    2445-2447  tb_out = av_inv_q(fr) with fr = the -r rate (10/1): enc_time_base is unset (case 0)
+  fftools/ffmpeg_dec.c 401   frame->pts = frame->best_effort_timestamp (what the decoded-frame PTS is)
+  fftools/ffmpeg_demux.c 2121  ts_offset = -(file start_time) without -copyts, i.e. a non-zero
+               start_time shifts every frame before this rule sees it. NOT handled here: refused.
+  libavutil/mathematics.c 142-144 av_rescale_q = av_rescale_q_rnd(..., AV_ROUND_NEAR_INF)
+
+THE STEADY-STATE ADDRESS (address()). Proxy slot n (decoded PTS n/10 exactly) shows frame i where, with
+next_pts = n, i is the first frame after the one shown at slot n-1 that is NOT dropped
+(`not (delta < -1.1)`, the comparison ffmpeg makes, in the same double arithmetic, ties included).
+Equivalently in real numbers: the first frame whose END t_i + d_i reaches n/10 - 0.11, except that
+at exact equality the +2^-17 nudge (non-integer sync_ipts) keeps the frame. "shown at p - 0.11 s"
+is an approximation of this and is not used.
+
+It is exact only in the steady state: every earlier slot filled by exactly one frame. That is proved
+locally (the window is CFR and contiguous, the slot n-1 choice is strictly earlier, the chosen frame
+is emitted once) and, for the real sources, globally by simulate() over every packet
+(address_table.py). Everything else is refused, with its own reason:
+  start_transient, end_of_stream, proxy_rate_not_validated, proxy_start_time_nonzero,
+  source_start_time_nonzero, source_vfr (declared), vfr_local (window not CFR/contiguous),
+  source_rate_not_validated, source_fps_le_proxy_fps, proxy_pts_off_grid, slot_not_in_proxy,
+  window_short, not_steady, duplicated, pts_unknown.
+"""
+from __future__ import annotations
+
+from fractions import Fraction
+
+import numpy as np
+
+RULE_VERSION = "m0v2-addr-1 (ffmpeg n8.1.1 VSYNC_CFR replica)"
+FFMPEG_SOURCES = {  # sha256 of the files read at tag n8.1.1 (raw.githubusercontent.com/FFmpeg/FFmpeg/n8.1.1/...)
+    "fftools/ffmpeg_filter.c": "32b478325d0843c982c810a865016bed5b154f1d6c2f0b957be297dee7beb2ec",
+    "fftools/ffmpeg_dec.c": "dd79988a38f82e5ae0b8508eb5e1db9ab7f4a4c544d939535d185039180f4c5a",
+    "fftools/ffmpeg_demux.c": "28e36593d954d053122ac028708a8cf10852d5986ccee201f4f3ea3993fdffb8",
+    "fftools/ffmpeg_opt.c": "95951e05371ac6debc4856304a340d5da294c8a7adc844c9b7d2af7743cc4c6c",
+    "libavutil/mathematics.c": "c38b36d09a886b8a0471fa1c8f0174a1a852f437011d818569ece3824b1d4b6b",
+}
+
+PROXY_FPS = 10
+VALIDATED_PROXY_RATES = {Fraction(10)}
+# Each rate is validated by a synthetic source run through build_proxy's exact command, every slot read
+# and compared with simulate() (0 mismatches required). Evidence:
+#   60, 30, 25, 60000/1001: offset/synthetic_long.json + synthetic_long_59.94.json (F-offset), re-checked
+#   by m0v2/synth_probe.py against THIS replica; 24 and 24000/1001: m0v2/synth_probe.py (new).
+# test_m0v2.py::test_validated_rates_have_probe_evidence ties this set to those files.
+VALIDATED_SOURCE_RATES = {Fraction(60), Fraction(30), Fraction(25), Fraction(60000, 1001),
+                          Fraction(24), Fraction(24000, 1001)}
+START_SLOTS = 2          # slots 0 and 1 show frames 0 and 1 (start transient): not the steady rule
+
+
+# --------------------------------------------------------------------------- the C arithmetic
+
+def av_log2(v: int) -> int:
+    return int(v).bit_length() - 1
+
+
+def rescale_q(a: int, bq: tuple[int, int], cq: tuple[int, int]) -> int:
+    """av_rescale_q (AV_ROUND_NEAR_INF): a * bq / cq, rounded half away from zero, with
+    b = bq.num * cq.den and c = cq.num * bq.den, as mathematics.c computes them."""
+    b = bq[0] * cq[1]
+    c = cq[0] * bq[1]
+    if a < 0:
+        return -rescale_q(-a, bq, cq)
+    return (a * b + c // 2) // c
+
+
+def sync_ipts(pts: int, tb: tuple[int, int], out_fps: int = PROXY_FPS, start_time_us: int = 0) -> float:
+    """adjust_frame_pts_to_encoder_tb (ffmpeg_filter.c:2453-2473), tb_dst = 1/out_fps."""
+    tb_dst = (1, out_fps)
+    extra_bits = min(max(29 - av_log2(tb_dst[1]), 0), 16)
+    tbx = (tb_dst[0], tb_dst[1] << extra_bits)
+    fp = float(rescale_q(pts, tb, tbx) - rescale_q(start_time_us, (1, 1_000_000), tbx))
+    fp /= (1 << extra_bits)
+    if fp != float(np.rint(fp)):                       # llrint: exact-integer test only
+        fp += (1.0 if fp > 0 else -1.0) * 1.0 / (1 << 17)
+    return fp
+
+
+def out_duration(dur: int, tb: tuple[int, int], out_fps: int = PROXY_FPS) -> float:
+    """ffmpeg_filter.c:2533, left to right in double: dur * av_q2d(tb) / av_q2d(tb_out)."""
+    return dur * (tb[0] / float(tb[1])) / (1 / float(out_fps))
+
+
+def llrintf(x: float) -> int:
+    return int(np.rint(np.float32(x)))
+
+
+def deltas(pts: int, dur: int, tb, next_pts: int, out_fps: int = PROXY_FPS) -> tuple[float, float]:
+    d0 = sync_ipts(pts, tb, out_fps) - float(next_pts)
+    return d0, d0 + out_duration(dur, tb, out_fps)
+
+
+def cfr_decision(delta0: float, delta: float) -> tuple[int, int]:
+    """(nb_frames, nb_frames_prev), ffmpeg_filter.c:2572-2583 with frame_drop_threshold == 0."""
+    if delta < -1.1:
+        return 0, 0
+    if delta > 1.1:
+        return llrintf(delta), (llrintf(delta0 - 0.6) if delta0 > 1.1 else 0)
+    return 1, 0
+
+
+def simulate(pts: list[int], durs: list[int], tb, out_fps: int = PROXY_FPS) -> list[int]:
+    """The whole CFR conversion, frame by frame, EOF flush included. Returns, per output slot, the
+    index (into pts) of the frame shown there. pts must be in presentation order."""
+    slots: list[int] = []
+    hist = [0, 0, 0]
+    prev = None
+    next_pts = 0
+    for i, (p, d) in enumerate(zip(pts, durs)):
+        d0, dl = deltas(int(p), int(d), tb, next_pts, out_fps)
+        nb, nbp = cfr_decision(d0, dl)
+        hist = [nbp] + hist[:2]
+        for k in range(nb):
+            slots.append(prev if (k < nbp and prev is not None) else i)
+            next_pts += 1
+        prev = i
+    nb = sorted(hist)[1]                               # median3 at EOF, nb_frames_prev == nb_frames
+    for _ in range(nb):
+        if prev is None:
+            break
+        slots.append(prev)
+        next_pts += 1
+    return slots
+
+
+# --------------------------------------------------------------------------- domain
+
+def _rate(s: str | None) -> Fraction | None:
+    try:
+        n, d = str(s).split("/")
+        return Fraction(int(n), int(d)) if int(d) else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def _tb(s: str | None) -> tuple[int, int] | None:
+    try:
+        n, d = str(s).split("/")
+        return (int(n), int(d)) if int(n) > 0 and int(d) > 0 else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def _zero(v) -> bool | None:
+    """ffprobe start_time/start_pts as text -> is it zero? None when absent (unknown)."""
+    if v is None or v == "N/A":
+        return None
+    return Fraction(str(v)) == 0
+
+
+def domain(proxy: dict, source: dict) -> dict:
+    """Per-source domain check on ffprobe stream+format fields. Returns {"state": "ok"} or
+    {"state": "refused", "reasons": [...]}; every failing condition is listed, not just the first."""
+    why: list[str] = []
+    ps, pf = proxy.get("stream", {}), proxy.get("format", {})
+    ss, sf = source.get("stream", {}), source.get("format", {})
+    pr, pa = _rate(ps.get("r_frame_rate")), _rate(ps.get("avg_frame_rate"))
+    sr, sa = _rate(ss.get("r_frame_rate")), _rate(ss.get("avg_frame_rate"))
+    if pr is None or pr != pa or pr not in VALIDATED_PROXY_RATES:
+        why.append(f"proxy_rate_not_validated ({ps.get('r_frame_rate')} / {ps.get('avg_frame_rate')})")
+    for who, s, f in (("proxy", ps, pf), ("source", ss, sf)):
+        z = [_zero(s.get("start_time")), _zero(s.get("start_pts")), _zero(f.get("start_time"))]
+        if not all(x is True for x in z):
+            why.append(f"{who}_start_time_nonzero (stream {s.get('start_time')} pts {s.get('start_pts')} "
+                       f"format {f.get('start_time')})")
+    if _tb(ps.get("time_base")) is None or _tb(ss.get("time_base")) is None:
+        why.append("pts_unknown (time_base missing)")
+    if sr is None or sa is None or sr != sa:
+        why.append(f"source_vfr (r_frame_rate {ss.get('r_frame_rate')} != avg {ss.get('avg_frame_rate')})")
+    elif sr <= PROXY_FPS:
+        why.append(f"source_fps_le_proxy_fps ({sr})")
+    elif sr not in VALIDATED_SOURCE_RATES:
+        why.append(f"source_rate_not_validated ({sr})")
+    return {"state": "ok"} if not why else {"state": "refused", "reasons": why}
+
+
+# --------------------------------------------------------------------------- the address
+
+def _refuse(reason: str, **kw) -> dict:
+    return {"state": "refused", "reason": reason, "rule": RULE_VERSION, **kw}
+
+
+def address(proxy_pts: int | None, proxy: dict, source: dict, frames: list[tuple[int, int]],
+            source_nb_frames: int | None, proxy_nb_frames: int | None) -> dict:
+    """Address one proxy frame.
+
+    proxy_pts: the DECODED PTS as an integer in the proxy stream time_base (None = could not be tied).
+    proxy/source: ffprobe {"stream": {...}, "format": {...}} (text fields as ffprobe prints them).
+    frames: DECODED source frames around the slot, (pts, duration) integers in the source time_base,
+        presentation order; must reach back past the slot n-1 decision and forward past the choice.
+    source_nb_frames / proxy_nb_frames: the streams' frame counts (the end of both streams).
+    """
+    if proxy_pts is None:
+        return _refuse("pts_unknown (frame not tied to a decoded proxy PTS)")
+    dom = domain(proxy, source)
+    if dom["state"] != "ok":
+        return _refuse(dom["reasons"][0], all_reasons=dom["reasons"])
+    ptb, stb = _tb(proxy["stream"]["time_base"]), _tb(source["stream"]["time_base"])
+    slot_q = Fraction(proxy_pts * ptb[0], ptb[1]) * PROXY_FPS
+    if slot_q.denominator != 1:
+        return _refuse(f"proxy_pts_off_grid (pts {proxy_pts} x {ptb[0]}/{ptb[1]} = {slot_q / PROXY_FPS} s)")
+    n = int(slot_q)
+    base = {"slot": n, "proxy_pts": proxy_pts, "proxy_pts_time": str(Fraction(n, PROXY_FPS))}
+    if n < START_SLOTS:
+        return _refuse("start_transient (slots 0-1 show source frames 0 and 1; not the steady rule)", **base)
+    if proxy_nb_frames is not None and n >= proxy_nb_frames:
+        return _refuse(f"slot_not_in_proxy (slot {n} >= {proxy_nb_frames} frames)", **base)
+    fps = _rate(source["stream"]["r_frame_rate"])
+    if len(frames) < 3:
+        return _refuse("window_short (fewer than 3 decoded source frames)", **base)
+    step = Fraction(stb[1], stb[0]) / fps                  # one frame in source tb units
+    if step.denominator != 1:
+        return _refuse(f"vfr_local (1/fps = {step} ticks, not an integer)", **base)
+    step = int(step)
+    for k, (p, d) in enumerate(frames):
+        if d != step or (k + 1 < len(frames) and frames[k + 1][0] != p + d) or p % step:
+            return _refuse(f"vfr_local (frame pts {p} dur {d}; expected contiguous {step}-tick frames "
+                           f"on the index grid)", **base)
+    first_nd = {}
+    for m in (n - 1, n):
+        first_nd[m] = next((k for k, (p, d) in enumerate(frames)
+                            if cfr_decision(*deltas(p, d, stb, m))[0] != 0), None)
+    if first_nd[n - 1] is None or first_nd[n] is None:
+        return _refuse("window_short (no frame in the window survives the slot test)", **base)
+    if first_nd[n - 1] == 0 and frames[0][0] == 0:
+        return _refuse("start_transient (the slot n-1 decision reaches the first frame of the stream)", **base)
+    if first_nd[n - 1] == 0:
+        return _refuse("window_short (the window does not reach back to a frame dropped at slot n-1)", **base)
+    if not first_nd[n] > first_nd[n - 1]:
+        return _refuse("not_steady (the frame chosen for slot n-1 would be chosen again)", **base)
+    k = first_nd[n]
+    p, d = frames[k]
+    d0, dl = deltas(p, d, stb, n)
+    pd0, pdl = deltas(*frames[k - 1], stb, n)
+    if cfr_decision(d0, dl) != (1, 0):
+        return _refuse(f"duplicated (delta {dl!r} emits {cfr_decision(d0, dl)})", **base)
+    idx = p // step
+    if source_nb_frames is not None and idx >= source_nb_frames - 1:
+        return _refuse(f"end_of_stream (chosen frame {idx} is the last of {source_nb_frames})", **base)
+    if k + 1 >= len(frames):
+        return _refuse("window_short (nothing decoded after the chosen frame)", **base)
+    return {"state": "addressed", "rule": RULE_VERSION, **base,
+            "source_index": idx, "source_pts": p, "source_duration": d,
+            "source_time_base": f"{stb[0]}/{stb[1]}",
+            "source_pts_time": str(Fraction(p * stb[0], stb[1])),
+            "source_end_time": str(Fraction((p + d) * stb[0], stb[1])),
+            "edge_time_real": str(Fraction(n, PROXY_FPS) - Fraction(11, 100)),
+            "delta": dl, "prev_frame_delta": pdl,
+            "tie": Fraction((p + d) * stb[0], stb[1]) == Fraction(n, PROXY_FPS) - Fraction(11, 100),
+            "lag_frames_real": str(Fraction(n, PROXY_FPS) * fps - idx)}
+
+
+def window(pts: list[int], durs: list[int], tb, n: int, before: Fraction = Fraction(6, 10),
+           after: Fraction = Fraction(2, 10)) -> list[tuple[int, int]]:
+    """The frames of a sorted (pts, dur) list whose pts time lies in [n/10 - before, n/10 + after]."""
+    import bisect
+    lo = Fraction(n, PROXY_FPS) - before
+    hi = Fraction(n, PROXY_FPS) + after
+    a = bisect.bisect_left(pts, int(lo * tb[1] / tb[0]))
+    b = bisect.bisect_right(pts, int(hi * tb[1] / tb[0]))
+    return list(zip(pts[a:b], durs[a:b]))
+
+
+def exact_end_vs_edge(p: int, d: int, tb, n: int) -> int:
+    """Sign of (frame end - (n/10 - 0.11)) in exact rational arithmetic (for tests/reporting)."""
+    v = Fraction((p + d) * tb[0], tb[1]) - (Fraction(n, PROXY_FPS) - Fraction(11, 100))
+    return (v > 0) - (v < 0)

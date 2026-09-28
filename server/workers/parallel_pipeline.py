@@ -88,6 +88,14 @@ def _safe_stem(s: str) -> str:
     return s.strip("._") or "output"
 
 
+def _video_args(fps: int, crf_fallback: str = "18") -> List[str]:
+    """Aceiasi parametri de codec ca in celelalte doua encodari — vezi
+    `services/encode_profile`. Taierea in parti e ULTIMA encodare, deci ea
+    decide ce ajunge pe canal."""
+    from services.encode_profile import video_args
+    return video_args(fps, crf_fallback=crf_fallback)
+
+
 def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") -> List[dict]:
     """Split the finished mp4 per _split_plan (re-encoded for exact cuts).
     Returns [] when the clip stays a single part.
@@ -116,7 +124,7 @@ def _split_video(final_path: Path, out_stem: str, part_suffix: str = "_part") ->
         cmd = [
             ffmpeg, "-y", "-loglevel", "error",
             "-ss", f"{start:.3f}", "-i", str(final_path), "-t", f"{part_len:.3f}",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-preset", "medium", *_video_args(OUTPUT_FPS, crf_fallback="18"),
             "-r", str(OUTPUT_FPS),   # parts keep the forced 60fps of the final
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(dst),
@@ -150,6 +158,7 @@ _VARIANT_KEYS = (
     "commentator_preset_id", "commentator_chroma_color",
     "commentator_chroma_similarity", "commentator_chroma_blend",
     "drive_folder", "split_into_parts", "match_to_source_duration",
+    "bg_music_db",
 )
 
 
@@ -299,6 +308,7 @@ async def handle_parallel_pipeline(
     var_lo, var_hi = 0.48, 0.97
     var_span = (var_hi - var_lo) / n
     results: List[Dict[str, Any]] = []
+    variant_failures: List[Dict[str, Any]] = []
 
     for i, variant in enumerate(variants):
         vcfg = _variant_cfg(cfg, variant)
@@ -316,109 +326,138 @@ async def handle_parallel_pipeline(
         com_id = variant.get("commentator_preset_id") or None
         label = vname or com_id or f"variant {i + 1}"
 
-        # This variant's cleaned text is in ITS language (voice + captions).
-        v_cleaned = cleaned_by_lang[_lang_key(variant)]
-        # Acelasi text merge si in voce, si in subtitrari — alinierea pe
-        # cuvinte potriveste audio-ul TTS exact cu acest sir.
-        v_spoken = _with_outro(v_cleaned, vcfg.get("transcript_target_lang")
-                               or vcfg.get("tts_language"))
+        try:
+            # This variant's cleaned text is in ITS language (voice + captions).
+            v_cleaned = cleaned_by_lang[_lang_key(variant)]
+            # Acelasi text merge si in voce, si in subtitrari — alinierea pe
+            # cuvinte potriveste audio-ul TTS exact cu acest sir.
+            v_spoken = _with_outro(v_cleaned, vcfg.get("transcript_target_lang")
+                                   or vcfg.get("tts_language"))
 
-        await v_slc.update(0.0, f"[{i + 1}/{n}] {label}: voice…")
+            await v_slc.update(0.0, f"[{i + 1}/{n}] {label}: voice…")
 
-        # 1) voice (0–40% of this variant's slice)
-        voice_path = await synth_voice_from_text(
-            v_spoken, vdir, vcfg, v_slc.sub(0.0, 0.40), out_stem="voice",
-        )
-
-        # 2+3) FUSED speed-match + caption burn (one encode) on the shared
-        # erased video against this variant's voice.
-        await v_slc.update(0.40, f"[{i + 1}/{n}] {label}: speed-match + captions…")
-        has_com = bool(com_id)
-        cap_hi = 0.80 if has_com else 1.0
-        captioned_path = vdir / ("video_captioned.mp4" if has_com else "video_final.mp4")
-        sm_stats = await _stage_match_and_caption(
-            erased_path, voice_path, v_spoken, vcfg, captioned_path,
-            v_slc.sub(0.40, cap_hi),
-        )
-
-        # 4) commentator (optional)
-        final_path = vdir / "video_final.mp4"
-        commentator_stats = None
-        if has_com:
-            commentator_stats = await _stage_commentator(
-                captioned_path, final_path, vcfg, v_slc.sub(0.80, 1.0),
+            # 1) voice (0–40% of this variant's slice)
+            voice_path = await synth_voice_from_text(
+                v_spoken, vdir, vcfg, v_slc.sub(0.0, 0.40), out_stem="voice",
             )
-        else:
-            final_path = captioned_path
 
-        # Naming: when the job is tied to a Sheets row, every variant's
-        # files are named after the row's <number>. Otherwise fall back to
-        # "<title>_<variant>" (existing behaviour).
-        sheets_number = (cfg.get("sheets_number") or "").strip()
-        if sheets_number:
-            stem = _safe_stem(sheets_number)
-            part_suffix = "_p"          # <num>_p1.mp4
-        else:
-            base_name = Path(cfg.get("title") or project_id).stem
-            stem = f"{base_name}_{(vname or com_id or f'v{i + 1}')}"
-            part_suffix = "_part"       # <stem>_part1of3.mp4
-        out_name = f"{stem}.mp4"
+            # 2+3) FUSED speed-match + caption burn (one encode) on the shared
+            # erased video against this variant's voice.
+            await v_slc.update(0.40, f"[{i + 1}/{n}] {label}: speed-match + captions…")
+            has_com = bool(com_id)
+            cap_hi = 0.80 if has_com else 1.0
+            captioned_path = vdir / ("video_captioned.mp4" if has_com else "video_final.mp4")
+            sm_stats = await _stage_match_and_caption(
+                erased_path, voice_path, v_spoken, vcfg, captioned_path,
+                v_slc.sub(0.40, cap_hi),
+            )
 
-        # Rename the on-disk final video so Drive uploads + download all
-        # carry the proper name (drive_upload uses fp.name as Drive filename).
-        desired_final = final_path.parent / out_name
-        if final_path.exists() and final_path != desired_final:
-            try:
-                if desired_final.exists():
-                    desired_final.unlink()
-                final_path.rename(desired_final)
-                final_path = desired_final
-            except Exception as e:
-                logger.warning(
-                    f"could not rename {final_path.name} → {desired_final.name}: {e}"
+            # 4) commentator (optional)
+            final_path = vdir / "video_final.mp4"
+            commentator_stats = None
+            if has_com:
+                commentator_stats = await _stage_commentator(
+                    captioned_path, final_path, vcfg, v_slc.sub(0.80, 1.0),
+                )
+            else:
+                final_path = captioned_path
+
+            # Naming: when the job is tied to a Sheets row, every variant's
+            # files are named after the row's <number>. Otherwise fall back to
+            # "<title>_<variant>" (existing behaviour).
+            sheets_number = (cfg.get("sheets_number") or "").strip()
+            if sheets_number:
+                stem = _safe_stem(sheets_number)
+                part_suffix = "_p"          # <num>_p1.mp4
+            else:
+                base_name = Path(cfg.get("title") or project_id).stem
+                stem = f"{base_name}_{(vname or com_id or f'v{i + 1}')}"
+                part_suffix = "_part"       # <stem>_part1of3.mp4
+            out_name = f"{stem}.mp4"
+
+            # Rename the on-disk final video so Drive uploads + download all
+            # carry the proper name (drive_upload uses fp.name as Drive filename).
+            desired_final = final_path.parent / out_name
+            if final_path.exists() and final_path != desired_final:
+                try:
+                    if desired_final.exists():
+                        desired_final.unlink()
+                    final_path.rename(desired_final)
+                    final_path = desired_final
+                except Exception as e:
+                    logger.warning(
+                        f"could not rename {final_path.name} → {desired_final.name}: {e}"
+                    )
+
+            import asyncio as _asyncio
+            loop_ = _asyncio.get_event_loop()
+
+            # Optional: split the finished video into equal parts for multi-part
+            # posting (e.g. a 2:40 clip → two 1:20 parts).
+            parts: List[dict] = []
+            if variant.get("split_into_parts"):
+                await v_slc.update(0.96, f"[{i + 1}/{n}] {label}: splitting into parts…")
+                parts = await loop_.run_in_executor(
+                    None, lambda: _split_video(final_path, stem, part_suffix)
                 )
 
-        import asyncio as _asyncio
-        loop_ = _asyncio.get_event_loop()
+            # Optional: upload to the variant's Drive folder. When split, upload the
+            # PARTS; otherwise the whole video. Download stays available either way.
+            drive_result = None
+            drive_folder = (variant.get("drive_folder") or "").strip()
+            if drive_folder:
+                await v_slc.update(0.98, f"[{i + 1}/{n}] {label}: uploading to Drive…")
+                from services.drive_upload import upload_files
+                targets = [Path(p["path"]) for p in parts] if parts else [final_path]
+                drive_result = await loop_.run_in_executor(
+                    None, lambda: upload_files(drive_folder, targets)
+                )
+                logger.info(f"variant {i} Drive upload: {drive_result.get('status')}")
 
-        # Optional: split the finished video into equal parts for multi-part
-        # posting (e.g. a 2:40 clip → two 1:20 parts).
-        parts: List[dict] = []
-        if variant.get("split_into_parts"):
-            await v_slc.update(0.96, f"[{i + 1}/{n}] {label}: splitting into parts…")
-            parts = await loop_.run_in_executor(
-                None, lambda: _split_video(final_path, stem, part_suffix)
-            )
+            results.append({
+                "index": i,
+                "name": vname,
+                "label": label,
+                "commentator_preset_id": com_id,
+                "tts_engine": vcfg.get("tts_engine"),
+                "tts_voice_id": vcfg.get("tts_voice_id"),
+                "caption_template_id": vcfg.get("caption_template_id"),
+                "final_path": str(final_path),
+                "output_filename": out_name,
+                "parts": parts,
+                "speed_match_stats": sm_stats,
+                "commentator_stats": commentator_stats,
+                "drive": drive_result,
+            })
+            await v_slc.update(1.0, f"[{i + 1}/{n}] {label}: done")
+        except Exception as e:
+            reason = str(e)[-500:] or type(e).__name__
+            variant_failures.append({
+                "index": i,
+                "name": vname,
+                "label": label,
+                "status": "failed",
+                "error": reason,
+            })
+            logger.exception("parallel variant %s failed (%s)", label, job_id)
+            await v_slc.update(1.0, f"[{i + 1}/{n}] {label}: failed")
+            continue
 
-        # Optional: upload to the variant's Drive folder. When split, upload the
-        # PARTS; otherwise the whole video. Download stays available either way.
-        drive_result = None
-        drive_folder = (variant.get("drive_folder") or "").strip()
-        if drive_folder:
-            await v_slc.update(0.98, f"[{i + 1}/{n}] {label}: uploading to Drive…")
-            from services.drive_upload import upload_files
-            targets = [Path(p["path"]) for p in parts] if parts else [final_path]
-            drive_result = await loop_.run_in_executor(
-                None, lambda: upload_files(drive_folder, targets)
-            )
-            logger.info(f"variant {i} Drive upload: {drive_result.get('status')}")
-
-        results.append({
-            "index": i,
-            "name": vname,
-            "label": label,
-            "commentator_preset_id": com_id,
-            "tts_engine": vcfg.get("tts_engine"),
-            "tts_voice_id": vcfg.get("tts_voice_id"),
-            "caption_template_id": vcfg.get("caption_template_id"),
-            "final_path": str(final_path),
-            "output_filename": out_name,
-            "parts": parts,
-            "speed_match_stats": sm_stats,
-            "commentator_stats": commentator_stats,
-            "drive": drive_result,
-        })
-        await v_slc.update(1.0, f"[{i + 1}/{n}] {label}: done")
+    if not results:
+        details = "; ".join(
+            f"{failure['label']}: {failure['error']}"
+            for failure in variant_failures
+        )
+        raise RuntimeError(f"All parallel variants failed. {details}".strip())
+    if variant_failures and cfg.get("sheets_row"):
+        details = "; ".join(
+            f"{failure['label']}: {failure['error']}"
+            for failure in variant_failures
+        )
+        raise RuntimeError(
+            "Parallel Sheets run failed for one or more variants; "
+            f"the row was not committed. {details}"
+        )
 
     # ── Shared stage 5 — descriptions ONCE (0.97–1.00) ─────────────────────
     descriptions = await _stage_descriptions(
@@ -477,6 +516,7 @@ async def handle_parallel_pipeline(
         "transcript_text": raw_transcript_text,
         "descriptions": descriptions,
         "results": results,
+        "variant_failures": variant_failures,
         "sheets_commit": sheets_commit_result,
     })
     async with async_session() as session:

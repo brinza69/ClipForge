@@ -26,7 +26,6 @@ export async function readApiError(r: Response, fallback: string): Promise<ApiEr
     }
   }
 
-  // eslint-disable-next-line no-console
   console.error(`[api] ${r.status} ${r.url}`, body);
 
   const detail = (body as { detail?: unknown } | null)?.detail;

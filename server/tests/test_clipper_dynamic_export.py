@@ -9,9 +9,12 @@ a clip that cannot be cut dynamically must still export, statically.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from workers import clipper_render_jobs as jobs
+from workers import clipper_render_output as output
 
 
 class _Clip:
@@ -27,6 +30,16 @@ class _Clip:
     # same answer it gives when there is nothing to do, so a test could "pass"
     # while proving nothing.
     layout_plan: dict | None = None
+    # The three R2 carries into the render decision. `content_confidence` is
+    # None here on purpose: that is the state most real clips are in, and it is
+    # the one that must resolve to the conservative profile.
+    # The clip's own length. R3b clamps the proposal's timeline to it, so a
+    # sample at the end of the dense track cannot describe video that is not
+    # there.
+    duration = 30.0
+    content_type: str | None = "gaming"
+    content_confidence: float | None = None
+    content_type_origin: str | None = None
 
 
 class _Project:
@@ -52,6 +65,7 @@ def wired(monkeypatch, tmp_path):
         "faces": [{"t": 100.0, "boxes": [[10, 10, 40, 40]]}],
         "motion": [0.1, 0.2], "focus": [-1.0, 120.0], "detail": [3.0, 4.0],
         "ui": [0.0, 0.0], "band": (0.25, 1.0, 0.0, 0.8), "hop": 0.25,
+        "proxy_width": 640, "proxy_height": 360,
     })
     return dynamic_edit, proxy
 
@@ -67,6 +81,9 @@ async def test_a_planned_edit_records_the_frame_it_was_measured_in(wired, monkey
     assert plan["src_w"] == 1920 and plan["src_h"] == 1080
     assert plan["band"] == [0.25, 1.0, 0.0, 0.8]
     assert plan["faces_seen"] == 1
+    # Dimensions come from the decoded window, not the stale 480x270 signals.
+    assert plan["_face_space"] == {"width": 640, "height": 360,
+                                   "clock": "source_requested", "decoded_space": None}
 
 
 async def test_a_single_shot_falls_back_to_the_static_layout(wired, monkeypatch):
@@ -93,14 +110,29 @@ async def test_a_zero_length_window_is_refused(wired, monkeypatch):
     assert await jobs._dynamic_plan(clip, _Project(), 1920, 1080) is None
 
 
-def test_the_export_handler_reaches_the_dynamic_renderer():
-    """The assertion that would have caught the whole gap: the export path has
-    to name the dynamic renderer, not merely have one available in the tree."""
+def test_both_handlers_reach_the_dynamic_renderer():
+    """The assertion that would have caught the whole gap: a render path has to
+    NAME the dynamic renderer, not merely have one available in the tree.
+
+    Widened to the preview on 2026-08-17. It took the static renderer
+    unconditionally while the export could take the multi-shot one, so a person
+    approved a fixed split screen and received an edit with a dozen cuts in it.
+    The shot list is planned once now, in `_decide_render`, and both handlers
+    consume the same answer — which is why this checks the decision function
+    rather than either handler's body.
+    """
     import inspect
 
-    src = inspect.getsource(jobs.handle_export)
-    assert "dynamic_render" in src, "handle_export cannot reach the multi-shot renderer"
-    assert "_dynamic_plan" in src, "handle_export never plans a shot list"
+    decide = inspect.getsource(jobs._decide_render)
+    assert "_dynamic_plan" in decide, "nothing plans a shot list"
+
+    for handler in (jobs.handle_export, jobs.handle_preview):
+        src = inspect.getsource(handler)
+        assert "_decide_render" in src, (
+            f"{handler.__name__} decides what to render on its own again")
+        assert ("dynamic_render" in src or ("render_export(" in src
+                and "dynamic_render.render_dynamic_clip," in inspect.getsource(output.render_export))), (
+            f"{handler.__name__} cannot reach the multi-shot renderer")
 
 
 # ── the words the planner cuts on ────────────────────────────────────────────
@@ -207,9 +239,9 @@ async def test_the_working_signals_never_reach_the_sidecar(wired, monkeypatch):
     assert "_panels" in plan, "the caption placer has nothing to avoid"
 
     import inspect
-    popped = inspect.getsource(jobs.handle_export)
+    popped = inspect.getsource(output.render_export)
     for key in [k for k in plan if k.startswith("_")]:
-        assert f'pop("{key}"' in popped, f"{key} would be written to the sidecar"
+        assert f'"{key}"' in popped and "dyn.pop(key, None)" in popped, f"{key} would be written to the sidecar"
 
 
 def test_the_multi_shot_path_is_what_ships():
@@ -223,3 +255,192 @@ def test_the_multi_shot_path_is_what_ships():
     from config import Settings
 
     assert Settings().clipper_dynamic_edit is True
+
+
+# --- Batch R1: removing an invisible cut must not change the renderer --------
+
+
+async def test_a_plan_merged_down_to_one_shot_stays_dynamic(wired, monkeypatch):
+    """The R1 merge joins two `fit` shots that deliver one image. A clip whose
+    only fault was that invisible cut comes back as a single shot, and counting
+    THAT would drop it onto the static path: different crop, different captions,
+    different renderer version — for a change that was supposed to remove one
+    redundant command and nothing else."""
+    dynamic_edit, _proxy = wired
+    monkeypatch.setattr(dynamic_edit, "plan_dynamic_edit", lambda *a, **k: {
+        "shots": [{"camera": "face"}], "warnings": [],
+        # What the planner decided, before the merge absorbed the second shot.
+        "shot_count_before_merge": 2, "equivalent_cuts_removed": 1})
+
+    plan = await jobs._dynamic_plan(_Clip(), _Project(), 1920, 1080)
+    assert plan is not None, "an invisible cut cost this clip the dynamic path"
+    assert len(plan["shots"]) == 1
+
+
+async def test_a_natively_single_shot_plan_still_falls_back(wired, monkeypatch):
+    """The other direction, unchanged: a planner that only ever found one shot
+    is a static crop with extra steps."""
+    dynamic_edit, _proxy = wired
+    monkeypatch.setattr(dynamic_edit, "plan_dynamic_edit", lambda *a, **k: {
+        "shots": [{"camera": "face"}], "warnings": [],
+        "shot_count_before_merge": 1, "equivalent_cuts_removed": 0})
+
+    assert await jobs._dynamic_plan(_Clip(), _Project(), 1920, 1080) is None
+
+
+# --- Batch R2: the shadow must be inert -------------------------------------
+
+
+async def _decide_in(mode: str, wired, monkeypatch, tmp_path):
+    dynamic_edit, _proxy = wired
+    monkeypatch.setattr(dynamic_edit, "plan_dynamic_edit", lambda *a, **k: {
+        "shots": [{"camera": "face", "t0": 0.0, "t1": 2.0, "composition": "crop",
+                   "rect": {"x": 0, "y": 0, "w": 540, "h": 960}, "anchor": [270, 480]},
+                  {"camera": "game", "t0": 2.0, "t1": 4.0, "composition": "crop",
+                   "rect": {"x": 700, "y": 0, "w": 606, "h": 1080}, "anchor": [1003, 540]}],
+        "warnings": [], "style": {}})
+
+    class _P(_Project):
+        clipper_settings = {"edit_mode": mode}
+
+    return await jobs._decide_render(_Clip(), _P(), tmp_path)
+
+
+async def test_the_shadow_changes_nothing_about_the_render(wired, monkeypatch, tmp_path):
+    """R2's gate, end to end rather than by reading source. The profile is
+    resolved and recorded in both modes; every decision the renderer acts on —
+    the plan, the crop, the captions, the trim, the fps, the watermark — has to
+    come back identical, or "shadow" is not a shadow."""
+    from services.clipper import edit_profiles, render_input
+
+    legacy = await _decide_in(edit_profiles.LEGACY_DYNAMIC, wired, monkeypatch, tmp_path)
+    shadow = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired, monkeypatch, tmp_path)
+
+    assert legacy["edit_profile"]["profile"] == shadow["edit_profile"]["profile"]
+    assert legacy["edit_profile"]["mode"] != shadow["edit_profile"]["mode"]
+    # Neither mode applies it, and that is the point of the batch.
+    assert not legacy["edit_profile"]["applied"]
+    assert not shadow["edit_profile"]["applied"]
+
+    for key in ("plan", "dyn", "drop", "fps", "caption_y", "watermark"):
+        assert legacy[key] == shadow[key], key
+
+    # And the digest the audit rechecks does not move either.
+    def _fingerprint(decision):
+        return render_input.input_fingerprint({
+            "layout_plan": decision["plan"], "dynamic_plan": decision["dyn"],
+            "drop_spans": decision["drop"],
+            "render": {"fps": decision["fps"], "watermark": decision["watermark"]},
+        })
+
+    assert _fingerprint(legacy) == _fingerprint(shadow)
+
+
+async def test_a_rig_configured_to_an_unavailable_mode_still_delivers_legacy(
+        wired, monkeypatch, tmp_path):
+    """config.py is a second door into this setting, and the router's refusal
+    only guards the third. A rig set to `content_aware` used to produce
+    `applied: true` on every render while no grammar was connected to it."""
+    from config import settings
+    from services.clipper import edit_profiles
+
+    monkeypatch.setattr(settings, "clipper_edit_mode", edit_profiles.CONTENT_AWARE)
+    decision = await _decide_in("", wired, monkeypatch, tmp_path)
+    assert decision["edit_profile"]["mode"] == edit_profiles.DEFAULT_MODE
+    assert not decision["edit_profile"]["applied"]
+
+
+# --- Batch R3a: the shadow instrumentation, executed rather than read --------
+
+
+async def test_the_creator_view_reaches_the_export_and_the_working_key_does_not(
+        wired, monkeypatch, tmp_path):
+    """Grepping the source proves the line exists, not that it runs. This runs
+    the decision and looks at what would be written."""
+    from services.clipper import edit_profiles
+
+    decision = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
+                                monkeypatch, tmp_path)
+    view = decision["creator_view"]
+    assert view is not None
+    assert view["schema"] == "creator_view_v1"
+    assert view["scope"] == "composition_only_existing_shots"
+    # One entry per shot the planner produced, each carrying both answers.
+    assert len(view["shots"]) == len(decision["dyn"]["shots"])
+    assert all("composition" in s and "delivered" in s for s in view["shots"])
+    assert all(s["composition"] in ("crop", "fit") for s in view["shots"])
+
+    # The anchor rides on the plan to get here, and must not ride any further:
+    # the sidecar is a deliverable, and a face track is not part of it.
+    dyn = decision["dyn"]
+    for key in ("_review_faces", "_panels", "_stable_track", "_motion",
+                "_motion_hop", "_rhythm", "_face_space"):
+        dyn.pop(key, None)
+    assert not [k for k in dyn if k.startswith("_")], "working data in the plan"
+
+
+async def test_the_creator_view_changes_nothing_the_renderer_reads(
+        wired, monkeypatch, tmp_path):
+    """R3a is instrumentation. If the proposal moved a single delivered frame,
+    the shadow would stop being comparable with what R2 froze."""
+    from services.clipper import edit_profiles, render_input
+
+    legacy = await _decide_in(edit_profiles.LEGACY_DYNAMIC, wired, monkeypatch, tmp_path)
+    shadow = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
+                              monkeypatch, tmp_path)
+
+    for key in ("plan", "dyn", "drop", "fps", "caption_y", "watermark"):
+        assert legacy[key] == shadow[key], key
+
+    # And a fingerprint taken over the recipe does not move when only the
+    # proposal differs — which is why `creator_view` is not one of its keys.
+    assert "creator_view" not in render_input.FINGERPRINT_KEYS
+    fingerprints = {
+        render_input.input_fingerprint({
+            "layout_plan": d["plan"], "dynamic_plan": d["dyn"],
+            "drop_spans": d["drop"],
+            "render": {"fps": d["fps"], "watermark": d["watermark"]},
+        })
+        for d in (legacy, shadow)
+    }
+    assert len(fingerprints) == 1
+
+
+async def test_the_regime_view_is_recorded_beside_the_creator_view(
+        wired, monkeypatch, tmp_path):
+    """R3b, executed rather than read. Both proposals describe the same
+    timeline: the hop comes from the first, so they cannot drift apart."""
+    from services.clipper import edit_profiles
+
+    decision = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
+                                monkeypatch, tmp_path)
+    view = decision["regime_view"]
+    assert view["schema"] == "regime_view_v2"
+    assert view["scope"] == "regime_segments_at_timeline_resolution"
+    assert view["sample_hop_s"] == decision["creator_view"]["sample_hop_s"]
+
+    # Contiguous and gapless, and at the SAMPLE rate rather than the shot's:
+    # the boundaries fall where the signals change, not where the legacy edit
+    # happened to cut.
+    segments = view["segments"]
+    assert segments[0]["t0"] == 0.0
+    for a, b in zip(segments, segments[1:]):
+        assert a["t1"] == b["t0"], "a gap between segments is time nobody owns"
+    assert sum(s["samples"] for s in segments) == view["samples"]
+
+    # And the treatment merge never asks for more cuts than there are regimes.
+    assert view["treatment_boundaries"] <= view["regime_boundaries"]
+
+
+async def test_neither_proposal_moves_the_delivered_plan(wired, monkeypatch, tmp_path):
+    """Two batches of instrumentation now ride on every render. If either had
+    moved a frame, the shadow would stop being comparable with what R2 froze."""
+    from services.clipper import edit_profiles
+
+    legacy = await _decide_in(edit_profiles.LEGACY_DYNAMIC, wired, monkeypatch, tmp_path)
+    shadow = await _decide_in(edit_profiles.CONTENT_AWARE_SHADOW, wired,
+                              monkeypatch, tmp_path)
+    for key in ("plan", "dyn", "drop", "fps", "caption_y", "watermark"):
+        assert legacy[key] == shadow[key], key
+    assert legacy["regime_view"] == shadow["regime_view"]
+    assert legacy["rhythm_view"] == shadow["rhythm_view"]

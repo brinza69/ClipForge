@@ -1,0 +1,260 @@
+"""Batch R6: the minimum separation a caption palette can GUARANTEE.
+
+WHAT A FLOOR BELOW 3.0 MEANS, precisely, because the loose phrasing says
+something much stronger and false: it means the palette cannot GUARANTEE 3:1
+against every uniform backdrop. It does NOT mean the caption never reaches 3:1
+— on most real backdrops it does, comfortably. The number is a worst case, and
+the worst case is a specific backdrop luminance, not the typical one.
+
+§R6 asks whether the caption "passes the contrast" on the blurred letterbox
+band. The corpus says that is not a corner case — 27 of the 27 clips with a
+`fit` shot and known geometry have the caption on that band — and the answer
+turns out not to need a single frame: an outlined glyph separates from ANY
+backdrop by one of its two colours, so there is a floor.
+
+    python scripts/audit_caption_contrast.py
+    python scripts/audit_caption_contrast.py --json
+
+TWO POPULATIONS, and they are not the same question.
+
+The seven SHIPPING PRESETS are what any future clip can be given. The STYLES ON
+DISK are what was actually burned into the 101 exports. A preset nobody has used
+can still be wrong, and a style in use can be one no preset defines any more —
+so both are counted, with their own denominators.
+
+WHAT FAILS THE RUN:
+
+    a style that cannot be READ        an unreadable colour is not a black one.
+                                       A style that is ABSENT is different: an
+                                       export can carry no captions, so that is
+                                       counted and printed, never failed on
+    a fill below the large-text bar    the body text is unreadable by the only
+                                       published standard available
+    a highlight below it               the word the animation paints is the one
+                                       the eye goes to
+                                       ...UNLESS the exact palette is in
+                                       `caption_contrast.KNOWN_SHORTFALLS`, a
+                                       decision recorded with its reason and
+                                       keyed on every colour, so a repaint that
+                                       makes it worse fires the gate again
+    an empty population                a pass over nothing is not a pass
+
+The last one matters here more than usual: this script's whole method is a sweep
+over colour pairs, and a sweep over an empty list is silent and green.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT / "server"))
+
+DATA = Path(os.environ.get("CLIPFORGE_DATA_DIR") or (_ROOT / "data")) / "clipper"
+
+from services.captioner_presets import DEFAULT_PRESETS  # noqa: E402
+from services.clipper import caption_contrast as cc  # noqa: E402
+
+
+def _styles_on_disk() -> tuple[list[tuple[str, Any]], list[str]]:
+    """`(styles found, refusals)` across the export sidecars.
+
+    A sidecar that cannot be read gets a refusal rather than vanishing. The
+    style is sometimes a repr rather than JSON, which `caption_plan` has stored
+    since the clipper shipped; a repr that will not parse is also a refusal and
+    not an absent style.
+    """
+    found: list[tuple[str, Any]] = []
+    refused: list[str] = []
+    for path in sorted(DATA.glob("*/exports/*.json")):
+        name = f"{path.parent.parent.name}/{path.stem}"
+        try:
+            side = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            refused.append(f"{name}: sidecar_unreadable {type(exc).__name__}")
+            continue
+        if not isinstance(side, dict):
+            refused.append(f"{name}: sidecar_not_a_record")
+            continue
+        # A SUB-RECORD THAT IS NOT A RECORD IS A REFUSAL. `side.get(
+        # "caption_plan") or {}` returns the list itself for `[1]`, and `.get`
+        # on a list raises — out of a loop over the corpus, so the audit reports
+        # on the part before the crash and never says it crashed. The placement
+        # audit was taught this and this one was not.
+        plan = side.get("caption_plan")
+        if plan is not None and not isinstance(plan, dict):
+            refused.append(f"{name}: caption_plan_not_a_record")
+            continue
+        style = (plan or {}).get("style")
+        if isinstance(style, str):
+            try:
+                style = ast.literal_eval(style)
+            except Exception:
+                refused.append(f"{name}: style_repr_unparsable")
+                continue
+        if style is not None and not isinstance(style, dict):
+            # PRESENT AND NOT A RECORD, which `verdict` would call `no_caption_
+            # style` — the one refusal this audit deliberately does not fail on.
+            # An absent style is a legitimate export with no captions; a style
+            # that is the number 7 is a corrupt record, and they must not spell
+            # the same.
+            refused.append(f"{name}: style_not_a_record")
+            continue
+        found.append((name, style))
+    return found, refused
+
+
+def _rows(population: list[tuple[str, Any]]) -> list[dict]:
+    out = []
+    for name, style in population:
+        told = cc.verdict(style)
+        # THE STYLE CARRIES ITS OWN NAME. Stripping a suffix off the row label
+        # worked for the presets and never for a stored export, whose label is
+        # `project/clip`.
+        out.append({"name": name,
+                    "accepted": cc.accepted_shortfall(style), **told})
+    return out
+
+
+def _print(title: str, rows: list[dict]) -> None:
+    print(f"{title}: {len(rows)}")
+    if not rows:
+        return
+    print(f"  {'':40} {'fill':>6} {'highlight':>10}")
+    for row in rows:
+        if row["refused"]:
+            print(f"  {row['name']:40} REFUSED {','.join(row['refused'])}")
+            continue
+        fill = row["fill"]
+        high = row["highlight"]
+        mark = "" if fill["clears_large_text"] else "  <- fill below 3.0"
+        hmark = ("" if high is None or high["clears_large_text"]
+                 else ("  <- highlight below 3.0, ACCEPTED"
+                       if row.get("accepted") else "  <- highlight below 3.0"))
+        print(f"  {row['name']:40} {fill['floor']:6.2f} "
+              f"{(high['floor'] if high else 0.0):10.2f}{mark}{hmark}")
+
+
+def _failures(presets: list[dict], disk: list[dict],
+              disk_refused: list[str]) -> list[str]:
+    bad: list[str] = []
+    if not presets:
+        bad.append("no presets found — a sweep over nothing is silent and green")
+    if not disk and not disk_refused:
+        bad.append("no styles on disk — a sweep over nothing is silent and green")
+    for line in disk_refused:
+        bad.append(f"sidecar refused: {line}")
+    for row in presets + disk:
+        if row["refused"] == [cc.NO_STYLE]:
+            # NOT A FAILURE, and counted rather than dropped. An export can
+            # genuinely carry no captions, and a sidecar can have lost the
+            # style, and nothing here tells the two apart — so it is
+            # `unavailable`, exactly as `audit_caption_placement` treats the
+            # same fact. Failing on it would keep the gate permanently red for
+            # a legitimate state; hiding it would let a palette count claim to
+            # cover renders it never saw.
+            continue
+        if row["refused"]:
+            bad.append(f"{row['name']}: refused ({', '.join(row['refused'])})")
+            continue
+        # A KNOWN SHORTFALL IS EXCUSED, and only this exact palette is. The
+        # exception is keyed on every colour and the outline width, so
+        # repainting the preset into something worse stops matching it and the
+        # gate fires again.
+        excused = row["accepted"]
+        if not row["fill"]["clears_large_text"] and not excused:
+            bad.append(f"{row['name']}: fill floor {row['fill']['floor']} is "
+                       f"below {cc.LARGE_TEXT_MIN}")
+        high = row["highlight"]
+        if high is not None and not high["clears_large_text"] and not excused:
+            bad.append(f"{row['name']}: highlight floor {high['floor']} is "
+                       f"below {cc.LARGE_TEXT_MIN}")
+    return bad
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    presets = _rows([(str(p.get("name") or key), p)
+                     for key, p in sorted(DEFAULT_PRESETS.items())])
+    on_disk, refused = _styles_on_disk()
+    # ONE ROW PER DISTINCT PALETTE, not one per export. 99 identical rows would
+    # bury the two that differ, and the question is about palettes.
+    def _key(style: Any) -> tuple:
+        """What makes two styles the same VERDICT, not the same colours.
+
+        `outline_width` is in it because the floor depends on the outline being
+        drawn: two styles with identical colours and widths of 5 and 0 get
+        different answers, and keying on colours alone collapsed them into one
+        row and reported whichever came first.
+        """
+        got = style if isinstance(style, dict) else {}
+        return (str(got.get("text_color")), str(got.get("highlight_color")),
+                str(got.get("outline_color")), str(got.get("outline_width")))
+
+    seen: set[tuple] = set()
+    unique: list[tuple[str, Any]] = []
+    counts: dict[tuple, int] = {}
+    for _name, style in on_disk:
+        counts[_key(style)] = counts.get(_key(style), 0) + 1
+    for name, style in on_disk:
+        key = _key(style)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((f"{name} (x{counts[key]})", style))
+    disk = _rows(unique)
+
+    bad = _failures(presets, disk, refused)
+    out = {
+        "presets": presets,
+        "sidecars_read": len(on_disk),
+        "sidecars_refused": refused,
+        "distinct_palettes_on_disk": disk,
+        "thresholds": {"large_text": cc.LARGE_TEXT_MIN,
+                       "normal_text": cc.NORMAL_TEXT_MIN,
+                       "calibrated": False},
+        "failures": bad,
+    }
+    if args.json:
+        print(json.dumps(out, indent=1))
+    else:
+        _print("shipping presets", presets)
+        print()
+        print(f"sidecars read: {len(on_disk)}")
+        print(f"  refused:     {len(refused)}")
+        for line in refused:
+            print(f"    {line}")
+        print()
+        _print("distinct palettes on disk", disk)
+        print()
+        print(f"thresholds are WCAG 2.1 AA, borrowed and not calibrated: "
+              f"{cc.LARGE_TEXT_MIN} large / {cc.NORMAL_TEXT_MIN} normal")
+        print()
+        for line in bad:
+            print(f"FAIL: {line}")
+        # THE PASS LINE HAS TO SAY WHAT HAPPENED. "every palette clears the bar"
+        # was printed over two that do not and are merely excused, which is a
+        # green run reporting the opposite of its own table.
+        if not bad:
+            excused = [r for r in presets + disk if r.get("accepted")]
+            if excused:
+                print(f"no palette misses the bar except {len(excused)} "
+                      f"accepted below it:")
+                for row in excused:
+                    print(f"  {row['name']}: {row['accepted']}")
+            else:
+                print("every palette clears the large-text bar on both colours")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

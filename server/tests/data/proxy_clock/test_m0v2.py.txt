@@ -1,0 +1,315 @@
+"""M0 v2 addressing tests (condition 2).
+
+    server/.venv/Scripts/python.exe -m pytest data/claude-master-20260924/B/gates/m0v2/test_m0v2.py
+
+Pure tests reproduce ffmpeg's arithmetic; `real_ffmpeg` tests build CONSTRUCTED sources (barcode
+frames, chosen timestamps) through build_proxy's exact command and compare every proxy slot with the
+replica, including exact ties on both sides of the -1.1 threshold.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from fractions import Fraction
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "offset"))
+import addrlib as A  # noqa: E402
+import mediaio as M  # noqa: E402
+import offlib  # noqa: E402
+
+SYNTH = HERE / "synth_24_23.976_60_30_25_59.94.json"
+
+
+def meta(rate="60/1", avg=None, tb="1/15360", start="0.000000", start_pts="0", fmt_start="0.000000"):
+    return {"stream": {"r_frame_rate": rate, "avg_frame_rate": avg or rate, "time_base": tb,
+                       "start_time": start, "start_pts": start_pts},
+            "format": {"start_time": fmt_start}}
+
+
+PROXY = meta("10/1", tb="1/10240")
+
+
+def cfr(fps: Fraction, tb_den: int, n: int):
+    step = int(Fraction(tb_den) / fps)
+    return [i * step for i in range(n)], [step] * n, (1, tb_den)
+
+
+def addr(slot, pts, durs, tb, src_meta=None, proxy_meta=None, nb=None, pnb=None):
+    return A.address(slot * 1024, proxy_meta or PROXY, src_meta or meta(), A.window(pts, durs, tb, slot),
+                     nb if nb is not None else len(pts), pnb)
+
+
+# --------------------------------------------------------------------------- the C arithmetic
+
+def test_rescale_q_rounds_half_away_from_zero():
+    assert A.rescale_q(1, (1, 2), (1, 1)) == 1          # 0.5 -> 1
+    assert A.rescale_q(-1, (1, 2), (1, 1)) == -1
+    assert A.rescale_q(3, (1, 4), (1, 1)) == 1          # 0.75 -> 1
+    assert A.rescale_q(1, (1, 4), (1, 1)) == 0          # 0.25 -> 0
+    assert A.rescale_q(5404399, (1, 60000), (1, 10 << 26)) == (5404399 * (10 << 26) + 30000) // 60000
+
+
+def test_sync_ipts_nudges_only_non_integers():
+    assert A.sync_ipts(90, (1, 100)) == 9.0                            # 0.9 s: exactly slot 9
+    x = A.sync_ipts(5404399, (1, 60000))
+    # extra_bits = av_clip(29 - 3, 0, 16) = 16: quantised to 1/65536 slot, then + 2^-17
+    q = A.rescale_q(5404399, (1, 60000), (1, 10 << 16)) / 65536.0
+    assert q != float(Fraction(5404399 * 10, 60000))
+    assert x == q + 2 ** -17
+
+
+# --------------------------------------------------------------------------- threshold (pure, constructed)
+
+@pytest.mark.parametrize("shift,kept", [(-1, False), (0, True), (1, True)])
+def test_threshold_non_integer_sync_both_sides(shift, kept):
+    """59.94: frame 5399 ends EXACTLY at slot 902's edge (90.09 = 90.2 - 0.11) when shift == 0.
+    Its next frame is moved by `shift` ticks, so the end is below / at / above the edge."""
+    p, d = 5399 * 1001, 1001 + shift
+    assert A.exact_end_vs_edge(p, d, (1, 60000), 902) == shift
+    nb, _ = A.cfr_decision(*A.deltas(p, d, (1, 60000), 902))
+    assert (nb == 1) is kept
+
+
+@pytest.mark.parametrize("shift,kept", [(-1, False), (0, True), (1, True)])
+def test_threshold_integer_sync_both_sides(shift, kept):
+    """tb 1/100: a frame starting at 0.9 s (sync_ipts exactly 9, NO nudge) and lasting 0.09 s ends
+    EXACTLY at slot 11's edge (0.99 = 1.1 - 0.11). (The decision in isolation; the real-ffmpeg test
+    uses the same geometry at frame 50 / slot 47, in steady state.) In double, 9*0.01/0.1 = 0.8999999999999999 and
+    -2 + that is the SAME double as the literal -1.1, so `delta < -1.1` is false: KEPT at exact
+    equality. (First written expecting DROPPED; the replica said kept; the real-ffmpeg test below
+    decides.)"""
+    p, d = 90, 9 + shift
+    assert A.exact_end_vs_edge(p, d, (1, 100), 11) == shift
+    d0, dl = A.deltas(p, d, (1, 100), 11)
+    if shift == 0:
+        assert d0 == -2.0 and dl == -1.1
+    nb, _ = A.cfr_decision(d0, dl)
+    assert (nb == 1) is kept
+
+
+# --------------------------------------------------------------------------- first / last slots
+
+def test_first_slots_are_the_start_transient():
+    for fps, tbd, want in ((Fraction(60), 15360, [0, 1, 5, 11]), (Fraction(30), 15360, [0, 1, 2, 5]),
+                           (Fraction(24), 12288, [0, 1, 2, 4]), (Fraction(24000, 1001), 24000, [0, 1, 2, 4])):
+        pts, durs, tb = cfr(fps, tbd, int(fps * 20))
+        assert A.simulate(pts, durs, tb)[:4] == want
+        for s in (0, 1):
+            r = addr(s, pts, durs, tb, meta(f"{fps.numerator}/{fps.denominator}", tb=f"1/{tbd}"))
+            assert r["state"] == "refused" and r["reason"].startswith("start_transient")
+
+
+def test_last_slot_is_refused_as_end_of_stream():
+    pts, durs, tb = cfr(Fraction(24), 12288, 24 * 20)
+    sim = A.simulate(pts, durs, tb)
+    last = len(sim) - 1
+    assert sim[last] == len(pts) - 1
+    r = addr(last, pts, durs, tb, meta("24/1", tb="1/12288"), pnb=len(sim))
+    assert r["state"] == "refused" and r["reason"].startswith("end_of_stream")
+    r = addr(last + 1, pts, durs, tb, meta("24/1", tb="1/12288"), pnb=len(sim))
+    assert r["state"] == "refused" and r["reason"].startswith("slot_not_in_proxy")
+
+
+def test_probe_first_and_last_slots_match_ffmpeg():
+    """Evidence from synth_probe.py (real ffmpeg, build_proxy's command): the first and last four
+    slots of every rate equal the replica."""
+    res = json.loads(SYNTH.read_text())
+    assert len(res) == 6
+    for r in res:
+        assert r["state"] == "read"
+        for s in r["first_slots"] + r["last_slots"]:
+            assert s["shown"] == s["sim"], (r["rate"], s)
+        assert r["proxy_slots"] == r["simulated_slots"]
+
+
+# --------------------------------------------------------------------------- 24 fps and the steady state
+
+@pytest.mark.parametrize("fps,tbd", [(Fraction(24), 12288), (Fraction(24000, 1001), 24000)])
+def test_24fps_address_equals_whole_stream_replica(fps, tbd):
+    pts, durs, tb = cfr(fps, tbd, int(fps * 120))
+    sim = A.simulate(pts, durs, tb)
+    m = meta(f"{fps.numerator}/{fps.denominator}", tb=f"1/{tbd}")
+    addressed = 0
+    for s in range(len(sim)):
+        r = addr(s, pts, durs, tb, m, pnb=len(sim))
+        if r["state"] == "addressed":
+            addressed += 1
+            assert r["source_index"] == sim[s], (s, r)
+        else:
+            assert s < 3 or s == len(sim) - 1, (s, r["reason"])
+    assert addressed == len(sim) - 4
+
+
+def test_60fps_steady_state_is_v1s_minus_7():
+    pts, durs, tb = cfr(Fraction(60), 15360, 60 * 60)
+    for s in range(3, 590):
+        assert addr(s, pts, durs, tb)["source_index"] == 6 * s - 7
+
+
+def test_validated_rates_have_probe_evidence():
+    res = {r["fps"]: r for r in json.loads(SYNTH.read_text())}
+    for fps in A.VALIDATED_SOURCE_RATES:
+        r = res[str(fps)]
+        assert r["state"] == "read" and r["sim_mismatches"] == 0 and r["addr_mismatches"] == 0
+        assert r["proxy_pts_off_grid"] == 0 and r["unreadable"] == 0 and r["domain"]["state"] == "ok"
+
+
+# --------------------------------------------------------------------------- refusals, one per domain
+
+def _one(src_meta=None, proxy_meta=None, slot=500, frames=None, nb=None):
+    pts, durs, tb = cfr(Fraction(60), 15360, 60 * 100)
+    win = frames if frames is not None else A.window(pts, durs, tb, slot)
+    return A.address(slot * 1024, proxy_meta or PROXY, src_meta or meta(), win,
+                     nb if nb is not None else len(pts), None)
+
+
+@pytest.mark.parametrize("kw,reason", [
+    (dict(src_meta=meta("60/1", avg="5997/100")), "source_vfr"),
+    (dict(src_meta=meta(start="0.500000")), "source_start_time_nonzero"),
+    (dict(src_meta=meta(fmt_start="1.000000")), "source_start_time_nonzero"),
+    (dict(proxy_meta=meta("10/1", tb="1/10240", start="0.100000")), "proxy_start_time_nonzero"),
+    (dict(proxy_meta=meta("10/1", tb="1/10240", start_pts="N/A")), "proxy_start_time_nonzero"),
+    (dict(proxy_meta=meta("25/1", tb="1/12800")), "proxy_rate_not_validated"),
+    (dict(src_meta=meta("10/1")), "source_fps_le_proxy_fps"),
+    (dict(src_meta=meta("8/1")), "source_fps_le_proxy_fps"),
+    (dict(src_meta=meta("50/1")), "source_rate_not_validated"),
+    (dict(src_meta=meta("120/1")), "source_rate_not_validated"),
+])
+def test_out_of_contract_domains_are_refused(kw, reason):
+    r = _one(**kw)
+    assert r["state"] == "refused" and r["reason"].startswith(reason), r
+
+
+def test_local_vfr_window_is_refused():
+    pts, durs, tb = cfr(Fraction(60), 15360, 60 * 100)
+    win = A.window(pts, durs, tb, 500)
+    gap = win[:5] + [(p + 256, d) for p, d in win[6:]]          # a missing frame in the window
+    assert _one(frames=gap)["reason"].startswith("vfr_local")
+    odd = win[:5] + [(win[5][0], 300)] + win[6:]                # one irregular duration
+    assert _one(frames=odd)["reason"].startswith("vfr_local")
+
+
+def test_off_grid_unknown_and_short_are_refused():
+    pts, durs, tb = cfr(Fraction(60), 15360, 60 * 100)
+    assert A.address(500 * 1024 + 1, PROXY, meta(), A.window(pts, durs, tb, 500), len(pts), None)[
+        "reason"].startswith("proxy_pts_off_grid")
+    assert A.address(None, PROXY, meta(), [], len(pts), None)["reason"].startswith("pts_unknown")
+    win = A.window(pts, durs, tb, 500)
+    assert _one(frames=win[-4:])["reason"].startswith("window_short")
+    assert _one(frames=win[:3])["state"] == "refused"
+
+
+def test_domain_lists_every_failing_condition():
+    d = A.domain(meta("25/1", tb="1/12800", start="0.1"), meta("8/1", start="0.2"))
+    kinds = {x.split(" ")[0] for x in d["reasons"]}
+    assert {"proxy_rate_not_validated", "proxy_start_time_nonzero", "source_start_time_nonzero",
+            "source_fps_le_proxy_fps"} <= kinds
+
+
+# --------------------------------------------------------------------------- refused never counted
+
+def test_tally_never_counts_a_refused_frame():
+    _argv, sys.argv = sys.argv, sys.argv[:1]
+    import m0v2_run
+    sys.argv = _argv
+    rows = [{"state": "addressed", "visible": True, "detected": True},
+            {"state": "addressed", "visible": True, "detected": False},
+            {"state": "refused", "reason": "start_transient (x)", "visible": True, "detected": True},
+            {"state": "refused", "reason": "vfr_local (y)", "visible": True, "detected": False}]
+    t = m0v2_run.tally(rows)
+    assert (t["requested"], t["addressed"], t["refused"]) == (4, 2, 2)
+    assert (t["visible"], t["detected"], t["missed"]) == (2, 1, 1)
+    assert t["refused_by_reason"] == {"start_transient": 1, "vfr_local": 1}
+
+
+@pytest.mark.real_ffmpeg
+def test_run_case_gives_refused_frames_no_source_box(tmp_path, monkeypatch):
+    """The harness path itself: frames whose address is refused get NO source-arm boxes and land in
+    frames_refused and the tally's refused row, never in detected/missed."""
+    _argv, sys.argv = sys.argv, sys.argv[:1]
+    import m0v2_run
+    sys.argv = _argv
+    src = tmp_path / "s.mp4"
+    subprocess.run([M.FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=64x36:r=60:d=2",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
+    rng = np.random.default_rng(0)
+    grays = [rng.integers(0, 255, (27, 48), np.uint8) for _ in range(2)]
+    case = {"case": "fake", "source": src, "keys": ["a", "b"], "pts": [0.5, 0.6], "grays": grays,
+            "bgrs": [np.dstack([g] * 3) for g in grays], "fw": 48, "fh": 27, "stored_result": []}
+    monkeypatch.setattr(m0v2_run, "OUT", tmp_path)
+    (tmp_path / "src").mkdir()
+    monkeypatch.setattr(m0v2_run, "address_case", lambda c, t: [
+        {"state": "refused", "reason": "start_transient (test)", "v1_proxy_pts_s": 0.5},
+        {"state": "refused", "reason": "vfr_local (test)", "v1_proxy_pts_s": 0.6}])
+    yunet = m0v2_run.YuNetDetector(str(m0v2_run.m0_run.MODEL))
+    res = m0v2_run.run_case(case, yunet, {})
+    for arm in ("haar_source", "yunet_source"):
+        a = res["arms"][arm]
+        assert a["boxes"] == 0 and len(a["frames_refused"]) == 2 and a["faces_proxy"] == [[], []]
+    t = res["address_tally"]
+    assert (t["addressed"], t["refused"], t["detected"], t["missed"]) == (0, 2, 0, 0)
+
+
+# --------------------------------------------------------------------------- real ffmpeg, constructed ties
+
+def _constructed(tmp: Path, rate: str, tb_den: int, secs: float, step: int, at: int, shift: int,
+                 w=192, h=108):
+    """A CFR barcode source (`step` ticks per frame at tb 1/tb_den) in which the END of frame `at`
+    is moved by `shift` ticks: packets after it are shifted and its duration changed with the `setts`
+    bitstream filter (setpts alone leaves frame->duration, so the mp4 kept the old durations; first
+    run of this test). Through build_proxy's exact command. Returns (shown per slot, replica per
+    slot, source packets)."""
+    import synthetic_long as SL
+    src, prx = tmp / "src.mp4", tmp / "prx.mp4"
+    sh = f"gt(N\\,{at})*({shift})"                       # \, : a bare comma splits the bsf chain
+    bsf = (f"setts=pts=PTS+{sh}:dts=DTS+{sh}:duration=DURATION+eq(N\\,{at})*({shift})")
+    subprocess.run([M.FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                    f"color=c=black:s={w}x{h}:r={rate}:d={secs}", "-vf",
+                    f"geq=lum='{offlib.geq_barcode_expr(w, h)}':cb=128:cr=128,settb=1/{tb_den},setpts=N*{step}",
+                    "-fps_mode", "passthrough", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", "-bf", "0",
+                    "-pix_fmt", "yuv420p", "-enc_time_base:v", f"1/{tb_den}",   # setts works in the encoder tb
+                    "-bsf:v", bsf, "-video_track_timescale", str(tb_den), str(src)],
+                   check=True)
+    pk = M.packets(src)
+    sp = M.probe(src)["stream"]
+    assert sp["time_base"] == f"1/{tb_den}"
+    fps = float(A._rate(sp["r_frame_rate"]))
+    subprocess.run(SL.build_proxy_cmd(src, prx, w, fps), check=True)
+    assert M.probe(prx)["stream"]["r_frame_rate"] == "10/1"
+    d = offlib.decode(prx, None, None, 96, 54, copyts=True)
+    assert d["state"] == "verified", d["problems"]
+    shown = [offlib.read_barcode(f).get("index") for f in d["frames"]]
+    assert all(abs(t * 10 - k) < 1e-9 for k, t in enumerate(d["pts"]))
+    return shown, A.simulate(pk["pts"], pk["dur"], (1, tb_den)), pk
+
+
+@pytest.mark.real_ffmpeg
+@pytest.mark.parametrize("shift", [-1, 0, 1])
+def test_real_ffmpeg_threshold_non_integer_sync(tmp_path, shift):
+    shown, sim, pk = _constructed(tmp_path, "60000/1001", 60000, 91, 1001, 5399, shift)
+    i = 5399
+    assert (pk["pts"][i], pk["dur"][i], pk["pts"][i + 1]) == (i * 1001, 1001 + shift, (i + 1) * 1001 + shift)
+    assert A.exact_end_vs_edge(pk["pts"][i], pk["dur"][i], (1, 60000), 902) == shift
+    assert shown == sim                                     # every slot, first and last included
+    assert shown[902] == (5400 if shift < 0 else 5399)
+
+
+@pytest.mark.real_ffmpeg
+@pytest.mark.parametrize("shift", [-1, 0, 1])
+def test_real_ffmpeg_threshold_integer_sync(tmp_path, shift):
+    """Frame 50 starts at 4.5 s (on the slot grid) and, unshifted, ends at 4.59 = slot 47 - 0.11.
+    Past the ~2 s start transient of a 100/9 fps source (slot 11 was used first: there frame k
+    sits in slot k whatever the tie, so it tested nothing)."""
+    shown, sim, pk = _constructed(tmp_path, "100/9", 100, 6, 9, 50, shift)
+    assert (pk["pts"][50], pk["dur"][50], pk["pts"][51]) == (450, 9 + shift, 459 + shift)
+    assert A.exact_end_vs_edge(450, 9 + shift, (1, 100), 47) == shift
+    assert shown == sim
+    assert shown[46] == 49                                  # the slot before is decided by frame 49
+    assert shown[47] == (51 if shift < 0 else 50)

@@ -26,6 +26,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Pill } from "@/components/clipper/pill";
+import { EditModeField } from "@/components/clipper/edit-mode-field";
+import { ReasoningModeField } from "@/components/clipper/reasoning-mode-field";
 import { readApiError, errorDescription } from "@/lib/api-error";
 import {
   CLIPPER_API,
@@ -34,6 +37,8 @@ import {
   formatTimecode,
   type ClipperSettings,
   type LayoutMode,
+  type EditMode,
+  type ReasoningMode,
   type SourceMetadata,
   type TargetPlatform,
 } from "@/types/clipper";
@@ -64,30 +69,6 @@ const LAYOUT_CHOICES: LayoutMode[] = [
   "fullscreen_crop",
 ];
 
-function Pill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-        active
-          ? "border-primary/60 bg-primary/10 text-primary"
-          : "border-border/50 text-muted-foreground hover:bg-accent hover:text-foreground"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 export function SourceForm({ onCreated }: { onCreated?: () => void }) {
   const router = useRouter();
 
@@ -113,6 +94,9 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
   const [platform, setPlatform] = useState<TargetPlatform>("tiktok");
   const [language, setLanguage] = useState("auto");
   const [layout, setLayout] = useState<LayoutMode>("auto");
+  const [reasoning, setReasoning] = useState<ReasoningMode | null>(null);
+  // Null on purpose: see EditModeField. Sending a value would override the rig.
+  const [editMode, setEditMode] = useState<EditMode | null>(null);
 
   const metaError = meta?.error ? meta : null;
   const metaOk = meta && !meta.error ? meta : null;
@@ -190,6 +174,9 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
       // 0 keeps the old behaviour exactly: the run stops at the board.
       auto_export: handsOff ? clipCount : 0,
       vision_review: visionReview,
+      // Omitted unless the user picked one, so the server's own default wins.
+      ...(reasoning ? { reasoning_mode: reasoning } : {}),
+      ...(editMode ? { edit_mode: editMode } : {}),
     };
 
     setSubmitting(true);
@@ -464,6 +451,9 @@ export function SourceForm({ onCreated }: { onCreated?: () => void }) {
               change it per clip afterwards.
             </p>
           </div>
+
+          <ReasoningModeField value={reasoning} onChange={setReasoning} />
+          <EditModeField value={editMode} onChange={setEditMode} />
         </div>
       )}
 
