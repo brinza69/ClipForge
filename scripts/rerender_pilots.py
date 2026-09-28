@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -67,6 +68,30 @@ def _needed(side: dict) -> str | None:
     return None
 
 
+def _frozen_end_tail(path: Path, side: dict) -> dict | None:
+    """EN3's scoring record, carried from the frozen sidecar (codex-verdict-next-29 §3), as the clip's
+    `reasoning`: the new render binds it to ITS OWN window and file (`end_tail.sidecar_block`).
+
+    Only `end_tail.recorded` is carried, with where it came from. The old `binding` and `delivered_s` describe
+    the old file and are never copied; today's settings are never read. No block — a sidecar from before
+    EN3T — is None, which binds `absent`. A block whose record is not one is carried as it is, and binds
+    `invalid_record`: a record that cannot be read is not the same fact as no record.
+    """
+    block = side.get("end_tail")
+    if block is None:
+        return None
+    rec = block.get("recorded") if isinstance(block, dict) else block
+    if isinstance(block, dict) and block.get("binding") == "absent" and rec is None:
+        return None
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        digest = None
+    return {"end_tail": rec if isinstance(rec, dict) else {"unreadable_record": rec},
+            "end_tail_provenance": {"from": "frozen_sidecar", "sidecar": str(path), "sidecar_sha256": digest,
+                                    "field": "end_tail.recorded"}}
+
+
 def _render(path: Path, side: dict, dry: bool) -> dict:
     row = {"project": path.parent.parent.name, "clip": path.stem}
     why = _needed(side)
@@ -97,7 +122,7 @@ def _render(path: Path, side: dict, dry: bool) -> dict:
         transcript_text=side.get("transcript"), overall_score=side.get("overall_score"),
         sub_scores=side.get("sub_scores"), score_reason=side.get("score_reason"),
         caption_plan=side.get("caption_plan"), content_type=side.get("content_type"),
-        ranker_version=side.get("ranker_version"))
+        ranker_version=side.get("ranker_version"), reasoning=_frozen_end_tail(path, side))
     project = SimpleNamespace(id=row["project"], source_url=source.get("url"),
                               width=plan["src_w"], height=plan["src_h"],
                               analysis_version=side.get("analysis_version"))
