@@ -128,7 +128,8 @@ clipforge/
 │   ├── job_attempt.py               ← ClaimedAttempt + CLAIMED_ATTEMPT: the attempt a handler runs as,
 │   │                                  fixed at the claim (R1c), never re-read from the job row
 │   ├── job_recovery.py              ← lease lifecycle: recover_stuck_jobs, heartbeats, stop,
-│   │                                  _requeue_owned_job, _cleanup_workspace, _claim, update_progress
+│   │                                  _requeue_owned_job, _cleanup_workspace, _claim, update_progress,
+│   │                                  _unregister (moved from JobQueue, OW1r2)
 │   │                                  (JobQueue delegates here); heartbeat/progress/requeue touch only
 │   │                                  the row of the task's claimed attempt (AQ1)
 │   ├── routers/                     ← jobs, utilities, doodle, remix, parallel,

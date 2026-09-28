@@ -149,7 +149,9 @@ async def test_a_caption_change_mixed_with_a_scoring_one_rescores_once(client, c
     assert body["rescore_job_id"]
     assert body["project"]["clipper_settings"]["clip_count"] == 7
     assert body["caption_source"]["affected_clip_ids"] == [ids["a"]]
-    assert (await _snapshot(pid))["jobs"] == ["clipper_score"]
+    # ONE job. The analysis here is legacy (flat files, no generation), and OW1 (next-24 Q2)
+    # rebuilds a legacy analysis once before a new scoring, so that job is the analyze.
+    assert (await _snapshot(pid))["jobs"] == ["clipper_analyze"]
 
 
 async def test_a_scoring_change_alone_still_rescores(client, clipper_tmp):

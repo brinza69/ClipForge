@@ -240,18 +240,22 @@ def _segment_types_stamp(base: dict, duration: float, signals: dict,
 
 
 def _segment_types(project_id: str, duration: float, transcript: dict,
-                   *, base: dict | None = None) -> list[dict]:
+                   *, base: dict | None = None, ctx=None) -> list[dict]:
     """Per-stretch content types, checkpointed. [] when it cannot be worked out.
 
     Never fatal: a source whose stretches cannot be classified scores exactly
     as it did before this existed.
+
+    `ctx`: the score's pinned analysis (analysis_generation.Context), so frames,
+    times and signals come from ONE generation; None reads the legacy flat tree.
     """
+    from services.clipper import analysis_generation
     from services.clipper import segment_type as seg_type_mod
 
-    paths = storage.paths(project_id)
-    frames = sorted(str(p) for p in paths["frames_dir"].glob("*.jpg"))
-    times = (storage.read_artifact(project_id, "faces") or {}).get("times") or []
-    signals = storage.read_artifact(project_id, "signals") or {}
+    ctx = ctx or analysis_generation.legacy(project_id)
+    frames = ctx.frames()
+    times = (ctx.read("faces") or {}).get("times") or []
+    signals = ctx.read("signals") or {}
     if not frames or len(times) != len(frames) or duration <= 0:
         return []
     stamp = _segment_types_stamp(base or _base_stamp(project_id, transcript),

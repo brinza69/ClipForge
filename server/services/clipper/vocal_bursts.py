@@ -45,6 +45,8 @@ from typing import Any, Sequence
 
 import numpy as np
 
+from services.clipper import attempt_stop
+
 logger = logging.getLogger("clipforge.clipper.vocal")
 
 __all__ = ["FRAME_S", "vocal_burst_timeline", "burst_share"]
@@ -111,11 +113,12 @@ def _wordless(times: np.ndarray, words: Sequence[dict]) -> np.ndarray:
 
 
 def vocal_burst_timeline(wav_path: Path | str, words: Sequence[dict] = (),
-                         hop_s: float = FRAME_S) -> list[float]:
+                         hop_s: float = FRAME_S, stop=None) -> list[float]:
     """Per-hop 0..1 score for "somebody made a loud voiced noise, not words".
 
     Returns [] rather than raising: a source whose audio cannot be read should
-    lose this feature, not the run.
+    lose this feature, not the run. `stop` (attempt_stop, OW1) is checked in
+    the block loop and raises; a stopped read is not an empty one.
     """
     samples, rate = _read_wav(wav_path)
     if samples.size == 0 or rate <= 0:
@@ -154,6 +157,8 @@ def vocal_burst_timeline(wav_path: Path | str, words: Sequence[dict] = (),
     out = np.zeros(n, dtype=np.float32)
     run_start = None
     for i in range(n + 1):
+        if i % 4096 == 0:
+            attempt_stop.check(stop)
         if i < n and hit[i]:
             run_start = i if run_start is None else run_start
             continue

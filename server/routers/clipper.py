@@ -12,6 +12,7 @@ EXISTING job SSE endpoint at /api/jobs/{id}/stream rather than a new transport.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -399,9 +400,13 @@ async def patch_settings(
     # source, a few minutes on a 6-hour one, and no re-download or re-transcribe.
     rescored_job: str | None = None
     if "content_type_override" in changed or scoring_changed:
-        from services.clipper import storage
+        from services.clipper import analysis_generation, storage
 
-        has_analysis = storage.artifact_exists(project_id, "candidates")
+        # OW1 (next-24 Q2): a rescore reads a verified, current generation; any
+        # other analysis (legacy flat files, an old or broken generation) is
+        # rebuilt ONCE into one first — the analyze job schedules the score.
+        ctx = await asyncio.to_thread(analysis_generation.open_for, project)
+        has_analysis = ctx.current or storage.artifact_exists(project_id, "candidates")
         busy = await session.execute(
             select(JobModel)
             .where(JobModel.project_id == project_id)
@@ -411,8 +416,10 @@ async def patch_settings(
         if has_analysis and busy.scalar_one_or_none() is None:
             rescored_job = await job_queue.enqueue(
                 project_id=project_id,
-                job_type=JobType.clipper_score.value,
-                metadata={"stage": "rescore", "launched_by": "api"},
+                job_type=(JobType.clipper_score.value if ctx.current
+                          else JobType.clipper_analyze.value),
+                metadata={"stage": "rescore", "launched_by": "api",
+                          **({"generation": ctx.generation} if ctx.current else {})},
             )
 
     return {

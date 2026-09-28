@@ -223,8 +223,8 @@ def test_a_same_size_edit_with_mtime_restored_is_the_declared_cache_limit(tmp_pa
 
 
 def _signals(pid: str, prx: Path) -> dict:
-    signals.build_signals(pid, str(prx), str(storage.paths(pid)["audio"]), 0.0)
-    return storage.read_artifact(pid, "signals")
+    # OW1: build_signals returns its result and writes nothing.
+    return signals.build_signals(pid, str(prx), str(storage.paths(pid)["audio"]), 0.0)
 
 
 def test_decode_error_is_not_zero_scenes_through_build_signals(tmp_path):

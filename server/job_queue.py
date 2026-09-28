@@ -20,6 +20,7 @@ import job_recovery
 from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
 from job_rows import add_job, new_job_row
 from models import JobModel, JobStatus, JobType, ProjectModel
+from services.clipper import attempt_stop
 
 logger = logging.getLogger("clipforge.queue")
 
@@ -249,6 +250,7 @@ class JobQueue:
             self._cancelled_jobs.add(job_id)
             task = self._running_jobs.get(job_id)
             if task and task is not asyncio.current_task():
+                attempt_stop.signal(self, job_id, self._running_attempts.get(job_id))   # OW1 threads
                 task.cancel()
                 self._unregister(job_id, None)
 
@@ -296,6 +298,7 @@ class JobQueue:
 
             await session.commit()
         if transitioned:
+            attempt_stop.signal(self, job_id, attempt)   # OW1: the attempt the row confirmed, if any
             if attempt is not None and self._running_attempts.get(job_id) == attempt:
                 self._cancelled_jobs.add(job_id)
             logger.info(f"Job {job_id} cancelled")
@@ -318,13 +321,7 @@ class JobQueue:
         return job_id in self._cancelled_jobs
 
     def _unregister(self, job_id: str, attempt: Optional[int]) -> None:
-        """Drop the job's registration — with `attempt`, only when it is that attempt's (AQ1): an
-        old attempt's end never unregisters the task that replaced it."""
-        if attempt is not None and self._running_attempts.get(job_id) != attempt:
-            return
-        self._running_jobs.pop(job_id, None)
-        self._running_types.pop(job_id, None)
-        self._running_attempts.pop(job_id, None)
+        return job_recovery._unregister(self, job_id, attempt)
 
     async def _heartbeat_once(self, job_id: str, owner: Optional[asyncio.Task] = None) -> bool:
         return await job_recovery._heartbeat_once(self, job_id, owner)

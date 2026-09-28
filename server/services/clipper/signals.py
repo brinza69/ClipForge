@@ -32,7 +32,7 @@ from services.clipper.face_detector import (  # re-exported; callers import from
     FACE_MIN_NEIGHBOURS, FACE_MIN_SIZE, FACE_SCALE_FACTOR,
     detect_faces, face_cascades, face_presence,
 )
-from services.clipper import scene_address
+from services.clipper import attempt_stop, scene_address
 from services.clipper.ffmpeg_tools import FFmpegError, video_info
 
 logger = logging.getLogger("clipforge.clipper.signals")
@@ -378,16 +378,24 @@ def build_signals(
     proxy_path: str,
     wav_path: str,
     duration: float,
+    stop=None,
 ) -> dict[str, Any]:
-    """Run all of Pass A, persist analysis/signals.json, return the signals."""
+    """Run all of Pass A and return the signals. Writes NOTHING (OW1): this runs
+    in an executor thread a cancel cannot stop, and it used to publish
+    signals.json and faces.json from there (AD3H). The handler writes the result
+    into its own generation. `stop` (attempt_stop) is checked between stages."""
     audio = audio_timeline(wav_path)
+    attempt_stop.check(stop)
     # Provenance is read before the decode used as evidence, and again (inside
     # address_scenes) after the whole step.
     before = scene_address.provenance_now(project_id, proxy_path)
     scene = scene_address.scene_pass(proxy_path)
     scenes = scene["times"]
-    scenes_addressed = scene_address.address_scenes(project_id, proxy_path, scene, before)
+    attempt_stop.check(stop)
+    scenes_addressed = scene_address.address_scenes(project_id, proxy_path, scene, before, stop=stop)
+    attempt_stop.check(stop)
     motion = motion_timeline(proxy_path)
+    attempt_stop.check(stop)
 
     width = height = 0
     probe_duration = 0.0
@@ -402,7 +410,9 @@ def build_signals(
     if total <= 0:
         total = probe_duration or float(audio.get("duration") or 0.0)
 
+    attempt_stop.check(stop)
     faces = face_presence(proxy_path, _face_sample_times(total))
+    attempt_stop.check(stop)
 
     signals: dict[str, Any] = {
         "version": ANALYSIS_VERSION,
@@ -422,16 +432,6 @@ def build_signals(
         # Parallel to `scenes`, read by no consumer (scene_address).
         "scenes_addressed": scenes_addressed,
     }
-
-    # Imported here so the analysis functions above stay usable (and testable)
-    # without the storage layer or its settings.
-    try:
-        from services.clipper import storage
-
-        storage.write_artifact(project_id, "signals", signals)
-        storage.write_artifact(project_id, "faces", faces)
-    except Exception as exc:  # noqa: BLE001 — a failed write must not lose the pass
-        logger.error("build_signals: could not persist signals for %s (%s)", project_id, exc)
 
     logger.info(
         "build_signals: %s — %.1fs, %d rms hops, %d peaks, %d scenes, %d motion samples, %d face samples",

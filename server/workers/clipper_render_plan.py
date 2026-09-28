@@ -15,6 +15,7 @@ and that answer is this module.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Sequence
@@ -22,8 +23,8 @@ from typing import Any, Sequence
 from config import settings
 from database import async_session
 from models import ClipModel, ProjectModel
-from services.clipper import (caption_policy, dynamic_rhythm, edit_profiles,
-                              layout_policy,
+from services.clipper import (analysis_generation, caption_policy, dynamic_rhythm,
+                              edit_profiles, layout_policy,
                               storage)
 # THE canonical numeric guard, not a local copy: it rejects the infinities too,
 # and a second implementation is how R2's validation hole reopened.
@@ -107,21 +108,7 @@ def _plan_fits(plan: Any, src_w: int, src_h: int) -> bool:
     return plan_w == src_w and plan_h == src_h
 
 
-def _regions_for(project_id: str, t: float) -> dict:
-    """The on-screen layout at time `t`, falling back to the whole-file answer.
-
-    A source whose arrangement changes has no single layout, and using the
-    averaged one crops a clip against a frame it was never in.
-    """
-    for blob in (storage.read_artifact(project_id, "regions_by_segment") or []):
-        if not isinstance(blob, dict):
-            continue
-        if float(blob.get("start") or 0.0) <= t <= float(blob.get("end") or 0.0):
-            return blob
-    return storage.read_artifact(project_id, "regions") or {}
-
-
-def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
+def _layout_plan(clip: ClipModel, project: ProjectModel, ctx=None) -> dict:
     """Use the stored plan; fall back to a centre crop if analysis never produced
     one (e.g. an alternative the user promoted by hand)."""
     src_w = int(project.width or 1920)
@@ -150,9 +137,11 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
             clip.layout_plan.get("src_w"), clip.layout_plan.get("src_h"))
     from services.clipper import layout as layout_mod
 
-    regions = _regions_for(project.id, (float(clip.start_time or 0.0)
-                                       + float(clip.end_time or 0.0)) / 2.0)
-    faces_blob = storage.read_artifact(project.id, "faces") or {}
+    # OW1: the render's pinned analysis (`_decide_render`), else this row's.
+    ctx = ctx or analysis_generation.open_for(project).require()
+    regions = ctx.regions_at((float(clip.start_time or 0.0)
+                              + float(clip.end_time or 0.0)) / 2.0)
+    faces_blob = ctx.read("faces") or {}
     cfg = project.clipper_settings or {}
     return layout_mod.plan_layout(
         _candidate(clip),
@@ -166,7 +155,7 @@ def _layout_plan(clip: ClipModel, project: ProjectModel) -> dict:
     )
 
 
-async def _dead_spans(clip: ClipModel, project: ProjectModel
+async def _dead_spans(clip: ClipModel, project: ProjectModel, ctx
                       ) -> list[tuple[float, float]]:
     """Dead seconds to cut out of the middle of this clip (§15).
 
@@ -179,7 +168,7 @@ async def _dead_spans(clip: ClipModel, project: ProjectModel
     from models import TranscriptModel
     from services.clipper.dead_air import dead_spans
 
-    signals = storage.read_artifact(project.id, "signals") or {}
+    signals = ctx.read("signals") or {}
     if not (signals.get("silence") or []):
         return []
 
@@ -200,7 +189,7 @@ async def _dead_spans(clip: ClipModel, project: ProjectModel
 
 async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
                         src_w: int, src_h: int,
-                        no_second_camera: bool = False) -> dict | None:
+                        no_second_camera: bool = False, ctx=None) -> dict | None:
     """A multi-shot edit for this clip, or None when the window cannot carry one.
 
     Returns None rather than raising: a clip that cannot be cut dynamically is
@@ -224,11 +213,12 @@ async def _dynamic_plan(clip: ClipModel, project: ProjectModel,
     if duration <= 0:
         return None
 
-    signals = storage.read_artifact(project.id, "signals") or {}
+    ctx = ctx or analysis_generation.open_for(project).require()
+    signals = ctx.read("signals") or {}
 
     from services.clipper import dynamic_subject
 
-    faces_all = storage.read_artifact(project.id, "faces") or {}
+    faces_all = ctx.read("faces") or {}
     stable = dynamic_subject.stable_track(
         faces_all.get("samples") if isinstance(faces_all, dict) else faces_all)
     if stable:
@@ -345,6 +335,9 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     .ass written on the trimmed clock, and the options both renderers take.
     """
     cfg = project.clipper_settings or {}
+    # OW1: ONE verified analysis for the whole decision, off the event loop. An
+    # unavailable generation refuses the render; it never plans on empty inputs.
+    ctx = (await asyncio.to_thread(analysis_generation.open_for, project)).require()
 
     async def stage(pct: float, message: str) -> None:
         if on_stage is not None:
@@ -355,7 +348,7 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     drop: list[tuple[float, float]] = []
     if bool(cfg.get("trim_silence", settings.clipper_trim_silence)):
         try:
-            drop = await _dead_spans(clip, project)
+            drop = await _dead_spans(clip, project, ctx)
         except Exception:
             logger.warning("clip %s: dead-air detection failed; rendering the "
                            "window whole", clip.id, exc_info=True)
@@ -366,7 +359,7 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
         logger.info("clip %s: cutting %d dead span(s), %.1fs total",
                     clip.id, len(drop), removed_seconds(drop))
 
-    plan = _layout_plan(clip, project)
+    plan = _layout_plan(clip, project, ctx)
 
     fps = cfg.get("fps")
     fps = int(project.fps or settings.clipper_export_fps) if fps == "source" else int(
@@ -405,7 +398,7 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
                 int(project.width or 1920),
                 int(project.height or 1080),
                 no_second_camera=(layout_decision["regions"]
-                                  == layout_policy.NO_SECOND_CAMERA))
+                                  == layout_policy.NO_SECOND_CAMERA), ctx=ctx)
         except Exception:
             logger.warning("clip %s: dynamic planning failed, falling back to "
                            "the static layout", clip.id, exc_info=True)

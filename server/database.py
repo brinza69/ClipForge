@@ -76,6 +76,7 @@ _REQUIRED_MIGRATED_COLUMNS = {
         "erased_video_path", "clipper_settings", "content_type",
         "content_type_confidence", "content_type_override", "analysis_version",
         "rights_confirmed", "source_kind",
+        "analysis_generation",
     },
     "transcripts": {"failed_chunks"},
     "clips": {
@@ -293,6 +294,7 @@ async def init_db() -> None:
             ("analysis_version", "VARCHAR(20)"),
             ("rights_confirmed", "BOOLEAN"),
             ("source_kind", "VARCHAR(20)"),
+            ("analysis_generation", "VARCHAR(64)"),
         ]
         for col, col_type in _clipper_project_migrations:
             try:

@@ -216,7 +216,7 @@ def test_the_explanation_and_sidecar_name_the_same_selection_identity():
 
 def test_the_worker_hands_the_trace_identity_to_clip_persistence():
     source = inspect.getsource(clipper_build.handle_score)
-    assert "_write_clips(project_id, ranked, winners, profile, trace.run_id)" in source
+    assert "_write_clips(project_id, ranked, winners, profile, trace.run_id, ctx.generation)" in source
 
 
 def test_both_selection_artefacts_and_the_clip_use_one_identity(monkeypatch):

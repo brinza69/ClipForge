@@ -203,6 +203,10 @@ class ProjectModel(Base):
     # Bumped when the analysis pipeline changes shape; cached artifacts written
     # by an older version are recomputed instead of trusted.
     analysis_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # OW1: the analysis generation this project reads — the ONE pointer that
+    # publishes an analysis (services/clipper/analysis_generation.py). None is a
+    # pre-OW1 project: its flat analysis/ is read as `legacy`, unverified.
+    analysis_generation: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # The user's affirmation that they own the content or have permission.
     rights_confirmed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     source_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)  # url|upload|library

@@ -52,7 +52,6 @@ from workers.clipper_render_plan import (  # noqa: F401
     _layout_plan,
     _load,
     _plan_fits,
-    _regions_for,
     _source_path,
     _write_ass,
 )

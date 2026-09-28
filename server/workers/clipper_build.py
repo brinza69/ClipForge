@@ -12,6 +12,7 @@ engine is configured, so an absent optional provider can never fail a run.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -29,7 +30,7 @@ from models import (
     ProjectStatus,
     TranscriptModel,
 )
-from services.clipper import ANALYSIS_VERSION
+from services.clipper import ANALYSIS_VERSION, analysis_generation
 from services.clipper import feedback as feedback_mod
 from services.clipper import reasoning_mode, reasoning_trace, selection, storage
 from services.clipper import story_evidence
@@ -120,9 +121,17 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
 
     transcript = await _fetch_transcript(project_id)
     cache_base = _base_stamp(project_id, transcript)
-    sig = storage.read_artifact(project_id, "signals") or {}
-    regions = storage.read_artifact(project_id, "regions") or {}
-    faces_blob = storage.read_artifact(project_id, "faces") or {}
+    # OW1: the analysis is pinned ONCE, from the job that scheduled this score —
+    # never the project pointer re-read per file (next-24 §1 (1)). A job queued
+    # before OW1 has no key, and reads the pointer once, here. An unavailable
+    # generation refuses the run; it never becomes empty signals.
+    meta_ = metadata or {}
+    generation = meta_["generation"] if "generation" in meta_ else project.analysis_generation
+    ctx = (await asyncio.to_thread(
+        analysis_generation.open_context, project_id, generation)).require()
+    sig = ctx.read("signals") or {}
+    regions = ctx.read("regions") or {}
+    faces_blob = ctx.read("faces") or {}
     faces = faces_blob.get("samples") or []
     # What each STRETCH of the source is, rather than what the file is. Every
     # long live source labelled by hand runs two or three types in a row, so a
@@ -134,7 +143,7 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     seg_types: list[dict] = []
     if not project.content_type_override:
         seg_types = _segment_types(project_id, duration, transcript,
-                                   base=cache_base)
+                                   base=cache_base, ctx=ctx)
 
     # ── Pass B ──────────────────────────────────────────────────────────────
     await queue.update_progress(job_id, 0.05, "Building semantic segments")
@@ -304,6 +313,8 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
     trace.note_stage("verdicts", "marked", ", ".join(
         f"{k}={v}" for k, v in sorted(tally.items())))
 
+    for cand in refined:                 # the analysis these were built from (OW1)
+        cand["analysis_generation"] = ctx.generation
     storage.write_artifact(project_id, "candidates", refined)
 
     # The FULL post-judge field, kept for the selection trace. Everything below
@@ -437,13 +448,15 @@ async def handle_score(job_id: str, project_id: str, clip_id, metadata, queue) -
 
     # ── Persist ─────────────────────────────────────────────────────────────
     await queue.update_progress(job_id, 0.90, "Generating previews")
-    await _write_clips(project_id, ranked, winners, profile, trace.run_id)
+    await _write_clips(project_id, ranked, winners, profile, trace.run_id, ctx.generation)
     _write_traces(project_id, trace, field, mode, eliminated)
 
     async with async_session() as session:
         await session.execute(
             update(ProjectModel)
             .where(ProjectModel.id == project_id)
+            .where(ProjectModel.analysis_generation.is_(None) if ctx.generation is None
+                   else ProjectModel.analysis_generation == ctx.generation)
             .values(status=ProjectStatus.ready.value)
         )
         await session.commit()

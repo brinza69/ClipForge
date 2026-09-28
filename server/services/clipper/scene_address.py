@@ -57,7 +57,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from services.clipper import proxy_clock
+from services.clipper import attempt_stop, proxy_clock
 from services.clipper.ffmpeg_tools import FFmpegError, creationflags, ffmpeg_bin, ffprobe_bin
 
 logger = logging.getLogger("clipforge.clipper.scene_address")
@@ -378,9 +378,11 @@ def _header(scene: dict) -> dict:
 
 
 def assemble(scene: dict, before: dict, read_after: Callable[[], dict],
-             addresser: Callable[[dict, dict], dict], ctx: dict | None = None) -> dict:
+             addresser: Callable[[dict, dict], dict], ctx: dict | None = None,
+             stop=None) -> dict:
     """scenes_addressed for one scene pass. `before` is the provenance read
-    before the decode; `read_after` reads it again once every row is done."""
+    before the decode; `read_after` reads it again once every row is done.
+    `stop` (attempt_stop) is checked before each row's ffprobe (OW1)."""
     doc: dict[str, Any] = _header(scene)
     legacy_unique = len(scene.get("times") or [])
     if scene["state"] in NO_ROW_STATES or scene.get("rows") is None:
@@ -393,6 +395,7 @@ def assemble(scene: dict, before: dict, read_after: Callable[[], dict],
     state, reason, reasons = project_state(before, scene["time_base"])
     rows = []
     for row in scene["rows"]:
+        attempt_stop.check(stop)
         if state == "ok":
             rows.append({**_decode_facts(row), **addresser(row, ctx or {})})
         else:
@@ -444,7 +447,7 @@ def not_requested(scene: dict, before: dict) -> dict:
             "counts": counts, "provenance": _provenance_summary(before, None), "rows": rows}
 
 
-def address_scenes(project_id: str, proxy_path: str, scene: dict, before: dict) -> dict:
+def address_scenes(project_id: str, proxy_path: str, scene: dict, before: dict, stop=None) -> dict:
     """scenes_addressed for build_signals. `before` = provenance_now() read before scene_pass."""
     from config import settings  # local: the pass above stays config-free for its tests
 
@@ -460,4 +463,4 @@ def address_scenes(project_id: str, proxy_path: str, scene: dict, before: dict) 
                "proxy_nb": _int((p.get("stream") or {}).get("nb_frames")),
                "width": _int((p.get("stream") or {}).get("width")) or 0,
                "height": _int((p.get("stream") or {}).get("height")) or 0}
-    return assemble(scene, before, lambda: provenance_now(project_id, proxy_path), address_row, ctx)
+    return assemble(scene, before, lambda: provenance_now(project_id, proxy_path), address_row, ctx, stop)

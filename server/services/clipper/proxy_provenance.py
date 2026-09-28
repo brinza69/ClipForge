@@ -393,10 +393,12 @@ def frame_row(name: str, t: float, state: str, got: dict | None = None, reason: 
             "slot": proxy_clock.slot_of(pts, tb) if state == "decoded" else None}
 
 
-def record_frames(project_id: str, proxy_path: str | Path, rows: list[dict]) -> dict:
+def record_frames(project_id: str, proxy_path: str | Path, rows: list[dict],
+                  out: Path | None = None) -> dict:
     """Write frames_pts.json for one sample_frames run. The proxy it describes is
     named by its REGISTERED sha256 (checked by fingerprint, not rehashed, and
-    labelled so: identity_check CACHE_REUSE)."""
+    labelled so: identity_check CACHE_REUSE). `out`: the analysis generation's
+    own copy (OW1); None keeps the flat analysis/frames_pts.json."""
     prov = read_provenance(project_id, proxy_path=proxy_path)
     counts = {s: sum(1 for r in rows if r["state"] == s) for s in ("decoded", "pts_unknown", "failed")}
     doc = {"schema": "frames_pts/1", "recorded_at": _now(), "reader_version": READER_VERSION,
@@ -405,14 +407,15 @@ def record_frames(project_id: str, proxy_path: str | Path, rows: list[dict]) -> 
                      if prov["state"] == "recorded" else None,
                      "identity_check": (prov.get("identity_check") or {}).get("proxy")},
            "requested": len(rows), **counts, "frames": rows}
-    storage.atomic_write_json(_path(project_id, FRAMES_FILE), doc, separators=(",", ":"))
+    storage.atomic_write_json(out or _path(project_id, FRAMES_FILE), doc, separators=(",", ":"))
     return doc
 
 
-def read_frames(project_id: str) -> dict[str, Any]:
+def read_frames(project_id: str, path: Path | None = None) -> dict[str, Any]:
     """frames_pts.json, or `provenance_missing` for a project whose frames were
-    grabbed before it existed (those keep `faces.json.times` only)."""
-    doc = _read_json(_path(project_id, FRAMES_FILE))
+    grabbed before it existed (those keep `faces.json.times` only). `path`: a
+    generation's copy (`analysis_generation.Context.frames_pts_path()`)."""
+    doc = _read_json(path or _path(project_id, FRAMES_FILE))
     if not doc or not isinstance(doc.get("frames"), list):
         return {"state": "provenance_missing"}
     return {"state": "recorded", **doc}

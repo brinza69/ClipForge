@@ -230,7 +230,7 @@ def test_no_recipe_addressing_or_reader_version_makes_an_analysis_stale(tmp_path
 @pytest.mark.parametrize("provenance", ["none", "foreign_versions"])
 async def test_retry_resumes_where_it_did_before(client, tmp_path, provenance):
     from database import async_session
-    from models import JobModel, ProjectModel
+    from models import JobModel, ProjectModel, TranscriptModel
 
     pid = f"ad12rt{provenance[:4]}"
     media = tmp_path / "src.mp4"
@@ -245,6 +245,8 @@ async def test_retry_resumes_where_it_did_before(client, tmp_path, provenance):
                                  status="failed", processing_mode="clipping"))
         session.add(JobModel(id=f"{pid}j", project_id=pid, type="clipper_analyze", status="failed",
                              error="boom"))
+        # OW1 (next-24 §1 (3)): with no transcript the resume is transcribe.
+        session.add(TranscriptModel(project_id=pid, segments=[{"start": 0, "end": 1, "text": "a"}]))
         await session.commit()
     r = await client.post(f"/api/clipper/projects/{pid}/retry")
     assert r.status_code == 200, r.text

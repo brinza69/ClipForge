@@ -304,7 +304,7 @@ def _reasoning_of(cand: dict) -> dict | None:
 
 async def _write_clips(
     project_id: str, ranked: list[dict], winners: list[dict], profile: str,
-    selection_run_id: str,
+    selection_run_id: str, generation: str | None = None,
 ) -> None:
     """Replace this project's candidates with the new set.
 
@@ -350,6 +350,14 @@ async def _write_clips(
             .where(ClipModel.project_id == project_id)
             .where(~_keeps())
             .execution_options(synchronize_session=False))
+        # OW1, under the lock the DELETE took: the board is written only while
+        # the analysis this score read is still the project's (next-24 §1 (1)).
+        # A late G1 score raising here rolls its DELETE back with it.
+        current = await session.scalar(
+            select(ProjectModel.analysis_generation).where(ProjectModel.id == project_id))
+        if current != generation:
+            raise JobCancelledError(f"board not written: this score read analysis "
+                                    f"{generation}, the project now reads {current}")
         kept = (await session.execute(_kept_clips(project_id))).all()
         kept_spans = [{"start": float(row[1] or 0.0), "end": float(row[2] or 0.0)}
                       for row in kept]

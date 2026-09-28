@@ -18,6 +18,7 @@ from sqlalchemy import func, select, update
 from database import async_session
 from job_attempt import CLAIMED_ATTEMPT, ClaimedAttempt
 from models import JobModel, JobStatus, ProjectModel
+from services.clipper import attempt_stop
 
 logger = logging.getLogger("clipforge.queue")
 
@@ -97,6 +98,17 @@ async def _claim(queue, session, job_id: str) -> ClaimedAttempt | None:
     return None if attempt is None else ClaimedAttempt(job_id, int(attempt), worker)
 
 
+def _unregister(queue, job_id: str, attempt: int | None) -> None:
+    """Drop the job's registration — with `attempt`, only when it is that attempt's (AQ1): an
+    old attempt's end never unregisters the task that replaced it. Moved here from `JobQueue`
+    with OW1r2, whose stop signal took job_queue.py past 500 lines."""
+    if attempt is not None and queue._running_attempts.get(job_id) != attempt:
+        return
+    queue._running_jobs.pop(job_id, None)
+    queue._running_types.pop(job_id, None)
+    queue._running_attempts.pop(job_id, None)
+
+
 def _mine(job_id: str) -> int | None:
     """The attempt this task runs `job_id` as (the claim `_run` set, inherited by the tasks it
     starts), or None when it runs no claim of that job."""
@@ -161,6 +173,10 @@ async def _heartbeat_once(queue, job_id: str, owner: asyncio.Task | None = None)
 
     queue._lost_ownership_jobs.setdefault(job_id, set()).add(_mine(job_id))
     task = owner if owner is not None else queue._running_jobs.get(job_id)
+    # OW1: the threads of the attempt this loss stops — the heartbeat's own; with no owner (a
+    # direct call), the registered one's, as the cancel below. Never "the job's current token".
+    attempt_stop.signal(queue, job_id,
+                        _mine(job_id) if owner is not None else queue._running_attempts.get(job_id))
     # Already cancelled (a person's cancel empties the row too): a second cancel would cut
     # short the wait for its threads that the first one started.
     if task and task is not asyncio.current_task() and not task.cancelling():

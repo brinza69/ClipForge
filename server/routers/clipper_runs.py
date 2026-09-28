@@ -12,6 +12,7 @@ trusted, read those artifacts back, and the ranker's own status.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -22,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from database import get_session
 from job_queue import job_queue
-from models import JobModel, JobStatus, JobType, ProjectModel, ProjectStatus
+from models import JobModel, JobStatus, JobType, ProjectModel, ProjectStatus, TranscriptModel
 from routers.clipper import _TERMINAL, _load_project
 from routers.clipper_settings import _err
 from services.clipper import ANALYSIS_VERSION
@@ -86,8 +87,15 @@ async def retry_analysis(project_id: str, session: AsyncSession = Depends(get_se
     running analysis is 409 with no job and no status change (D2r-3): this
     resumes at `clipper_score` once the candidates exist, so a stale button or a
     direct call used to rescore a ready project. Rescoring is the settings action.
+
+    OW1 (codex-verdict-next-24 §1 (3), Q2): scoring resumes only on the project's
+    SELECTED generation, verified in full and written by today's analysis code —
+    whether or not its first score got as far as candidates.json. A legacy flat
+    analysis, or a generation that does not verify, never resumes at scoring
+    because files exist: it is re-analysed from the proxy and audio into a new
+    generation. No transcript means the transcribe stage, not analyze.
     """
-    from services.clipper import storage
+    from services.clipper import analysis_generation, storage
     from services.clipper.project_attempts import analysis_state
 
     project = await _load_project(session, project_id)
@@ -111,27 +119,31 @@ async def retry_analysis(project_id: str, session: AsyncSession = Depends(get_se
         logger.info("clipper retry for %s: ignoring cached analysis (%s)",
                     project_id, stale)
 
-    if not stale and storage.artifact_exists(project_id, "signals") and paths["proxy"].exists():
-        resume = JobType.clipper_score.value if storage.artifact_exists(
-            project_id, "candidates"
-        ) else JobType.clipper_analyze.value
-    elif not stale and paths["proxy"].exists() and paths["audio"].exists():
-        resume = JobType.clipper_transcribe.value
-    elif (stale and "analysis_version" in stale
-            and paths["proxy"].exists() and paths["audio"].exists()):
-        # The code moved, not the media: the proxy and the audio are still a
-        # faithful copy of the same file, and re-downloading a 4 GB VOD to
-        # recompute signals would be the indefensible half of this endpoint.
-        resume = JobType.clipper_analyze.value
+    ctx = await asyncio.to_thread(analysis_generation.open_for, project)
+    if ctx.state != analysis_generation.VERIFIED or not ctx.current:
+        logger.info("clipper retry for %s: analysis %s is %s (%s)", project_id,
+                    ctx.generation, ctx.state, ctx.reason or "not today's analysis_version")
+    transcribed = bool(await session.scalar(
+        select(TranscriptModel.segments).where(TranscriptModel.project_id == project_id).limit(1)))
+    # The code moved, not the media: the proxy and the audio are still a
+    # faithful copy of the same file, and re-downloading a 4 GB VOD to
+    # recompute signals would be the indefensible half of this endpoint.
+    source_moved = bool(stale) and "analysis_version" not in stale
+    media = paths["proxy"].exists() and paths["audio"].exists()
+    metadata: dict[str, Any] = {"stage": "resume"}
+    if not source_moved and media and transcribed and ctx.current:
+        resume = JobType.clipper_score.value
+        metadata["generation"] = ctx.generation
+    elif not source_moved and media:
+        resume = (JobType.clipper_analyze.value if transcribed
+                  else JobType.clipper_transcribe.value)
     else:
         resume = JobType.clipper_ingest.value
 
     project.status = ProjectStatus.pending.value
     await session.commit()
 
-    job_id = await job_queue.enqueue(
-        project_id=project_id, job_type=resume, metadata={"stage": "resume"}
-    )
+    job_id = await job_queue.enqueue(project_id=project_id, job_type=resume, metadata=metadata)
     logger.info(f"clipper retry for {project_id} resuming at {resume}")
     return {"job_id": job_id, "resumed_at": resume}
 
@@ -142,11 +154,18 @@ async def get_artifact(
 ) -> Any:
     """Read one cached analysis artifact. `name` is checked against a fixed
     allowlist inside storage, so this cannot be walked into another directory."""
-    from services.clipper import storage
+    from services.clipper import analysis_generation, storage
 
-    await _load_project(session, project_id)
+    project = await _load_project(session, project_id)
     try:
-        data = storage.read_artifact(project_id, name)
+        if name in analysis_generation.OWNED:
+            # OW1: the selected generation's copy, verified; never a partial one.
+            ctx = await asyncio.to_thread(analysis_generation.open_for, project)
+            data = ctx.read(name)
+        else:
+            data = storage.read_artifact(project_id, name)
+    except analysis_generation.GenerationUnavailable as exc:
+        raise _err(409, "analysis_unavailable", str(exc)) from exc
     except ValueError as exc:
         raise _err(400, "unknown_artifact", str(exc)) from exc
     if data is None:

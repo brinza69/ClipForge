@@ -417,64 +417,6 @@ async def extract_thumbnail(project_id: str, video_path: str, t: float, name: st
     return str(out)
 
 
-async def sample_frames(project_id: str, proxy_path: str, times: list[float]) -> list[str]:
-    """Grab one JPEG per timestamp from the proxy; returns the paths written.
-
-    A timestamp past the end of a stream (or in a corrupt region) is skipped, not
-    fatal: the sampling grid is built from estimates and losing a frame costs one
-    sample out of hundreds.
-    """
-    if not times:
-        return []
-    storage.ensure_dirs(project_id)
-    frames_dir = storage.paths(project_id)["frames_dir"]
-    frames_dir.mkdir(parents=True, exist_ok=True)
-
-    cap = int(settings.clipper_max_sampled_frames or 0)
-    wanted = [max(0.0, float(t or 0.0)) for t in times]
-    if cap > 0 and len(wanted) > cap:
-        logger.info(f"clipper frame sampling capped at {cap} (asked for {len(wanted)})")
-        wanted = wanted[:cap]
-
-    # One executor hop for the whole batch: N short ffmpeg runs, sequential, so a
-    # 400-frame grid does not spawn 400 threads or 400 concurrent decoders.
-    return await _in_thread(lambda: _sample_frames_sync(project_id, proxy_path, frames_dir, wanted))
-
-
-def _sample_frames_sync(project_id: str, proxy_path: str, frames_dir: Path,
-                        times: list[float]) -> list[str]:
-    written: list[str] = []
-    # One row per REQUESTED time, failures included: frames_pts.json's
-    # denominator is what was asked for, not what came back.
-    rows: list[dict] = []
-    failures = 0
-    for i, t in enumerate(times):
-        out = frames_dir / f"frame_{i:05d}.jpg"
-        try:
-            got = proxy_provenance.run_showinfo(
-                _frame_cmd(proxy_path, t, out, quality=4, decoded_pts=True),
-                timeout=60, what="frame sample")
-        except RuntimeError as exc:
-            failures += 1
-            rows.append(proxy_provenance.frame_row(out.name, t, "failed", reason=str(exc)[-200:]))
-            continue
-        if out.exists() and out.stat().st_size > 0:
-            written.append(str(out))
-            rows.append(proxy_provenance.frame_row(
-                out.name, t, "decoded" if got else "pts_unknown", got,
-                None if got else "showinfo did not report exactly one frame"))
-        else:
-            failures += 1
-            rows.append(proxy_provenance.frame_row(out.name, t, "failed", reason="no frame written"))
-    if failures:
-        logger.warning(f"clipper frame sampling skipped {failures}/{len(times)} timestamps")
-    try:
-        proxy_provenance.record_frames(project_id, proxy_path, rows)
-    except Exception:
-        logger.warning("clipper frames_pts not recorded for %s", project_id, exc_info=True)
-    return written
-
-
 def _frame_cmd(video_path: str, t: float, out: Path, *, quality: int,
                decoded_pts: bool = False) -> list[str]:
     """Single-frame grab. -ss before -i seeks on the container instead of
@@ -496,3 +438,8 @@ def _frame_cmd(video_path: str, t: float, out: Path, *, quality: int,
         *(["-vf", "showinfo"] if decoded_pts else []),
         str(out),
     ]
+
+
+# Frame sampling moved out at the 500-line limit (OW1); re-exported so
+# `ingest.sample_frames` keeps working for every caller.
+from services.clipper.frame_sampling import _sample_frames_sync, sample_frames  # noqa: E402,F401
