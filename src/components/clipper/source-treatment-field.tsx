@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { errorDescription, readApiError } from "@/lib/api-error";
 import { CLIPPER_API, type ClipperClip } from "@/types/clipper";
+import { placementNotice } from "./caption-placement";
 
 type Layer = "burn" | "suppress" | null;
 type Requested = { treatment: "none" | "blur"; mask_sha256?: string } | null;
@@ -50,6 +51,7 @@ export function SourceTreatmentField({ clip, disabled, onSaved }: {
   const [view, setView] = useState<View | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unchecked, setUnchecked] = useState<{ id: string; text: string } | null>(null);   // RX1
   const current = useRef(clip.id);
   current.current = clip.id;
 
@@ -78,6 +80,7 @@ export function SourceTreatmentField({ clip, disabled, onSaved }: {
     const id = clip.id;
     setBusy(true);
     setError(null);
+    setUnchecked(null);
     try {
       const r = await fetch(`${CLIPPER_API}/clips/${id}/source-treatment`, {
         method: "PUT",
@@ -91,6 +94,8 @@ export function SourceTreatmentField({ clip, disabled, onSaved }: {
       }
       const body = await r.json();
       setView(body);
+      const text = placementNotice(body.caption_placement);
+      if (text) setUnchecked({ id, text });
       onSaved(body.clip);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -145,6 +150,7 @@ export function SourceTreatmentField({ clip, disabled, onSaved }: {
           {" · "}{view.effective.layer === "burn" ? "subtitrarea ClipForge se arde" : "fără subtitrare ClipForge"}
         </p>
       )}
+      {unchecked?.id === clip.id && <p className="text-[11px] text-amber-500">{unchecked.text}</p>}
       {error && <p className="text-[11px] text-rose-500">{error}</p>}
     </div>
   );

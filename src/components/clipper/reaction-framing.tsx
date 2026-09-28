@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { errorDescription, readApiError } from "@/lib/api-error";
 import { CLIPPER_API, type ClipperClip, type Rect } from "@/types/clipper";
+import { placementNotice, type CaptionPlacement } from "./caption-placement";
 import { readSourceFrame, selectionRect, type SourceFrame } from "./reaction-selection";
 
 type Region = "content" | "face";
@@ -24,6 +25,7 @@ export function ReactionFraming({ clip, disabled, onSaved, onBusyChange }: {
   const [saved, setSaved] = useState(clip.layout_plan?.game_content_fit === true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [unchecked, setUnchecked] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
   const objectUrl = useRef<string | null>(null);
   const drag = useRef<{ x: number; y: number; region: Region; before: Rect | null } | null>(null);
@@ -91,7 +93,7 @@ export function ReactionFraming({ clip, disabled, onSaved, onBusyChange }: {
 
   async function save(clear = false) {
     if (disabled || saving || loading || (!clear && (!shown || !rects.content || !rects.face))) return;
-    setSaving(true); onBusyChange(true); setError(null); setNotice(null);
+    setSaving(true); onBusyChange(true); setError(null); setNotice(null); setUnchecked(null);
     try {
       const frame = shown?.frame;
       const response = await fetch(`${CLIPPER_API}/clips/${clip.id}/reaction-layout`, {
@@ -106,11 +108,12 @@ export function ReactionFraming({ clip, disabled, onSaved, onBusyChange }: {
       if (!response.ok) throw new Error(errorDescription(
         await readApiError(response, "Încadrarea nu a putut fi salvată"),
       ));
-      const result: { clip: ClipperClip } = await response.json();
+      const result: { clip: ClipperClip; caption_placement?: CaptionPlacement } = await response.json();
       setSaved(!clear);
       if (clear) setRects({ content: null, face: null });
       setNotice(clear ? "Încadrarea automată a fost restabilită." :
         "Încadrare salvată. Previzualizarea și exportul folosesc acum aceste regiuni.");
+      setUnchecked(clear ? null : placementNotice(result.caption_placement));
       onSaved(result.clip);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -191,6 +194,7 @@ export function ReactionFraming({ clip, disabled, onSaved, onBusyChange }: {
         </>}
         {error && <p role="alert" className="text-xs text-rose-500">{error}</p>}
         {notice && <p role="status" className="text-xs text-emerald-500">{notice}</p>}
+        {unchecked && <p role="status" className="text-xs text-amber-500">{unchecked}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           {saved && <button type="button" onClick={() => save(true)}
             disabled={disabled || saving || loading} className={button}>Revino la automat</button>}

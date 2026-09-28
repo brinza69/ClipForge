@@ -130,10 +130,10 @@ async def put_source_treatment(clip_id: str, payload: dict,
     if layer == caption_policy.BURN and not blur and store._burned(clip, project) is not False:
         raise _err(422, "burn_over_untreated_source_captions",
                    "Burning ClipForge's captions over the source's own needs the source's text blurred first.")
-    caption_plan = clip.caption_plan
+    caption_plan, placement = clip.caption_plan, None
     if _policy(clip, project, layer)["action"] == caption_policy.BURN:
         from routers.clipper_caption_source import _place_or_refuse
-        caption_plan = _place_or_refuse(clip)
+        caption_plan, placement = await _place_or_refuse(clip, project)
 
     clip.source_caption_treatment = treatment
     clip.caption_layer = layer
@@ -144,4 +144,5 @@ async def put_source_treatment(clip_id: str, payload: dict,
                            {"field": "source_treatment", "old": old, "new": new},
                            origin=feedback_mod.ORIGIN_MANUAL)
     await session.commit()
-    return {"clip": clip_to_dict(clip, project), "changed": True, **_view(clip, project)}
+    return {"clip": clip_to_dict(clip, project), "changed": True, "caption_placement": placement,
+            **_view(clip, project)}

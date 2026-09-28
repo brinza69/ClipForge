@@ -294,7 +294,7 @@ async def test_turning_the_layer_on_stores_the_resolved_position(client, tmp_pat
         await s.delete(await s.get(ClipModel, ids["square"]))
         await s.commit()
         band = await s.get(ClipModel, ids["band"])
-        expected = _place_or_refuse(band)
+        expected, _ = await _place_or_refuse(band, await s.get(ProjectModel, pid))
     assert expected["y_pct"] != _caption_plan()["y_pct"], "the fixture must move the caption"
     events_before = (await _snapshot(pid))["events"]   # the two reaction PUTs'
 

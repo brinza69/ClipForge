@@ -14,11 +14,13 @@ import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { errorDescription, readApiError } from "@/lib/api-error";
 import { CLIPPER_API } from "@/types/clipper";
+import { unbuiltReason } from "./caption-placement";
 
 interface BlockingClip {
   clip_id: string;
   title?: string | null;
   max_content_height?: number | null;
+  reason?: string | null;   // RX1: the check could not run (`caption_check_failed`)
 }
 
 const SELECT_CLASS =
@@ -34,12 +36,14 @@ export function ProjectCaptionSource({ projectId, value, onSaved }: {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [blocking, setBlocking] = useState<BlockingClip[]>([]);
+  const [unchecked, setUnchecked] = useState<string | null>(null);   // RX1
 
   const save = async (next: boolean | null) => {
     setSaving(true);
     setNotice(null);
     setError(null);
     setBlocking([]);
+    setUnchecked(null);
     try {
       const r = await fetch(`${CLIPPER_API}/projects/${projectId}/settings`, {
         method: "PATCH",
@@ -66,6 +70,12 @@ export function ProjectCaptionSource({ projectId, value, onSaved }: {
           + (cleared
             ? `; ${cleared === 1 ? "1 export trebuie refăcut" : `${cleared} exporturi trebuie refăcute`} (fișierele vechi rămân pe disc).`
             : "."));
+      const unverified: { reason: string | null }[] = cs.caption_placement_unverified ?? [];
+      if (unverified.length) setUnchecked(
+        `La ${unverified.length === 1 ? "1 clip" : `${unverified.length} clipuri`} cu încadrare pentru reacții `
+        + "amplasarea subtitrării ClipForge nu a fost verificată: "
+        + [...new Set(unverified.map((u) => unbuiltReason(u.reason)))].join("; ")
+        + ". Exportul lor iese fără subtitrare și spune de ce.");
       onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -96,6 +106,7 @@ export function ProjectCaptionSource({ projectId, value, onSaved }: {
         </select>
       </div>
       {notice && <p className="text-xs text-muted-foreground">{notice}</p>}
+      {unchecked && <p className="text-xs text-amber-500">{unchecked}</p>}
       {error && (
         <div className="space-y-1 rounded border border-rose-500/30 bg-rose-500/10 p-2 text-xs text-rose-500">
           <p>{error}</p>
@@ -107,6 +118,7 @@ export function ProjectCaptionSource({ projectId, value, onSaved }: {
                   {c.max_content_height
                     ? ` — materialul trebuie să aibă cel mult ${c.max_content_height} px înălțime`
                     : ""}
+                  {c.reason ? ` — verificarea subtitrării n-a putut rula (${c.reason})` : ""}
                 </li>
               ))}
             </ul>

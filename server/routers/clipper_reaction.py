@@ -379,18 +379,24 @@ async def put_reaction_layout(
         clip_setting=clip.source_has_burned_captions,
         layer=getattr(clip, "caption_layer", None),
     )["action"] == cap_pol.BURN)
-    if _burn and new_caption_plan and not new_caption_plan.get("y_pct_manual"):
+    # RX1 (codex-verdict-next-36 §3): with no readable plan stored (every alternative),
+    # the plan the render builds for THIS framing is the one checked, and never written.
+    placed, placement = new_caption_plan, None
+    if _burn and not isinstance(new_caption_plan, dict):
+        from routers.clipper_caption_source import plan_to_place
+        placed, placement = await plan_to_place(clip, project, plan)
+    if _burn and placed and not placed.get("y_pct_manual"):
         from services.clipper.reaction_captions import (
             NoCaptionGap, caption_ready_height, resolve_reaction_caption_y)
         try:
             new_y = resolve_reaction_caption_y(
-                plan, new_caption_plan, clip_duration=clip_end - clip_start)
-            if new_y is not None:
+                plan, placed, clip_duration=clip_end - clip_start)
+            if new_y is not None and placed is new_caption_plan:
                 new_caption_plan = {**new_caption_plan, "y_pct": new_y}
         except NoCaptionGap as exc:
             # Say WHICH box would pass; found by the same builder and resolver.
             h = caption_ready_height(content_rect, face_rect, req_w, req_h,
-                                     new_caption_plan, face_pct=0.40,
+                                     placed, face_pct=0.40,
                                      clip_duration=clip_end - clip_start)
             hint = (f" At this width ({content_rect['w']} px), a content height of at "
                     f"most {h} px leaves room for automatic captions." if h else "")
@@ -407,7 +413,7 @@ async def put_reaction_layout(
     # Saving the framing already on the clip changes nothing: no event, and the
     # render made from it stays valid.
     if plan == clip.layout_plan and new_caption_plan == clip.caption_plan:
-        return {"clip": clip_to_dict(clip, project)}
+        return {"clip": clip_to_dict(clip, project), "caption_placement": placement}
     clip.layout_plan = plan
     if new_caption_plan is not clip.caption_plan:
         clip.caption_plan = new_caption_plan
@@ -421,7 +427,7 @@ async def put_reaction_layout(
         origin=feedback_mod.ORIGIN_MANUAL,
     )
     await session.commit()
-    return {"clip": clip_to_dict(clip, project)}
+    return {"clip": clip_to_dict(clip, project), "caption_placement": placement}
 
 
 # ---------------------------------------------------------------------------

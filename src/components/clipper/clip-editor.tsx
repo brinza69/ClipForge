@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { errorDescription, readApiError } from "@/lib/api-error";
 import { rangeTooLong } from "@/components/clipper/range-limit";
 import { CLIPPER_API, type ClipperClip } from "@/types/clipper";
+import { placementNotice } from "./caption-placement";
 import { ClipFramePreview } from "./clip-frame-preview";
 import { ReactionFraming } from "./reaction-framing";
 import { CaptionDisplayNote } from "./caption-display-note";
@@ -121,6 +122,8 @@ export function ClipEditor({
   const [presets, setPresets] = useState<Preset[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // RX1: the caption-source save's own report, for THIS clip (the save hands back a new clip object).
+  const [captionUnchecked, setCaptionUnchecked] = useState<{ id: string; text: string } | null>(null);
   // Bumped on every save so the <img> refetches — the frame is rendered
   // server-side from the SAVED clip, so it is only true after a round trip.
   const [frameKey, setFrameKey] = useState(0);
@@ -235,6 +238,7 @@ export function ClipEditor({
       if (!clip) return;
       setBusy("caption-source");
       setError(null);
+      setCaptionUnchecked(null);
       try {
         const r = await fetch(`${CLIPPER_API}/clips/${clip.id}/caption-source`, {
           method: "PUT",
@@ -247,7 +251,10 @@ export function ClipEditor({
           return;
         }
         setFrameKey((k) => k + 1);
-        onSaved((await r.json()).clip);
+        const body = await r.json();
+        const unchecked = placementNotice(body.caption_placement);
+        if (unchecked) setCaptionUnchecked({ id: clip.id, text: unchecked });
+        onSaved(body.clip);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -359,6 +366,9 @@ export function ClipEditor({
                   {{ clip: "decis pentru acest clip", project: "decis de proiect",
                      default: "implicit, nimeni n-a declarat" }[clip.effective_caption_policy.scope]}
                 </p>
+              )}
+              {captionUnchecked?.id === clip.id && (
+                <p className="text-[11px] text-amber-500">{captionUnchecked.text}</p>
               )}
               <CaptionDisplayNote view={clip.caption_display} />
             </Field>

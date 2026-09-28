@@ -31,13 +31,19 @@ Not clipper: `remix_pipeline.py`, `parallel_pipeline.py`, `doodle_pipeline.py`,
 `clipper.py` (projects, settings, artifacts) and `clipper_clips.py` (clip-level
 operations). Split to stay under the 500-line limit.
 `clipper_reaction.py` adds source-frame reading and save/clear of per-clip reaction
-regions; it shares the ordinary layout, caption and export paths.
+regions; it shares the ordinary layout, caption and export paths. RX1: a clip with no readable
+caption plan stored (every alternative) is placed with the plan its render builds (`plan_to_place`).
 `clipper_caption_source.py` is `PUT /clips/{id}/caption-source`: a person's per-clip
 answer to whether the source already shows burned subtitles (true / false / null),
 read by `caption_policy.decide` at both decision sites. An answer that turns the layer
 ON runs the reaction PUT's own caption check first: a reaction framing saved while
 the layer was off may leave no caption slot, and accepting it would fail every later
-preview and export, so it is a 422 with `max_content_height`. The answer is recorded
+preview and export, so it is a 422 with `max_content_height`. RX1 (codex-verdict-next-36 §3):
+`plan_to_place` is that check's plan when none readable is stored — the one `_plan_for_render`
+builds, returned for the check and never written; a build that could not read its inputs
+(`transcript_unreadable`, `build_failed`, `unreadable_plan`) is a 422 `caption_check_failed`, and
+missing word timing saves with `caption_placement: {verified: false, reason}` for the UI to say
+so. `_place_or_refuse` (async) serves this route, `apply_project_answer` and SC3's layer. The answer is recorded
 as a manual `caption_changed` event, so a rescore keeps the clip (`clipper_finalize`).
 The PROJECT answer (master plan B2): PATCH `/projects/{id}/settings` with only
 `source_has_burned_captions` changed re-scores nothing; `apply_project_answer` checks every inheriting clip

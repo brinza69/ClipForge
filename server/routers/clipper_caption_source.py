@@ -34,7 +34,35 @@ def _err(status: int, code: str, message: str, **extra) -> HTTPException:
     return HTTPException(status, {"error": code, "message": message, **extra})
 
 
-def _place_or_refuse(clip: ClipModel) -> dict | None:
+# RX1 (codex-verdict-next-36 §3.4): a build that could not READ its inputs is a failed check.
+_CHECK_FAILED = ("transcript_unreadable", "build_failed", "unreadable_plan")
+
+
+async def plan_to_place(clip: ClipModel, project: ProjectModel, layout: Any) -> tuple[Any, dict]:
+    """`(plan, placement)` for a burned layer over `layout`, when no readable plan is stored.
+
+    RX1 (codex-verdict-next-36 §3). The render builds such a clip's plan itself
+    (`_plan_for_render`) and places THAT, so it is the one checked: checking only
+    a stored plan answered 200 for framings whose every export was then refused
+    (RSK, 3 of 3). It comes back for the check and is never written — it must
+    not pass for a person's edit. A build that could not read its inputs is
+    refused as a failed check, never read as "nothing to burn". Missing word
+    timing, which the render reports as an unavailable layer, returns no plan
+    and `verified: False` with the reason, so the answer can say nothing was
+    checked.
+    """
+    from workers.clipper_captions import _plan_for_render
+    seen, state = await _plan_for_render(clip, project, layout, caption_policy.BURN)
+    if state["reason"] in _CHECK_FAILED:
+        raise _err(422, "caption_check_failed",
+                   f"ClipForge's captions for this clip could not be checked ({state['reason']}); "
+                   "nothing was saved.", reason=state["reason"])
+    if state["outcome"] == "unavailable":
+        return None, {"verified": False, "reason": state["reason"]}
+    return seen.caption_plan, {"verified": True, "reason": None}
+
+
+async def _place_or_refuse(clip: ClipModel, project: ProjectModel) -> tuple[Any, dict | None]:
     """The reaction PUT's caption check, for an answer that turns the layer ON.
 
     A reaction framing with no caption slot is accepted while the layer is off,
@@ -43,10 +71,21 @@ def _place_or_refuse(clip: ClipModel) -> dict | None:
     content height that would leave room; an accepted one stores the resolved
     position, as the reaction PUT does. Non-reaction layouts and manual
     positions come back unchanged — the resolver returns None for them.
+
+    `(plan to store, placement)`. RX1: a reaction framing with no readable plan
+    stored is checked with the plan its render builds (`plan_to_place`), and
+    nothing is stored for it; `placement` is that check's report, None when a
+    stored plan decided.
     """
     from services.clipper.reaction_captions import (
         NoCaptionGap, caption_ready_height, resolve_reaction_caption_y)
     plan, cap = clip.layout_plan, clip.caption_plan
+    placement = None
+    if (not isinstance(cap, dict) and isinstance(plan, dict)
+            and plan.get("game_content_fit") is True):
+        cap, placement = await plan_to_place(clip, project, plan)
+        if cap is None:
+            return clip.caption_plan, placement
     duration = float(clip.end_time or 0) - float(clip.start_time or 0)
     try:
         y = resolve_reaction_caption_y(plan, cap, clip_duration=duration)
@@ -61,7 +100,9 @@ def _place_or_refuse(clip: ClipModel) -> dict | None:
                    + str(exc) + hint, max_content_height=h) from exc
     except ValueError as exc:
         raise _err(422, "caption_placement_failed", str(exc)) from exc
-    return cap if y is None else {**cap, "y_pct": y}
+    if cap is not clip.caption_plan:        # RX1: a built plan is checked, never stored
+        return clip.caption_plan, placement
+    return (cap if y is None else {**cap, "y_pct": y}), placement
 
 
 @router.put("/clips/{clip_id}/caption-source")
@@ -99,9 +140,9 @@ async def put_caption_source(
     _refuse_unexecutable_burn(clip, value if isinstance(value, bool) else setting)
     before = caption_policy.decide(setting, clip_setting=old, layer=layer)
     decision = caption_policy.decide(setting, clip_setting=value, layer=layer)
-    caption_plan = clip.caption_plan
+    caption_plan, placement = clip.caption_plan, None
     if decision["action"] == caption_policy.BURN:
-        caption_plan = _place_or_refuse(clip)
+        caption_plan, placement = await _place_or_refuse(clip, project)
 
     clip.source_has_burned_captions = value
     if caption_plan is not clip.caption_plan:
@@ -114,7 +155,7 @@ async def put_caption_source(
         origin=feedback_mod.ORIGIN_MANUAL,
     )
     await session.commit()
-    return {"clip": clip_to_dict(clip, project)}
+    return {"clip": clip_to_dict(clip, project), "caption_placement": placement}
 
 
 async def apply_project_answer(
@@ -168,14 +209,25 @@ async def apply_project_answer(
                    "Wait for these exports to finish before changing the project's "
                    "caption source.", clip_ids=busy)
 
-    placed, blocking = {}, []
+    placed, blocking, failed, unverified = {}, [], [], []
     if new_action == caption_policy.BURN:
         for clip in clips:  # an explicit layer never flips, so every moved clip follows the answer
             try:
-                placed[clip.id] = _place_or_refuse(clip)
+                placed[clip.id], placement = await _place_or_refuse(clip, project)
             except HTTPException as exc:
+                if exc.detail.get("error") == "caption_check_failed":   # RX1: not a missing slot
+                    failed.append({"clip_id": clip.id, "title": clip.title,
+                                   "reason": exc.detail.get("reason")})
+                    continue
                 blocking.append({"clip_id": clip.id, "title": clip.title,
                                  "max_content_height": exc.detail.get("max_content_height")})
+                continue
+            if placement and not placement["verified"]:
+                unverified.append({"clip_id": clip.id, "reason": placement["reason"]})
+    if failed:
+        raise _err(422, "caption_check_failed",
+                   f"ClipForge's captions could not be checked for {len(failed)} clip(s); "
+                   "nothing was changed.", blocking_clips=failed)
     if blocking:
         raise _err(422, "caption_placement_failed",
                    f"{len(blocking)} clip(s) have a reaction framing that leaves no room "
@@ -201,6 +253,8 @@ async def apply_project_answer(
             clip.caption_plan = placed[clip.id]
         invalidate_render(clip)
         out["invalidated_clip_ids"].append(clip.id)
+    if unverified:  # RX1: saved, but no caption layer could be built to check
+        out["caption_placement_unverified"] = unverified
     return out
 
 
