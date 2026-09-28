@@ -150,7 +150,8 @@ clipforge/
 │   └── workers/                     ← clipper_pipeline, clipper_build,
 │                                       clipper_render_jobs, remix_, parallel_,
 │                                       doodle_, utility_jobs (tiktok_ PLANNED)
-├── docs/clipper-map.md              ← the clipper's file map — KEEP IT CURRENT
+├── docs/clipper-map.md              ← the clipper's file map — KEEP IT CURRENT (an index; the
+│                                      tables are in docs/clipper-map/*.md, each under 500 lines)
 ├── docs/handover/areas/clipper/CURRENT.md ← current Clipper state; historical sessions are in `docs/handover/archive/clipper/`
 └── PRPs/                            ← Implementation blueprints for each feature batch
 ```
