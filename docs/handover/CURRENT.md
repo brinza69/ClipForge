@@ -34,10 +34,17 @@ Suita dă 3445 passed. Backend-ul A rulează pe `3229423`.
 - proba pe handler pentru 3b (AD3H găsește o publicare după anulare);
 - compunerea ceasurilor (CC1A) și M0 v2 ca seed limitat (LIM1), ambele la Codex.
 
-**La 28 sept. sunt comise:** FD1, BURST, UI, SCB2, AQ1, CC1 + C1r (noaptea); OW1r2 (`47c5cbd`), EN3T (`2994b67`),
-reluarea EN3T (`009a135`), harta împărțită (`190af2e`). SC3 (subtitrările sursei cu blur, per clip) e închis de
-Codex și acceptat de om, iar commit-ul lui așteaptă acordul. Rămâne R2 + Speed/Kai (exporturi care păstrează
-persoanele).
+**La 28 sept. sunt comise:**
+- noaptea: FD1, BURST, UI, SCB2, AQ1, CC1 + C1r;
+- ziua: OW1r2 (`47c5cbd`), EN3T (`2994b67`), reluarea EN3T (`009a135`), harta împărțită (`190af2e`);
+- SC3, subtitrările sursei cu blur, per clip (`c155dbc`);
+- RX1, editorul de reacție verifică planul pe care îl construiește randarea (`74f3686`).
+
+Backend-ul A rulează pe `74f3686`. Omul a acceptat încadrările manuale pentru R2 și Speed/Kai.
+
+**Clipper-ul este o versiune utilizabilă cu verificare umană înainte de postare.** Încadrarea automată încă taie
+oameni pe reacții și pe clipurile cu două camere, iar soluția e editorul de reacție. Blur-ul se aplică numai cu mască
+validată; EN3 și 3b sunt oprite. Codex a închis această versiune (next-38).
 
 Codex rulează pe contul nou, în aplicația ChatGPT. Stare detaliată: [handover-ul Clipper](areas/clipper/CURRENT.md).
 

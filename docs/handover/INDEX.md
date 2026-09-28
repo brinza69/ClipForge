@@ -35,6 +35,7 @@ Handover-urile vechi sunt păstrate în arhivă și trebuie consultate ca istori
 - [Clipper: puncte de reluare și limite istorice](archive/clipper/2026-09-20-current-history-5.md)
 - [Clipper: 9–24 sept., planul master Codex, rescorarea, subtitrarea dublă, încadrarea](archive/clipper/2026-09-27-current-history-6.md)
 - [Clipper: 26 sept., D2, M0 v2, verdictul editorial, adresarea AD12, finalurile EN1/EN2](archive/clipper/2026-09-28-current-history-7.md)
+- [Clipper: 27 sept.: FD1, R1c, C1r, AQ1, AD3/AD3C, EN3, BURST1, UI, SC lot 1 și loturile pe contul 2](archive/clipper/2026-09-28-current-history-8.md)
 - [`handoff-clipper-session-5.md`](archive/clipper/handoff-clipper-session-5.md)
 - [`handoff-clipper-session-4.md`](archive/clipper/handoff-clipper-session-4.md)
 - [`handoff-clipper-session-3.md`](archive/clipper/handoff-clipper-session-3.md)
