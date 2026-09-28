@@ -299,6 +299,11 @@ def _reasoning_of(cand: dict) -> dict | None:
         value = cand.get(key)
         if value not in (None, "", [], {}):
             out[key] = value
+    # EN3's evidence for this END, kept with the clip so its export can state it (EN3T, next-23 §3).
+    # Absent when the rule was off or never ran: an export then says so, never guesses.
+    tail = cand.get("end_evidence", {}).get("tail") if isinstance(cand.get("end_evidence"), dict) else None
+    if isinstance(tail, dict):
+        out["end_tail"] = tail
     return out or None
 
 

@@ -21,6 +21,7 @@ activation is a separate decision, as EN2's was.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Sequence
 
 from services.clipper.candidate_terms import _EPS, _num
@@ -67,3 +68,125 @@ def extend_tail(end: float, words: Sequence[dict], ev: dict | None, *, audio: An
     if onset is not None:
         return end, {**tail, "state": "refused", "why": "onset_in_interval", "energy_onset": onset}
     return target, {**tail, "state": "moved", "end_out": target}
+
+
+STATES = frozenset({"moved", "kept", "refused", "not_applicable", "unavailable"})
+# The window check compares two numbers that are the same arithmetic done twice: the argv prints `-ss` and `-t`
+# with `%.3f` (±0.5 ms each) and the record rounds its end to the millisecond (±0.5 ms) — 1.5 ms, 2 with slack.
+WINDOW_TOL_S = 0.002
+# The output check compares the argv's `-t` with what ffprobe measures, and the encoder does not stop exactly
+# there. Video leaves on the `-r` grid, so its last frame lands up to one frame (1/fps) either side of `-t`
+# (EN3V2 f81b ON: video 61.200 for 61.214). AAC encodes whole frames of 1024 samples at `AUDIO_RATE` (every
+# export's loudness chain resamples to it), so the audio can run up to one such frame, 21.3 ms, past it. The
+# container reports the longer stream. Plus the probe's own rounding to the millisecond and the argv's: 1 ms.
+# At 60 fps that is 16.7 + 21.3 + 1 = 39 ms — a frame plus an audio frame, not the scoring's 1 ms.
+AAC_FRAME_SAMPLES = 1024
+ROUNDING_S = 0.001
+
+
+def sidecar_block(reasoning: Any, clip_end: Any, record: Any, drop_spans: Any, fps: Any, output: Any) -> dict:
+    """EN3's evidence for the END an export rendered (codex-verdict-next-23 §3, EN3T; next-29 R1/R2, EN3Tr).
+
+    What the scoring recorded (`reasoning.end_tail`), bound to the file this render produced. Five bindings:
+    - `absent`: no record. Never rebuilt from today's setting.
+    - `invalid_record`: a record the binding cannot rely on — an unknown `rule` or `state`, or the end that
+      state implies (`end_out` for `moved`, `end_in` otherwise) or a time it carries not a finite number (a bool
+      is not one). Not an edited end, and never `applies` because a number happens to match.
+    - `end_changed_since_scoring`: the clip row ends elsewhere now — it was edited after the scoring. The row is
+      read only for this; it never corroborates anything.
+    - `not_corroborated` (`why`): the record stands and the row agrees, but the file does not certify it: the
+      window the renderer executed (`render_record.window`, read off the argv) does not end at the recorded
+      end, or the output's probed duration is unavailable or does not match within `tolerance_s`.
+    - `applies`: the recorded end is the executed window's end AND the probed file's end. That certifies where
+      the file ENDS — the container's duration, which follows its longer stream — not that the audio tail is
+      there or sound to that end: a VFR source, another encoder or audio shorter than the video were never
+      measured, and the video can hold the container open past the audio (codex-verdict-next-30 §2).
+    `applies` on a `refused` or `kept` record means the recorded DECISION matches the rendered end — the end
+    that decision left in place — not that an extension was applied; only `moved` extended anything.
+
+    Times in `recorded` are the source clock, as scored. `delivered_s` (only on `applies`) is them on the
+    file's clock: minus the executed start and the seconds this render dropped before them; None for a time
+    inside a dropped span or outside `[0, delivered end]` — the next speech after the end is context, not an
+    event of the file. `delivered_s.end` is that remap, computed; `measured_duration_s` is the probe, measured.
+    Evidence, not recipe: `render_input` does not read it, so it stays outside the fingerprint, and no older
+    sidecar is rewritten. A record that did not come from this clip's scoring says where it did come from in
+    `reasoning.end_tail_provenance` (a frozen replay: the sidecar it was carried from); it is copied beside the
+    record as `provenance`, and the binding is still computed here, on this render.
+    """
+    ev = reasoning.get("end_tail") if isinstance(reasoning, dict) else None
+    if not isinstance(ev, dict):
+        return {"binding": "absent", "recorded": None}
+    prov = reasoning.get("end_tail_provenance")
+    extra = {"provenance": prov} if isinstance(prov, dict) else {}
+    final, why = _recorded_end(ev)
+    if why is not None:
+        return {"binding": "invalid_record", "why": why, "recorded": ev, **extra}
+    if not _finite(clip_end) or abs(float(clip_end) - final) > 1e-3:
+        return {"binding": "end_changed_since_scoring", "recorded": ev, "clock": "source_s", **extra}
+    block: dict[str, Any] = {"binding": "not_corroborated", "why": None, "recorded": ev, "clock": "source_s",
+                             "executed": None, "measured_duration_s": None, "tolerance_s": None, **extra}
+    window = record.get("window") if isinstance(record, dict) else None
+    ss, t = (window.get("ss"), window.get("t")) if isinstance(window, dict) else (None, None)
+    spans = _spans(drop_spans)
+    if not (_finite(ss) and _finite(t)) or spans is None:
+        return {**block, "why": "executed_window_unavailable"}
+    block["executed"] = {"start_s": float(ss), "duration_s": float(t)}
+    end_d = _delivered(final, ss, spans)
+    if end_d is None or abs(end_d - float(t)) > WINDOW_TOL_S:
+        return {**block, "why": "executed_window_ends_elsewhere"}
+    measured = output.get("duration_s") if isinstance(output, dict) and not output.get("refused") else None
+    if not _finite(measured) or not _finite(fps) or not fps > 0:
+        return {**block, "why": "output_probe_unavailable"}
+    from services.clipper.ffmpeg_tools import AUDIO_RATE
+
+    tol = 1.0 / float(fps) + (AAC_FRAME_SAMPLES / AUDIO_RATE if output.get("has_audio") else 0.0) + ROUNDING_S
+    block.update(measured_duration_s=float(measured), tolerance_s=round(tol, 4))
+    if abs(float(measured) - end_d) > tol:
+        return {**block, "why": "output_duration_differs"}
+    delivered = {k: _delivered(ev.get(k), ss, spans, limit=end_d) for k in ("vocal_end", "next_speech")}
+    delivered["end"] = end_d
+    return {**block, "binding": "applies", "delivered_s": delivered}
+
+
+def _finite(x: Any) -> bool:
+    return not isinstance(x, bool) and isinstance(x, (int, float)) and math.isfinite(x)
+
+
+def _recorded_end(ev: dict) -> tuple[float | None, str | None]:
+    """(the end the record's state implies, None) or (None, why the record cannot be relied on)."""
+    if ev.get("rule") != RULE:
+        return None, "unknown_rule"
+    if ev.get("state") not in STATES:
+        return None, "unknown_state"
+    final = ev.get("end_out") if ev["state"] == "moved" else ev.get("end_in")
+    if not _finite(final):
+        return None, "recorded_end_not_a_finite_number"
+    if any(ev.get(k) is not None and not _finite(ev.get(k)) for k in ("vocal_end", "next_speech")):
+        return None, "recorded_time_not_a_finite_number"
+    return float(final), None
+
+
+def _spans(spans: Any) -> list[tuple[float, float]] | None:
+    """The executed drop spans as numbers, or None when one cannot be read."""
+    out = []
+    for span in spans or ():
+        if not isinstance(span, (list, tuple)) or len(span) != 2 or not all(_finite(v) for v in span):
+            return None
+        out.append((float(span[0]), float(span[1])))
+    return out
+
+
+def _delivered(t: Any, start: float, spans: Sequence, limit: float | None = None) -> float | None:
+    """A source time on the delivered file's clock: clip time minus the seconds dropped before it. None
+    for no time, a time inside a dropped span, one before the start, or one past `limit` (the delivered end)."""
+    if not _finite(t):
+        return None
+    x = float(t) - float(start)
+    removed = 0.0
+    for a, b in spans:
+        if a < x < b:
+            return None
+        if b <= x:
+            removed += b - a
+    y = round(x - removed, 3)
+    return None if x < 0 or (limit is not None and y > limit) else y

@@ -133,7 +133,7 @@ async def render_export(clip, project, decision: dict, out: str | Path, *,
 
 def _write_sidecar(clip, project, decision, out, *, src, dyn, render,
                    result, review_result, patch=None):
-    from services.clipper import (dynamic_render, edit_quality, output_identity,
+    from services.clipper import (dynamic_render, edit_quality, end_tail, output_identity,
                                   render as static_render, render_input,
                                   source_treatment_render)
 
@@ -259,6 +259,13 @@ def _write_sidecar(clip, project, decision, out, *, src, dyn, render,
     # AFTER the fingerprint, deliberately: the recipe digest must not depend on
     # the output, or a re-render of the same plan would change its own recipe.
     body["output_identity"] = output_identity.probe(out)
+    # EN3's evidence for the end this file was cut at (EN3T): evidence, not recipe, so after the fingerprint.
+    # Bound to what RAN — the argv's window in the render record, the drop spans and fps handed to the
+    # encoder, the probed file — never to the clip row, which only says whether the end was edited (EN3Tr R1).
+    # A frozen replay's clip (scripts/rerender_pilots.py) carries the frozen sidecar's record, or none.
+    body["end_tail"] = end_tail.sidecar_block(
+        getattr(clip, "reasoning", None), clip.end_time, body["render_record"], drop, render["fps"],
+        body["output_identity"])
 
     storage.atomic_write_json(
         out.with_suffix(".json"), body, indent=2, ensure_ascii=False, default=str)

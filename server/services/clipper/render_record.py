@@ -188,7 +188,7 @@ def record(argv: Any, *, ass_path: Any = None, treatment_manifest: Any = None) -
         "ass_sha256": None, "ass_bytes": None, "ass_refused": None,
         "ass_events": None, "argv_sha256": None, "argv_len": None,
         "ass_path_offered": str(ass_path) if ass_path else None,
-        "offered_matches_used": None,
+        "offered_matches_used": None, "window": None,
     }
     if (not isinstance(argv, Sequence) or isinstance(argv, (str, bytes))
             or not all(isinstance(a, str) for a in argv)):
@@ -201,6 +201,7 @@ def record(argv: Any, *, ass_path: Any = None, treatment_manifest: Any = None) -
         return out
     if treatment_manifest is not None or _inputs(argv)[1:]:
         out["source_treatment"] = _treatment(argv, treatment_manifest)
+    out["window"] = _window(argv)
     out["argv_len"] = len(argv)
     out["argv_sha256"] = hashlib.sha256(
         "\x00".join(argv).encode("utf-8", "replace")).hexdigest()
@@ -261,6 +262,23 @@ def _inputs(argv: Sequence[str]) -> list[tuple[list[str], str]]:
 
 def _opt(opts: list[str], name: str) -> str | None:
     return opts[opts.index(name) + 1] if name in opts[:-1] else None
+
+
+def _window(argv: Sequence[str]) -> dict:
+    """The window the encode READ, as the argv carried it (EN3Tr R1): the source input's `-ss` and the
+    OUTPUT `-t` — the one after the last `-i`, i.e. the delivered length once the drop spans are taken
+    out. Not the clip row and not the plan: whatever either says, this is what ffmpeg was told. None for a
+    value that is not there or is not a number."""
+    def num(raw: str | None) -> float | None:
+        try:
+            return float(raw) if raw is not None else None
+        except ValueError:
+            return None
+
+    inputs = _inputs(argv)
+    last = max((i for i, a in enumerate(argv) if a == "-i"), default=len(argv))
+    return {"ss": num(_opt(inputs[0][0], "-ss")) if inputs else None,
+            "t": num(_opt(list(argv[last + 2:]), "-t"))}
 
 
 def _treatment(argv: Sequence[str], manifest: Any) -> dict:
