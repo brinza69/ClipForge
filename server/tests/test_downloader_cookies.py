@@ -75,9 +75,10 @@ def test_cookies_and_runtime_travel_together(tmp_path):
     """One property, so a call site cannot pick up half of what it needs."""
     jar = tmp_path / "cookies.txt"
     jar.write_text("x", encoding="utf-8")
-    opts = Settings(ytdlp_cookies_file=str(jar),
-                    ytdlp_js_runtimes="node").ytdlp_opts
-    assert opts == {"cookiefile": str(jar), "js_runtimes": {"node": {}}}
+    s = Settings(ytdlp_cookies_file=str(jar), ytdlp_js_runtimes="node")
+    # The browser User-Agent (TikTok, a46cb49) travels in the same property.
+    assert s.ytdlp_opts == {"cookiefile": str(jar), "js_runtimes": {"node": {}},
+                            "http_headers": {"User-Agent": s.ytdlp_user_agent}}
 
 
 # ── whether anything reads it ────────────────────────────────────────────────
