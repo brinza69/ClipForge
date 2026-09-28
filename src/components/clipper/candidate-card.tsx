@@ -211,6 +211,12 @@ export function CandidateCard({
       )}
 
       <CaptionDisplayNote view={clip.caption_display} compact />
+      {/* SC3: the stored CHOICE, read from the clip the server returned (a save or a reload shows it). It
+          says nothing about a file: the export is invalidated when the choice changes (next-34 R1). */}
+      {(clip as { source_caption_treatment?: { treatment?: string } | null })
+        .source_caption_treatment?.treatment === "blur" && (
+        <p className="text-[10px] text-muted-foreground">Blur selectat pentru următoarea randare</p>
+      )}
 
       <div className="mt-auto flex flex-wrap gap-1.5">
         <Button

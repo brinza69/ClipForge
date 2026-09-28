@@ -386,6 +386,15 @@ class ClipModel(Base):
     # leaves the previous file AND its report selected, never a new file under an old report. A job id
     # alone is not an attempt — a recovered job publishes again under another `attempt`. NULL = legacy.
     preview_record: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # What to do with the SOURCE's own burned captions on this clip (SC3, codex-verdict-next-33 §3):
+    # NULL = the existing default (nothing treated), `{"treatment": "none", "decided_by": "human"}` = a person
+    # chose none, or `{"treatment": "blur", "decided_by": "human", "mask_sha256": <validated mask>}`. Written
+    # only by PUT /clips/{id}/source-treatment; `decided_by` is the server's, never the client's.
+    source_caption_treatment: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # ClipForge's OWN caption layer chosen for this clip: "burn", "suppress" or NULL (= the existing
+    # policy). Separate from `source_has_burned_captions`, which stays the truth about the SOURCE and is
+    # never flipped to get a burn.
+    caption_layer: Mapped[str | None] = mapped_column(String(10), nullable=True)
     # The optional context hook. Distinct from `hook_text` (legacy editor).
     headline_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)

@@ -367,9 +367,17 @@ async def put_reaction_layout(
     # no mutation reaches the DB.
     new_caption_plan = clip.caption_plan
     from services.clipper import caption_policy as cap_pol
+    # SC3: a reaction framing renders on the STATIC path, where a stored blur cannot execute
+    # (codex-verdict-next-34 R3/R4) — refused here rather than left to fail every later render.
+    stored = getattr(clip, "source_caption_treatment", None)
+    if isinstance(stored, dict) and stored.get("treatment") == "blur":
+        raise _err(422, "static_path_unsupported",
+                   "This clip blurs the source's text, which needs the multi-shot renderer; a reaction "
+                   "framing renders statically. Set the source text to no treatment first.")
     _burn = (cap_pol.decide(
         (project.clipper_settings or {}).get(cap_pol.SETTING),
         clip_setting=clip.source_has_burned_captions,
+        layer=getattr(clip, "caption_layer", None),
     )["action"] == cap_pol.BURN)
     if _burn and new_caption_plan and not new_caption_plan.get("y_pct_manual"):
         from services.clipper.reaction_captions import (

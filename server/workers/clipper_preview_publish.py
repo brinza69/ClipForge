@@ -52,7 +52,9 @@ def _preview_inputs(clip, project) -> tuple:
     """
     return (_caption_inputs(clip, project), clip.content_type,
             project.width, project.height, project.video_path,
-            project.content_type, project.content_type_override)
+            project.content_type, project.content_type_override,
+            # SC3: a changed source-caption treatment or layer choice is a changed picture
+            getattr(clip, "source_caption_treatment", None), getattr(clip, "caption_layer", None))
 
 
 def capture_attempt(job_id: str) -> dict | None:

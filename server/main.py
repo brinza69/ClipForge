@@ -153,10 +153,12 @@ if settings.clipper_enabled:
     from routers.clipper_reaction import router as clipper_reaction_router
     from routers.clipper_review import router as clipper_review_router
     from routers.clipper_runs import router as clipper_runs_router
+    from routers.clipper_source_treatment import router as clipper_source_treatment_router
 
     app.include_router(clipper_router)
     app.include_router(clipper_clips_router)
     app.include_router(clipper_caption_source_router)
+    app.include_router(clipper_source_treatment_router)
     app.include_router(clipper_reaction_router)
     app.include_router(clipper_runs_router)
     app.include_router(clipper_review_router)

@@ -21,6 +21,7 @@ import { CLIPPER_API, type ClipperClip } from "@/types/clipper";
 import { ClipFramePreview } from "./clip-frame-preview";
 import { ReactionFraming } from "./reaction-framing";
 import { CaptionDisplayNote } from "./caption-display-note";
+import { SourceTreatmentField } from "./source-treatment-field";
 
 interface Preset {
   id: string;
@@ -361,6 +362,9 @@ export function ClipEditor({
               )}
               <CaptionDisplayNote view={clip.caption_display} />
             </Field>
+
+            <SourceTreatmentField clip={clip} disabled={busy !== null || dirty}
+              onSaved={(c) => { setFrameKey((k) => k + 1); onSaved(c); }} />
 
             <Field label="Caption preset">
               <div className="flex gap-2">

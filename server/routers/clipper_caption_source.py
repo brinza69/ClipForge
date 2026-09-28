@@ -94,9 +94,11 @@ async def put_caption_source(
     if old == value:
         return {"clip": clip_to_dict(clip, project)}
 
-    decision = caption_policy.decide(
-        ((project.clipper_settings if project else None) or {}).get(caption_policy.SETTING),
-        clip_setting=value)
+    setting = ((project.clipper_settings if project else None) or {}).get(caption_policy.SETTING)
+    layer = getattr(clip, "caption_layer", None)
+    _refuse_unexecutable_burn(clip, value if isinstance(value, bool) else setting)
+    before = caption_policy.decide(setting, clip_setting=old, layer=layer)
+    decision = caption_policy.decide(setting, clip_setting=value, layer=layer)
     caption_plan = clip.caption_plan
     if decision["action"] == caption_policy.BURN:
         caption_plan = _place_or_refuse(clip)
@@ -104,7 +106,8 @@ async def put_caption_source(
     clip.source_has_burned_captions = value
     if caption_plan is not clip.caption_plan:
         clip.caption_plan = caption_plan
-    invalidate_render(clip)
+    if decision != before:  # SC3: a layer chosen for the clip renders the same whatever the answer
+        invalidate_render(clip)
     await feedback_mod.add(
         session, clip.id, clip.project_id, "caption_changed",
         {"field": FIELD, "old": old, "new": value},
@@ -132,16 +135,32 @@ async def apply_project_answer(
     """
     out = {"changed": old is not new, "affected_clip_ids": [],
            "invalidated_clip_ids": [], "export_cleared_clip_ids": []}
-    new_action = caption_policy.decide(new)["action"]
-    if caption_policy.decide(old)["action"] == new_action:
-        return out
-
-    clips = (await session.execute(
+    inheriting = (await session.execute(
         select(ClipModel)
         .where(ClipModel.project_id == project.id)
         .where(ClipModel.source_has_burned_captions.is_(None))
         .order_by(ClipModel.id)
     )).scalars().all()
+    # SC3 (codex-verdict-next-34 R4): a clip's own layer choice decides its layer, so only the clips
+    # whose EFFECTIVE action flips are moved; and a chosen burn without a blur that the new answer would
+    # put over source text refuses the whole change, nothing written.
+    blocked = []
+    for clip in inheriting:
+        try:
+            _refuse_unexecutable_burn(clip, new)
+        except HTTPException:
+            blocked.append({"clip_id": clip.id, "title": clip.title})
+    if blocked:
+        raise _err(422, "burn_over_untreated_source_captions",
+                   f"{len(blocked)} clip(s) burn ClipForge's captions by choice without blurring the "
+                   "source; this answer would put them over the source's text. Change their caption "
+                   "layer first; nothing was changed.", blocking_clips=blocked)
+    clips = [c for c in inheriting
+             if caption_policy.decide(old, layer=getattr(c, "caption_layer", None))["action"]
+             != caption_policy.decide(new, layer=getattr(c, "caption_layer", None))["action"]]
+    if not clips:
+        return out
+    new_action = caption_policy.decide(new)["action"]
 
     busy = [c.id for c in clips if c.status == ClipStatus.exporting.value]
     if busy:
@@ -151,7 +170,7 @@ async def apply_project_answer(
 
     placed, blocking = {}, []
     if new_action == caption_policy.BURN:
-        for clip in clips:
+        for clip in clips:  # an explicit layer never flips, so every moved clip follows the answer
             try:
                 placed[clip.id] = _place_or_refuse(clip)
             except HTTPException as exc:
@@ -183,3 +202,15 @@ async def apply_project_answer(
         invalidate_render(clip)
         out["invalidated_clip_ids"].append(clip.id)
     return out
+
+
+def _refuse_unexecutable_burn(clip: ClipModel, burned: Any) -> None:
+    """SC3 (codex-verdict-next-34 R4): a person's chosen burn without a blur is valid only over a source
+    declared WITHOUT text. An answer that says it has text — or leaves it unknown — would make that clip
+    burn over the source's own text, so it is refused until the clip's layer changes."""
+    stored = getattr(clip, "source_caption_treatment", None)
+    blur = isinstance(stored, dict) and stored.get("treatment") == "blur"
+    if getattr(clip, "caption_layer", None) == caption_policy.BURN and not blur and burned is not False:
+        raise _err(422, "burn_over_untreated_source_captions",
+                   "This clip burns ClipForge's captions by choice without blurring the source; with this "
+                   "answer they would go over the source's own text. Change the clip's caption layer first.")

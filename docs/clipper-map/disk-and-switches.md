@@ -16,6 +16,7 @@ data/clipper/<project_id>/
                generations/<job>-a<attempt>/  one analysis attempt (OW1); the project reads the one projects.analysis_generation names
   exports/     <clip>.mp4 + <clip>.json sidecar + <clip>.ass
   previews/    low-res renders
+  source_caption_masks/  SC3: <sha>/ per imported mask (the mask + its glyphs), params/, source_identity.json
   thumbs/      poster frames
 ```
 

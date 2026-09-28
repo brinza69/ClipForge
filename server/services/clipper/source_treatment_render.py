@@ -60,6 +60,9 @@ PARAMS_SCHEMA = "clipper_source_treatment_params_v1"
 TAGS = ("tv", "bt709")
 #: `exports/sct<n>/` — the versioned directories a treated render may land in.
 VERSIONED = re.compile(r"^sct[1-9][0-9]*$")
+#: The destination only `handle_export` passes (SC3, codex-verdict-next-33 §3): its own staged file, for a
+#: BLUR-ONLY treatment. R4b's `_publish_export` stays the one publisher and checks the staged sidecar again.
+PUBLISH_BLUR = "publish_blur"
 _GRAPH_HEAD = "[0:v]split=2[a][b];"
 
 
@@ -198,16 +201,29 @@ def _executable(values: dict, mask: dict, segs: list[dict]) -> None:
                                              f"{lid}: footprint/dilation are not the params record's")
 
 
-def check_destination(out: Any, project: Any, *, destination: Any) -> None:
+def check_destination(out: Any, project: Any, *, destination: Any, resolved: dict | None = None) -> None:
     """A treated render is never a normal export (SC-addendum-v2 §4): the caller
     says `destination="versioned"`, and inside exports_dir only
     `exports/sct<n>/<file>` is accepted — never `export_path`, never the
-    staging names beside it. The original is never overwritten."""
+    staging names beside it. The original is never overwritten.
+
+    The one exception is SC3's blur (next-33 §3): `PUBLISH_BLUR`, only for a treatment whose every
+    segment is blur, and only into an export's own staged name (`.<clip>.<job>-<nonce>.mp4` in
+    exports_dir). Erase is never promoted, however it got into the decision."""
+    from services.clipper import storage
+
+    if destination == PUBLISH_BLUR:
+        segs = (resolved or {}).get("per_line") or []
+        if not segs or (resolved or {}).get("treatment") != BLUR or any(s["treatment"] != BLUR for s in segs):
+            raise SourceTreatmentRefused("erase_not_offered", "only a blur-only treatment is published")
+        target = Path(out).resolve()
+        if not (target.parent == storage.paths(project.id)["exports_dir"].resolve()
+                and target.name.startswith(".") and target.suffix == ".mp4"):
+            raise SourceTreatmentRefused("destination_not_versioned", f"{target} is not an export's staged file")
+        return
     if destination != "versioned":
         raise SourceTreatmentRefused("treated_export_not_promoted",
                                      f"destination {destination!r}: a treated render is not promoted")
-    from services.clipper import storage
-
     target = Path(out).resolve()
     exports = storage.paths(project.id)["exports_dir"].resolve()
     if target.is_relative_to(exports) and not (target.parent.parent == exports
@@ -228,7 +244,7 @@ def prepare(clip: Any, project: Any, decision: Any, *, src: str, out: Any = None
     if ctx is None:
         return None
     if out is not None:
-        check_destination(out, project, destination=destination)
+        check_destination(out, project, destination=destination, resolved=ctx["resolved"])
     attempt = attempt or {"job_id": None, "nonce": uuid.uuid4().hex}
     root = Path(out).parent if out is not None else Path(scratch_root)
     stem = Path(out).stem if out is not None else "still"
@@ -363,10 +379,13 @@ def sidecar_identity(record: Any, patch: dict | None) -> dict:
     return t["identity"]
 
 
-def refuse_treated_publish(sidecar_path: Any) -> None:
+def refuse_treated_publish(sidecar_path: Any, *, blur: bool = False) -> None:
     """`_publish_export`'s guard, the only place that renames over the original:
     a staged sidecar that carries a treatment — or cannot be read to prove it
-    carries none — is never published (SC-addendum-v2 §4)."""
+    carries none — is never published (SC-addendum-v2 §4).
+
+    `blur=True` (SC3, `_publish_export` only) lets through a sidecar whose label AND v3 identity are an
+    active BLUR on every segment; anything else stays refused, erase and unreadable included."""
     from services.clipper import render_input
 
     try:
@@ -376,9 +395,23 @@ def refuse_treated_publish(sidecar_path: Any) -> None:
     if not isinstance(body, dict):
         raise SourceTreatmentRefused("treated_export_not_promoted", "the sidecar is not an object")
     labelled = body.get("source_treatment")
+    if blur and _blur_only(body, labelled):
+        return
     if labelled is not None and (not isinstance(labelled, dict) or labelled.get("treatment") != NONE):
         raise SourceTreatmentRefused("treated_export_not_promoted", f"labelled {labelled!r}")
     if (body.get("fingerprint_schema") == render_input.FINGERPRINT_SCHEMA_V3
             and render_input.treatment_identity_state(body) != render_input.TREATMENT_NONE):
         raise SourceTreatmentRefused("treated_export_not_promoted",
                                      f"identity {render_input.treatment_identity_state(body)}")
+
+
+def _blur_only(body: dict, labelled: Any) -> bool:
+    """A v3 sidecar whose label and identity both say an active blur, on every segment."""
+    from services.clipper import render_input
+
+    ident = body.get("source_treatment_identity")
+    return (isinstance(labelled, dict) and labelled.get("treatment") == BLUR and labelled.get("active") is True
+            and body.get("fingerprint_schema") == render_input.FINGERPRINT_SCHEMA_V3
+            and render_input.treatment_identity_state(body) == render_input.TREATMENT_ACTIVE
+            and ident["treatment"] == BLUR
+            and all(isinstance(s, dict) and s.get("treatment") == BLUR for s in ident["per_line"]))

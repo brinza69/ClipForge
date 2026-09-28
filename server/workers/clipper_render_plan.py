@@ -25,7 +25,7 @@ from database import async_session
 from models import ClipModel, ProjectModel
 from services.clipper import (analysis_generation, caption_policy, dynamic_rhythm,
                               edit_profiles, layout_policy,
-                              storage)
+                              source_treatment_store, storage)
 # THE canonical numeric guard, not a local copy: it rejects the infinities too,
 # and a second implementation is how R2's validation hole reopened.
 from services.clipper.candidate_terms import _num
@@ -412,7 +412,11 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
     # calibrated, this call gains its second argument and nothing else moves.
     caption_policy_decision = caption_policy.decide(
         cfg.get(caption_policy.SETTING),
-        clip_setting=getattr(clip, "source_has_burned_captions", None))
+        clip_setting=getattr(clip, "source_has_burned_captions", None),
+        layer=getattr(clip, "caption_layer", None))
+    # SC3: the clip's stored source-caption treatment, re-validated now, or a refusal BEFORE any .ass.
+    treatment = source_treatment_store.for_render(clip, project, caption_policy_decision,
+                                                  getattr(project, "video_path", None) or "")
     # D2: an alternative has no stored plan; under burn one is built for this
     # render (never stored), and a burn that cannot be built is reported. Built
     # AFTER `_dynamic_plan`: an alternative's cut grid does not get these words as
@@ -487,4 +491,5 @@ async def _decide_render(clip, project, out_dir, *, on_stage=None) -> dict:
                      if caption_policy_decision["action"] == caption_policy.BURN
                      else None),
         "watermark": str(cfg.get("watermark_text") or ""),
+        **treatment,
     }

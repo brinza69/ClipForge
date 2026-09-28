@@ -155,7 +155,12 @@ def clip_to_dict(clip: ClipModel, project: ProjectModel | None = None) -> dict[s
         # that is (clip / project / default). Presentation only.
         "effective_caption_policy": caption_policy.effective(
             (project.clipper_settings or {}).get(caption_policy.SETTING),
-            clip.source_has_burned_captions) if project is not None else None,
+            clip.source_has_burned_captions,
+            getattr(clip, "caption_layer", None)) if project is not None else None,
+        # SC3: the stored choice as a person made it (`decided_by` is the server's), and the layer choice.
+        # Whether blur is AVAILABLE is a separate, validated answer: GET /clips/{id}/source-treatment.
+        "source_caption_treatment": getattr(clip, "source_caption_treatment", None),
+        "caption_layer": getattr(clip, "caption_layer", None),
         "rank_position": clip.rank_position,
         "selection_run_id": clip.selection_run_id,
         # Why this clip exists — anchor, payoff, required context, archetype,
@@ -314,7 +319,8 @@ def caption_display_view(clip: ClipModel, project: ProjectModel | None = None) -
 
     plan = caption_display.plan_facts(clip.caption_plan, MIN_CHUNK_S)
     policy = (caption_policy.effective((project.clipper_settings or {}).get(caption_policy.SETTING),
-                                       clip.source_has_burned_captions)
+                                       clip.source_has_burned_captions,
+                                       getattr(clip, "caption_layer", None))
               if project is not None else None)
     plan_counts = not (isinstance(policy, dict) and policy.get("action") == "suppress")
     export, preview = _export_view(clip), _preview_view(clip)

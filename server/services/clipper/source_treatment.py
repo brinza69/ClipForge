@@ -97,6 +97,8 @@ REASONS: tuple[str, ...] = (
     # SC batch 2 — the executor, the destination guard and the render record
     "treatment_inputs_missing", "decision_mask_mismatch", "patch_build_failed",
     "record_not_corroborated", "treated_export_not_promoted", "destination_not_versioned",
+    # SC3 (codex-verdict-next-33) — only none and blur are offered; erase is never stored or published
+    "treatment_not_offered", "erase_not_offered",
 )
 
 

@@ -11,10 +11,35 @@ A1 e acceptat. Stare la 26 sept.:
   cu D2r, D2r-2, D2r-3) sunt închise de Codex și comise: `d0f397a`, `d01dd6e`, `c4e8db3`. Integrarea
   pe arborele final dă 2894 passed, exit 0;
 - backend-ul A (8420) e repornit pe codul nou: migrarea a adăugat `clips.export_job_id`, iar
-  `release_stuck_exports.py` nu găsește niciun export blocat.
-Rămân: verdictul editorial al utilizatorului (pagina `A/editorial-review/review.html`), lotul
-subtitrărilor suprapuse (71/100 exporturi) și încadrarea automată (M0 v2 înghețat). Codex rulează pe
-contul nou, în aplicația ChatGPT. Stare detaliată: [handover-ul Clipper](areas/clipper/CURRENT.md).
+  `release_stuck_exports.py` nu găsește niciun export blocat;
+- adresarea proxy→sursă, pașii 1–2, e comisă (`0f50dc7`, cu testul heartbeat în `073ef97`);
+- finalurile clipurilor (EN1 + EN2, regula `end_acoustics_v2`) sunt comise în `4a2c7ea` și **active doar
+  pentru utilizare limitată**: numai la scorările noi, iar omul verifică clipurile înainte de postare.
+  Suita dă 3069 passed, iar backend-ul A a fost repornit la 22:47.
+
+Verdictul editorial al utilizatorului e dat, la fel răspunsurile la DE1 și la linia F4/F5.
+
+**La 27 sept. sunt comise:**
+- AD3 (`be618b1`), cu 3b opt-in în `a73e589`;
+- nucleul SC, lotul 1 (`31972e2`);
+- lotul UI O2–O4 (`78b9fae`);
+- EN3, pauza după ultimul cuvânt (`3229423`, oprită implicit).
+
+Suita dă 3445 passed. Backend-ul A rulează pe `3229423`.
+
+**Rămân:**
+- proba de activare EN3 la 0,4 (contul 2, apoi vizionarea omului);
+- SC, loturile 2–4;
+- subtitrările suprapuse (BURST1r, apoi limita în UI și realinierea la audio);
+- proba pe handler pentru 3b (AD3H găsește o publicare după anulare);
+- compunerea ceasurilor (CC1A) și M0 v2 ca seed limitat (LIM1), ambele la Codex.
+
+**La 28 sept. sunt comise:** FD1, BURST, UI, SCB2, AQ1, CC1 + C1r (noaptea); OW1r2 (`47c5cbd`), EN3T (`2994b67`),
+reluarea EN3T (`009a135`), harta împărțită (`190af2e`). SC3 (subtitrările sursei cu blur, per clip) e închis de
+Codex și acceptat de om, iar commit-ul lui așteaptă acordul. Rămâne R2 + Speed/Kai (exporturi care păstrează
+persoanele).
+
+Codex rulează pe contul nou, în aplicația ChatGPT. Stare detaliată: [handover-ul Clipper](areas/clipper/CURRENT.md).
 
 ## Clipper, 24 septembrie 2026, noaptea
 

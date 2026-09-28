@@ -32,7 +32,7 @@ from database import async_session
 from models import ClipModel, ClipStatus, JobModel, JobStatus, ProjectModel
 from services.clipper import storage
 from services.clipper.clip_mutations import begin_write
-from services.clipper.source_treatment_render import refuse_treated_publish
+from services.clipper.source_treatment_render import PUBLISH_BLUR, refuse_treated_publish
 from workers.clipper_captions import _caption_warnings
 # Moved out when BURST R1 grew them, re-exported for callers and tests (codex-verdict-next-23).
 from workers.clipper_preview_publish import (  # noqa: F401
@@ -199,8 +199,8 @@ async def _publish_export(job_id: str, clip_id: str, owner: str, staged: Path, o
         if current is None:
             await session.rollback()
             return False
-        try:  # a treated file never renames over the original (SC-addendum-v2 §4)
-            refuse_treated_publish(staged.with_suffix(".json"))
+        try:  # a treated file never renames over the original (SC-addendum-v2 §4) — blur only (SC3)
+            refuse_treated_publish(staged.with_suffix(".json"), blur=True)
         except Exception:
             await session.rollback()
             raise
@@ -298,7 +298,8 @@ async def handle_export(job_id: str, project_id: str, clip_id, metadata, queue) 
             clip, project, decision, staged, src=src, review_result=review_result,
             after_render=review_rendered,
             on_progress=lambda p, m: queue.update_progress(job_id, 0.20 + 0.7 * p, m),
-            is_cancelled=lambda: queue.is_cancelled(job_id), discard_on_cancel=True)
+            is_cancelled=lambda: queue.is_cancelled(job_id), discard_on_cancel=True,
+            destination=PUBLISH_BLUR)
         review_result = result["sidecar"]["review"]
         ass = decision.get("ass_path")
         if ass:

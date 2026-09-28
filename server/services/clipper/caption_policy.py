@@ -50,7 +50,8 @@ DECIDED_BY: tuple[str, ...] = (HUMAN, DEFAULT)
 SETTING = "source_has_burned_captions"
 
 
-def decide(setting: Any = None, detector: Any = None, clip_setting: Any = None) -> dict:
+def decide(setting: Any = None, detector: Any = None, clip_setting: Any = None,
+           layer: Any = None) -> dict:
     """`{"action", "why", "decided_by", "detector"}` — burn or suppress, and why.
 
     `setting` is the project's own three-valued answer; `detector` is a
@@ -58,6 +59,12 @@ def decide(setting: Any = None, detector: Any = None, clip_setting: Any = None) 
     the same three-valued answer for ONE clip; a real bool wins over
     `setting` (`decided_by: human`, `scope: clip`) — `None` defers to the
     project exactly as if `clip_setting` had never been passed.
+
+    `layer` is a person's choice of ClipForge's OWN layer for this clip (SC3, codex-verdict-next-33 §3):
+    "burn" or "suppress" wins over both answers for the LAYER only — the answers stay what the source
+    carries — and anything else, None included, leaves this function exactly as it was, so a sidecar
+    written without a choice is byte-identical. Burning over source text that stays is refused at the
+    render (`source_treatment_store.for_render`), not here.
     """
     from services.clipper import source_captions as scap
 
@@ -72,6 +79,11 @@ def decide(setting: Any = None, detector: Any = None, clip_setting: Any = None) 
         # was calibrated, and a field nobody has to look up is the way to say it.
         "detector_calibrated": bool(calibrated) if calibrated is not None else None,
     }
+
+    if isinstance(layer, str) and layer in (BURN, SUPPRESS):
+        out.update({"action": layer, "decided_by": HUMAN, "scope": "clip",
+                    "why": f"a_person_chose_to_{layer}_the_layer"})
+        return out
 
     # A clip's own answer beats the project's. `isinstance(x, bool)`, never
     # `x in (True, False)` — `1 == True` would let an integer through as a
@@ -104,7 +116,7 @@ def decide(setting: Any = None, detector: Any = None, clip_setting: Any = None) 
     return out
 
 
-def effective(setting: Any = None, clip_setting: Any = None) -> dict:
+def effective(setting: Any = None, clip_setting: Any = None, layer: Any = None) -> dict:
     """`{"action", "scope", "decided_by", "why"}` for the editor to SHOW.
 
     Read off `decide()` with the same two arguments the render passes it (the
@@ -113,7 +125,7 @@ def effective(setting: Any = None, clip_setting: Any = None) -> dict:
     is written into export sidecars, and a project-level answer's sidecar must
     stay byte-identical to what it was before a clip could have one.
     """
-    got = decide(setting, clip_setting=clip_setting)
+    got = decide(setting, clip_setting=clip_setting, layer=layer)
     scope = got.get("scope") or ("project" if got["decided_by"] == HUMAN else "default")
     return {"action": got["action"], "scope": scope,
             "decided_by": got["decided_by"], "why": got["why"]}
