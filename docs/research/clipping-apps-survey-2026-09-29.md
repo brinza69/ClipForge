@@ -3,7 +3,8 @@
 Cercetare din **29 septembrie 2026**, făcută cu conectorul Firecrawl: căutare web, paginile de produs și de
 documentație ale producătorilor, indexul de articole științifice și indexul pentru dezvoltatori (README-uri,
 documentații de API). Continuă [`ai-stream-clipper-competitive-analysis.md`](ai-stream-clipper-competitive-analysis.md)
-(30 iulie: doar OpusClip și clipping.net) — ce e acolo nu se repetă aici.
+(30 iulie: doar OpusClip și clipping.net) — ce e acolo nu se repetă aici. Scorarea, judge-ul LLM, ranker-ul și
+selecția au documentul lor: [`clipper-scoring-selection-2026-09-29.md`](clipper-scoring-selection-2026-09-29.md).
 
 | etichetă | înseamnă |
 |---|---|
