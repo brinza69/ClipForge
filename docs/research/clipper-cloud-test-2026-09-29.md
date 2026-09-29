@@ -23,9 +23,10 @@ Scripturile folosite sunt în [`clipper-cloud-test-2026-09-29/`](clipper-cloud-t
 2. **Board-ul ignoră ultimele 20 de minute** [MĂS]: niciun clip după 44:20, deși acolo sunt 5 din cele mai puternice
    12 momente din chat, inclusiv primele trei. Candidații există: 60 după minutul 44. Cel mai bun are însă 60,1,
    cu 1,8 puncte sub pragul board-ului (61,9). Problema e la scorare, nu la generarea candidaților (§7).
-3. **Față de chat, board-ul e aproape de nivelul întâmplării** [MĂS]. Cu un decalaj de 25 s, 0 din 12 momente din
-   chat cad într-un clip; cu 35 s, 3 din 12. Un board aleator ar prinde 12% (p ≈ 0,17). E un singur stream și un
-   proxy necalibrat, deci un indiciu, nu un verdict (§5).
+3. **Board-ul nu prinde momentele la care reacționează chatul** [MĂS]. Decalajul acestui stream, măsurat din sunet,
+   e ~10 s. La acest decalaj, 0 din 12 momente din chat cad într-un clip, iar un board aleator ar prinde 12%. Cifra de
+   3 din 12 apare doar la un decalaj de 35 s, ales după rezultat. E un singur stream și un proxy necalibrat, deci un
+   indiciu, nu un verdict (§5).
 4. **Ce a ales board-ul** [MĂS]: clipul #1 e vocea naratorului din trailer, nu streamerul, iar 3 din 10 clipuri sunt
    logistică (reclame, green screen). Fără LLM, titlurile sunt primele cuvinte din transcript („Huh"); §4.
 5. **Exportul se blochează pe ffmpeg < 8** [MĂS]. Schimbarea mărimii `crop` prin `sendcmd` oprește ffmpeg 6.1 și 7.0
@@ -124,10 +125,12 @@ Cele 12 momente (decalaj 25 s), în ordinea tăriei:
 | 26:08 | râs | nu |
 | 57:32 | hype | nu |
 
-**Ce se poate spune:** cele trei clipuri care „prind" chatul au același tipar. Chatul reacționează la 1–4 s după
-finalul clipului, deci fie decalajul pe acest stream e ~35 s, fie clipurile se termină chiar înainte de poantă
-[ASM]. Se lămurește uitându-se la video: dacă poanta cade după final, e o problemă de granițe. Cele mai puternice
-trei momente (50:02, 61:02, 46:28) sunt toate în afara board-ului.
+**Corecție, după măsurarea decalajului** ([`clipper-reaction-signals-2026-09-29.md`](clipper-reaction-signals-2026-09-29.md)
+§3.1): pe acest stream, emote-urile de râs urmăresc sunetul cu 8–10 s întârziere. 25 și 35 s au fost presupuse, nu
+măsurate. La 10 s și la 15 s, **0 din 12** momente cad în board. Rândurile cu 3/12 de mai sus arată doar că un
+decalaj ales după rezultat poate face board-ul să pară aliniat.
+
+Cele mai puternice trei momente (50:02, 61:02, 46:28) sunt toate în afara board-ului, la orice decalaj.
 
 ## 6. Exportul blocat: ffmpeg < 8 [MĂS]
 
@@ -196,13 +199,15 @@ Scripturile folosesc doar biblioteca standard Python. Rulează-le dintr-un folde
    ```
    <repo>\server\.venv\Scripts\python.exe <repo>\docs\research\clipper-cloud-test-2026-09-29\extract_results.py <project_id> <repo>\data\db\clipforge.db
    <repo>\server\.venv\Scripts\python.exe <repo>\docs\research\clipper-cloud-test-2026-09-29\fetch_chat.py 2858049515 3828 chat.json
-   <repo>\server\.venv\Scripts\python.exe <repo>\docs\research\clipper-cloud-test-2026-09-29\analyze_chat.py chat.json board.json --lag 25
-   <repo>\server\.venv\Scripts\python.exe <repo>\docs\research\clipper-cloud-test-2026-09-29\analyze_chat.py chat.json board.json --lag 35
+   <repo>\server\.venv\Scripts\python.exe <repo>\docs\research\clipper-cloud-test-2026-09-29\chat_lag.py <repo>\data\clipper\<project_id>\audio\speech.wav chat.json
+   <repo>\server\.venv\Scripts\python.exe <repo>\docs\research\clipper-cloud-test-2026-09-29\analyze_chat.py chat.json board.json --lag <decalajul măsurat>
    ```
 
-   `fetch_chat.py` face ~680 de cereri și ia câteva minute. `gql.twitch.tv` e endpoint-ul intern al site-ului
-   Twitch, nu un API documentat, așa că poate să nu mai răspundă la fel. `analyze_chat.py` iese cu 2 când nu are
-   ce compara (chat gol sau 0 momente).
+   - `fetch_chat.py` face ~680 de cereri și ia câteva minute. `gql.twitch.tv` e endpoint-ul intern al site-ului
+     Twitch, nu un API documentat, așa că poate să nu mai răspundă la fel.
+   - `chat_lag.py` măsoară decalajul din sunet. Iese cu 2 când corelația nu trece pragul obținut la întâmplare, iar
+     atunci nu există un decalaj de folosit.
+   - `analyze_chat.py` iese cu 2 când nu are ce compara (chat gol sau 0 momente).
 4. Compară patru liste: board-ul de pe PC (cu LLM), board-ul din cloud (§4), momentele din chat (§5) și clipurile
    OpusClip pe același VOD. Pentru fiecare clip OpusClip trebuie intervalul din VOD (sau prima frază) și scorul.
    Scorurile OpusClip sunt comprimate: 82% din 7.101 clipuri au ≥ 80, după cercetarea SL. Contează ordinea, nu
