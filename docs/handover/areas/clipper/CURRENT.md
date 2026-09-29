@@ -8,6 +8,9 @@
     conținut, decalajul și emote-urile din chat, logistica.
   - `docs/research/opusclip-reverse-engineering-2026-09-29.md`: OpusClip din surse publice (API, centrul de ajutor),
     plus `opus_blackbox.py`, care descrie clipurile lui pe VOD-ul de test când primește lista.
+  - `docs/research/eklipse-reverse-engineering-2026-09-29.md`: Eklipse, concurentul cel mai apropiat (VOD-uri de
+    stream). Motorul lor rutează pe categoria platformei; capitolele Twitch din yt-dlp ar fi la noi o a doua sursă
+    pentru tipul segmentului.
 - **Testul în cloud** e în `docs/research/clipper-cloud-test-2026-09-29.md`. VOD Twitch de 64 min, mod euristic
   (fără cheie LLM), fără GPU. Rezultate:
   - niciun clip după 44:20, deși acolo sunt cele mai puternice momente din chat;
