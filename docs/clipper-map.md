@@ -30,6 +30,7 @@ five files that do not exist.
 | local reaction-source probes, what was decoded and what remains unverified | `refs/clipper-reaction-local-2026-09-13.md` |
 | ce fac alte aplicații de clipping și ce merită construit mai departe (planul CA1–CA16) | `research/clipping-apps-survey-2026-09-29.md` |
 | scorare, judge LLM, ranker și selecție: ce spune cercetarea (planul SL1–SL12) | `research/clipper-scoring-selection-2026-09-29.md` |
+| testul în cloud pe un VOD Twitch: board vs chat, timpi, exportul blocat pe ffmpeg < 8, reluarea pe PC | `research/clipper-cloud-test-2026-09-29.md` (scripturile, în folderul cu același nume) |
 | what is already on disk and can be skipped | `../data/clipper/MANIFEST.md` |
 
 Older handoffs are history, superseded but not wrong about the code they
