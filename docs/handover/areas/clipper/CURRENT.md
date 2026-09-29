@@ -11,6 +11,9 @@
   - `docs/research/eklipse-reverse-engineering-2026-09-29.md`: Eklipse, concurentul cel mai apropiat (VOD-uri de
     stream). Motorul lor rutează pe categoria platformei; capitolele Twitch din yt-dlp ar fi la noi o a doua sursă
     pentru tipul segmentului.
+  - `docs/research/klap-reverse-engineering-2026-09-29.md`: Klap. Politica lor de confidențialitate declară
+    arhitectura: WhisperX, apoi un LLM care alege și scorează doar din transcript, cu Gemini pentru video fără
+    vorbire. Confirmă CA5 (context de vocabular la transcriere).
 - **Testul în cloud** e în `docs/research/clipper-cloud-test-2026-09-29.md`. VOD Twitch de 64 min, mod euristic
   (fără cheie LLM), fără GPU. Rezultate:
   - niciun clip după 44:20, deși acolo sunt cele mai puternice momente din chat;
