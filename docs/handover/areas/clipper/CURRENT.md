@@ -6,6 +6,8 @@
   - `docs/research/clipper-scoring-selection-2026-09-29.md` (planul SL1–SL12);
   - `docs/research/clipper-reaction-signals-2026-09-29.md` (planul RS1–RS8): vocea streamerului față de
     conținut, decalajul și emote-urile din chat, logistica.
+  - `docs/research/opusclip-reverse-engineering-2026-09-29.md`: OpusClip din surse publice (API, centrul de ajutor),
+    plus `opus_blackbox.py`, care descrie clipurile lui pe VOD-ul de test când primește lista.
 - **Testul în cloud** e în `docs/research/clipper-cloud-test-2026-09-29.md`. VOD Twitch de 64 min, mod euristic
   (fără cheie LLM), fără GPU. Rezultate:
   - niciun clip după 44:20, deși acolo sunt cele mai puternice momente din chat;

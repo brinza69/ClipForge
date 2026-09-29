@@ -132,6 +132,10 @@ decalaj ales după rezultat poate face board-ul să pară aliniat.
 
 Cele mai puternice trei momente (50:02, 61:02, 46:28) sunt toate în afara board-ului, la orice decalaj.
 
+Măsurat altfel, pe toată durata clipurilor, board-ul e urmat de râs în chat de 2,4 ori peste mediana VOD-ului,
+față de 1,4× la ferestre aleatoare ([`opusclip-reverse-engineering-2026-09-29.md`](opusclip-reverse-engineering-2026-09-29.md)
+§7). Board-ul prinde deci momente moderat amuzante, dar nu vârfurile.
+
 ## 6. Exportul blocat: ffmpeg < 8 [MĂS]
 
 **Simptomul:** exportul #10 a rămas la 20%, fără mesaj, iar ffmpeg n-a scris niciun cadru. Jobul s-ar fi terminat
