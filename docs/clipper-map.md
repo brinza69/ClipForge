@@ -28,6 +28,7 @@ five files that do not exist.
 | how to run the pipeline by hand | `ai-stream-clipper-runbook.md` |
 | the measured recipe behind the multi-shot edit | `dynamic-edit-recipe.md` |
 | local reaction-source probes, what was decoded and what remains unverified | `refs/clipper-reaction-local-2026-09-13.md` |
+| ce fac alte aplicații de clipping și ce merită construit mai departe (planul CA1–CA16) | `research/clipping-apps-survey-2026-09-29.md` |
 | what is already on disk and can be skipped | `../data/clipper/MANIFEST.md` |
 
 Older handoffs are history, superseded but not wrong about the code they
