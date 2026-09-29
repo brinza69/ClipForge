@@ -14,6 +14,9 @@
   - `docs/research/klap-reverse-engineering-2026-09-29.md`: Klap. Politica lor de confidențialitate declară
     arhitectura: WhisperX, apoi un LLM care alege și scorează doar din transcript, cu Gemini pentru video fără
     vorbire. Confirmă CA5 (context de vocabular la transcriere).
+  - `docs/research/streamladder-reverse-engineering-2026-09-29.md`: StreamLadder ClipGPT, cel mai apropiat de
+    ClipForge. Scorul lor are aceleași patru dimensiuni ca patru din sub-scorurile noastre; chatul pare să conteze.
+    Pe VOD-ul de test chatul e plafonat, deci „citește chatul?” cere un al doilea VOD, de pe un canal mic.
 - **Testul în cloud** e în `docs/research/clipper-cloud-test-2026-09-29.md`. VOD Twitch de 64 min, mod euristic
   (fără cheie LLM), fără GPU. Rezultate:
   - niciun clip după 44:20, deși acolo sunt cele mai puternice momente din chat;

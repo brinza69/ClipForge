@@ -35,6 +35,7 @@ five files that do not exist.
 | OpusClip desfăcut din surse publice: pipeline, modele de curare, stack probabil, protocolul black-box pe VOD-ul de test | `research/opusclip-reverse-engineering-2026-09-29.md` |
 | Eklipse desfăcut din surse publice: motorul Gameplay Intelligence, semnale (HUD, audio pe trei piste, chat, comandă vocală), limite, ce merită luat | `research/eklipse-reverse-engineering-2026-09-29.md` |
 | Klap desfăcut din surse publice: arhitectura declarată (WhisperX, LLM prin OpenRouter/OpenAI pe transcript, Gemini fără vorbire), contractul API, ce merită luat | `research/klap-reverse-engineering-2026-09-29.md` |
+| StreamLadder ClipGPT desfăcut din surse publice, DNS și Wayback: semnalele scorului, chatul, „clip that”, analiza pe bucăți, testul care poate răspunde „citește chatul?” | `research/streamladder-reverse-engineering-2026-09-29.md` |
 | what is already on disk and can be skipped | `../data/clipper/MANIFEST.md` |
 
 Older handoffs are history, superseded but not wrong about the code they
