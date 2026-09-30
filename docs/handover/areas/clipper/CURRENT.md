@@ -1,5 +1,34 @@
 # Handover — AI Stream Clipper
 
+## 29 septembrie 2026, ~16:20 — cercetare (PR #32) și un test în cloud; de reluat pe PC
+- **Cercetarea** e doar documentație, fără cod de produs, pe `claude/fireclaw-clipping-apps-fnmlou` (PR #32):
+  - `docs/research/clipping-apps-survey-2026-09-29.md` (planul CA1–CA16);
+  - `docs/research/clipper-scoring-selection-2026-09-29.md` (planul SL1–SL12);
+  - `docs/research/clipper-reaction-signals-2026-09-29.md` (planul RS1–RS8): vocea streamerului față de
+    conținut, decalajul și emote-urile din chat, logistica.
+  - `docs/research/opusclip-reverse-engineering-2026-09-29.md`: OpusClip din surse publice (API, centrul de ajutor),
+    plus `opus_blackbox.py`, care descrie clipurile lui pe VOD-ul de test când primește lista.
+  - `docs/research/eklipse-reverse-engineering-2026-09-29.md`: Eklipse, concurentul cel mai apropiat (VOD-uri de
+    stream). Motorul lor rutează pe categoria platformei; capitolele Twitch din yt-dlp ar fi la noi o a doua sursă
+    pentru tipul segmentului.
+  - `docs/research/klap-reverse-engineering-2026-09-29.md`: Klap. Politica lor de confidențialitate declară
+    arhitectura: WhisperX, apoi un LLM care alege și scorează doar din transcript, cu Gemini pentru video fără
+    vorbire. Confirmă CA5 (context de vocabular la transcriere).
+  - `docs/research/streamladder-reverse-engineering-2026-09-29.md`: StreamLadder ClipGPT, cel mai apropiat de
+    ClipForge. Scorul lor are aceleași patru dimensiuni ca patru din sub-scorurile noastre; chatul pare să conteze.
+    Pe VOD-ul de test chatul e plafonat, deci „citește chatul?” cere un al doilea VOD, de pe un canal mic.
+- **Testul în cloud** e în `docs/research/clipper-cloud-test-2026-09-29.md`. VOD Twitch de 64 min, mod euristic
+  (fără cheie LLM), fără GPU. Rezultate:
+  - niciun clip după 44:20, deși acolo sunt cele mai puternice momente din chat;
+  - board-ul nu prinde momentele din chat: 0/12 la decalajul măsurat din sunet (~10 s), față de 12% aleator;
+  - clipul #1 e naratorul unui trailer.
+- **Exportul dinamic se blochează pe ffmpeg < 8.** Schimbarea mărimii `crop` prin `sendcmd` oprește ffmpeg 6.1 și
+  7.0 fără mesaj, până la `RENDER_TIMEOUT`. PC-ul are 8.1, deci nu e afectat. Guard-ul de versiune e propus ca task
+  separat, necomis.
+- **Retry pe o sursă URL descarcă din nou VOD-ul.** Propus ca task separat, necomis.
+- **De făcut pe PC:** același VOD, cu judge-ul LLM pornit; apoi comparația board PC / board cloud / chat / OpusClip
+  (§9 din documentul testului). Lista OpusClip e la utilizator.
+
 ## 28 septembrie 2026, ~18:35 — Clipper închis (next-38); RX1 comis și live; omul a acceptat variantele B
 - **next-38 (Codex):** versiunea e închisă ca **utilizabilă cu verificare umană înainte de postare**. RSK e închis
   editorial pe cele trei fișiere B identificate prin hash; nu mai rămâne niciun blocaj de release. Acceptarea lor nu

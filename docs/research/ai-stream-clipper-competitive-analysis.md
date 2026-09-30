@@ -1,5 +1,8 @@
 # AI Stream Clipper — Competitive Analysis
 
+> **Follow-up (2026-09-29):** [`clipping-apps-survey-2026-09-29.md`](clipping-apps-survey-2026-09-29.md) — more
+> apps, new signals (chat, viewer clips, Most Replayed), interval framing, and a plan (CA1–CA16).
+
 Research date: **2026-07-30**. Sources: the public marketing/doc pages of
 [opus.pro](https://www.opus.pro/), [clipping.net](https://clipping.net/),
 [clipping.net/blog/stream-clipper-guide](https://clipping.net/blog/stream-clipper-guide),
